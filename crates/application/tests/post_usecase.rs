@@ -1,15 +1,18 @@
 //! 文章用例测试：内存 fake 仓储验证用例、归属与失败路径，不依赖生产 infrastructure。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use application::content::{CreatePostCmd, EditPostCmd, PostInteractor};
 use application::error::UseCaseError;
-use application::identity::{Actor, CreateUserCmd, UserInteractor};
-use application::ports::{Clock, PostRepository, SaveOutcome, UserRepository};
+use application::identity::{
+    Actor, CreateUserCmd, PermissionDescriptor, RoleInteractor, UserInteractor,
+};
+use application::ports::{Clock, PostRepository, RbacStore, RoleDto, SaveOutcome, UserRepository};
 use domain::content::post::{PostSnapshot, Visibility};
 use domain::identity::UserSnapshot;
 use time::OffsetDateTime;
+use uuid::Uuid;
 
 // ---------------------------------------------------------------------------
 // Fakes
@@ -147,46 +150,163 @@ impl UserRepository for FakeUserRepo {
 // 测试装配
 // ---------------------------------------------------------------------------
 
+struct FakeRbacStore {
+    roles: std::sync::Mutex<HashMap<String, Vec<&'static str>>>,
+    assignments: std::sync::Mutex<HashSet<(Uuid, String)>>,
+}
+
+impl FakeRbacStore {
+    fn new() -> Self {
+        Self {
+            roles: std::sync::Mutex::new(HashMap::new()),
+            assignments: std::sync::Mutex::new(HashSet::new()),
+        }
+    }
+
+    fn owners(&self) -> i64 {
+        self.assignments
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, slug)| slug == "owner")
+            .count() as i64
+    }
+}
+
+#[async_trait::async_trait]
+impl RbacStore for FakeRbacStore {
+    async fn sync_permission_registry(
+        &self,
+        _entries: &[PermissionDescriptor],
+    ) -> Result<(), UseCaseError> {
+        Ok(())
+    }
+
+    async fn sync_builtin_roles(
+        &self,
+        defs: &[application::identity::BuiltinRoleDef],
+    ) -> Result<(), UseCaseError> {
+        let mut roles = self.roles.lock().unwrap();
+        for def in defs {
+            roles.insert(def.slug.to_string(), def.permissions.to_vec());
+        }
+        Ok(())
+    }
+
+    async fn permissions_of_user(
+        &self,
+        user_id: Uuid,
+    ) -> Result<domain::identity::PermissionSet, UseCaseError> {
+        let roles = self.roles.lock().unwrap();
+        let assignments = self.assignments.lock().unwrap();
+        let mut keys = Vec::new();
+        for (uid, slug) in assignments.iter() {
+            if *uid == user_id
+                && let Some(perms) = roles.get(slug)
+            {
+                keys.extend(perms.iter().copied());
+            }
+        }
+        Ok(domain::identity::PermissionSet::from_keys(keys))
+    }
+
+    async fn assign_role(&self, user_id: Uuid, role_slug: &str) -> Result<(), UseCaseError> {
+        if !self.roles.lock().unwrap().contains_key(role_slug) {
+            return Err(UseCaseError::NotFound(format!("角色 {role_slug}")));
+        }
+        self.assignments
+            .lock()
+            .unwrap()
+            .insert((user_id, role_slug.to_string()));
+        Ok(())
+    }
+
+    async fn remove_role(&self, user_id: Uuid, role_slug: &str) -> Result<(), UseCaseError> {
+        if role_slug == "owner" && self.owners() <= 1 {
+            return Err(UseCaseError::Forbidden);
+        }
+        self.assignments
+            .lock()
+            .unwrap()
+            .remove(&(user_id, role_slug.to_string()));
+        Ok(())
+    }
+
+    async fn list_roles(&self) -> Result<Vec<RoleDto>, UseCaseError> {
+        let roles = self.roles.lock().unwrap();
+        Ok(roles
+            .iter()
+            .map(|(slug, perms)| RoleDto {
+                slug: slug.clone(),
+                name: format!("{slug}-name"),
+                description: None,
+                builtin: true,
+                permission_count: perms.len() as i64,
+            })
+            .collect())
+    }
+
+    async fn roles_of_user(&self, user_id: Uuid) -> Result<Vec<String>, UseCaseError> {
+        let assignments = self.assignments.lock().unwrap();
+        Ok(assignments
+            .iter()
+            .filter(|(uid, _)| *uid == user_id)
+            .map(|(_, slug)| slug.clone())
+            .collect())
+    }
+}
+
 struct Fixture {
     posts: Arc<PostInteractor>,
     users: Arc<UserInteractor>,
+    roles: Arc<RoleInteractor>,
     author: Actor,
     other: Actor,
+    editor: Actor,
 }
 
 async fn fixture() -> Fixture {
     let post_repo = Arc::new(FakePostRepo::new());
     let user_repo = Arc::new(FakeUserRepo::new());
+    let rbac = Arc::new(FakeRbacStore::new());
     let clock = Arc::new(FixedClock);
 
-    let users = Arc::new(UserInteractor::new(user_repo, clock.clone()));
+    let users = Arc::new(UserInteractor::new(
+        user_repo.clone(),
+        rbac.clone(),
+        clock.clone(),
+    ));
+    let roles = Arc::new(RoleInteractor::new(rbac.clone(), user_repo));
     let posts = Arc::new(PostInteractor::new(post_repo, clock));
 
-    users
-        .create_user(CreateUserCmd {
-            username: "author".into(),
-            email: None,
-            display_name: Some("作者甲".into()),
-        })
-        .await
-        .unwrap();
-    users
-        .create_user(CreateUserCmd {
-            username: "other".into(),
-            email: None,
-            display_name: None,
-        })
-        .await
-        .unwrap();
+    roles.sync_registry().await.unwrap();
+
+    for username in ["author", "author2", "other", "editor"] {
+        users
+            .create_user(CreateUserCmd {
+                username: username.into(),
+                email: None,
+                display_name: Some(format!("{username}的展示名")),
+            })
+            .await
+            .unwrap();
+    }
+    // author 获 author 角色；editor 获得 any 权限角色；other 无任何角色。
+    roles.assign_to_username("author", "author").await.unwrap();
+    roles.assign_to_username("author2", "author").await.unwrap();
+    roles.assign_to_username("editor", "editor").await.unwrap();
 
     let author = users.actor_for_username("author").await.unwrap();
     let other = users.actor_for_username("other").await.unwrap();
+    let editor = users.actor_for_username("editor").await.unwrap();
 
     Fixture {
         posts,
         users,
+        roles,
         author,
         other,
+        editor,
     }
 }
 
@@ -320,7 +440,7 @@ async fn truly_parallel_edits_exactly_one_wins() {
         + usize::from(matches!(b, Err(UseCaseError::VersionConflict)));
     assert_eq!(conflict_count, 1);
 
-    let shown = f.posts.find("parallel").await.unwrap();
+    let shown = f.posts.find(&f.author, "parallel").await.unwrap();
     assert_eq!(shown.version, 2, "恰好一次版本递增");
     // 胜者只改了 content，标题/摘要保持原样。
     assert_eq!(shown.title, "第一篇");
@@ -406,7 +526,7 @@ async fn generated_slug_occupied_at_creation() {
 async fn find_returns_current_state_for_cli() {
     let f = fixture().await;
     let created = f.posts.create(&f.author, draft_cmd("shown")).await.unwrap();
-    let shown = f.posts.find("shown").await.unwrap();
+    let shown = f.posts.find(&f.author, "shown").await.unwrap();
     assert_eq!(shown.id, created.id);
     // deleted_at 过滤行为由 infrastructure 集成测试覆盖（M1 未开放删除用例）。
 }
@@ -416,4 +536,155 @@ async fn actor_resolution_rejects_unknown_user() {
     let f = fixture().await;
     let err = f.users.actor_for_username("ghost").await.unwrap_err();
     assert!(matches!(err, UseCaseError::NotFound(_)));
+}
+
+// ---------------------------------------------------------------------------
+// RBAC 行为
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn editor_with_any_permission_can_edit_others_posts() {
+    let f = fixture().await;
+    f.posts
+        .create(&f.author, draft_cmd("editors-view"))
+        .await
+        .unwrap();
+
+    // editor 无 own 授权，但 update_any 覆盖 own。
+    let edited = f
+        .posts
+        .edit(
+            &f.editor,
+            EditPostCmd {
+                target_slug: "editors-view".into(),
+                title: Some("编辑改写".into()),
+                ..Default::default()
+            },
+        )
+        .await;
+    assert!(edited.is_ok(), "update_any 应允许编辑他人文章：{edited:?}");
+
+    let shown = f.posts.find(&f.editor, "editors-view").await.unwrap();
+    assert_eq!(shown.title, "编辑改写");
+}
+
+#[tokio::test]
+async fn user_without_permission_cannot_create_posts() {
+    let f = fixture().await;
+    let err = f
+        .posts
+        .create(&f.other, draft_cmd("no-perm"))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, UseCaseError::Forbidden),
+        "无 post.create 应拒绝：{err:?}"
+    );
+}
+
+#[tokio::test]
+async fn reader_scope_blocks_others_drafts() {
+    let f = fixture().await;
+    f.posts
+        .create(&f.author, draft_cmd("secret-draft"))
+        .await
+        .unwrap();
+
+    // other 无 read/read_any：既不能读也不能改。
+    let err = f.posts.find(&f.other, "secret-draft").await.unwrap_err();
+    assert!(matches!(err, UseCaseError::Forbidden));
+    let err = f
+        .posts
+        .edit(
+            &f.other,
+            EditPostCmd {
+                target_slug: "secret-draft".into(),
+                title: Some("越权修改".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, UseCaseError::Forbidden));
+
+    // author 本人可读自己的草稿（own）。
+    assert!(f.posts.find(&f.author, "secret-draft").await.is_ok());
+    // editor 有 read_any，可读他人草稿。
+    assert!(f.posts.find(&f.editor, "secret-draft").await.is_ok());
+}
+
+#[tokio::test]
+async fn author_cannot_publish_others_posts_without_any() {
+    let f = fixture().await;
+    let author2 = f.users.actor_for_username("author2").await.unwrap();
+    f.posts
+        .create(&author2, draft_cmd("author2-owns"))
+        .await
+        .unwrap();
+
+    // author 有 post.publish(own)，但文章属于 author2 → Forbidden。
+    let err = f
+        .posts
+        .publish(&f.author, "author2-owns", None)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, UseCaseError::Forbidden));
+
+    // editor 有 publish_any，可发布同一篇。
+    assert!(
+        f.posts
+            .publish(&f.editor, "author2-owns", None)
+            .await
+            .is_ok()
+    );
+}
+
+#[tokio::test]
+async fn last_owner_cannot_be_removed() {
+    let f = fixture().await;
+    f.roles.assign_to_username("author", "owner").await.unwrap();
+
+    // 唯一 Owner：移除被拒。
+    let err = f
+        .roles
+        .remove_from_username("author", "owner")
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, UseCaseError::Forbidden),
+        "最后 Owner 保护：{err:?}"
+    );
+
+    // 出现第二个 Owner 后，移除其中一个允许。
+    f.roles.assign_to_username("editor", "owner").await.unwrap();
+    assert!(
+        f.roles
+            .remove_from_username("author", "owner")
+            .await
+            .is_ok()
+    );
+}
+
+#[tokio::test]
+async fn unknown_role_assignment_is_rejected() {
+    let f = fixture().await;
+    let err = f
+        .roles
+        .assign_to_username("author", "ghost-role")
+        .await
+        .unwrap_err();
+    assert!(matches!(err, UseCaseError::NotFound(_)));
+}
+
+#[tokio::test]
+async fn actor_permissions_are_union_of_roles() {
+    let f = fixture().await;
+    // author 再叠加 editor 角色 → 并集包含 own + any。
+    f.roles
+        .assign_to_username("author", "editor")
+        .await
+        .unwrap();
+    let actor = f.users.actor_for_username("author").await.unwrap();
+    assert!(actor.has_permission("post.create"), "own 动作仍在");
+    assert!(actor.has_permission("post.update_any"), "any 动作并入");
 }

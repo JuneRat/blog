@@ -10,7 +10,7 @@ use std::sync::Arc;
 use application::content::PostVisibility;
 use application::content::{CreatePostCmd, EditPostCmd, PostInteractor};
 use application::error::UseCaseError;
-use application::identity::{Actor, CreateUserCmd, UserInteractor};
+use application::identity::{Actor, CreateUserCmd, RoleInteractor, UserInteractor};
 use application::ports::UserRepository;
 use application::public_site::{PublicSiteInteractor, format_datetime};
 use clap::{Parser, Subcommand};
@@ -41,10 +41,16 @@ pub enum Command {
         action: UserAction,
     },
 
-    /// 文章管理（M1 写通道）
+    /// 文章管理（写通道需相应权限）
     Post {
         #[command(subcommand)]
         action: PostAction,
+    },
+
+    /// 角色与授权管理（受控 CLI；结构性保护始终生效）
+    Role {
+        #[command(subcommand)]
+        action: RoleAction,
     },
 
     /// 启动公开 SSR 服务
@@ -69,6 +75,28 @@ pub enum UserAction {
     },
     /// 查看用户
     Show { username: String },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum RoleAction {
+    /// 同步权限目录与内置角色（幂等；启动时自动执行）
+    Sync,
+    /// 列出全部角色
+    List,
+    /// 为用户分配角色
+    Assign {
+        #[arg(long)]
+        user: String,
+        #[arg(long)]
+        role: String,
+    },
+    /// 移除用户的角色（最后一个有效 Owner 会被拒绝）
+    Remove {
+        #[arg(long)]
+        user: String,
+        #[arg(long)]
+        role: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -142,12 +170,18 @@ pub enum PostAction {
     Show {
         #[arg(long)]
         slug: String,
+        /// 查看身份（own 限本人文章，read_any 可看全部）
+        #[arg(long = "as")]
+        actor: Option<String>,
     },
 
     /// 列出作者的文章（含非公开状态）
     List {
         #[arg(long)]
         author: String,
+        /// 操作身份（缺省为 --author 本人）
+        #[arg(long = "as")]
+        actor: Option<String>,
     },
 }
 
@@ -155,6 +189,7 @@ pub enum PostAction {
 pub struct CliDeps {
     pub users: Arc<UserInteractor>,
     pub posts: Arc<PostInteractor>,
+    pub roles: Arc<RoleInteractor>,
     pub public_site: Arc<PublicSiteInteractor>,
     pub user_repo: Arc<dyn UserRepository>,
     /// 主题静态资源目录（/assets/）。
@@ -170,6 +205,8 @@ pub async fn run(deps: CliDeps, command: Command) -> Result<(), String> {
         Command::User { action } => run_user(deps, action).await,
 
         Command::Post { action } => run_post(deps, action).await,
+
+        Command::Role { action } => run_role(deps, action).await,
 
         Command::Serve { addr } => {
             let bind = addr
@@ -218,7 +255,64 @@ async fn run_user(deps: CliDeps, action: UserAction) -> Result<(), String> {
                 .actor_for_username(&username)
                 .await
                 .map_err(fmt_error)?;
+            let roles = deps
+                .users
+                .roles_of_user(actor.user_id.0)
+                .await
+                .map_err(fmt_error)?;
             println!("用户 {}（id={}）", username, actor.user_id.0);
+            println!(
+                "角色：{}",
+                if roles.is_empty() {
+                    "（无）".to_string()
+                } else {
+                    roles.join(", ")
+                }
+            );
+            println!(
+                "权限：{}",
+                actor.permissions().keys().collect::<Vec<_>>().join(", ")
+            );
+            Ok(())
+        }
+    }
+}
+
+async fn run_role(deps: CliDeps, action: RoleAction) -> Result<(), String> {
+    match action {
+        RoleAction::Sync => {
+            deps.roles.sync_registry().await.map_err(fmt_error)?;
+            println!("权限目录与内置角色已同步。");
+            Ok(())
+        }
+        RoleAction::List => {
+            let roles = deps.roles.list().await.map_err(fmt_error)?;
+            println!("{:<10} {:<16} {:<8} 权限数", "slug", "名称", "内置");
+            for role in roles {
+                println!(
+                    "{:<10} {:<16} {:<8} {}",
+                    role.slug,
+                    role.name,
+                    if role.builtin { "是" } else { "否" },
+                    role.permission_count
+                );
+            }
+            Ok(())
+        }
+        RoleAction::Assign { user, role } => {
+            deps.roles
+                .assign_to_username(&user, &role)
+                .await
+                .map_err(fmt_error)?;
+            println!("已将角色 {role} 分配给 {user}。");
+            Ok(())
+        }
+        RoleAction::Remove { user, role } => {
+            deps.roles
+                .remove_from_username(&user, &role)
+                .await
+                .map_err(fmt_error)?;
+            println!("已移除 {user} 的角色 {role}。");
             Ok(())
         }
     }
@@ -339,13 +433,21 @@ async fn run_post(deps: CliDeps, action: PostAction) -> Result<(), String> {
             Ok(())
         }
 
-        PostAction::Show { slug } => {
-            let dto = deps.posts.find(&slug).await.map_err(fmt_error)?;
+        PostAction::Show { slug, actor } => {
+            let actor = resolve_actor(&deps, actor.as_deref(), &slug).await?;
+            let dto = deps.posts.find(&actor, &slug).await.map_err(fmt_error)?;
             print_post(&dto);
             Ok(())
         }
 
-        PostAction::List { author } => {
+        PostAction::List { author, actor } => {
+            // 操作身份缺省为目标作者本人（actor_for_username 内部走同一规范化）。
+            let operator_name = actor.as_deref().unwrap_or(&author);
+            let operator = deps
+                .users
+                .actor_for_username(operator_name)
+                .await
+                .map_err(fmt_error)?;
             let who = deps
                 .users
                 .actor_for_username(&author)
@@ -353,7 +455,7 @@ async fn run_post(deps: CliDeps, action: PostAction) -> Result<(), String> {
                 .map_err(fmt_error)?;
             let list = deps
                 .posts
-                .list_by_author(who.user_id)
+                .list_by_author(&operator, who.user_id)
                 .await
                 .map_err(fmt_error)?;
             println!(
@@ -383,10 +485,10 @@ async fn resolve_actor(
             .await
             .map_err(fmt_error),
         None => {
-            // 缺省使用文章作者。
-            let snapshot = deps.posts.find(post_slug).await.map_err(fmt_error)?;
+            // 缺省使用文章作者（写动作随后仍按 own/any 授权）。
+            let author = deps.posts.author_of(post_slug).await.map_err(fmt_error)?;
             deps.users
-                .actor_for_user_id(snapshot.author_id)
+                .actor_for_user_id(author.0)
                 .await
                 .map_err(fmt_error)
         }

@@ -5,11 +5,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use application::content::PostInteractor;
-use application::identity::UserInteractor;
+use application::identity::{RoleInteractor, UserInteractor};
 use application::ports::{PostRepository, PublishedPostQuery, UserRepository};
 use application::public_site::{PublicSiteInteractor, SiteInfo};
 use infrastructure::{
-    MiniJinjaThemeRenderer, PostgresPostRepository, PostgresPublishedPostQuery,
+    MiniJinjaThemeRenderer, PostgresPostRepository, PostgresPublishedPostQuery, PostgresRbacStore,
     PostgresUserRepository, SanitizingMarkdownRenderer, SystemClock,
 };
 use interfaces::cli::{CliDeps, Command, parse_args};
@@ -76,6 +76,10 @@ async fn main() {
                 Arc::new(PostgresUserRepository::new(pool.clone()));
             let post_repo: Arc<dyn PostRepository> =
                 Arc::new(PostgresPostRepository::new(pool.clone()));
+            let rbac_store = Arc::new(PostgresRbacStore::new(pool.clone()));
+            let roles = Arc::new(RoleInteractor::new(rbac_store.clone(), user_repo.clone()));
+            // 迁移后同步权限目录与内置角色（幂等；受控初始化命令的一部分）。
+            roles.sync_registry().await.expect("同步权限目录失败");
             let public_query: Arc<dyn PublishedPostQuery> =
                 Arc::new(PostgresPublishedPostQuery::new(pool.clone()));
 
@@ -84,7 +88,11 @@ async fn main() {
             );
             let markdown = Arc::new(SanitizingMarkdownRenderer::new());
 
-            let users = Arc::new(UserInteractor::new(user_repo.clone(), clock.clone()));
+            let users = Arc::new(UserInteractor::new(
+                user_repo.clone(),
+                rbac_store.clone(),
+                clock.clone(),
+            ));
             let posts = Arc::new(PostInteractor::new(post_repo.clone(), clock.clone()));
             let public_site = Arc::new(PublicSiteInteractor::new(
                 public_query,
@@ -99,6 +107,7 @@ async fn main() {
             let deps = CliDeps {
                 users,
                 posts,
+                roles,
                 public_site,
                 user_repo,
                 assets_dir: Some(config.theme_dir.join("assets")),

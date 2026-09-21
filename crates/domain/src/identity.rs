@@ -1,5 +1,7 @@
-//! 本站用户的最小领域模型。
-//! M1 仅覆盖受控 CLI 创建与文章归属校权；OAuth 绑定、软删除语义随 M2 补充。
+//! 本站用户的最小领域模型与权限集合。
+//! OAuth 绑定、软删除语义随 M2 后续部分补充。
+
+use std::collections::BTreeSet;
 
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -11,6 +13,38 @@ pub struct UserId(pub Uuid);
 impl UserId {
     pub fn generate() -> Self {
         Self(Uuid::now_v7())
+    }
+}
+
+/// 有效权限集合：用户全部角色授权的并集。
+/// key 来自可信注册表（`resource.action`），不由请求参数决定；
+/// 域层不枚举业务动作，只承载集合语义。
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PermissionSet(BTreeSet<String>);
+
+impl PermissionSet {
+    pub fn from_keys<I, K>(keys: I) -> Self
+    where
+        I: IntoIterator<Item = K>,
+        K: Into<String>,
+    {
+        Self(keys.into_iter().map(Into::into).collect())
+    }
+
+    pub fn grant(&mut self, key: &str) {
+        self.0.insert(key.to_string());
+    }
+
+    pub fn has(&self, key: &str) -> bool {
+        self.0.contains(key)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn keys(&self) -> impl Iterator<Item = &str> + '_ {
+        self.0.iter().map(String::as_str)
     }
 }
 

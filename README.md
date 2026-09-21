@@ -1,6 +1,6 @@
 # blog
 
-Rust 模块化单体博客。当前进度：**M1 内容闭环已通**（迁移 → 受控 CLI 写入 → 公开 SSR 阅读）。
+Rust 模块化单体博客。当前进度：**M1 内容闭环 + M2 RBAC 核心**（迁移 → 受控 CLI 写入（按权限） → 公开 SSR 阅读）；OAuth、内存会话与 React 后台为 M2 后续部分。
 
 ## 快速开始
 
@@ -11,8 +11,9 @@ Rust 模块化单体博客。当前进度：**M1 内容闭环已通**（迁移 �
 # 2. 数据库迁移（也可省略，serve/写命令前会自动迁移）
 cargo run -p server -- migrate
 
-# 3. 受控 CLI：建用户、写文章、发布
+# 3. 受控 CLI：建用户、分配角色、写文章、发布
 cargo run -p server -- user create sun --display-name "Sun"
+cargo run -p server -- role assign --user sun --role author
 cargo run -p server -- post create --author sun --slug hello-world \
   --title "你好，世界" --content-file path/to/post.md
 cargo run -p server -- post publish --slug hello-world
@@ -20,6 +21,19 @@ cargo run -p server -- post publish --slug hello-world
 # 4. 公开 SSR 服务
 cargo run -p server -- serve --addr 127.0.0.1:8080
 ```
+
+角色与权限（M2 第一段已交付）：
+
+```bash
+blog role list                       # 内置角色：owner/admin/editor/author
+blog role assign --user X --role Y   # 分配（幂等；users.version 递增）
+blog role remove --user X --role Y   # 移除（最后一个有效 Owner 会被拒绝）
+blog user show X                     # 查看角色与有效权限并集
+```
+
+- 权限目录是应用可信注册表（`PERMISSION_REGISTRY`），启动时幂等同步，普通入口不能创造任意 key。
+- 文章动作按 own/any 权限对检查（如 `post.update` / `post.update_any`），any 覆盖 own，角色名称不替代动作检查。
+- 身份/角色变更在统一 `pg_advisory_xact_lock(2048001,1)` 排他锁下执行（docs/identity-and-admin.md §3）。
 
 环境变量：
 

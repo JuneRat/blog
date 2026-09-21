@@ -8,6 +8,7 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::error::UseCaseError;
+use crate::identity::{BuiltinRoleDef, PermissionDescriptor};
 use domain::content::post::PostSnapshot;
 use domain::identity::UserSnapshot;
 
@@ -48,6 +49,45 @@ pub trait UserRepository: Send + Sync {
     async fn insert(&self, snapshot: &UserSnapshot) -> Result<(), UseCaseError>;
     async fn find_by_id(&self, id: Uuid) -> Result<Option<UserSnapshot>, UseCaseError>;
     async fn find_by_username(&self, username: &str) -> Result<Option<UserSnapshot>, UseCaseError>;
+}
+
+/// 视图用角色条目。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RoleDto {
+    pub slug: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub builtin: bool,
+    pub permission_count: i64,
+}
+
+/// 角色分配/授权存储端口。
+/// 权限目录只接受应用可信注册表；未知 key 拒绝授权。
+#[async_trait]
+pub trait RbacStore: Send + Sync {
+    /// 幂等同步权限目录（按 key upsert；不删除已有 key）。
+    async fn sync_permission_registry(
+        &self,
+        entries: &[PermissionDescriptor],
+    ) -> Result<(), UseCaseError>;
+
+    /// 幂等同步内置角色定义与授权集合（内置 slug 不可改名）。
+    async fn sync_builtin_roles(&self, defs: &[BuiltinRoleDef]) -> Result<(), UseCaseError>;
+
+    /// 用户有效权限（全部角色并集；软删除用户为空集）。
+    async fn permissions_of_user(
+        &self,
+        user_id: Uuid,
+    ) -> Result<domain::identity::PermissionSet, UseCaseError>;
+
+    async fn assign_role(&self, user_id: Uuid, role_slug: &str) -> Result<(), UseCaseError>;
+
+    /// 移除角色分配；内置保护（如最后一个有效 Owner）由实现拒绝。
+    async fn remove_role(&self, user_id: Uuid, role_slug: &str) -> Result<(), UseCaseError>;
+
+    async fn list_roles(&self) -> Result<Vec<RoleDto>, UseCaseError>;
+
+    async fn roles_of_user(&self, user_id: Uuid) -> Result<Vec<String>, UseCaseError>;
 }
 
 // ---------------------------------------------------------------------------

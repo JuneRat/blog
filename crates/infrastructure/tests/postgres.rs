@@ -5,12 +5,14 @@
 //! 直接 panic 失败——这些测试是破坏性的（DROP DATABASE），不允许静默跳过后误报通过。
 
 use application::error::UseCaseError;
-use application::ports::{ContentRenderer, PostRepository, PublishedPostQuery, SaveOutcome};
+use application::ports::{
+    ContentRenderer, PostRepository, PublishedPostQuery, RbacStore, SaveOutcome,
+};
 use domain::content::post::{Post, PostSnapshot, PostStatus, Slug, Visibility};
 use domain::identity::UserId;
 use infrastructure::{
-    PostgresPostRepository, PostgresPublishedPostQuery, SanitizingMarkdownRenderer, connect,
-    migrate,
+    PostgresPostRepository, PostgresPublishedPostQuery, PostgresRbacStore,
+    SanitizingMarkdownRenderer, connect, migrate,
 };
 use sqlx::{PgPool, Row};
 use time::OffsetDateTime;
@@ -461,4 +463,159 @@ async fn markdown_renderer_sanitizes_unsafe_html() {
 
     let html = renderer.render_markdown("![img](javascript:alert(1))");
     assert!(!html.contains("javascript:"), "危险协议必须被清除");
+}
+
+// ---------------------------------------------------------------------------
+// RBAC：权限目录同步、角色分配与 Owner 保护（真实数据库）
+// ---------------------------------------------------------------------------
+
+fn rbac_of(pool: &PgPool) -> PostgresRbacStore {
+    PostgresRbacStore::new(pool.clone())
+}
+
+#[tokio::test]
+async fn rbac_registry_sync_is_idempotent() {
+    let _g = SERIAL.lock().await;
+    let pool = fresh_database().await;
+    let rbac = rbac_of(&pool);
+
+    rbac.sync_permission_registry(application::identity::PERMISSION_REGISTRY)
+        .await
+        .unwrap();
+    rbac.sync_builtin_roles(application::identity::BUILTIN_ROLES)
+        .await
+        .unwrap();
+    // 第二次同步（幂等）不得翻倍或漂移。
+    rbac.sync_permission_registry(application::identity::PERMISSION_REGISTRY)
+        .await
+        .unwrap();
+    rbac.sync_builtin_roles(application::identity::BUILTIN_ROLES)
+        .await
+        .unwrap();
+
+    let perm_count: i64 = sqlx::query_scalar("SELECT count(*) FROM permissions")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        perm_count as usize,
+        application::identity::PERMISSION_REGISTRY.len(),
+        "权限目录与注册表一致"
+    );
+
+    let author_perms: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM role_permissions rp \
+         JOIN roles r ON r.id = rp.role_id WHERE r.slug = 'author'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(author_perms, 5, "Author 恰好 5 个 own 动作");
+
+    let roles: Vec<String> = sqlx::query_scalar("SELECT slug FROM roles ORDER BY slug")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert_eq!(roles, vec!["admin", "author", "editor", "owner"]);
+}
+
+#[tokio::test]
+async fn rbac_permissions_union_and_version_bump() {
+    let _g = SERIAL.lock().await;
+    let pool = fresh_database().await;
+    let rbac = rbac_of(&pool);
+    rbac.sync_permission_registry(application::identity::PERMISSION_REGISTRY)
+        .await
+        .unwrap();
+    rbac.sync_builtin_roles(application::identity::BUILTIN_ROLES)
+        .await
+        .unwrap();
+
+    let uid = seed_user(&pool, "member").await;
+    let (version_before,): (i64,) = sqlx::query_as("SELECT version FROM users WHERE id = $1")
+        .bind(uid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    // 未知角色拒绝。
+    let err = rbac.assign_role(uid, "ghost").await.unwrap_err();
+    assert!(matches!(err, application::error::UseCaseError::NotFound(_)));
+
+    rbac.assign_role(uid, "author").await.unwrap();
+    rbac.assign_role(uid, "editor").await.unwrap();
+    // 重复分配幂等，不重复递增版本。
+    rbac.assign_role(uid, "author").await.unwrap();
+
+    let (version_after,): (i64,) = sqlx::query_as("SELECT version FROM users WHERE id = $1")
+        .bind(uid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        version_after,
+        version_before + 2,
+        "两次新分配各递增一次 users.version"
+    );
+
+    // 并集：own（post.create）+ any（post.update_any）同时可见。
+    let perms = rbac.permissions_of_user(uid).await.unwrap();
+    assert!(perms.has("post.create"), "author 的 own 动作");
+    assert!(perms.has("post.update_any"), "editor 的 any 动作");
+    assert!(!perms.has("role.manage"), "未授予的管理动作不可见");
+
+    let roles = rbac.roles_of_user(uid).await.unwrap();
+    assert_eq!(roles, vec!["author", "editor"]);
+}
+
+#[tokio::test]
+async fn rbac_last_owner_protection() {
+    let _g = SERIAL.lock().await;
+    let pool = fresh_database().await;
+    let rbac = rbac_of(&pool);
+    rbac.sync_permission_registry(application::identity::PERMISSION_REGISTRY)
+        .await
+        .unwrap();
+    rbac.sync_builtin_roles(application::identity::BUILTIN_ROLES)
+        .await
+        .unwrap();
+
+    let u1 = seed_user(&pool, "first").await;
+    let u2 = seed_user(&pool, "second").await;
+
+    rbac.assign_role(u1, "owner").await.unwrap();
+
+    // 唯一 Owner：移除被拒。
+    let err = rbac.remove_role(u1, "owner").await.unwrap_err();
+    assert!(
+        matches!(err, application::error::UseCaseError::Forbidden),
+        "最后 Owner 不能被移除：{err:?}"
+    );
+
+    // 第二个 Owner 后，允许移除第一个。
+    rbac.assign_role(u2, "owner").await.unwrap();
+    rbac.remove_role(u1, "owner").await.unwrap();
+
+    let owners: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM user_roles ur \
+         JOIN roles r ON r.id = ur.role_id \
+         JOIN users u ON u.id = ur.user_id \
+         WHERE r.slug = 'owner' AND u.deleted_at IS NULL",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(owners, 1);
+
+    // 软删除用户不计入有效 Owner：u2 离开后，u1 成为唯一活跃 Owner，不可再被移除。
+    sqlx::query("UPDATE users SET deleted_at = now() WHERE id = $1")
+        .bind(u2)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let err = rbac.remove_role(u1, "owner").await.unwrap_err();
+    assert!(
+        matches!(err, application::error::UseCaseError::Forbidden),
+        "软删除的 Owner 不计入有效数量"
+    );
 }

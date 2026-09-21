@@ -4,14 +4,14 @@
 use std::sync::Arc;
 
 use application::content::{CreatePostCmd, PostInteractor};
-use application::identity::{Actor, CreateUserCmd, UserInteractor};
+use application::identity::{Actor, CreateUserCmd, RoleInteractor, UserInteractor};
 use application::ports::{PostRepository, PublishedPostQuery, UserRepository};
 use application::public_site::{PublicSiteInteractor, SiteInfo};
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use infrastructure::{
-    MiniJinjaThemeRenderer, PostgresPostRepository, PostgresPublishedPostQuery,
+    MiniJinjaThemeRenderer, PostgresPostRepository, PostgresPublishedPostQuery, PostgresRbacStore,
     PostgresUserRepository, SanitizingMarkdownRenderer, SystemClock, connect, migrate,
 };
 use interfaces::http::public_router_minimal;
@@ -58,6 +58,9 @@ async fn stack() -> Stack {
     let clock = Arc::new(SystemClock);
     let user_repo: Arc<dyn UserRepository> = Arc::new(PostgresUserRepository::new(pool.clone()));
     let post_repo: Arc<dyn PostRepository> = Arc::new(PostgresPostRepository::new(pool.clone()));
+    let rbac = Arc::new(PostgresRbacStore::new(pool.clone()));
+    let roles = Arc::new(RoleInteractor::new(rbac.clone(), user_repo.clone()));
+    roles.sync_registry().await.expect("同步权限目录失败");
     let public_query: Arc<dyn PublishedPostQuery> =
         Arc::new(PostgresPublishedPostQuery::new(pool.clone()));
 
@@ -67,7 +70,7 @@ async fn stack() -> Stack {
     );
     let markdown = Arc::new(SanitizingMarkdownRenderer::new());
 
-    let users = Arc::new(UserInteractor::new(user_repo, clock.clone()));
+    let users = Arc::new(UserInteractor::new(user_repo, rbac, clock.clone()));
     let posts = Arc::new(PostInteractor::new(post_repo, clock));
     let public_site = Arc::new(PublicSiteInteractor::new(
         public_query,
@@ -87,6 +90,8 @@ async fn stack() -> Stack {
         })
         .await
         .unwrap();
+    // 测试作者需要 author 角色才能创建/发布文章（RBAC 已接入用例）。
+    roles.assign_to_username("author", "author").await.unwrap();
     let author = actor_for(&users, "author").await;
 
     let router = public_router_minimal(public_site);
