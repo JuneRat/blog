@@ -1,0 +1,12 @@
+[package]
+name = "interfaces"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+application = { path = "../application" }
+axum.workspace = true
+clap.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tower-http = { version = "0.6", features = ["fs"] }

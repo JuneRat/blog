@@ -1,0 +1,19 @@
+[package]
+name = "infrastructure"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+application = { path = "../application" }
+domain = { path = "../domain" }
+sqlx.workspace = true
+tokio.workspace = true
+minijinja.workspace = true
+pulldown-cmark.workspace = true
+ammonia.workspace = true
+time.workspace = true
+uuid.workspace = true
+serde.workspace = true
+async-trait.workspace = true
+
+[dev-dependencies]

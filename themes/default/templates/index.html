@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block content %}
+{% if posts %}
+<ul class="post-list">
+  {% for post in posts %}
+  <li class="post-item">
+    <h2><a href="/posts/{{ post.slug }}">{{ post.title }}</a></h2>
+    {% if post.excerpt %}<p class="excerpt">{{ post.excerpt }}</p>{% endif %}
+    <p class="meta">
+      <time>{{ post.published_at }}</time>
+      <span class="author">{{ post.author_display }}</span>
+    </p>
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="empty">还没有公开文章。</p>
+{% endif %}
+{% endblock %}

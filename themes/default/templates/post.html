@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}{{ post.title }} - {{ site.title }}{% endblock %}
+{% block content %}
+<article class="post">
+  <h1>{{ post.title }}</h1>
+  <p class="meta">
+    {% if post.published_at %}<time>{{ post.published_at }}</time>{% endif %}
+    <span class="author">{{ post.author_display }}</span>
+  </p>
+  {% if post.excerpt %}<p class="excerpt">{{ post.excerpt }}</p>{% endif %}
+  <div class="content">{{ post.content_html | safe }}</div>
+</article>
+{% endblock %}

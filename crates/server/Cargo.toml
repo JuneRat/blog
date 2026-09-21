@@ -1,0 +1,24 @@
+[package]
+name = "server"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "blog"
+path = "src/main.rs"
+
+[dependencies]
+application = { path = "../application" }
+domain = { path = "../domain" }
+infrastructure = { path = "../infrastructure" }
+interfaces = { path = "../interfaces" }
+sqlx.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+axum.workspace = true
+time.workspace = true
