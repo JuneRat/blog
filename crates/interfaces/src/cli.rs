@@ -296,10 +296,12 @@ pub async fn run(deps: CliDeps, command: Command) -> Result<(), String> {
             let admin_state = crate::http_auth::AdminState {
                 auth: auth_state.auth.clone(),
                 users: deps.users,
+                posts: deps.posts,
             };
             let app = public_router(public_state, deps.assets_dir)
                 .merge(crate::http_auth::auth_router(auth_state))
-                .merge(crate::http_auth::admin_router(admin_state));
+                .merge(crate::http_auth::admin_router(admin_state.clone()))
+                .merge(crate::http_admin::posts_router(admin_state));
             let listener = tokio::net::TcpListener::bind(&bind)
                 .await
                 .map_err(|e| format!("绑定 {bind} 失败：{e}"))?;

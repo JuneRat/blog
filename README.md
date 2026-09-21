@@ -1,6 +1,6 @@
 # blog
 
-Rust 模块化单体博客。当前进度：**M1 内容闭环 + M2 RBAC 核心与会话/OAuth 登录**（迁移 → 权限化 CLI 写入 → 公开 SSR 阅读 → OAuth 登录 + `/api/admin/v1/me`）；管理写 API 与 React 后台为 M2 剩余部分。
+Rust 模块化单体博客。当前进度：**M1 内容闭环 + M2 RBAC/会话/OAuth/管理写 API**（迁移 → 权限化写入 → 公开 SSR 阅读 → OAuth 登录 → `/api/admin/v1` 文章管理）；React 后台为 M2 最后一块。
 
 ## 快速开始
 
@@ -52,6 +52,21 @@ blog oauth bindings --user sun
 - 会话为单实例内存存储（HttpOnly/SameSite=Lax cookie，服务端只存 SHA-256 摘要）；空闲/绝对过期、容量淘汰、重启全部失效。
 - `GET /api/admin/v1/me` 返回当前用户与权限并集（每次重新读取，撤权即时生效）；`POST /auth/logout` 需会话 + `X-CSRF-Token` 头 + 同源 Origin。
 - 相关环境变量：`BLOG_PUBLIC_BASE_URL`（回调 redirect_uri 基址）、`BLOG_SECURE_COOKIES=1`（HTTPS 部署时加 Secure）。
+
+### 管理写 API（M2 第三段已交付）
+
+会话认证 + CSRF（写方法必须带 `X-CSRF-Token`，值来自 `/api/admin/v1/me`）+ own/any 授权的文章管理端点，响应一律 `Cache-Control: no-store`，请求体上限 2 MiB：
+
+| 方法与路径 | 说明 |
+|---|---|
+| `POST /api/admin/v1/posts` | 创建草稿（`post.create`；作者即会话用户） |
+| `GET /api/admin/v1/posts/{slug}` | 任意状态详情（own 限本人；`post.read_any` 全部） |
+| `GET /api/admin/v1/posts?author=` | 列表（默认本人；他人需 `read_any`） |
+| `PATCH /api/admin/v1/posts/{slug}` | 编辑（`post.update` own / `post.update_any`；支持 `expected_version`） |
+| `POST /api/admin/v1/posts/{slug}/publish` | 发布（`post.publish` / `_any`；幂等） |
+| `POST /api/admin/v1/posts/{slug}/unpublish` | 撤回（`post.unpublish` / `_any`） |
+
+错误语义：401 未登录（带 `WWW-Authenticate: Session`）、403 越权/CSRF、404 不存在、409 slug 占用或版本冲突、400 校验失败。SPA 的下一步工作即基于这组端点。
 
 环境变量：
 

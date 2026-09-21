@@ -145,6 +145,11 @@ async fn fresh_stack() -> Stack {
     });
     let random: Arc<dyn SecureRandom> = Arc::new(TestRandom);
 
+    let posts = Arc::new(application::content::PostInteractor::new(
+        Arc::new(infrastructure::PostgresPostRepository::new(pool.clone())),
+        std::sync::Arc::new(infrastructure::SystemClock),
+    ));
+
     let auth = Arc::new(AuthInteractor::new(
         application::auth::AuthDeps {
             sessions,
@@ -166,9 +171,12 @@ async fn fresh_stack() -> Stack {
     let admin_state = AdminState {
         auth: auth.clone(),
         users,
+        posts,
     };
 
-    let router = auth_router(auth_state).merge(admin_router(admin_state));
+    let router = auth_router(auth_state)
+        .merge(admin_router(admin_state.clone()))
+        .merge(interfaces::http_admin::posts_router(admin_state));
     Stack { router, pool }
 }
 

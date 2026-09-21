@@ -3,4 +3,5 @@
 
 pub mod cli;
 pub mod http;
+pub mod http_admin;
 pub mod http_auth;

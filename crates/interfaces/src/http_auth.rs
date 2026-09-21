@@ -11,6 +11,7 @@
 use std::sync::Arc;
 
 use application::auth::{AuthInteractor, SESSION_COOKIE_NAME};
+use application::content::PostInteractor;
 use application::error::UseCaseError;
 use application::identity::UserInteractor;
 use axum::extract::{Path, Query, State};
@@ -46,6 +47,8 @@ pub fn auth_router(state: AuthState) -> Router {
 pub struct AdminState {
     pub auth: Arc<AuthInteractor>,
     pub users: Arc<UserInteractor>,
+    /// 管理写 API 的文章用例（http_admin 模块使用）。
+    pub posts: Arc<PostInteractor>,
 }
 
 pub fn admin_router(state: AdminState) -> Router {
