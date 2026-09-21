@@ -1526,7 +1526,6 @@ version = "0.1.0"
 dependencies = [
  "application",
  "axum",
- "domain",
  "http-body-util",
  "infrastructure",
  "interfaces",

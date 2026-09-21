@@ -1,7 +1,10 @@
 //! 文章用例：创建、编辑、发布、撤回。
 //!
-//! M1 权限约定：作者可编辑/发布/撤回自己的文章（own 语义的雏形），
-//! RBAC 表与 any 权限随 M2 接入后替换这里的归属检查。
+//! 权限约定（M1）：
+//! - 写通道仅限受控 CLI（`Actor::ensure_write_channel`），公开 HTTP 无写路由；
+//! - 作者可编辑/发布/撤回自己的文章（own 语义雏形），
+//!   RBAC 表与 any 权限随 M2 接入后替换归属检查。
+//!
 //! 所有写入携带 expected_version，冲突不自动覆盖。
 
 use std::sync::Arc;
@@ -10,10 +13,8 @@ use uuid::Uuid;
 
 use crate::error::UseCaseError;
 use crate::identity::Actor;
-use crate::ports::{Clock, PostRepository};
-use domain::content::post::{
-    Post, PostPatch, PostSnapshot, Slug, Visibility,
-};
+use crate::ports::{Clock, PostRepository, SaveOutcome};
+use domain::content::post::{Post, PostPatch, PostSnapshot, Slug, Visibility};
 use domain::identity::UserId;
 
 /// 向接口层转出的值对象（interfaces 不直接依赖 domain crate）。
@@ -85,7 +86,10 @@ impl PostInteractor {
 
     /// 创建草稿。作者来自受信 Actor。
     pub async fn create(&self, actor: &Actor, cmd: CreatePostCmd) -> Result<PostDto, UseCaseError> {
-        let slug_raw = cmd.slug.unwrap_or_else(|| format!("draft-{}", Uuid::now_v7().simple()));
+        actor.ensure_write_channel()?;
+        let slug_raw = cmd
+            .slug
+            .unwrap_or_else(|| format!("draft-{}", Uuid::now_v7().simple()));
         let slug = Slug::new(&slug_raw).map_err(|e| UseCaseError::Invalid(e.to_string()))?;
         let post = Post::create_draft(
             actor.user_id,
@@ -104,6 +108,7 @@ impl PostInteractor {
 
     /// 编辑当前正文；保存已发布内容直接更新线上。
     pub async fn edit(&self, actor: &Actor, cmd: EditPostCmd) -> Result<PostDto, UseCaseError> {
+        actor.ensure_write_channel()?;
         let (mut post, expected) = self.load_for_actor(&cmd.target_slug, actor).await?;
         let expected = cmd.expected_version.unwrap_or(expected);
 
@@ -118,18 +123,7 @@ impl PostInteractor {
             .map_err(|e| UseCaseError::Invalid(e.to_string()))?;
 
         if changed {
-            let now = self.clock.now();
-            let mut snapshot = post.snapshot();
-            if !self.posts.save(&snapshot, expected, now).await? {
-                return Err(UseCaseError::VersionConflict);
-            }
-            // 回读真实 version，避免调用方拿到过期计数。
-            snapshot = self
-                .posts
-                .find_by_id(snapshot.id)
-                .await?
-                .ok_or_else(|| UseCaseError::NotFound("文章".into()))?;
-            return Ok(PostDto::from_snapshot(&snapshot));
+            return self.commit(post, expected).await;
         }
         Ok(PostDto::from_snapshot(&post.snapshot()))
     }
@@ -141,20 +135,12 @@ impl PostInteractor {
         slug: &str,
         expected_version: Option<i64>,
     ) -> Result<PostDto, UseCaseError> {
+        actor.ensure_write_channel()?;
         let (mut post, expected) = self.load_for_actor(slug, actor).await?;
         let expected = expected_version.unwrap_or(expected);
 
         if post.publish(self.clock.now()).map_err(map_domain)? {
-            let mut snapshot = post.snapshot();
-            if !self.posts.save(&snapshot, expected, self.clock.now()).await? {
-                return Err(UseCaseError::VersionConflict);
-            }
-            snapshot = self
-                .posts
-                .find_by_id(snapshot.id)
-                .await?
-                .ok_or_else(|| UseCaseError::NotFound("文章".into()))?;
-            return Ok(PostDto::from_snapshot(&snapshot));
+            return self.commit(post, expected).await;
         }
         Ok(PostDto::from_snapshot(&post.snapshot()))
     }
@@ -166,20 +152,12 @@ impl PostInteractor {
         slug: &str,
         expected_version: Option<i64>,
     ) -> Result<PostDto, UseCaseError> {
+        actor.ensure_write_channel()?;
         let (mut post, expected) = self.load_for_actor(slug, actor).await?;
         let expected = expected_version.unwrap_or(expected);
 
         if post.withdraw() {
-            let mut snapshot = post.snapshot();
-            if !self.posts.save(&snapshot, expected, self.clock.now()).await? {
-                return Err(UseCaseError::VersionConflict);
-            }
-            snapshot = self
-                .posts
-                .find_by_id(snapshot.id)
-                .await?
-                .ok_or_else(|| UseCaseError::NotFound("文章".into()))?;
-            return Ok(PostDto::from_snapshot(&snapshot));
+            return self.commit(post, expected).await;
         }
         Ok(PostDto::from_snapshot(&post.snapshot()))
     }
@@ -199,12 +177,24 @@ impl PostInteractor {
         Ok(snapshots.iter().map(PostDto::from_snapshot).collect())
     }
 
+    /// 提交聚合变更：三态结果映射为用例错误；
+    /// 成功时直接采用数据库返回的新版本，不做二次回读。
+    async fn commit(&self, post: Post, expected: i64) -> Result<PostDto, UseCaseError> {
+        let now = self.clock.now();
+        let mut snapshot = post.snapshot();
+        match self.posts.save(&snapshot, expected, now).await? {
+            SaveOutcome::Saved { new_version } => {
+                snapshot.version = new_version;
+                snapshot.updated_at = now;
+                Ok(PostDto::from_snapshot(&snapshot))
+            }
+            SaveOutcome::StaleConflict => Err(UseCaseError::VersionConflict),
+            SaveOutcome::Gone => Err(UseCaseError::NotFound("文章（已被删除）".into())),
+        }
+    }
+
     /// 加载聚合并执行 M1 归属检查（own）。
-    async fn load_for_actor(
-        &self,
-        slug: &str,
-        actor: &Actor,
-    ) -> Result<(Post, i64), UseCaseError> {
+    async fn load_for_actor(&self, slug: &str, actor: &Actor) -> Result<(Post, i64), UseCaseError> {
         let snapshot = self
             .posts
             .find_by_slug(slug)
@@ -224,9 +214,4 @@ impl PostInteractor {
 
 fn map_domain(e: domain::content::post::PostError) -> UseCaseError {
     UseCaseError::Invalid(e.to_string())
-}
-
-#[cfg(test)]
-mod tests {
-    //! 用例测试见 crates/application/tests/，配合内存 fake 仓储。
 }

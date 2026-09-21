@@ -15,6 +15,18 @@ use domain::identity::UserSnapshot;
 // 写侧端口
 // ---------------------------------------------------------------------------
 
+/// 条件保存的三态结果：
+/// 区分「版本过期可重试」与「记录已消失/被删（重试无意义）」。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SaveOutcome {
+    /// 写入成功，携带数据库返回的递增后版本。
+    Saved { new_version: i64 },
+    /// expected_version 与当前记录不匹配；调用方应报并发冲突。
+    StaleConflict,
+    /// 记录不存在或已软删除。
+    Gone,
+}
+
 #[async_trait]
 pub trait PostRepository: Send + Sync {
     async fn find_by_slug(&self, slug: &str) -> Result<Option<PostSnapshot>, UseCaseError>;
@@ -23,13 +35,12 @@ pub trait PostRepository: Send + Sync {
     async fn insert(&self, snapshot: &PostSnapshot) -> Result<(), UseCaseError>;
 
     /// 条件保存：`expected_version` 匹配当前记录时写入并 version+1。
-    /// 返回 false 表示版本不匹配（或记录已消失），调用方应报并发冲突。
     async fn save(
         &self,
         snapshot: &PostSnapshot,
         expected_version: i64,
         now: OffsetDateTime,
-    ) -> Result<bool, UseCaseError>;
+    ) -> Result<SaveOutcome, UseCaseError>;
 }
 
 #[async_trait]
@@ -86,6 +97,13 @@ pub trait PublishedPostQuery: Send + Sync {
 
 pub trait Clock: Send + Sync {
     fn now(&self) -> OffsetDateTime;
+}
+
+/// readiness 探针：实现方执行最小健康动作（如 SELECT 1）。
+/// None/未装配时调用方按“无依赖可检”处理。
+#[async_trait]
+pub trait HealthCheck: Send + Sync {
+    async fn check(&self) -> bool;
 }
 
 /// Markdown → 清洗后 HTML。清洗规则由实现方（基础设施）负责。

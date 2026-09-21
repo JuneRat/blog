@@ -35,14 +35,16 @@ cargo run -p server -- serve --addr 127.0.0.1:8080
 
 ```bash
 cargo test --workspace
+# 或本地提交前一键检查（fmt + clippy -D warnings + 测试）
+./scripts/check.sh
 ```
 
 - `crates/domain`：聚合与值对象规则（无数据库）。
-- `crates/application`：用例 + 内存 fake（权限、版本冲突）。
-- `crates/infrastructure/tests`：真实 PostgreSQL（迁移、约束、并发版本、公开过滤）。
-- `crates/server/tests`：完整装配 + HTTP（草稿/private/软删除不可访问，撤回即 404）。
+- `crates/application`：用例 + 内存 fake（权限、版本冲突、真并发 join!）。
+- `crates/infrastructure/tests`：真实 PostgreSQL（迁移、约束、三态保存、两连接真并发、公开过滤）。
+- `crates/server/tests`：完整装配 + HTTP（草稿/private/软删除不可访问，撤回即 404，标题/摘要模板转义）。
 
-集成测试需要可写的 PostgreSQL（默认 `postgres://blog:blog@127.0.0.1:5432`，可用 `BLOG_TEST_ADMIN_URL` 覆盖），会重建 `blog_test` / `blog_server_test` 数据库。
+集成测试需要可写的 PostgreSQL，且**只允许 loopback 主机**：默认 `postgres://blog:blog@127.0.0.1:5432`，可用 `BLOG_TEST_ADMIN_URL` 覆盖（测试库 DSN 自动从它推导），会重建 `blog_test` / `blog_server_test` 数据库。CI 见 `.github/workflows/ci.yml`。
 
 ## 结构
 

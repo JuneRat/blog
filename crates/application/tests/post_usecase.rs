@@ -5,10 +5,10 @@ use std::sync::{Arc, Mutex};
 
 use application::content::{CreatePostCmd, EditPostCmd, PostInteractor};
 use application::error::UseCaseError;
-use application::identity::{Actor, ActorChannel, CreateUserCmd, UserInteractor};
-use application::ports::{Clock, PostRepository, UserRepository};
-use domain::content::post::{PostSnapshot, PostStatus, Visibility};
-use domain::identity::{User, UserId, UserSnapshot};
+use application::identity::{Actor, CreateUserCmd, UserInteractor};
+use application::ports::{Clock, PostRepository, SaveOutcome, UserRepository};
+use domain::content::post::{PostSnapshot, Visibility};
+use domain::identity::UserSnapshot;
 use time::OffsetDateTime;
 
 // ---------------------------------------------------------------------------
@@ -51,7 +51,10 @@ impl PostRepository for FakePostRepo {
             .cloned())
     }
 
-    async fn list_by_author(&self, author_id: uuid::Uuid) -> Result<Vec<PostSnapshot>, UseCaseError> {
+    async fn list_by_author(
+        &self,
+        author_id: uuid::Uuid,
+    ) -> Result<Vec<PostSnapshot>, UseCaseError> {
         Ok(self
             .posts
             .lock()
@@ -76,14 +79,17 @@ impl PostRepository for FakePostRepo {
         snapshot: &PostSnapshot,
         expected_version: i64,
         now: OffsetDateTime,
-    ) -> Result<bool, UseCaseError> {
+    ) -> Result<SaveOutcome, UseCaseError> {
         let mut posts = self.posts.lock().unwrap();
         let current = match posts.get_mut(&snapshot.slug) {
             Some(p) if p.id == snapshot.id => p,
-            _ => return Ok(false),
+            _ => return Ok(SaveOutcome::Gone),
         };
+        if current.deleted_at.is_some() {
+            return Ok(SaveOutcome::Gone);
+        }
         if current.version != expected_version {
-            return Ok(false);
+            return Ok(SaveOutcome::StaleConflict);
         }
         current.title = snapshot.title.clone();
         current.excerpt = snapshot.excerpt.clone();
@@ -93,7 +99,9 @@ impl PostRepository for FakePostRepo {
         current.published_at = snapshot.published_at;
         current.updated_at = now;
         current.version += 1;
-        Ok(true)
+        Ok(SaveOutcome::Saved {
+            new_version: current.version,
+        })
     }
 }
 
@@ -196,7 +204,11 @@ fn draft_cmd(slug: &str) -> CreatePostCmd {
 async fn create_edit_publish_withdraw_flow() {
     let f = fixture().await;
 
-    let created = f.posts.create(&f.author, draft_cmd("first-post")).await.unwrap();
+    let created = f
+        .posts
+        .create(&f.author, draft_cmd("first-post"))
+        .await
+        .unwrap();
     assert_eq!(created.status, "draft");
     assert_eq!(created.version, 1);
 
@@ -224,7 +236,11 @@ async fn create_edit_publish_withdraw_flow() {
     assert_eq!(published.version, 3);
 
     // 重复发布幂等：无变化不递增版本。
-    let again = f.posts.publish(&f.author, "first-post", None).await.unwrap();
+    let again = f
+        .posts
+        .publish(&f.author, "first-post", None)
+        .await
+        .unwrap();
     assert_eq!(again.version, 3);
 
     let withdrawn = f
@@ -277,9 +293,46 @@ async fn concurrent_edit_detects_version_conflict() {
 }
 
 #[tokio::test]
+async fn truly_parallel_edits_exactly_one_wins() {
+    let f = fixture().await;
+    f.posts
+        .create(&f.author, draft_cmd("parallel"))
+        .await
+        .unwrap();
+
+    // 两个调用真正同时进行（join!），都基于 version=1。
+    let edit = |content: &'static str| {
+        f.posts.edit(
+            &f.author,
+            EditPostCmd {
+                target_slug: "parallel".into(),
+                content: Some(content.into()),
+                expected_version: Some(1),
+                ..Default::default()
+            },
+        )
+    };
+    let (a, b) = tokio::join!(edit("A 的并发修改"), edit("B 的并发修改"));
+
+    let ok_count = usize::from(a.is_ok()) + usize::from(b.is_ok());
+    assert_eq!(ok_count, 1, "并发提交恰好一个成功，实际 a={a:?} b={b:?}");
+    let conflict_count = usize::from(matches!(a, Err(UseCaseError::VersionConflict)))
+        + usize::from(matches!(b, Err(UseCaseError::VersionConflict)));
+    assert_eq!(conflict_count, 1);
+
+    let shown = f.posts.find("parallel").await.unwrap();
+    assert_eq!(shown.version, 2, "恰好一次版本递增");
+    // 胜者只改了 content，标题/摘要保持原样。
+    assert_eq!(shown.title, "第一篇");
+}
+
+#[tokio::test]
 async fn ownership_check_rejects_non_author() {
     let f = fixture().await;
-    f.posts.create(&f.author, draft_cmd("own-post")).await.unwrap();
+    f.posts
+        .create(&f.author, draft_cmd("own-post"))
+        .await
+        .unwrap();
 
     let err = f
         .posts
@@ -317,7 +370,11 @@ async fn publish_requires_content() {
 async fn slug_taken_maps_to_conflict() {
     let f = fixture().await;
     f.posts.create(&f.author, draft_cmd("dup")).await.unwrap();
-    let err = f.posts.create(&f.author, draft_cmd("dup")).await.unwrap_err();
+    let err = f
+        .posts
+        .create(&f.author, draft_cmd("dup"))
+        .await
+        .unwrap_err();
     assert!(matches!(err, UseCaseError::Conflict(_)));
 }
 
@@ -338,7 +395,11 @@ async fn generated_slug_occupied_at_creation() {
         )
         .await
         .unwrap();
-    assert!(created.slug.starts_with("draft-"), "生成临时唯一 slug：{}", created.slug);
+    assert!(
+        created.slug.starts_with("draft-"),
+        "生成临时唯一 slug：{}",
+        created.slug
+    );
 }
 
 #[tokio::test]

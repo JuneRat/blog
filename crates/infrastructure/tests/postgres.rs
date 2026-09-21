@@ -1,15 +1,18 @@
 //! 基础设施集成测试：真实 PostgreSQL 上验证迁移、约束与并发版本语义。
-//! 需要可用的 PostgreSQL（默认 postgres://blog:blog@127.0.0.1:5432），
-//! 通过 BLOG_TEST_ADMIN_URL 覆盖；库不可达时跳过。
+//!
+//! 通过 `BLOG_TEST_ADMIN_URL` 覆盖管理连接（默认 postgres://blog:blog@127.0.0.1:5432/postgres）；
+//! 测试库 DSN 从它推导（同名主机上的 blog_test）。库不可达或主机非 loopback 时
+//! 直接 panic 失败——这些测试是破坏性的（DROP DATABASE），不允许静默跳过后误报通过。
 
 use application::error::UseCaseError;
-use application::ports::{ContentRenderer, PostRepository, PublishedPostQuery};
+use application::ports::{ContentRenderer, PostRepository, PublishedPostQuery, SaveOutcome};
 use domain::content::post::{Post, PostSnapshot, PostStatus, Slug, Visibility};
 use domain::identity::UserId;
 use infrastructure::{
-    connect, migrate, PostgresPostRepository, PostgresPublishedPostQuery, SanitizingMarkdownRenderer,
+    PostgresPostRepository, PostgresPublishedPostQuery, SanitizingMarkdownRenderer, connect,
+    migrate,
 };
-use sqlx::{Executor, PgPool, Row};
+use sqlx::{PgPool, Row};
 use time::OffsetDateTime;
 use tokio::sync::Mutex;
 
@@ -20,8 +23,35 @@ fn admin_url() -> String {
         .unwrap_or_else(|_| "postgres://blog:blog@127.0.0.1:5432/postgres".into())
 }
 
+/// 从管理 DSN 推导同一主机上的测试库 DSN（替换最后一段路径）。
+fn test_db_url(admin: &str) -> String {
+    let base = admin.trim_end_matches('/');
+    let idx = base
+        .rfind('/')
+        .expect("管理 DSN 缺少路径段，形如 postgres://user:pass@host:port/postgres");
+    format!("{}/blog_test", &base[..idx])
+}
+
+/// 破坏性测试守卫：只允许 loopback 主机，防止误删远端同名库。
+fn assert_loopback(admin: &str) {
+    let after_scheme = admin.split("://").nth(1).unwrap_or_default();
+    let host_port = after_scheme
+        .rsplit_once('@')
+        .map(|(_, rest)| rest)
+        .unwrap_or(after_scheme);
+    let host = host_port.split([':', '/']).next().unwrap_or_default();
+    assert!(
+        matches!(host, "127.0.0.1" | "::1" | "localhost"),
+        "拒绝在非 loopback 主机 {host} 上执行破坏性测试（BLOG_TEST_ADMIN_URL 指向了远端？）"
+    );
+}
+
 async fn fresh_database() -> PgPool {
-    let admin = connect(&admin_url()).await.expect("连接管理库失败");
+    let admin_dsn = admin_url();
+    assert_loopback(&admin_dsn);
+    let test_dsn = test_db_url(&admin_dsn);
+
+    let admin = connect(&admin_dsn).await.expect("连接管理库失败");
 
     // raw_sql 走简单协议且不包事务；CREATE/DROP DATABASE 不能在事务块内执行。
     sqlx::raw_sql("DROP DATABASE IF EXISTS blog_test WITH (FORCE)")
@@ -34,9 +64,7 @@ async fn fresh_database() -> PgPool {
         .expect("创建测试库失败");
     admin.close().await;
 
-    let pool = connect("postgres://blog:blog@127.0.0.1:5432/blog_test")
-        .await
-        .expect("连接测试库失败");
+    let pool = connect(&test_dsn).await.expect("连接测试库失败");
     migrate(&pool, "../../migrations/postgres")
         .await
         .expect("迁移失败");
@@ -94,8 +122,19 @@ async fn migrations_create_thirteen_core_tables() {
     .await
     .unwrap();
     let expected = [
-        "categories", "oauth_accounts", "pages", "permissions", "post_tags", "posts",
-        "role_permissions", "roles", "series", "settings", "tags", "user_roles", "users",
+        "categories",
+        "oauth_accounts",
+        "pages",
+        "permissions",
+        "post_tags",
+        "posts",
+        "role_permissions",
+        "roles",
+        "series",
+        "settings",
+        "tags",
+        "user_roles",
+        "users",
     ];
     for t in expected {
         assert!(tables.iter().any(|x| x == t), "缺少表 {t}");
@@ -109,8 +148,13 @@ async fn duplicate_slug_is_rejected_as_conflict() {
     let author = seed_user(&pool, "author").await;
     let repo = PostgresPostRepository::new(pool.clone());
 
-    repo.insert(&draft_snapshot(author, "same-slug")).await.unwrap();
-    let err = repo.insert(&draft_snapshot(author, "same-slug")).await.unwrap_err();
+    repo.insert(&draft_snapshot(author, "same-slug"))
+        .await
+        .unwrap();
+    let err = repo
+        .insert(&draft_snapshot(author, "same-slug"))
+        .await
+        .unwrap_err();
     match err {
         UseCaseError::Conflict(target) => assert_eq!(target, "slug"),
         other => panic!("期望 Conflict，得到 {other:?}"),
@@ -124,8 +168,14 @@ async fn foreign_key_protects_author_reference() {
     let repo = PostgresPostRepository::new(pool.clone());
 
     let ghost = uuid::Uuid::now_v7();
-    let err = repo.insert(&draft_snapshot(ghost, "orphan")).await.unwrap_err();
-    assert!(matches!(err, UseCaseError::Repository(_)), "未知作者应被 FK 拒绝");
+    let err = repo
+        .insert(&draft_snapshot(ghost, "orphan"))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, UseCaseError::Repository(_)),
+        "未知作者应被 FK 拒绝"
+    );
 }
 
 #[tokio::test]
@@ -166,45 +216,54 @@ async fn series_position_rules_enforced_by_constraints() {
     c.series_id = None;
     c.series_order = Some(1);
     let err = repo.insert(&c).await.unwrap_err();
-    assert!(matches!(err, UseCaseError::Repository(_)), "series_id 与 series_order 必须同空同非空");
+    assert!(
+        matches!(err, UseCaseError::Repository(_)),
+        "series_id 与 series_order 必须同空同非空"
+    );
 
     // 延后唯一约束：事务内交换位置，提交时必须恢复唯一。
-    let swap = format!(
+    sqlx::raw_sql(
         "BEGIN; SET CONSTRAINTS posts_series_position_unique DEFERRED; \
          UPDATE posts SET series_order = 5 WHERE slug = 'series-a'; \
          UPDATE posts SET series_order = 2 WHERE slug = 'series-b'; \
-         COMMIT;"
-    );
-    pool.execute(swap.as_str()).await.expect("交换系列位置");
-
-    let orders: Vec<(String, i32)> = sqlx::query(
-        "SELECT slug, series_order FROM posts WHERE series_id = $1 ORDER BY slug",
+         COMMIT;",
     )
-    .bind(series_id)
-    .fetch_all(&pool)
+    .execute(&pool)
     .await
-    .unwrap()
-    .into_iter()
-    .map(|row: sqlx::postgres::PgRow| {
-        (
-            row.get::<String, _>("slug"),
-            row.get::<i32, _>("series_order"),
-        )
-    })
-    .collect();
+    .expect("交换系列位置");
+
+    let orders: Vec<(String, i32)> =
+        sqlx::query("SELECT slug, series_order FROM posts WHERE series_id = $1 ORDER BY slug")
+            .bind(series_id)
+            .fetch_all(&pool)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|row: sqlx::postgres::PgRow| {
+                (
+                    row.get::<String, _>("slug"),
+                    row.get::<i32, _>("series_order"),
+                )
+            })
+            .collect();
     assert_eq!(orders, vec![("series-a".into(), 5), ("series-b".into(), 2)]);
 
     // 延后后仍冲突的提交必须整体失败。
-    let bad = format!(
+    let err = sqlx::raw_sql(
         "BEGIN; SET CONSTRAINTS posts_series_position_unique DEFERRED; \
-         UPDATE posts SET series_order = 5 WHERE slug = 'series-b'; COMMIT;"
+         UPDATE posts SET series_order = 5 WHERE slug = 'series-b'; COMMIT;",
+    )
+    .execute(&pool)
+    .await
+    .unwrap_err();
+    assert!(
+        err.to_string().contains("posts_series_position_unique"),
+        "冲突提交回滚：{err}"
     );
-    let err = pool.execute(bad.as_str()).await.unwrap_err();
-    assert!(err.to_string().contains("posts_series_position_unique"), "冲突提交回滚：{err}");
 }
 
 #[tokio::test]
-async fn optimistic_version_controls_concurrent_save() {
+async fn save_returns_three_states_and_new_version() {
     let _g = SERIAL.lock().await;
     let pool = fresh_database().await;
     let author = seed_user(&pool, "author").await;
@@ -214,23 +273,86 @@ async fn optimistic_version_controls_concurrent_save() {
     repo.insert(&snapshot).await.unwrap();
     assert_eq!(snapshot.version, 1);
 
-    // 正确版本：保存成功并递增。
+    // 正确版本：Saved 且携带新版本号，无需回读。
     snapshot.title = "第一次修改".into();
-    let ok = repo.save(&snapshot, 1, OffsetDateTime::now_utc()).await.unwrap();
-    assert!(ok);
-    let reloaded = repo.find_by_slug("versioned").await.unwrap().unwrap();
-    assert_eq!(reloaded.version, 2);
-    assert_eq!(reloaded.title, "第一次修改");
+    let outcome = repo
+        .save(&snapshot, 1, OffsetDateTime::now_utc())
+        .await
+        .unwrap();
+    assert_eq!(outcome, SaveOutcome::Saved { new_version: 2 });
 
-    // 过期版本：拒绝，不覆盖。
-    let stale = reloaded.clone();
-    let mut stale_edit = stale;
+    // 过期版本：StaleConflict，不覆盖。
+    let mut stale_edit = snapshot.clone();
     stale_edit.title = "基于旧版本的并发修改".into();
-    let rejected = repo.save(&stale_edit, 1, OffsetDateTime::now_utc()).await.unwrap();
-    assert!(!rejected, "过期版本不能写入");
+    stale_edit.version = 1;
+    let outcome = repo
+        .save(&stale_edit, 1, OffsetDateTime::now_utc())
+        .await
+        .unwrap();
+    assert_eq!(outcome, SaveOutcome::StaleConflict);
+
     let current = repo.find_by_slug("versioned").await.unwrap().unwrap();
     assert_eq!(current.title, "第一次修改", "并发写入未覆盖最新值");
     assert_eq!(current.version, 2);
+
+    // 记录消失（软删除）：Gone，重试无意义。
+    sqlx::raw_sql("UPDATE posts SET deleted_at = now() WHERE slug = 'versioned'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let mut gone_edit = snapshot.clone();
+    gone_edit.title = "写给已删除文章".into();
+    let outcome = repo
+        .save(&gone_edit, 2, OffsetDateTime::now_utc())
+        .await
+        .unwrap();
+    assert_eq!(
+        outcome,
+        SaveOutcome::Gone,
+        "软删除后的保存应报 Gone 而非冲突"
+    );
+}
+
+#[tokio::test]
+async fn truly_concurrent_saves_exactly_one_wins() {
+    let _g = SERIAL.lock().await;
+    let pool = fresh_database().await;
+    let author = seed_user(&pool, "author").await;
+
+    let repo_a = PostgresPostRepository::new(pool.clone());
+    let pool_b = connect(&test_db_url(&admin_url())).await.unwrap();
+    let repo_b = PostgresPostRepository::new(pool_b);
+
+    let snapshot = draft_snapshot(author, "race-real");
+    repo_a.insert(&snapshot).await.unwrap();
+
+    let mut edit_a = snapshot.clone();
+    edit_a.title = "并发A".into();
+    let mut edit_b = snapshot.clone();
+    edit_b.title = "并发B".into();
+    let now = OffsetDateTime::now_utc();
+
+    // 两条真实连接同时 UPDATE 同一行，都带 expected_version=1。
+    let (outcome_a, outcome_b) =
+        tokio::join!(repo_a.save(&edit_a, 1, now), repo_b.save(&edit_b, 1, now));
+    let outcomes = [outcome_a.unwrap(), outcome_b.unwrap()];
+    let saved = outcomes
+        .iter()
+        .filter(|o| **o == SaveOutcome::Saved { new_version: 2 })
+        .count();
+    let conflicted = outcomes
+        .iter()
+        .filter(|o| **o == SaveOutcome::StaleConflict)
+        .count();
+    assert_eq!(saved, 1, "恰好一个写入成功：{outcomes:?}");
+    assert_eq!(conflicted, 1, "另一个必须是版本冲突：{outcomes:?}");
+
+    let final_state = repo_a.find_by_slug("race-real").await.unwrap().unwrap();
+    assert_eq!(final_state.version, 2);
+    assert!(
+        final_state.title == "并发A" || final_state.title == "并发B",
+        "落盘的是胜者内容"
+    );
 }
 
 #[tokio::test]
@@ -251,7 +373,9 @@ async fn public_query_filters_draft_private_and_deleted() {
     repo.insert(&published).await.unwrap();
 
     // 2. 草稿
-    repo.insert(&draft_snapshot(author, "draft-one")).await.unwrap();
+    repo.insert(&draft_snapshot(author, "draft-one"))
+        .await
+        .unwrap();
 
     // 3. 发布但 private
     let mut private = draft_snapshot(author, "private-one");
@@ -271,7 +395,7 @@ async fn public_query_filters_draft_private_and_deleted() {
         deleted = post.snapshot();
     }
     repo.insert(&deleted).await.unwrap();
-    sqlx::query("UPDATE posts SET deleted_at = now() WHERE slug = 'deleted-one'")
+    sqlx::raw_sql("UPDATE posts SET deleted_at = now() WHERE slug = 'deleted-one'")
         .execute(&pool)
         .await
         .unwrap();
@@ -303,25 +427,34 @@ async fn status_transitions_persisted_correctly() {
 
     let mut post = Post::reconstitute(repo.find_by_slug("lifecycle").await.unwrap().unwrap());
     post.publish(OffsetDateTime::now_utc()).unwrap();
-    repo.save(&post.snapshot(), 1, OffsetDateTime::now_utc()).await.unwrap();
+    repo.save(&post.snapshot(), 1, OffsetDateTime::now_utc())
+        .await
+        .unwrap();
 
     let mut post = Post::reconstitute(repo.find_by_slug("lifecycle").await.unwrap().unwrap());
     assert_eq!(post.status(), PostStatus::Published);
     let first_published_at = post.snapshot().published_at;
 
     post.withdraw();
-    repo.save(&post.snapshot(), 2, OffsetDateTime::now_utc()).await.unwrap();
+    repo.save(&post.snapshot(), 2, OffsetDateTime::now_utc())
+        .await
+        .unwrap();
 
     let post = Post::reconstitute(repo.find_by_slug("lifecycle").await.unwrap().unwrap());
     assert_eq!(post.status(), PostStatus::Draft);
-    assert_eq!(post.snapshot().published_at, first_published_at, "撤回保留首次发布时间");
+    assert_eq!(
+        post.snapshot().published_at,
+        first_published_at,
+        "撤回保留首次发布时间"
+    );
 }
 
 #[tokio::test]
 async fn markdown_renderer_sanitizes_unsafe_html() {
     let renderer = SanitizingMarkdownRenderer::new();
 
-    let html = renderer.render_markdown("# 标题\n\n<script>alert('x')</script>\n\n[链接](https://example.com)");
+    let html = renderer
+        .render_markdown("# 标题\n\n<script>alert('x')</script>\n\n[链接](https://example.com)");
     assert!(html.contains("<h1>标题</h1>"));
     assert!(!html.contains("<script"), "script 必须被清除");
     assert!(html.contains("href=\"https://example.com\""));

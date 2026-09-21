@@ -6,14 +6,14 @@
 
 use async_trait::async_trait;
 use sqlx::postgres::{PgDatabaseError, PgPoolOptions};
-use sqlx::{Executor, PgPool, Row};
+use sqlx::{PgPool, Row};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
 use application::error::UseCaseError;
 use application::ports::{
-    Clock, PostRepository, PublicPostDetail, PublicPostSummary, PublishedPostQuery,
-    UserRepository,
+    Clock, HealthCheck, PostRepository, PublicPostDetail, PublicPostSummary, PublishedPostQuery,
+    SaveOutcome, UserRepository,
 };
 use domain::content::post::{PostSnapshot, PostStatus, Visibility};
 use domain::identity::UserSnapshot;
@@ -48,6 +48,27 @@ impl Clock for SystemClock {
     }
 }
 
+/// readiness 探针：真实执行 SELECT 1，连接池不可用时报告不健康。
+pub struct PgHealthCheck {
+    pool: PgPool,
+}
+
+impl PgHealthCheck {
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl HealthCheck for PgHealthCheck {
+    async fn check(&self) -> bool {
+        sqlx::query_scalar::<_, i32>("SELECT 1")
+            .fetch_one(&self.pool)
+            .await
+            .is_ok()
+    }
+}
+
 // ---------------------------------------------------------------------------
 // 错误映射
 // ---------------------------------------------------------------------------
@@ -69,12 +90,11 @@ fn unique_conflict_target(error: &PgDatabaseError) -> Option<&'static str> {
 fn map_sqlx_error(error: sqlx::Error) -> UseCaseError {
     if let sqlx::Error::Database(db) = &error {
         let pg = db.try_downcast_ref::<PgDatabaseError>();
-        if let Some(pg) = pg {
-            if pg.code() == "23505" {
-                if let Some(target) = unique_conflict_target(pg) {
-                    return UseCaseError::Conflict(target.to_string());
-                }
-            }
+        if let Some(pg) = pg
+            && pg.code() == "23505"
+            && let Some(target) = unique_conflict_target(pg)
+        {
+            return UseCaseError::Conflict(target.to_string());
         }
     }
     UseCaseError::Repository(error.to_string())
@@ -137,13 +157,11 @@ impl UserRepository for PostgresUserRepository {
     }
 
     async fn find_by_id(&self, id: Uuid) -> Result<Option<UserSnapshot>, UseCaseError> {
-        let row = sqlx::query(&format!(
-            "SELECT {USER_COLUMNS} FROM users WHERE id = $1"
-        ))
-        .bind(id)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(map_sqlx_error)?;
+        let row = sqlx::query(&format!("SELECT {USER_COLUMNS} FROM users WHERE id = $1"))
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(map_sqlx_error)?;
         row.as_ref().map(user_from_row).transpose()
     }
 
@@ -205,24 +223,20 @@ fn post_from_row(row: &sqlx::postgres::PgRow) -> Result<PostSnapshot, UseCaseErr
 #[async_trait]
 impl PostRepository for PostgresPostRepository {
     async fn find_by_slug(&self, slug: &str) -> Result<Option<PostSnapshot>, UseCaseError> {
-        let row = sqlx::query(&format!(
-            "SELECT {POST_COLUMNS} FROM posts WHERE slug = $1"
-        ))
-        .bind(slug)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(map_sqlx_error)?;
+        let row = sqlx::query(&format!("SELECT {POST_COLUMNS} FROM posts WHERE slug = $1"))
+            .bind(slug)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(map_sqlx_error)?;
         row.as_ref().map(post_from_row).transpose()
     }
 
     async fn find_by_id(&self, id: Uuid) -> Result<Option<PostSnapshot>, UseCaseError> {
-        let row = sqlx::query(&format!(
-            "SELECT {POST_COLUMNS} FROM posts WHERE id = $1"
-        ))
-        .bind(id)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(map_sqlx_error)?;
+        let row = sqlx::query(&format!("SELECT {POST_COLUMNS} FROM posts WHERE id = $1"))
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(map_sqlx_error)?;
         row.as_ref().map(post_from_row).transpose()
     }
 
@@ -276,8 +290,8 @@ impl PostRepository for PostgresPostRepository {
         snapshot: &PostSnapshot,
         expected_version: i64,
         now: OffsetDateTime,
-    ) -> Result<bool, UseCaseError> {
-        let result = sqlx::query(
+    ) -> Result<SaveOutcome, UseCaseError> {
+        let updated = sqlx::query(
             r#"
             UPDATE posts SET
                 title = $3, slug = $4, excerpt = $5, content = $6, cover = $7,
@@ -303,7 +317,26 @@ impl PostRepository for PostgresPostRepository {
         .fetch_optional(&self.pool)
         .await
         .map_err(map_sqlx_error)?;
-        Ok(result.is_some())
+
+        if let Some(row) = updated {
+            return Ok(SaveOutcome::Saved {
+                new_version: row.try_get::<i64, _>(0).map_err(map_row_error)?,
+            });
+        }
+
+        // 写入未命中：区分「版本过期」（可重试）与「记录已消失」（不可重试）。
+        let current =
+            sqlx::query("SELECT version, deleted_at IS NULL AS alive FROM posts WHERE id = $1")
+                .bind(snapshot.id)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(map_sqlx_error)?;
+        match current {
+            Some(row) if row.try_get::<bool, _>("alive").map_err(map_row_error)? => {
+                Ok(SaveOutcome::StaleConflict)
+            }
+            _ => Ok(SaveOutcome::Gone),
+        }
     }
 }
 
@@ -328,6 +361,9 @@ impl PublishedPostQuery for PostgresPublishedPostQuery {
         limit: i64,
         offset: i64,
     ) -> Result<Vec<PublicPostSummary>, UseCaseError> {
+        // 端口约束：无论调用方传什么，limit/offset 都被钳制在安全范围。
+        let limit = limit.clamp(1, 100);
+        let offset = offset.max(0);
         let rows = sqlx::query(&format!(
             r#"
             SELECT p.title, p.slug, p.excerpt, p.published_at,
@@ -391,11 +427,4 @@ impl PublishedPostQuery for PostgresPublishedPostQuery {
         })
         .transpose()
     }
-}
-
-/// 供集成测试复用的辅助：直接执行 SQL（不进入生产路径）。
-#[doc(hidden)]
-pub async fn execute_raw(pool: &PgPool, sql: &str) -> Result<u64, sqlx::Error> {
-    let result = pool.execute(sql).await?;
-    Ok(result.rows_affected())
 }

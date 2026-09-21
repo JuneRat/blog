@@ -12,7 +12,7 @@ use infrastructure::{
     MiniJinjaThemeRenderer, PostgresPostRepository, PostgresPublishedPostQuery,
     PostgresUserRepository, SanitizingMarkdownRenderer, SystemClock,
 };
-use interfaces::cli::{parse_args, CliDeps, Command};
+use interfaces::cli::{CliDeps, Command, parse_args};
 
 struct Config {
     database_url: String,
@@ -72,14 +72,15 @@ async fn main() {
                 .expect("执行迁移失败");
 
             let clock = Arc::new(SystemClock);
-            let user_repo: Arc<dyn UserRepository> = Arc::new(PostgresUserRepository::new(pool.clone()));
-            let post_repo: Arc<dyn PostRepository> = Arc::new(PostgresPostRepository::new(pool.clone()));
+            let user_repo: Arc<dyn UserRepository> =
+                Arc::new(PostgresUserRepository::new(pool.clone()));
+            let post_repo: Arc<dyn PostRepository> =
+                Arc::new(PostgresPostRepository::new(pool.clone()));
             let public_query: Arc<dyn PublishedPostQuery> =
                 Arc::new(PostgresPublishedPostQuery::new(pool.clone()));
 
             let renderer = Arc::new(
-                MiniJinjaThemeRenderer::load(&config.theme_dir)
-                    .expect("加载主题模板失败"),
+                MiniJinjaThemeRenderer::load(&config.theme_dir).expect("加载主题模板失败"),
             );
             let markdown = Arc::new(SanitizingMarkdownRenderer::new());
 
@@ -101,6 +102,7 @@ async fn main() {
                 public_site,
                 user_repo,
                 assets_dir: Some(config.theme_dir.join("assets")),
+                health: Some(Arc::new(infrastructure::PgHealthCheck::new(pool.clone()))),
             };
 
             if let Err(e) = interfaces::cli::run(deps, command).await {

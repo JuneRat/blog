@@ -91,12 +91,15 @@ pub enum PostError {
     EmptyContentOnPublish,
     #[error("已发布文章的标题与正文不能清空")]
     EmptyContentWhenPublished,
-    #[error("归档是终态，不能直接重新发布；需要先恢复为草稿的流程另行扩展")]
+    #[error("归档是终态，不能重新发布")]
     ArchivedIsTerminal,
+    #[error("归档是终态，不能编辑；需要恢复为草稿的流程另行扩展")]
+    ArchivedNotEditable,
 }
 
-/// 单一路径片段 slug：非空、UTF-8 字节数不超过上限，
-/// 禁止路径分隔符、点、百分号、空白与控制字符，防止编码与遍历绕过。
+/// 单一路径片段 slug：非空、UTF-8 字节数不超过上限。
+/// 字符集固定为 Unicode 字母数字加 `-`、`_`；禁止其他 ASCII 符号与空白，
+/// 防止路径分隔、编码与模板输出层面的绕过。
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Slug(String);
 
@@ -112,11 +115,11 @@ impl Slug {
             )));
         }
         for ch in raw.chars() {
-            if ch.is_control() || ch.is_whitespace() {
-                return Err(PostError::InvalidSlug("不能包含空白或控制字符".into()));
-            }
-            if matches!(ch, '/' | '\\' | '?' | '#' | '%' | '.') {
-                return Err(PostError::InvalidSlug(format!("不能包含字符 {ch:?}")));
+            let allowed = ch.is_alphanumeric() || ch == '-' || ch == '_';
+            if !allowed {
+                return Err(PostError::InvalidSlug(format!(
+                    "只允许 Unicode 字母数字、-、_，包含非法字符 {ch:?}"
+                )));
             }
         }
         Ok(Self(raw.to_string()))
@@ -184,10 +187,10 @@ impl Post {
         if title.chars().count() > TITLE_MAX_CHARS {
             return Err(PostError::TitleTooLong);
         }
-        if let Some(excerpt) = excerpt.as_deref() {
-            if excerpt.chars().count() > EXCERPT_MAX_CHARS {
-                return Err(PostError::ExcerptTooLong);
-            }
+        if let Some(excerpt) = excerpt.as_deref()
+            && excerpt.chars().count() > EXCERPT_MAX_CHARS
+        {
+            return Err(PostError::ExcerptTooLong);
         }
         Ok(Self {
             snapshot: PostSnapshot {
@@ -252,69 +255,83 @@ impl Post {
         if title.chars().count() > TITLE_MAX_CHARS {
             return Err(PostError::TitleTooLong);
         }
-        if let Some(excerpt) = excerpt {
-            if excerpt.chars().count() > EXCERPT_MAX_CHARS {
-                return Err(PostError::ExcerptTooLong);
-            }
+        if let Some(excerpt) = excerpt
+            && excerpt.chars().count() > EXCERPT_MAX_CHARS
+        {
+            return Err(PostError::ExcerptTooLong);
         }
         Ok(())
     }
 
     /// 编辑当前正文。保存已发布内容会直接反映到线上，因此已发布状态
     /// 不允许把标题/正文清空。返回是否存在实际变化（决定 version 是否 +1）。
+    ///
+    /// 实现：先在候选值上完成全部校验，再整体提交——任一校验失败时
+    /// 聚合保持原状，不会留下半套修改。
     pub fn edit(&mut self, patch: PostPatch) -> Result<bool, PostError> {
+        if self.snapshot.status == PostStatus::Archived {
+            return Err(PostError::ArchivedNotEditable);
+        }
+
+        // 1. 计算候选值（未提供的字段保持当前值）。
+        let new_title = patch.title.unwrap_or_else(|| self.snapshot.title.clone());
+        let new_excerpt_owned = patch
+            .excerpt
+            .map(|e| if e.is_empty() { None } else { Some(e) })
+            .unwrap_or_else(|| self.snapshot.excerpt.clone());
+        let new_content = patch
+            .content
+            .unwrap_or_else(|| self.snapshot.content.clone());
+        let new_visibility = patch.visibility.unwrap_or(self.snapshot.visibility);
+        let slug_changed = match patch.slug.as_deref() {
+            Some(new_slug) => new_slug != self.snapshot.slug,
+            None => false,
+        };
+
+        // 2. 全量校验候选值（不写任何字段）。
+        Self::validate_mutation_fields(&new_title, new_excerpt_owned.as_deref())?;
+        if slug_changed {
+            // 首次发布产生 published_at 后 slug 锁定；撤回不解锁。
+            if self.snapshot.published_at.is_some() {
+                return Err(PostError::SlugLocked);
+            }
+            Slug::new(
+                patch
+                    .slug
+                    .as_deref()
+                    .expect("slug_changed 蕴含 patch.slug 存在"),
+            )?;
+        }
+        if self.snapshot.status == PostStatus::Published {
+            if new_title.trim().is_empty() {
+                return Err(PostError::EmptyContentWhenPublished);
+            }
+            if new_content.trim().is_empty() {
+                return Err(PostError::EmptyContentWhenPublished);
+            }
+        }
+
+        // 3. 整体提交。
         let mut changed = false;
-
-        if let Some(new_title) = patch.title {
-            if new_title != self.snapshot.title {
-                Self::validate_mutation_fields(&new_title, patch.excerpt.as_deref())?;
-                self.snapshot.title = new_title;
-                changed = true;
-            }
+        if new_title != self.snapshot.title {
+            self.snapshot.title = new_title;
+            changed = true;
         }
-        if let Some(new_excerpt) = patch.excerpt {
-            if Some(&new_excerpt) != self.snapshot.excerpt.as_ref() {
-                Self::validate_mutation_fields(&self.snapshot.title, Some(&new_excerpt))?;
-                self.snapshot.excerpt = if new_excerpt.is_empty() {
-                    None
-                } else {
-                    Some(new_excerpt)
-                };
-                changed = true;
-            }
+        if new_excerpt_owned != self.snapshot.excerpt {
+            self.snapshot.excerpt = new_excerpt_owned;
+            changed = true;
         }
-        if let Some(new_content) = patch.content {
-            if new_content != self.snapshot.content {
-                self.snapshot.content = new_content;
-                changed = true;
-            }
+        if new_content != self.snapshot.content {
+            self.snapshot.content = new_content;
+            changed = true;
         }
-        if let Some(new_visibility) = patch.visibility {
-            if new_visibility != self.snapshot.visibility {
-                self.snapshot.visibility = new_visibility;
-                changed = true;
-            }
+        if new_visibility != self.snapshot.visibility {
+            self.snapshot.visibility = new_visibility;
+            changed = true;
         }
-        if let Some(new_slug_raw) = patch.slug {
-            if new_slug_raw != self.snapshot.slug {
-                // 首次发布产生 published_at 后 slug 锁定；撤回不解锁。
-                if self.snapshot.published_at.is_some() {
-                    return Err(PostError::SlugLocked);
-                }
-                let slug = Slug::new(&new_slug_raw)?;
-                self.snapshot.slug = slug.into_string();
-                changed = true;
-            }
-        }
-
-        // 已发布内容直接更新线上，标题/正文不可为空。
-        if changed && self.snapshot.status == PostStatus::Published {
-            if self.snapshot.title.trim().is_empty() {
-                return Err(PostError::EmptyContentWhenPublished);
-            }
-            if self.snapshot.content.trim().is_empty() {
-                return Err(PostError::EmptyContentWhenPublished);
-            }
+        if slug_changed {
+            self.snapshot.slug = patch.slug.expect("slug_changed 蕴含 patch.slug 存在");
+            changed = true;
         }
 
         Ok(changed)
@@ -382,8 +399,12 @@ mod tests {
         assert!(Slug::new("a%2Fb").is_err());
         assert!(Slug::new("a b").is_err());
         assert!(Slug::new("").is_err());
-        assert!(Slug::new("你好-世界").is_ok());
+        assert!(Slug::new("a&b").is_err(), "符号 & 不再允许");
+        assert!(Slug::new("a+b").is_err(), "符号 + 不再允许");
+        assert!(Slug::new("a:b").is_err(), "符号 : 不再允许");
         assert!(Slug::new(&"x".repeat(201)).is_err());
+        assert!(Slug::new("你好-世界").is_ok());
+        assert!(Slug::new("Hello_World-01").is_ok());
     }
 
     #[test]
@@ -409,7 +430,11 @@ mod tests {
         let first = post.snapshot().published_at.unwrap();
         post.withdraw();
         assert!(post.publish(OffsetDateTime::now_utc()).unwrap());
-        assert_eq!(post.snapshot().published_at, Some(first), "重新发布保留首次时间");
+        assert_eq!(
+            post.snapshot().published_at,
+            Some(first),
+            "重新发布保留首次时间"
+        );
     }
 
     #[test]
@@ -424,7 +449,10 @@ mod tests {
             OffsetDateTime::now_utc(),
         )
         .unwrap();
-        assert_eq!(post.publish(OffsetDateTime::now_utc()).unwrap_err(), PostError::EmptyTitleOnPublish);
+        assert_eq!(
+            post.publish(OffsetDateTime::now_utc()).unwrap_err(),
+            PostError::EmptyTitleOnPublish
+        );
     }
 
     #[test]
@@ -459,12 +487,13 @@ mod tests {
     #[test]
     fn slug_can_change_before_first_publish() {
         let mut post = draft();
-        assert!(post
-            .edit(PostPatch {
+        assert!(
+            post.edit(PostPatch {
                 slug: Some("renamed".into()),
                 ..Default::default()
             })
-            .unwrap());
+            .unwrap()
+        );
         assert_eq!(post.slug(), "renamed");
     }
 
@@ -494,18 +523,21 @@ mod tests {
     #[test]
     fn edit_reports_whether_changed() {
         let mut post = draft();
-        assert!(!post
-            .edit(PostPatch {
-                title: Some("标题".into()), // 相同值不算变化
-                ..Default::default()
-            })
-            .unwrap());
-        assert!(post
-            .edit(PostPatch {
+        assert!(
+            !post
+                .edit(PostPatch {
+                    title: Some("标题".into()), // 相同值不算变化
+                    ..Default::default()
+                })
+                .unwrap()
+        );
+        assert!(
+            post.edit(PostPatch {
                 content: Some("新正文".into()),
                 ..Default::default()
             })
-            .unwrap());
+            .unwrap()
+        );
     }
 
     #[test]
@@ -524,7 +556,7 @@ mod tests {
 
     #[test]
     fn archived_is_terminal() {
-        // 归档由专门用例驱动；这里验证聚合规则：archived 不能发布、撤回无效。
+        // 归档由专门用例驱动；这里验证聚合规则：archived 不能发布、撤回无效、不能编辑。
         let mut post = draft();
         post.publish(OffsetDateTime::now_utc()).unwrap();
         let mut snapshot = post.snapshot();
@@ -535,5 +567,56 @@ mod tests {
             PostError::ArchivedIsTerminal
         );
         assert!(!archived.withdraw());
+        assert_eq!(
+            archived
+                .edit(PostPatch {
+                    content: Some("改写归档文章".into()),
+                    ..Default::default()
+                })
+                .unwrap_err(),
+            PostError::ArchivedNotEditable,
+            "归档是终态，正文不可改写"
+        );
+    }
+
+    #[test]
+    fn edit_failure_leaves_aggregate_untouched() {
+        // 回归：任一字段校验失败（此处为非法 slug）时，聚合不得留下部分修改。
+        let mut post = draft();
+        let before = post.snapshot();
+
+        let err = post
+            .edit(PostPatch {
+                title: Some("新标题".into()),
+                content: Some("新正文".into()),
+                slug: Some("bad/slug".into()),
+                ..Default::default()
+            })
+            .unwrap_err();
+        assert!(matches!(err, PostError::InvalidSlug(_)));
+
+        let after = post.snapshot();
+        assert_eq!(before.title, after.title, "标题未被部分写入");
+        assert_eq!(before.content, after.content, "正文未被部分写入");
+        assert_eq!(before.slug, after.slug);
+    }
+
+    #[test]
+    fn published_post_cannot_be_emptied_atomically() {
+        let mut post = draft();
+        post.publish(OffsetDateTime::now_utc()).unwrap();
+        let before = post.snapshot();
+
+        // 同时改标题与清空正文：应整体失败，标题不能被单独写入。
+        let err = post
+            .edit(PostPatch {
+                title: Some("只改标题".into()),
+                content: Some(String::new()),
+                ..Default::default()
+            })
+            .unwrap_err();
+        assert_eq!(err, PostError::EmptyContentWhenPublished);
+        assert_eq!(post.snapshot().title, before.title);
+        assert_eq!(post.snapshot().content, before.content);
     }
 }

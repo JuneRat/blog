@@ -7,15 +7,15 @@ use std::io::Read;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use application::content::{CreatePostCmd, EditPostCmd, PostInteractor};
 use application::content::PostVisibility;
+use application::content::{CreatePostCmd, EditPostCmd, PostInteractor};
 use application::error::UseCaseError;
 use application::identity::{Actor, CreateUserCmd, UserInteractor};
 use application::ports::UserRepository;
-use application::public_site::PublicSiteInteractor;
+use application::public_site::{PublicSiteInteractor, format_datetime};
 use clap::{Parser, Subcommand};
 
-use crate::http::{public_router, PublicSiteState};
+use crate::http::{PublicSiteState, public_router};
 
 #[derive(Debug, Parser)]
 #[command(name = "blog", version, about = "博客受控 CLI 与公开 SSR 服务入口")]
@@ -139,7 +139,10 @@ pub enum PostAction {
     },
 
     /// 查看文章当前状态（CLI/后台视图，含草稿）
-    Show { #[arg(long)] slug: String },
+    Show {
+        #[arg(long)]
+        slug: String,
+    },
 
     /// 列出作者的文章（含非公开状态）
     List {
@@ -156,6 +159,8 @@ pub struct CliDeps {
     pub user_repo: Arc<dyn UserRepository>,
     /// 主题静态资源目录（/assets/）。
     pub assets_dir: Option<PathBuf>,
+    /// readiness 探针（healthz）。
+    pub health: Option<Arc<dyn application::ports::HealthCheck>>,
 }
 
 pub async fn run(deps: CliDeps, command: Command) -> Result<(), String> {
@@ -172,6 +177,7 @@ pub async fn run(deps: CliDeps, command: Command) -> Result<(), String> {
                 .unwrap_or_else(|| "127.0.0.1:8080".into());
             let state = PublicSiteState {
                 site: deps.public_site,
+                health: deps.health,
             };
             let app = public_router(state, deps.assets_dir);
             let listener = tokio::net::TcpListener::bind(&bind)
@@ -312,7 +318,7 @@ async fn run_post(deps: CliDeps, action: PostAction) -> Result<(), String> {
                 "已发布 slug={} published_at={}",
                 dto.slug,
                 dto.published_at
-                    .map(|t| t.to_string())
+                    .map(format_datetime)
                     .unwrap_or_else(|| "-".into())
             );
             Ok(())
@@ -351,8 +357,8 @@ async fn run_post(deps: CliDeps, action: PostAction) -> Result<(), String> {
                 .await
                 .map_err(fmt_error)?;
             println!(
-                "{:<6} {:<10} {:<8} {:<14} {}",
-                "版本", "状态", "可见", "slug", "标题"
+                "{:<6} {:<10} {:<8} {:<14} 标题",
+                "版本", "状态", "可见", "slug"
             );
             for dto in list {
                 println!(
@@ -421,10 +427,10 @@ fn print_post(dto: &application::content::PostDto) {
     println!(
         "published_at: {}",
         dto.published_at
-            .map(|t| t.to_string())
+            .map(format_datetime)
             .unwrap_or_else(|| "-".into())
     );
-    println!("updated_at:  {}", dto.updated_at);
+    println!("updated_at:  {}", format_datetime(dto.updated_at));
     if dto.deleted {
         println!("（已在回收站）");
     }

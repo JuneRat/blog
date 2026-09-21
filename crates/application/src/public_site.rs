@@ -9,7 +9,8 @@ use crate::error::UseCaseError;
 use crate::ports::{ContentRenderer, PublishedPostQuery};
 
 /// 模板展示用的时间格式（应用层渲染契约的一部分）。
-fn format_datetime(t: OffsetDateTime) -> String {
+/// CLI 输出复用同一格式，保证各端一致。
+pub fn format_datetime(t: OffsetDateTime) -> String {
     let fmt = time::macros::format_description!("[year]-[month]-[day] [hour]:[minute] UTC");
     t.format(fmt).unwrap_or_else(|_| t.to_string())
 }

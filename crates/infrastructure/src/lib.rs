@@ -5,7 +5,7 @@ pub mod persistence;
 pub mod rendering;
 
 pub use persistence::{
-    connect, migrate, PostgresPostRepository, PostgresPublishedPostQuery, PostgresUserRepository,
-    SystemClock,
+    PgHealthCheck, PostgresPostRepository, PostgresPublishedPostQuery, PostgresUserRepository,
+    SystemClock, connect, migrate,
 };
 pub use rendering::{MiniJinjaThemeRenderer, SanitizingMarkdownRenderer};

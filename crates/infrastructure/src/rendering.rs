@@ -6,7 +6,7 @@ use std::path::Path;
 use application::error::UseCaseError;
 use application::public_site::{PostCard, PostView, SiteInfo, ThemeRenderer};
 use minijinja::Environment;
-use pulldown_cmark::{html::push_html, Options, Parser};
+use pulldown_cmark::{Options, Parser, html::push_html};
 
 /// Markdown 渲染 + ammonia 清洗。
 /// 输出进入模板时以 |safe 注入，因此清洗步骤不可省略。

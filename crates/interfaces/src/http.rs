@@ -6,17 +6,21 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use application::error::UseCaseError;
+use application::ports::HealthCheck;
 use application::public_site::PublicSiteInteractor;
+use axum::Router;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
-use axum::Router;
 use tower_http::services::ServeDir;
 
 #[derive(Clone)]
 pub struct PublicSiteState {
     pub site: Arc<PublicSiteInteractor>,
+    /// 装配时可注入 readiness 探针（如 PgHealthCheck）；
+    /// None 表示本路由无外部依赖可检，healthz 仅反映进程存活。
+    pub health: Option<Arc<dyn HealthCheck>>,
 }
 
 /// 构建公开路由；assets_dir 提供时挂载 /assets/ 静态资源（主题 assets 目录）。
@@ -33,9 +37,15 @@ pub fn public_router(state: PublicSiteState, assets_dir: Option<PathBuf>) -> Rou
     router
 }
 
-/// 兼容无静态资源的调用方（如测试）。
-pub fn public_router_minimal(state: PublicSiteState) -> Router {
-    public_router(state, None)
+/// 兼容无静态资源/探针的调用方（如测试）。
+pub fn public_router_minimal(state: Arc<PublicSiteInteractor>) -> Router {
+    public_router(
+        PublicSiteState {
+            site: state,
+            health: None,
+        },
+        None,
+    )
 }
 
 async fn index(State(state): State<PublicSiteState>) -> Response {
@@ -57,16 +67,19 @@ async fn post_detail(State(state): State<PublicSiteState>, Path(slug): Path<Stri
     }
 }
 
-async fn healthz() -> &'static str {
-    "ok"
+async fn healthz(State(state): State<PublicSiteState>) -> Response {
+    match state.health {
+        Some(check) if !check.check().await => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "degraded: dependency check failed",
+        )
+            .into_response(),
+        _ => (StatusCode::OK, "ok").into_response(),
+    }
 }
 
 async fn not_found() -> Response {
-    (
-        StatusCode::NOT_FOUND,
-        "<h1>404</h1><p>页面不存在。</p>",
-    )
-        .into_response()
+    (StatusCode::NOT_FOUND, "<h1>404</h1><p>页面不存在。</p>").into_response()
 }
 
 fn server_error(e: UseCaseError) -> Response {

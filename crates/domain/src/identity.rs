@@ -35,10 +35,18 @@ pub enum UserError {
     InvalidUsernameChar,
     #[error("email 格式不合法")]
     InvalidEmail,
+    #[error("display_name 不能为空白")]
+    InvalidDisplayName,
 }
 
-/// 检查 username 采用的固定规范化策略：ASCII 字母、数字、`-`、`_`，1-64 字符。
-/// 规范化后唯一值由数据库约束兜底。
+/// username 固定规范化策略：trim + ASCII 小写。
+/// 创建与查询必须走同一函数，保证 COLLATE "C" 下的唯一键行为一致。
+pub fn normalize_username(raw: &str) -> Result<String, UserError> {
+    let normalized = raw.trim().to_ascii_lowercase();
+    validate_username(&normalized)?;
+    Ok(normalized)
+}
+
 fn validate_username(username: &str) -> Result<(), UserError> {
     let chars: usize = username.chars().count();
     if chars == 0 || chars > 64 {
@@ -53,9 +61,17 @@ fn validate_username(username: &str) -> Result<(), UserError> {
     Ok(())
 }
 
+/// email 形状校验：`local@domain`，domain 的每个点分段都非空。
+/// 拒绝 `a@.com`、`a@b.`、`@b.com` 等。
 fn validate_email(email: &str) -> Result<(), UserError> {
+    if email.chars().any(|c| c.is_whitespace()) {
+        return Err(UserError::InvalidEmail);
+    }
     let (local, domain) = email.split_once('@').ok_or(UserError::InvalidEmail)?;
     if local.is_empty() || domain.is_empty() || !domain.contains('.') {
+        return Err(UserError::InvalidEmail);
+    }
+    if domain.split('.').any(|label| label.is_empty()) {
         return Err(UserError::InvalidEmail);
     }
     Ok(())
@@ -68,7 +84,8 @@ pub struct User {
 }
 
 impl User {
-    /// 创建新用户；email 仅做形状校验，唯一性由数据库约束兜底。
+    /// 创建新用户；username/email/display_name 应已由调用方规范化，
+    /// 这里兜底校验形状（空展示名拒绝，空字符串不允许落库）。
     pub fn new(
         username: &str,
         email: Option<String>,
@@ -78,6 +95,11 @@ impl User {
         validate_username(username)?;
         if let Some(email) = email.as_deref() {
             validate_email(email)?;
+        }
+        if let Some(name) = display_name.as_deref()
+            && name.trim().is_empty()
+        {
+            return Err(UserError::InvalidDisplayName);
         }
         Ok(Self {
             snapshot: UserSnapshot {
@@ -91,6 +113,11 @@ impl User {
                 deleted_at: None,
             },
         })
+    }
+
+    /// 供应用层复用的 email 形状校验入口。
+    pub fn validate_email_shape(email: &str) -> Result<(), UserError> {
+        validate_email(email)
     }
 
     /// 受控重建入口：仅供持久化适配器从数据库恢复，不再重复业务校验。
@@ -156,5 +183,29 @@ mod tests {
             UserError::InvalidEmail
         );
         assert!(User::new("sun", Some("sun@example.com".into()), None, now()).is_ok());
+        // 边界形状：空点分段拒绝。
+        for bad in ["a@.com", "a@b.", "@b.com", "a b@c.com"] {
+            assert_eq!(
+                User::new("sun", Some(bad.into()), None, now()).unwrap_err(),
+                UserError::InvalidEmail,
+                "{bad} 应被拒绝"
+            );
+        }
+    }
+
+    #[test]
+    fn normalize_username_trims_and_lowercases() {
+        assert_eq!(normalize_username("  Sun ").unwrap(), "sun");
+        assert_eq!(normalize_username("Alice-DEV_01").unwrap(), "alice-dev_01");
+        assert!(normalize_username("空间 用户").is_err());
+    }
+
+    #[test]
+    fn rejects_blank_display_name() {
+        assert_eq!(
+            User::new("sun", None, Some("   ".into()), now()).unwrap_err(),
+            UserError::InvalidDisplayName
+        );
+        assert!(User::new("sun", None, Some("Sun".into()), now()).is_ok());
     }
 }
