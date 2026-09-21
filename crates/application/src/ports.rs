@@ -223,6 +223,9 @@ pub enum ProviderKind {
 pub struct ProviderConfig {
     /// URL 与回调路径使用的稳定 id。
     pub id: String,
+    /// 登录页展示名（可选；缺省回退到 id）。不参与身份命名空间。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     pub kind: ProviderKind,
     /// OIDC 必填：精确 issuer（不接受回调参数指定）。
     pub issuer: Option<String>,

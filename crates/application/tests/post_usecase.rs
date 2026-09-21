@@ -403,6 +403,95 @@ async fn create_edit_publish_withdraw_flow() {
 }
 
 #[tokio::test]
+async fn no_op_writes_reject_stale_versions_without_exposing_a_new_baseline() {
+    let f = fixture().await;
+    let slug = "stale-noop";
+    let original = f.posts.create(&f.author, draft_cmd(slug)).await.unwrap();
+    let edited = f
+        .posts
+        .edit(
+            &f.author,
+            EditPostCmd {
+                target_slug: slug.into(),
+                content: Some("另一位编辑的新正文".into()),
+                expected_version: Some(original.version),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let published = f
+        .posts
+        .publish(&f.author, slug, Some(edited.version))
+        .await
+        .unwrap();
+
+    // 另一位编辑已发布：旧页面再点发布必须冲突，不能取得新版本后覆盖旧正文。
+    assert!(matches!(
+        f.posts
+            .publish(&f.author, slug, Some(original.version))
+            .await,
+        Err(UseCaseError::VersionConflict)
+    ));
+    let again = f
+        .posts
+        .publish(&f.author, slug, Some(published.version))
+        .await
+        .unwrap();
+    assert_eq!(again.version, published.version);
+    assert_eq!(again.content, edited.content);
+
+    let withdrawn = f
+        .posts
+        .withdraw(&f.author, slug, Some(published.version))
+        .await
+        .unwrap();
+    assert!(matches!(
+        f.posts
+            .withdraw(&f.author, slug, Some(published.version))
+            .await,
+        Err(UseCaseError::VersionConflict)
+    ));
+    assert_eq!(
+        f.posts
+            .withdraw(&f.author, slug, Some(withdrawn.version))
+            .await
+            .unwrap()
+            .version,
+        withdrawn.version
+    );
+
+    // 空 PATCH 同样校验版本；当前版本的空 PATCH 保持幂等。
+    assert!(matches!(
+        f.posts
+            .edit(
+                &f.author,
+                EditPostCmd {
+                    target_slug: slug.into(),
+                    expected_version: Some(original.version),
+                    ..Default::default()
+                }
+            )
+            .await,
+        Err(UseCaseError::VersionConflict)
+    ));
+    let unchanged = f
+        .posts
+        .edit(
+            &f.author,
+            EditPostCmd {
+                target_slug: slug.into(),
+                expected_version: Some(withdrawn.version),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(unchanged.version, withdrawn.version);
+    assert_eq!(unchanged.content, edited.content);
+}
+
+#[tokio::test]
 async fn concurrent_edit_detects_version_conflict() {
     let f = fixture().await;
     f.posts.create(&f.author, draft_cmd("race")).await.unwrap();
@@ -663,6 +752,55 @@ async fn reader_scope_blocks_others_drafts() {
     assert!(f.posts.find(&f.author, "secret-draft").await.is_ok());
     // editor 有 read_any，可读他人草稿。
     assert!(f.posts.find(&f.editor, "secret-draft").await.is_ok());
+}
+
+#[tokio::test]
+async fn list_by_author_requires_read_permission_for_own_posts_too() {
+    let f = fixture().await;
+    f.posts
+        .create(&f.author, draft_cmd("listed-draft"))
+        .await
+        .unwrap();
+
+    // other 无任何角色：列表与单篇必须一致地拒绝，不能「单篇 403、列表 200」。
+    let err = f
+        .posts
+        .list_by_author(&f.other, f.other.user_id)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, UseCaseError::Forbidden),
+        "无 post.read 不得列出本人文章：{err:?}"
+    );
+    assert!(matches!(
+        f.posts.find(&f.other, "listed-draft").await.unwrap_err(),
+        UseCaseError::Forbidden
+    ));
+
+    // author 有 post.read(own)：列自己的文章正常。
+    let own = f
+        .posts
+        .list_by_author(&f.author, f.author.user_id)
+        .await
+        .unwrap();
+    assert_eq!(own.len(), 1);
+    assert_eq!(own[0].slug, "listed-draft");
+
+    // author2 有 post.read(own) 但不是作者，也无 read_any → 拒绝跨作者列表。
+    let err = f
+        .posts
+        .list_by_author(&f.author2, f.author.user_id)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, UseCaseError::Forbidden));
+
+    // editor 有 read_any，可列他人文章。
+    let others = f
+        .posts
+        .list_by_author(&f.editor, f.author.user_id)
+        .await
+        .unwrap();
+    assert_eq!(others.len(), 1);
 }
 
 #[tokio::test]

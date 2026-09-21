@@ -38,11 +38,16 @@ pub struct AuthState {
 const SESSION_COOKIE_MAX_AGE: u64 = 7 * 24 * 3600;
 
 pub fn auth_router(state: AuthState) -> Router {
+    let providers_route = Router::new()
+        .route("/auth/providers", get(list_providers))
+        .layer(middleware::from_fn(no_store))
+        .with_state(state.clone());
     Router::new()
         .route("/auth/login", get(login))
         .route("/auth/callback/{provider}", get(callback))
         .route("/auth/logout", post(logout))
         .with_state(state)
+        .merge(providers_route)
 }
 
 // ---------------------------------------------------------------------------
@@ -73,6 +78,14 @@ struct LoginQuery {
     provider: String,
     #[serde(default)]
     next: Option<String>,
+}
+
+/// 公开只读：登录页可用的提供商摘要（id/展示名/类型，匿名可访问）。
+async fn list_providers(State(state): State<AuthState>) -> Response {
+    match state.auth.list_provider_summaries().await {
+        Ok(providers) => (StatusCode::OK, Json(providers)).into_response(),
+        Err(e) => admin_error(e),
+    }
 }
 
 async fn login(State(state): State<AuthState>, Query(query): Query<LoginQuery>) -> Response {

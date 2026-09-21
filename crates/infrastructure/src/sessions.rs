@@ -23,6 +23,16 @@ fn sha256_hex(input: &[u8]) -> String {
     digest.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// 从用户索引里摘掉一个会话摘要；列表空了顺带删键，避免索引无限累积。
+fn unindex(by_user: &mut HashMap<Uuid, Vec<String>>, user_id: Uuid, digest: &str) {
+    if let Some(list) = by_user.get_mut(&user_id) {
+        list.retain(|d| d != digest);
+        if list.is_empty() {
+            by_user.remove(&user_id);
+        }
+    }
+}
+
 /// 安全随机源：系统 CSPRNG；PKCE S256 = base64url(SHA-256(verifier)) 无填充。
 pub struct SystemSecureRandom;
 
@@ -65,12 +75,21 @@ impl Default for SessionStoreConfig {
     }
 }
 
+/// 会话存储的全部可变状态。
+///
+/// `entries` 与 `by_user` 必须始终一致：放在**同一把锁**下更新，
+/// 任意时刻都不会出现「entries 里已没有、索引里还在」或反过来的窗口。
+#[derive(Default)]
+struct SessionState {
+    entries: Vec<SessionEntry>,
+    /// user_id → 该用户当前会话摘要（撤销全部用）。
+    by_user: HashMap<Uuid, Vec<String>>,
+}
+
 pub struct InMemorySessionStore {
     config: SessionStoreConfig,
     clock: Box<dyn Fn() -> OffsetDateTime + Send + Sync>,
-    entries: Mutex<Vec<SessionEntry>>,
-    /// user_id → 该用户当前会话摘要（撤销全部用）。
-    by_user: Mutex<HashMap<Uuid, Vec<String>>>,
+    state: Mutex<SessionState>,
 }
 
 impl InMemorySessionStore {
@@ -81,8 +100,7 @@ impl InMemorySessionStore {
         Self {
             config,
             clock,
-            entries: Mutex::new(Vec::new()),
-            by_user: Mutex::new(HashMap::new()),
+            state: Mutex::new(SessionState::default()),
         }
     }
 
@@ -104,13 +122,28 @@ impl InMemorySessionStore {
         now - record.last_seen_at > idle || now - record.created_at > absolute
     }
 
-    /// 清理过期；仍满时淘汰最久未活跃。
-    fn enforce_capacity(&self, entries: &mut Vec<SessionEntry>, now: OffsetDateTime) {
-        entries.retain(|e| !self.is_expired(&e.record, now));
+    /// 清理过期；仍满时淘汰最久未活跃，并同步摘除 `by_user` 索引。
+    ///
+    /// 调用方必须已持有 `state` 锁：淘汰与索引维护是一个不可分割的更新。
+    fn enforce_capacity(&self, state: &mut SessionState, now: OffsetDateTime) {
+        let SessionState { entries, by_user } = state;
+        let mut evicted = Vec::new();
+        let mut kept = Vec::with_capacity(entries.len());
+        for entry in entries.drain(..) {
+            if self.is_expired(&entry.record, now) {
+                evicted.push(entry);
+            } else {
+                kept.push(entry);
+            }
+        }
+        *entries = kept;
         if entries.len() >= self.config.max_entries {
             entries.sort_by_key(|e| e.record.last_seen_at);
             let overflow = entries.len() + 1 - self.config.max_entries;
-            entries.drain(..overflow);
+            evicted.extend(entries.drain(..overflow));
+        }
+        for entry in &evicted {
+            unindex(by_user, entry.record.user_id, &entry.digest);
         }
     }
 }
@@ -134,71 +167,56 @@ impl SessionStore for InMemorySessionStore {
             c.iter().map(|b| format!("{b:02x}")).collect::<String>()
         };
 
-        {
-            let mut entries = self.entries.lock().unwrap();
-            self.enforce_capacity(&mut entries, now);
-            entries.push(SessionEntry {
-                digest: digest.clone(),
-                record: SessionRecord {
-                    user_id,
-                    csrf_token,
-                    created_at: now,
-                    last_seen_at: now,
-                },
-            });
-        }
-        self.by_user
-            .lock()
-            .unwrap()
-            .entry(user_id)
-            .or_default()
-            .push(digest);
+        // 淘汰、插入与索引更新在同一把锁内完成：不会出现只更新了一半的中间态，
+        // 并发的 revoke_all_for_user 也不可能漏掉刚插入的会话。
+        let mut state = self.state.lock().unwrap();
+        self.enforce_capacity(&mut state, now);
+        state.entries.push(SessionEntry {
+            digest: digest.clone(),
+            record: SessionRecord {
+                user_id,
+                csrf_token,
+                created_at: now,
+                last_seen_at: now,
+            },
+        });
+        state.by_user.entry(user_id).or_default().push(digest);
         Ok(token)
     }
 
     async fn validate(&self, token: &str) -> Result<Option<SessionRecord>, UseCaseError> {
         let digest = sha256_hex(token.as_bytes());
         let now = self.now();
-        let mut entries = self.entries.lock().unwrap();
-        if let Some(idx) = entries.iter().position(|e| e.digest == digest) {
-            if self.is_expired(&entries[idx].record, now) {
-                entries.remove(idx);
+        let mut state = self.state.lock().unwrap();
+        if let Some(idx) = state.entries.iter().position(|e| e.digest == digest) {
+            if self.is_expired(&state.entries[idx].record, now) {
+                let removed = state.entries.remove(idx);
+                unindex(&mut state.by_user, removed.record.user_id, &removed.digest);
                 return Ok(None);
             }
-            entries[idx].record.last_seen_at = now;
-            return Ok(Some(entries[idx].record.clone()));
+            state.entries[idx].record.last_seen_at = now;
+            return Ok(Some(state.entries[idx].record.clone()));
         }
         Ok(None)
     }
 
     async fn revoke(&self, token: &str) -> Result<(), UseCaseError> {
         let digest = sha256_hex(token.as_bytes());
-        let mut entries = self.entries.lock().unwrap();
-        if let Some(idx) = entries.iter().position(|e| e.digest == digest) {
-            let removed = entries.remove(idx);
-            let mut by_user = self.by_user.lock().unwrap();
-            if let Some(list) = by_user.get_mut(&removed.record.user_id) {
-                list.retain(|d| *d != removed.digest);
-                if list.is_empty() {
-                    by_user.remove(&removed.record.user_id);
-                }
-            }
+        let mut state = self.state.lock().unwrap();
+        if let Some(idx) = state.entries.iter().position(|e| e.digest == digest) {
+            let removed = state.entries.remove(idx);
+            unindex(&mut state.by_user, removed.record.user_id, &removed.digest);
         }
         Ok(())
     }
 
     async fn revoke_all_for_user(&self, user_id: Uuid) -> Result<(), UseCaseError> {
-        let digests: Vec<String> = self
-            .by_user
-            .lock()
-            .unwrap()
-            .remove(&user_id)
-            .unwrap_or_default();
+        let mut state = self.state.lock().unwrap();
+        let digests = state.by_user.remove(&user_id).unwrap_or_default();
         if digests.is_empty() {
             return Ok(());
         }
-        let mut entries = self.entries.lock().unwrap();
-        entries.retain(|e| !digests.contains(&e.digest));
+        state.entries.retain(|e| !digests.contains(&e.digest));
         Ok(())
     }
 }
@@ -272,5 +290,85 @@ impl OAuthAttemptStore for InMemoryOAuthAttemptStore {
             }
             None => Ok(None),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mutable_now() -> (
+        std::sync::Arc<std::sync::Mutex<OffsetDateTime>>,
+        impl Fn() -> OffsetDateTime + Send + Sync + 'static,
+    ) {
+        let now = std::sync::Arc::new(std::sync::Mutex::new(OffsetDateTime::now_utc()));
+        let reader = now.clone();
+        (now, move || *reader.lock().unwrap())
+    }
+
+    /// (entries 条数, by_user 里摘要总数)：不变量是两者始终相等。
+    fn index_size(store: &InMemorySessionStore) -> (usize, usize) {
+        let state = store.state.lock().unwrap();
+        let indexed: usize = state.by_user.values().map(Vec::len).sum();
+        (state.entries.len(), indexed)
+    }
+
+    #[tokio::test]
+    async fn capacity_eviction_and_expiry_keep_user_index_pruned() {
+        let (now, clock) = mutable_now();
+        let store = InMemorySessionStore::new(
+            SessionStoreConfig {
+                idle_secs: 10_000,
+                absolute_secs: 10_000,
+                max_entries: 2,
+            },
+            Box::new(clock),
+        );
+        let u1 = Uuid::now_v7();
+        let u2 = Uuid::now_v7();
+        let u3 = Uuid::now_v7();
+
+        let t1 = store.create(u1).await.unwrap();
+        *now.lock().unwrap() += time::Duration::seconds(5);
+        let t2 = store.create(u2).await.unwrap();
+        *now.lock().unwrap() += time::Duration::seconds(5);
+        let _t3 = store.create(u3).await.unwrap();
+
+        // 容量淘汰 t1：u1 的索引项必须一起消失，否则 by_user 单调增长。
+        assert!(store.validate(&t1).await.unwrap().is_none());
+        let (entries, indexed) = index_size(&store);
+        assert_eq!(entries, 2);
+        assert_eq!(indexed, 2, "淘汰后索引摘要数必须与 entries 一致");
+        assert!(!store.state.lock().unwrap().by_user.contains_key(&u1));
+
+        // 过期删除同样要摘索引。
+        *now.lock().unwrap() += time::Duration::seconds(10_001);
+        assert!(store.validate(&t2).await.unwrap().is_none());
+        let (entries, indexed) = index_size(&store);
+        assert_eq!(entries, 1);
+        assert_eq!(indexed, 1, "过期删除后索引摘要数必须与 entries 一致");
+        assert!(!store.state.lock().unwrap().by_user.contains_key(&u2));
+    }
+
+    #[tokio::test]
+    async fn revoke_all_updates_both_structures_consistently() {
+        let store = InMemorySessionStore::with_defaults();
+        let user = Uuid::now_v7();
+        let other = Uuid::now_v7();
+
+        let t1 = store.create(user).await.unwrap();
+        let t2 = store.create(user).await.unwrap();
+        let t3 = store.create(other).await.unwrap();
+
+        store.revoke_all_for_user(user).await.unwrap();
+
+        // 撤销后 entries 与索引必须同时只剩 other 的会话。
+        let (entries, indexed) = index_size(&store);
+        assert_eq!(entries, 1);
+        assert_eq!(indexed, 1);
+        assert!(store.validate(&t1).await.unwrap().is_none());
+        assert!(store.validate(&t2).await.unwrap().is_none());
+        assert!(store.validate(&t3).await.unwrap().is_some());
+        assert!(!store.state.lock().unwrap().by_user.contains_key(&user));
     }
 }

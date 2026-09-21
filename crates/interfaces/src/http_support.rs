@@ -1,7 +1,9 @@
 //! 认证/管理 HTTP 的共用辅助：cookie 解析、CSRF/Origin 校验、统一错误契约与 no-store。
 //!
-//! 错误契约：JSON `{"error": ...}`；401 附 `WWW-Authenticate: Session`；
+//! 错误契约：JSON `{"error": ..., "code": ...}`；401 附 `WWW-Authenticate: Session`；
 //! `Repository`/`Render` 等内部错误只记日志、响应通用文案（不泄漏 SQL 与内部细节）。
+//! `code` 是业务码：同一状态码可能对应不同业务原因（slug 占用与版本冲突都是 409），
+//! 前端必须能区分，不能只按状态码分支。
 //! 管理响应一律 `Cache-Control: no-store`（含带 CSRF token 的 `/me`）。
 
 use application::error::UseCaseError;
@@ -71,6 +73,23 @@ pub fn ensure_same_origin(headers: &HeaderMap) -> Result<(), UseCaseError> {
     Err(UseCaseError::Forbidden)
 }
 
+/// 业务错误码：与 HTTP 状态码分离，供客户端做精确分支。
+///
+/// 关键用例是 409：`version_conflict` 可以用最新 version 重试覆盖，
+/// `conflict`（slug/username 已占用）重试无用。新增错误变体时必须同时给出码。
+pub fn admin_error_code(e: &UseCaseError) -> &'static str {
+    match e {
+        UseCaseError::Unauthenticated => "unauthenticated",
+        UseCaseError::Invalid(_) => "invalid_request",
+        UseCaseError::VersionConflict => "version_conflict",
+        UseCaseError::Conflict(_) => "conflict",
+        UseCaseError::NotFound(_) => "not_found",
+        UseCaseError::Forbidden => "forbidden",
+        UseCaseError::External(_) => "external_error",
+        UseCaseError::Repository(_) | UseCaseError::Render(_) => "internal_error",
+    }
+}
+
 /// 统一管理端错误响应。
 pub fn admin_error(e: UseCaseError) -> Response {
     let status = match &e {
@@ -90,7 +109,11 @@ pub fn admin_error(e: UseCaseError) -> Response {
         UseCaseError::Repository(_) | UseCaseError::Render(_) => "服务器内部错误".to_string(),
         other => other.to_string(),
     };
-    let mut response = (status, Json(serde_json::json!({ "error": message }))).into_response();
+    let mut response = (
+        status,
+        Json(serde_json::json!({ "error": message, "code": admin_error_code(&e) })),
+    )
+        .into_response();
     if status == StatusCode::UNAUTHORIZED {
         response.headers_mut().insert(
             header::WWW_AUTHENTICATE,

@@ -112,6 +112,7 @@ async fn fresh_stack_with(secure_cookies: bool) -> Stack {
     configs
         .save(&[ProviderConfig {
             id: "idp".into(),
+            name: Some("示例 IdP".into()),
             kind: ProviderKind::Oidc,
             issuer: Some("https://idp.example".into()),
             client_id: "client".into(),
@@ -193,14 +194,15 @@ async fn request(
         .filter_map(|v| v.to_str().ok().map(|s| s.to_string()))
         .map(|s| ("set-cookie".to_string(), s))
         .collect();
-    let location = response
-        .headers()
-        .get(axum::http::header::LOCATION)
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string());
     let mut captured = set_cookies;
-    if let Some(loc) = location {
-        captured.push(("location".to_string(), loc));
+    for name in [
+        axum::http::header::LOCATION,
+        axum::http::header::CACHE_CONTROL,
+        axum::http::header::WWW_AUTHENTICATE,
+    ] {
+        if let Some(value) = response.headers().get(&name).and_then(|v| v.to_str().ok()) {
+            captured.push((name.as_str().to_string(), value.to_string()));
+        }
     }
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let body = String::from_utf8_lossy(&body).to_string();
@@ -539,4 +541,36 @@ async fn secure_deployment_marks_cookies_secure_and_host_prefixed() {
         session_cookie.contains("; Secure"),
         "HTTPS 部署的会话 cookie 必须 Secure：{session_cookie}"
     );
+}
+
+#[tokio::test]
+async fn providers_endpoint_is_public_minimal_and_no_store() {
+    let _g = SERIAL.lock().await;
+    let stack = fresh_stack().await;
+
+    // 匿名可访问，不需要 cookie。
+    let (status, headers, body) = request(&stack.router, "GET", "/auth/providers", &[]).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        headers
+            .iter()
+            .find(|(k, _)| k == "cache-control")
+            .map(|(_, v)| v.as_str()),
+        Some("no-store"),
+        "登录页数据不得缓存"
+    );
+    assert!(body.contains(r#""id":"idp""#), "{body}");
+    assert!(body.contains(r#""name":"示例 IdP""#), "{body}");
+    assert!(body.contains(r#""kind":"oidc""#), "{body}");
+
+    // 不得泄漏任何配置细节。
+    for leaked in [
+        "client",
+        "IDP_SECRET",
+        "idp.example",
+        "secret_ref",
+        "issuer",
+    ] {
+        assert!(!body.contains(leaked), "响应不得包含 {leaked}：{body}");
+    }
 }

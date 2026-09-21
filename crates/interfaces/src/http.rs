@@ -9,11 +9,12 @@ use application::error::UseCaseError;
 use application::ports::HealthCheck;
 use application::public_site::PublicSiteInteractor;
 use axum::Router;
-use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use axum::extract::{Path, Request, State};
+use axum::http::{HeaderValue, StatusCode, header};
+use axum::middleware::{self, Next};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
-use tower_http::services::ServeDir;
+use tower_http::services::{ServeDir, ServeFile};
 
 #[derive(Clone)]
 pub struct PublicSiteState {
@@ -46,6 +47,44 @@ pub fn public_router_minimal(state: Arc<PublicSiteInteractor>) -> Router {
         },
         None,
     )
+}
+
+/// 挂载后台 SPA（`apps/admin` 的构建产物）到 `/admin` 子树。
+///
+/// - `dist` 不存在时完全不注册 `/admin`（后端单独部署不报错）。
+/// - SPA fallback 关在 `/admin` 内，结构上不可能遮挡 `/api`、`/auth`、
+///   `/posts/{slug}` 等已注册路由（axum 按路径匹配，fallback 只在无路由命中时触发）。
+/// - 缓存：`index.html`（含深链回退）`no-cache`，每次校验，发版即生效；
+///   `/admin/assets/*` 的**成功**响应是 Vite 带指纹产物，`immutable` 长缓存。两者都不含秘密。
+pub fn mount_admin_spa(router: Router, dist: Option<PathBuf>) -> Router {
+    let Some(dist) = dist.filter(|dir| dir.is_dir()) else {
+        return router;
+    };
+    let spa = Router::new()
+        .nest_service("/assets", ServeDir::new(dist.join("assets")))
+        .fallback_service(ServeFile::new(dist.join("index.html")))
+        .layer(middleware::from_fn(admin_cache_headers));
+    // nest_service（而非 nest）才能同时覆盖 `/admin` 与 `/admin/`（带斜杠的根路径）。
+    router.nest_service("/admin", spa)
+}
+
+/// 后台静态资源缓存策略（路径已剥离 `/admin` 前缀）。
+///
+/// 只有**成功**的 `/assets/*` 响应才是可长缓存的带指纹产物；缺失资源是 404，
+/// 若也带上 `immutable`，一次拼写错误就会被缓存层固化一年。
+async fn admin_cache_headers(req: Request, next: Next) -> Response {
+    let asset_path = req.uri().path().starts_with("/assets/");
+    let mut response = next.run(req).await;
+    let immutable = asset_path && response.status().is_success();
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static(if immutable {
+            "public, max-age=31536000, immutable"
+        } else {
+            "no-cache"
+        }),
+    );
+    response
 }
 
 async fn index(State(state): State<PublicSiteState>) -> Response {

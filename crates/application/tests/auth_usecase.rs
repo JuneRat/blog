@@ -250,6 +250,7 @@ async fn fixture() -> Fixture {
     let providers = vec![
         ProviderConfig {
             id: "idp".into(),
+            name: None,
             kind: ProviderKind::Oidc,
             issuer: Some("https://idp.example".into()),
             client_id: "client".into(),
@@ -258,6 +259,7 @@ async fn fixture() -> Fixture {
         },
         ProviderConfig {
             id: "gh".into(),
+            name: Some("GitHub 登录".into()),
             kind: ProviderKind::GitHub,
             issuer: None,
             client_id: "gh-client".into(),
@@ -611,6 +613,21 @@ async fn oidc_carries_pkce_verifier_to_exchange() {
     let exchanges = f.identity_client.exchanges.lock().unwrap();
     assert_eq!(exchanges.len(), 1);
     assert_ne!(exchanges[0], "无", "OIDC 必须传 PKCE verifier");
+}
+
+#[tokio::test]
+async fn provider_summaries_use_display_name_and_fall_back_to_id() {
+    let f = fixture().await;
+    let summaries = f.auth.list_provider_summaries().await.unwrap();
+    assert_eq!(summaries.len(), 2);
+
+    let idp = summaries.iter().find(|p| p.id == "idp").unwrap();
+    assert_eq!(idp.name, "idp", "未配置展示名时回退到 id");
+    assert_eq!(idp.kind, "oidc");
+
+    let gh = summaries.iter().find(|p| p.id == "gh").unwrap();
+    assert_eq!(gh.name, "GitHub 登录");
+    assert_eq!(gh.kind, "github");
 }
 
 // 确认 PostRepository 未被误删引用（编译期占位）。

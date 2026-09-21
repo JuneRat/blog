@@ -1,1 +1,4 @@
 /target
+/.pnpm-store
+/apps/admin/node_modules
+/apps/admin/dist

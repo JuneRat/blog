@@ -39,6 +39,15 @@ pub struct AuthInteractor {
     base_url: String,
 }
 
+/// 登录页可用的提供商摘要：只暴露 id / 展示名 / 类型，
+/// 不含 client_id、issuer、secret_ref 或任何配置细节。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ProviderSummary {
+    pub id: String,
+    pub name: String,
+    pub kind: &'static str,
+}
+
 /// 回调产物：浏览器需写入的会话 cookie 值与回跳路径。
 #[derive(Debug)]
 pub struct LoginSuccess {
@@ -241,6 +250,22 @@ impl AuthInteractor {
         self.deps.configs.list().await
     }
 
+    /// 公开登录页用的提供商摘要（只读、匿名可访问）。
+    pub async fn list_provider_summaries(&self) -> Result<Vec<ProviderSummary>, UseCaseError> {
+        Ok(self
+            .deps
+            .configs
+            .list()
+            .await?
+            .into_iter()
+            .map(|config| ProviderSummary {
+                name: config.name.clone().unwrap_or_else(|| config.id.clone()),
+                kind: provider_kind_label(config.kind),
+                id: config.id,
+            })
+            .collect())
+    }
+
     pub async fn save_providers(
         &self,
         actor: &Actor,
@@ -329,12 +354,29 @@ pub fn provider_identity_key(config: &ProviderConfig) -> String {
     }
 }
 
+/// 对外展示 / API 使用的提供商类型标签。
+fn provider_kind_label(kind: ProviderKind) -> &'static str {
+    match kind {
+        ProviderKind::Oidc => "oidc",
+        ProviderKind::GitHub => "github",
+    }
+}
+
 fn validate_provider_config(config: &ProviderConfig) -> Result<(), UseCaseError> {
     if config.id.is_empty() || config.id.len() > 64 {
         return Err(UseCaseError::Invalid("提供商 id 不合法".into()));
     }
     if config.id.contains('/') || config.id.contains('.') {
         return Err(UseCaseError::Invalid("提供商 id 不能包含 / 或 .".into()));
+    }
+    if let Some(name) = config.name.as_deref() {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(UseCaseError::Invalid("提供商展示名不能为空白".into()));
+        }
+        if name.chars().count() > 100 {
+            return Err(UseCaseError::Invalid("提供商展示名过长".into()));
+        }
     }
     if config.secret_ref.is_empty() {
         return Err(UseCaseError::Invalid("secret_ref 不能为空".into()));

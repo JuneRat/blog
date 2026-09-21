@@ -48,3 +48,32 @@ jobs:
 
       - name: Tests
         run: cargo test --workspace
+
+  web:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: apps/admin
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # 版本取 package.json 的 packageManager 字段。
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: apps/admin/pnpm-lock.yaml
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Tests
+        run: pnpm test
+
+      # tsc --noEmit + vite build：类型与产物同时自检。
+      - name: Build
+        run: pnpm build

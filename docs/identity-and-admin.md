@@ -4,9 +4,9 @@
 
 ## 1. 前后台结构
 
-公开站点使用 MiniJinja SSR；后台 React + TypeScript + Vite 通过版本化管理 API 调用用例。推荐同源部署：/admin/* 提供 SPA，/api/admin/v1/* 提供 JSON API，/auth/* 提供认证入口。SPA fallback 不覆盖 API、认证和公开页面。
+公开站点使用 MiniJinja SSR；后台 React + TypeScript + Vite 通过版本化管理 API 调用用例。推荐同源部署：/admin/* 提供 SPA（`apps/admin`，构建产物不进备份），/api/admin/v1/* 提供 JSON API，/auth/* 提供认证入口。SPA fallback 只注册在 /admin 子树内，不覆盖 API、认证和公开页面。登录页渲染用的 `GET /auth/providers` 是公开只读端点，只返回提供商的 id/展示名/类型。
 
-管理响应和预览使用 Cache-Control: no-store，前端路由守卫只改善体验，权限由后端执行。OpenAPI 维护接口契约，错误提供业务码与 request ID；编辑携带 expected_version，分页限制上限，批量命令逐项授权。
+管理响应和预览使用 Cache-Control: no-store，前端路由守卫只改善体验，权限由后端执行。OpenAPI 维护接口契约，错误响应为 `{"error", "code"}`：`code` 是业务码，同一状态码的不同原因必须可区分（409 的 slug 占用是 `conflict`，版本冲突是 `version_conflict`），客户端不得只按状态码分支；request ID 随日志中间件交付时补齐。编辑携带 expected_version，分页限制上限，批量命令逐项授权。
 
 ## 2. RBAC 与权限目录
 

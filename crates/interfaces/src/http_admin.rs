@@ -44,12 +44,12 @@ struct PostJson {
     author_id: Uuid,
 }
 
-impl From<PostDto> for PostJson {
-    fn from(dto: PostDto) -> Self {
+impl From<&PostDto> for PostJson {
+    fn from(dto: &PostDto) -> Self {
         Self {
             id: dto.id,
-            slug: dto.slug,
-            title: dto.title,
+            slug: dto.slug.clone(),
+            title: dto.title.clone(),
             status: dto.status.to_string(),
             visibility: dto.visibility.to_string(),
             version: dto.version,
@@ -58,6 +58,26 @@ impl From<PostDto> for PostJson {
                 .map(application::public_site::format_datetime),
             updated_at: application::public_site::format_datetime(dto.updated_at),
             author_id: dto.author_id,
+        }
+    }
+}
+
+/// 单篇详情：在摘要之上附 Markdown 源文与摘要（后台编辑需要）。
+/// 列表接口保持摘要形态，避免把全部正文塞进列表响应。
+#[derive(serde::Serialize)]
+struct PostDetailJson {
+    #[serde(flatten)]
+    summary: PostJson,
+    excerpt: Option<String>,
+    content: String,
+}
+
+impl From<PostDto> for PostDetailJson {
+    fn from(dto: PostDto) -> Self {
+        Self {
+            summary: PostJson::from(&dto),
+            excerpt: dto.excerpt,
+            content: dto.content,
         }
     }
 }
@@ -189,7 +209,7 @@ async fn create_post(
         )
         .await
     {
-        Ok(dto) => (StatusCode::CREATED, Json(PostJson::from(dto))).into_response(),
+        Ok(dto) => (StatusCode::CREATED, Json(PostDetailJson::from(dto))).into_response(),
         Err(e) => admin_error(e),
     }
 }
@@ -200,7 +220,7 @@ async fn get_post(
     Path(slug): Path<String>,
 ) -> Response {
     match state.posts.find(&actor, &slug).await {
-        Ok(dto) => (StatusCode::OK, Json(PostJson::from(dto))).into_response(),
+        Ok(dto) => (StatusCode::OK, Json(PostDetailJson::from(dto))).into_response(),
         Err(e) => admin_error(e),
     }
 }
@@ -226,7 +246,7 @@ async fn list_posts(
     match state.posts.list_by_author(&actor, author_id).await {
         Ok(list) => (
             StatusCode::OK,
-            Json(list.into_iter().map(PostJson::from).collect::<Vec<_>>()),
+            Json(list.iter().map(PostJson::from).collect::<Vec<_>>()),
         )
             .into_response(),
         Err(e) => admin_error(e),
@@ -262,7 +282,7 @@ async fn edit_post(
         )
         .await
     {
-        Ok(dto) => (StatusCode::OK, Json(PostJson::from(dto))).into_response(),
+        Ok(dto) => (StatusCode::OK, Json(PostDetailJson::from(dto))).into_response(),
         Err(e) => admin_error(e),
     }
 }
@@ -275,7 +295,7 @@ async fn publish_post(
 ) -> Response {
     let expected = body.and_then(|Json(b)| b.expected_version);
     match state.posts.publish(&actor, &slug, expected).await {
-        Ok(dto) => (StatusCode::OK, Json(PostJson::from(dto))).into_response(),
+        Ok(dto) => (StatusCode::OK, Json(PostDetailJson::from(dto))).into_response(),
         Err(e) => admin_error(e),
     }
 }
@@ -288,7 +308,7 @@ async fn unpublish_post(
 ) -> Response {
     let expected = body.and_then(|Json(b)| b.expected_version);
     match state.posts.withdraw(&actor, &slug, expected).await {
-        Ok(dto) => (StatusCode::OK, Json(PostJson::from(dto))).into_response(),
+        Ok(dto) => (StatusCode::OK, Json(PostDetailJson::from(dto))).into_response(),
         Err(e) => admin_error(e),
     }
 }

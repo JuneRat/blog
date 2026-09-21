@@ -42,12 +42,15 @@ pub struct EditPostCmd {
     pub expected_version: Option<i64>,
 }
 
-/// 面向 CLI/后台的文章视图，包含非公开状态。
+/// 面向 CLI/后台的文章视图，包含非公开状态与正文源文。
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct PostDto {
     pub id: Uuid,
     pub slug: String,
     pub title: String,
+    pub excerpt: Option<String>,
+    /// Markdown 源文；后台编辑需要，公开 SSR 不走此视图。
+    pub content: String,
     pub status: &'static str,
     pub visibility: &'static str,
     pub version: i64,
@@ -63,6 +66,8 @@ impl PostDto {
             id: s.id,
             slug: s.slug.clone(),
             title: s.title.clone(),
+            excerpt: s.excerpt.clone(),
+            content: s.content.clone(),
             status: s.status.as_str(),
             visibility: s.visibility.as_str(),
             version: s.version,
@@ -115,7 +120,7 @@ impl PostInteractor {
         let (mut post, expected) = self
             .load_authorized(&cmd.target_slug, actor, "post.update", "post.update_any")
             .await?;
-        let expected = cmd.expected_version.unwrap_or(expected);
+        let expected = checked_version(expected, cmd.expected_version)?;
 
         let changed = post
             .edit(PostPatch {
@@ -144,7 +149,7 @@ impl PostInteractor {
         let (mut post, expected) = self
             .load_authorized(slug, actor, "post.publish", "post.publish_any")
             .await?;
-        let expected = expected_version.unwrap_or(expected);
+        let expected = checked_version(expected, expected_version)?;
 
         if post.publish(self.clock.now()).map_err(map_domain)? {
             return self.commit(post, expected).await;
@@ -163,7 +168,7 @@ impl PostInteractor {
         let (mut post, expected) = self
             .load_authorized(slug, actor, "post.unpublish", "post.unpublish_any")
             .await?;
-        let expected = expected_version.unwrap_or(expected);
+        let expected = checked_version(expected, expected_version)?;
 
         if post.withdraw() {
             return self.commit(post, expected).await;
@@ -200,15 +205,16 @@ impl PostInteractor {
         Ok(PostDto::from_snapshot(&post.snapshot()))
     }
 
-    /// 列出作者的文章：本人列表或 read_any。
+    /// 列出作者的文章：本人列表需 `post.read`，他人列表需 `post.read_any`。
+    ///
+    /// 与单篇 [`PostInteractor::find`] 使用同一套 own/any 授权：否则同一用户会出现
+    /// 「单篇 `GET` 403、列表 `GET` 200」的自相矛盾（例如被移除 `author` 角色后仍能列草稿）。
     pub async fn list_by_author(
         &self,
         actor: &Actor,
         author: UserId,
     ) -> Result<Vec<PostDto>, UseCaseError> {
-        if author != actor.user_id && !actor.has_permission("post.read_any") {
-            return Err(UseCaseError::Forbidden);
-        }
+        authorize_own_or_any(actor, "post.read", "post.read_any", author)?;
         let snapshots = self.posts.list_by_author(author.0).await?;
         Ok(snapshots.iter().map(PostDto::from_snapshot).collect())
     }
@@ -250,6 +256,15 @@ impl PostInteractor {
         let version = post.version();
         Ok((post, version))
     }
+}
+
+/// 即使动作无实际变化，也不能让旧客户端将最新版本号用于其旧正文。
+/// 真正写入时仓储仍会再次检查版本，覆盖读取之后发生的并发修改。
+fn checked_version(current: i64, requested: Option<i64>) -> Result<i64, UseCaseError> {
+    if requested.is_some_and(|expected| expected != current) {
+        return Err(UseCaseError::VersionConflict);
+    }
+    Ok(current)
 }
 
 fn map_domain(e: domain::content::post::PostError) -> UseCaseError {

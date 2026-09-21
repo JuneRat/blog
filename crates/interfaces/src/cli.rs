@@ -113,6 +113,9 @@ pub enum OauthAction {
         /// 提供商 id（用于 URL 与回调路径，如 keycloak）
         #[arg(long)]
         id: String,
+        /// 登录页展示名（缺省用 id）
+        #[arg(long)]
+        name: Option<String>,
         /// 精确 issuer URL（https）
         #[arg(long)]
         issuer: String,
@@ -129,6 +132,9 @@ pub enum OauthAction {
     AddGithub {
         #[arg(long, default_value = "github")]
         id: String,
+        /// 登录页展示名（缺省用 id）
+        #[arg(long)]
+        name: Option<String>,
         #[arg(long)]
         client_id: String,
         #[arg(long)]
@@ -265,6 +271,8 @@ pub struct CliDeps {
     pub user_repo: Arc<dyn UserRepository>,
     /// 主题静态资源目录（/assets/）。
     pub assets_dir: Option<PathBuf>,
+    /// 后台 SPA 构建产物目录（/admin/）；不存在时不注册该路由。
+    pub admin_dist: Option<PathBuf>,
     /// readiness 探针（healthz）。
     pub health: Option<Arc<dyn application::ports::HealthCheck>>,
 }
@@ -302,6 +310,8 @@ pub async fn run(deps: CliDeps, command: Command) -> Result<(), String> {
                 .merge(crate::http_auth::auth_router(auth_state))
                 .merge(crate::http_auth::admin_router(admin_state.clone()))
                 .merge(crate::http_admin::posts_router(admin_state));
+            // 后台 SPA 挂在 /admin 子树；dist 不存在时保持未注册。
+            let app = crate::http::mount_admin_spa(app, deps.admin_dist);
             let listener = tokio::net::TcpListener::bind(&bind)
                 .await
                 .map_err(|e| format!("绑定 {bind} 失败：{e}"))?;
@@ -370,6 +380,7 @@ async fn run_oauth(deps: CliDeps, action: OauthAction) -> Result<(), String> {
     match action {
         OauthAction::AddOidc {
             id,
+            name,
             issuer,
             client_id,
             secret_ref,
@@ -380,6 +391,7 @@ async fn run_oauth(deps: CliDeps, action: OauthAction) -> Result<(), String> {
                 &mut providers,
                 ProviderConfig {
                     id,
+                    name: normalize_optional(name),
                     kind: ProviderKind::Oidc,
                     issuer: Some(issuer),
                     client_id,
@@ -396,6 +408,7 @@ async fn run_oauth(deps: CliDeps, action: OauthAction) -> Result<(), String> {
         }
         OauthAction::AddGithub {
             id,
+            name,
             client_id,
             secret_ref,
             scopes,
@@ -405,6 +418,7 @@ async fn run_oauth(deps: CliDeps, action: OauthAction) -> Result<(), String> {
                 &mut providers,
                 ProviderConfig {
                     id,
+                    name: normalize_optional(name),
                     kind: ProviderKind::GitHub,
                     issuer: None,
                     client_id,
@@ -425,13 +439,15 @@ async fn run_oauth(deps: CliDeps, action: OauthAction) -> Result<(), String> {
                 println!("（未配置提供商；用 oauth add-oidc / add-github 添加）");
             }
             for p in providers {
+                let name = p.name.clone().unwrap_or_else(|| p.id.clone());
                 println!(
-                    "{:<14} {:<6} client_id={} issuer={}",
+                    "{:<14} {:<6} name={:<16} client_id={} issuer={}",
                     p.id,
                     match p.kind {
                         ProviderKind::Oidc => "oidc",
                         ProviderKind::GitHub => "github",
                     },
+                    name,
                     p.client_id,
                     p.issuer.unwrap_or_else(|| "-".into())
                 );
@@ -491,6 +507,13 @@ fn split_scopes(scopes: Option<String>) -> Vec<String> {
     scopes
         .map(|s| s.split_whitespace().map(str::to_string).collect())
         .unwrap_or_default()
+}
+
+/// 空/空白展示名视为未提供（回退到 id）。
+fn normalize_optional(value: Option<String>) -> Option<String> {
+    value
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
 }
 
 async fn run_role(deps: CliDeps, action: RoleAction) -> Result<(), String> {

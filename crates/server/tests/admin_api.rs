@@ -123,6 +123,7 @@ async fn fresh_stack() -> Stack {
     configs
         .save(&[ProviderConfig {
             id: "idp".into(),
+            name: Some("示例 IdP".into()),
             kind: ProviderKind::Oidc,
             issuer: Some("https://idp.example".into()),
             client_id: "client".into(),
@@ -377,6 +378,19 @@ async fn author_full_crud_round_trip() {
     assert_eq!(status, StatusCode::OK, "{body}");
     assert!(body.contains("\"version\":3"), "幂等发布不递增版本");
 
+    // 状态已经是 published，也不能让旧页面取得最新版本号并覆盖旧正文。
+    let (status, body) = api(
+        &stack.router,
+        "POST",
+        "/api/admin/v1/posts/admin-post/publish",
+        Some(&cookie),
+        Some(&csrf),
+        Some(r#"{"expected_version":1}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "幂等发布也校验版本：{body}");
+    assert!(body.contains("\"code\":\"version_conflict\""), "{body}");
+
     // 过期版本编辑 → 409。
     let (status, body) = api(
         &stack.router,
@@ -388,6 +402,10 @@ async fn author_full_crud_round_trip() {
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT, "版本冲突：{body}");
+    assert!(
+        body.contains("\"code\":\"version_conflict\""),
+        "409 必须带可区分的业务码：{body}"
+    );
 
     // 撤回。
     let (status, body) = api(
@@ -414,6 +432,40 @@ async fn author_full_crud_round_trip() {
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert!(body.contains("admin-post"));
+}
+
+#[tokio::test]
+async fn duplicate_slug_is_conflict_not_version_conflict() {
+    let _g = SERIAL.lock().await;
+    let stack = fresh_stack().await;
+    let (cookie, csrf) = login_as(&stack.router, &stack.idp, "author").await;
+
+    let (status, body) = api(
+        &stack.router,
+        "POST",
+        "/api/admin/v1/posts",
+        Some(&cookie),
+        Some(&csrf),
+        Some(r#"{"slug":"dup-slug","title":"第一版","content":"正文"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+
+    // 同一 slug 再建一次：状态同为 409，但业务码必须是 conflict。
+    // 否则前端会把它当版本冲突，弹出「内容已在别处修改」并给出重试仍失败的覆盖按钮。
+    let (status, body) = api(
+        &stack.router,
+        "POST",
+        "/api/admin/v1/posts",
+        Some(&cookie),
+        Some(&csrf),
+        Some(r#"{"slug":"dup-slug","title":"第二版","content":"正文"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert!(body.contains("\"code\":\"conflict\""), "{body}");
+    assert!(!body.contains("version_conflict"), "{body}");
+    assert!(body.contains("slug"), "冲突文案应指向 slug：{body}");
 }
 
 #[tokio::test]
@@ -970,5 +1022,58 @@ async fn internal_errors_return_generic_body_without_leaking_storage_details() {
     assert!(
         !body.contains("relation") && !body.contains("does not exist"),
         "不得回显 SQL/存储细节：{body}"
+    );
+}
+
+#[tokio::test]
+async fn detail_returns_markdown_body_while_list_stays_summary() {
+    let _g = SERIAL.lock().await;
+    let stack = fresh_stack().await;
+    let (cookie, csrf) = login_as(&stack.router, &stack.idp, "author").await;
+
+    let (status, body) = api(
+        &stack.router,
+        "POST",
+        "/api/admin/v1/posts",
+        Some(&cookie),
+        Some(&csrf),
+        Some(r##"{"slug":"body-check","title":"正文","excerpt":"摘要","content":"# 标题\n\nBODYMARKER"}"##),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert!(body.contains("BODYMARKER"), "创建响应带正文：{body}");
+    assert!(body.contains(r#""excerpt":"摘要""#), "{body}");
+
+    // 详情（后台编辑器数据源）。
+    let (status, body) = api(
+        &stack.router,
+        "GET",
+        "/api/admin/v1/posts/body-check",
+        Some(&cookie),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        body.contains("BODYMARKER"),
+        "详情必须包含 Markdown 源文：{body}"
+    );
+
+    // 列表保持摘要形态，不携带正文。
+    let (status, body) = api(
+        &stack.router,
+        "GET",
+        "/api/admin/v1/posts",
+        Some(&cookie),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body.contains("body-check"));
+    assert!(
+        !body.contains("BODYMARKER") && !body.contains("\"content\""),
+        "列表不应携带正文：{body}"
     );
 }

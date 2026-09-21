@@ -19,6 +19,8 @@ struct Config {
     theme_dir: PathBuf,
     site_title: String,
     site_description: String,
+    /// 后台 SPA 构建产物（/admin/）；默认 apps/admin/dist，不存在时不注册。
+    admin_dist: PathBuf,
 }
 
 impl Config {
@@ -32,6 +34,9 @@ impl Config {
             site_title: std::env::var("BLOG_SITE_TITLE").unwrap_or_else(|_| "Sun's Blog".into()),
             site_description: std::env::var("BLOG_SITE_DESCRIPTION")
                 .unwrap_or_else(|_| "一个 Rust 博客".into()),
+            admin_dist: std::env::var("BLOG_ADMIN_DIST")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| PathBuf::from("apps/admin/dist")),
         }
     }
 }
@@ -151,6 +156,7 @@ async fn main() {
                 public_site,
                 user_repo,
                 assets_dir: Some(config.theme_dir.join("assets")),
+                admin_dist: Some(config.admin_dist),
                 health: Some(Arc::new(infrastructure::PgHealthCheck::new(pool.clone()))),
             };
 
