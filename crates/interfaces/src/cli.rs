@@ -324,11 +324,14 @@ async fn run_user(deps: CliDeps, action: UserAction) -> Result<(), String> {
         } => {
             let user = deps
                 .users
-                .create_user(CreateUserCmd {
-                    username,
-                    email,
-                    display_name,
-                })
+                .create_user(
+                    &Actor::bootstrap_cli(),
+                    CreateUserCmd {
+                        username,
+                        email,
+                        display_name,
+                    },
+                )
                 .await
                 .map_err(fmt_error)?;
             println!("已创建用户 {}（id={}）", user.username, user.id);
@@ -385,7 +388,7 @@ async fn run_oauth(deps: CliDeps, action: OauthAction) -> Result<(), String> {
                 },
             );
             deps.auth
-                .save_providers(&providers)
+                .save_providers(&Actor::bootstrap_cli(), &providers)
                 .await
                 .map_err(fmt_error)?;
             println!("已保存 OIDC 提供商配置（秘密经 secret_ref 从环境读取，不落库）。");
@@ -410,7 +413,7 @@ async fn run_oauth(deps: CliDeps, action: OauthAction) -> Result<(), String> {
                 },
             );
             deps.auth
-                .save_providers(&providers)
+                .save_providers(&Actor::bootstrap_cli(), &providers)
                 .await
                 .map_err(fmt_error)?;
             println!("已保存 GitHub 提供商配置。");
@@ -442,7 +445,13 @@ async fn run_oauth(deps: CliDeps, action: OauthAction) -> Result<(), String> {
             email,
         } => {
             deps.auth
-                .bind_external_id(&user, &provider, &external_id, email)
+                .bind_external_id(
+                    &Actor::bootstrap_cli(),
+                    &user,
+                    &provider,
+                    &external_id,
+                    email,
+                )
                 .await
                 .map_err(fmt_error)?;
             println!("已将 {external_id}@{provider} 绑定到用户 {user}。");
@@ -454,7 +463,7 @@ async fn run_oauth(deps: CliDeps, action: OauthAction) -> Result<(), String> {
             external_id,
         } => {
             deps.auth
-                .unbind_external_id(&user, &provider, &external_id)
+                .unbind_external_id(&Actor::bootstrap_cli(), &user, &provider, &external_id)
                 .await
                 .map_err(fmt_error)?;
             println!("已解绑 {external_id}@{provider} 与用户 {user}。");
@@ -507,7 +516,7 @@ async fn run_role(deps: CliDeps, action: RoleAction) -> Result<(), String> {
         }
         RoleAction::Assign { user, role } => {
             deps.roles
-                .assign_to_username(&user, &role)
+                .assign_to_username(&Actor::bootstrap_cli(), &user, &role)
                 .await
                 .map_err(fmt_error)?;
             println!("已将角色 {role} 分配给 {user}。");
@@ -515,7 +524,7 @@ async fn run_role(deps: CliDeps, action: RoleAction) -> Result<(), String> {
         }
         RoleAction::Remove { user, role } => {
             deps.roles
-                .remove_from_username(&user, &role)
+                .remove_from_username(&Actor::bootstrap_cli(), &user, &role)
                 .await
                 .map_err(fmt_error)?;
             println!("已移除 {user} 的角色 {role}。");

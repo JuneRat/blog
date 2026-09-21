@@ -39,6 +39,12 @@ impl PermissionSet {
         self.0.contains(key)
     }
 
+    /// 委派上限判定：本集合是否包含 `other` 的全部 key。
+    /// 空集是任何集合的子集（无权限者不能授予任何角色）。
+    pub fn contains_all(&self, other: &PermissionSet) -> bool {
+        other.0.iter().all(|key| self.0.contains(key))
+    }
+
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }

@@ -1,11 +1,12 @@
-//! 认证用例测试：内存 fake 验证登录闭环、一次性 state、绑定检查与会话解析。
+//! 认证用例测试：内存 fake 验证登录闭环、一次性 state、浏览器绑定、
+//! PKCE challenge/nonce/redirect_uri 传递、绑定检查与会话解析。
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use application::auth::AuthInteractor;
+use application::auth::{AuthInteractor, LoginSuccess};
 use application::error::UseCaseError;
-use application::identity::{CreateUserCmd, RoleInteractor, UserInteractor};
+use application::identity::{Actor, CreateUserCmd, RoleInteractor, UserInteractor};
 use application::ports::{
     Clock, ExternalIdentity, ExternalIdentityClient, OAuthAccountStore, OAuthAttempt,
     OAuthAttemptStore, OAuthConfigStore, PostRepository, ProviderConfig, ProviderKind,
@@ -33,8 +34,9 @@ impl SecureRandom for FakeRandom {
     fn token_hex(&self) -> Result<String, UseCaseError> {
         Ok(Uuid::now_v7().simple().to_string())
     }
-    fn pkce_s256(&self, _verifier: &str) -> Result<String, UseCaseError> {
-        Ok("challenge".into())
+    /// 可验证的 challenge：由 verifier 派生，便于断言 authorize 与 exchange 一致。
+    fn pkce_s256(&self, verifier: &str) -> Result<String, UseCaseError> {
+        Ok(format!("challenge-{verifier}"))
     }
 }
 
@@ -151,10 +153,20 @@ impl OAuthAccountStore for FakeAccountStore {
     }
 }
 
-/// 假身份客户端：authorize_url 返回固定形态；exchange 返回预置身份。
+/// 捕获 authorize_url 收到的参数，断言挑战/nonce/回调地址确实下发给提供商。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AuthorizeRequest {
+    state: String,
+    challenge: Option<String>,
+    nonce: Option<String>,
+    redirect_uri: String,
+}
+
+/// 假身份客户端：authorize_url 记录参数；exchange 返回预置身份。
 struct FakeIdentityClient {
     external_id: Mutex<String>,
     exchanges: Mutex<Vec<String>>, // 记录收到的 verifier
+    authorize_requests: Mutex<Vec<AuthorizeRequest>>,
 }
 
 #[async_trait::async_trait]
@@ -163,10 +175,19 @@ impl ExternalIdentityClient for FakeIdentityClient {
         &self,
         _config: &ProviderConfig,
         state: &str,
-        _challenge: Option<&str>,
-        _nonce: Option<&str>,
+        challenge: Option<&str>,
+        nonce: Option<&str>,
         redirect_uri: &str,
     ) -> Result<String, UseCaseError> {
+        self.authorize_requests
+            .lock()
+            .unwrap()
+            .push(AuthorizeRequest {
+                state: state.to_string(),
+                challenge: challenge.map(str::to_string),
+                nonce: nonce.map(str::to_string),
+                redirect_uri: redirect_uri.to_string(),
+            });
         Ok(format!(
             "https://idp.example/authorize?state={state}&redirect_uri={redirect_uri}"
         ))
@@ -215,22 +236,35 @@ async fn fixture() -> Fixture {
     let _roles = Arc::new(RoleInteractor::new(rbac, user_repo));
 
     let member = users
-        .create_user(CreateUserCmd {
-            username: "member".into(),
-            email: None,
-            display_name: Some("成员".into()),
-        })
+        .create_user(
+            &Actor::bootstrap_cli(),
+            CreateUserCmd {
+                username: "member".into(),
+                email: None,
+                display_name: Some("成员".into()),
+            },
+        )
         .await
         .unwrap();
 
-    let providers = vec![ProviderConfig {
-        id: "idp".into(),
-        kind: ProviderKind::Oidc,
-        issuer: Some("https://idp.example".into()),
-        client_id: "client".into(),
-        secret_ref: "IDP_SECRET".into(),
-        scopes: vec![],
-    }];
+    let providers = vec![
+        ProviderConfig {
+            id: "idp".into(),
+            kind: ProviderKind::Oidc,
+            issuer: Some("https://idp.example".into()),
+            client_id: "client".into(),
+            secret_ref: "IDP_SECRET".into(),
+            scopes: vec![],
+        },
+        ProviderConfig {
+            id: "gh".into(),
+            kind: ProviderKind::GitHub,
+            issuer: None,
+            client_id: "gh-client".into(),
+            secret_ref: "GH_SECRET".into(),
+            scopes: vec![],
+        },
+    ];
     let accounts = Arc::new(FakeAccountStore::default());
     accounts
         .bind(member.id, "https://idp.example", "sub-42", None)
@@ -240,6 +274,7 @@ async fn fixture() -> Fixture {
     let identity_client = Arc::new(FakeIdentityClient {
         external_id: Mutex::new("sub-42".into()),
         exchanges: Mutex::new(vec![]),
+        authorize_requests: Mutex::new(vec![]),
     });
 
     let auth = Arc::new(AuthInteractor::new(
@@ -261,6 +296,20 @@ async fn fixture() -> Fixture {
         identity_client,
         member_id: member.id,
     }
+}
+
+/// 发起登录并返回（授权 URL，浏览器绑定值）。
+async fn begin_login(f: &Fixture, provider: &str, next: &str) -> (String, String) {
+    let start = f.auth.login_start(provider, next).await.unwrap();
+    (start.authorize_url, start.browser_binding)
+}
+
+/// 完成一次正确绑定的回调。
+async fn complete_login(f: &Fixture, next: &str) -> Result<LoginSuccess, UseCaseError> {
+    let (_, binding) = begin_login(f, "idp", next).await;
+    f.auth
+        .login_callback("idp", "auth-code", &binding, Some(&binding))
+        .await
 }
 
 // 占位实现（auth 用例不需要用户仓储细节之外的断言）。
@@ -312,7 +361,16 @@ impl application::ports::RbacStore for NoopRbac {
         &self,
         _user_id: Uuid,
     ) -> Result<domain::identity::PermissionSet, UseCaseError> {
-        Ok(domain::identity::PermissionSet::from_keys(["post.read"]))
+        Ok(domain::identity::PermissionSet::from_keys([
+            "post.read",
+            "post.create",
+        ]))
+    }
+    async fn permissions_of_role(
+        &self,
+        role_slug: &str,
+    ) -> Result<domain::identity::PermissionSet, UseCaseError> {
+        Ok(domain::identity::PermissionSet::from_keys([role_slug]))
     }
     async fn assign_role(&self, _user_id: Uuid, _role_slug: &str) -> Result<(), UseCaseError> {
         Ok(())
@@ -340,24 +398,17 @@ struct Unused;
 async fn login_round_trip_issues_session() {
     let f = fixture().await;
 
-    let url = f.auth.login_start("idp", "/admin").await.unwrap();
+    let (url, binding) = begin_login(&f, "idp", "/admin").await;
     assert!(
         url.starts_with("https://idp.example/authorize"),
         "跳转到提供商：{url}"
     );
     assert!(url.contains("state="));
+    assert!(!binding.is_empty(), "必须下发浏览器绑定值");
 
-    let state = url
-        .split("state=")
-        .nth(1)
-        .unwrap()
-        .split('&')
-        .next()
-        .unwrap()
-        .to_string();
     let success = f
         .auth
-        .login_callback("idp", "auth-code", &state)
+        .login_callback("idp", "auth-code", &binding, Some(&binding))
         .await
         .unwrap();
     assert_eq!(success.next, "/admin");
@@ -367,27 +418,101 @@ async fn login_round_trip_issues_session() {
     let actor = f.auth.actor_from_session(&success.token).await.unwrap();
     assert_eq!(actor.user_id.0, f.member_id);
     assert!(actor.has_permission("post.read"));
+    assert!(actor.has_permission("post.create"));
     assert_eq!(application::identity::ActorChannel::Session, actor.channel);
+}
+
+#[tokio::test]
+async fn oidc_sends_pkce_challenge_nonce_and_exact_redirect_uri() {
+    let f = fixture().await;
+    let (_, binding) = begin_login(&f, "idp", "/admin").await;
+
+    let request = f.identity_client.authorize_requests.lock().unwrap()[0].clone();
+    assert_eq!(request.state, binding, "authorize 的 state 即浏览器绑定值");
+    assert_eq!(
+        request.redirect_uri, "http://localhost:8080/auth/callback/idp",
+        "回调地址精确匹配"
+    );
+    let challenge = request.challenge.expect("OIDC 必须传 PKCE challenge");
+    let nonce = request.nonce.expect("OIDC 必须传 nonce");
+    assert!(!nonce.is_empty(), "nonce 不可为空");
+
+    f.auth
+        .login_callback("idp", "code", &binding, Some(&binding))
+        .await
+        .unwrap();
+    let verifier = f.identity_client.exchanges.lock().unwrap()[0].clone();
+    assert_ne!(verifier, "无", "OIDC 必须传 PKCE verifier");
+    assert_eq!(
+        challenge,
+        format!("challenge-{verifier}"),
+        "challenge 必须由实际使用的 verifier 派生"
+    );
+}
+
+#[tokio::test]
+async fn github_login_carries_no_pkce_or_nonce() {
+    let f = fixture().await;
+    let (_, binding) = begin_login(&f, "gh", "/").await;
+    let request = f.identity_client.authorize_requests.lock().unwrap()[0].clone();
+    assert_eq!(request.state, binding);
+    assert!(
+        request.challenge.is_none(),
+        "GitHub 平台不接受 PKCE 参数：{:?}",
+        request.challenge
+    );
+    assert!(request.nonce.is_none(), "GitHub 无 nonce");
+    assert_eq!(
+        request.redirect_uri,
+        "http://localhost:8080/auth/callback/gh"
+    );
+}
+
+#[tokio::test]
+async fn missing_or_mismatched_browser_binding_is_rejected_without_consuming_attempt() {
+    let f = fixture().await;
+    let (_, binding) = begin_login(&f, "idp", "/").await;
+
+    // 缺少绑定 cookie（典型登录 CSRF：攻击者把回调 URL 塞给受害者）。
+    let err = f
+        .auth
+        .login_callback("idp", "code", &binding, None)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, UseCaseError::Invalid(_)), "{err:?}");
+
+    // 绑定值不匹配。
+    let err = f
+        .auth
+        .login_callback("idp", "code", &binding, Some("other-binding"))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, UseCaseError::Invalid(_)), "{err:?}");
+
+    // 错误的绑定没有烧掉尝试：同一浏览器随后仍可完成登录。
+    assert!(
+        f.auth
+            .login_callback("idp", "code", &binding, Some(&binding))
+            .await
+            .is_ok()
+    );
 }
 
 #[tokio::test]
 async fn state_is_single_use() {
     let f = fixture().await;
-    let url = f.auth.login_start("idp", "/").await.unwrap();
-    let state = url
-        .split("state=")
-        .nth(1)
-        .unwrap()
-        .split('&')
-        .next()
-        .unwrap()
-        .to_string();
+    let (_, binding) = begin_login(&f, "idp", "/").await;
 
-    assert!(f.auth.login_callback("idp", "code1", &state).await.is_ok());
+    assert!(
+        f.auth
+            .login_callback("idp", "code1", &binding, Some(&binding))
+            .await
+            .is_ok()
+    );
     // 同一 state 重放被拒。
     let err = f
         .auth
-        .login_callback("idp", "code2", &state)
+        .login_callback("idp", "code2", &binding, Some(&binding))
         .await
         .unwrap_err();
     assert!(
@@ -401,23 +526,15 @@ async fn unknown_state_and_provider_mismatch_rejected() {
     let f = fixture().await;
     let err = f
         .auth
-        .login_callback("idp", "code", "no-such-state")
+        .login_callback("idp", "code", "no-such-state", Some("no-such-state"))
         .await
         .unwrap_err();
     assert!(matches!(err, UseCaseError::Invalid(_)));
 
-    let url = f.auth.login_start("idp", "/").await.unwrap();
-    let state = url
-        .split("state=")
-        .nth(1)
-        .unwrap()
-        .split('&')
-        .next()
-        .unwrap()
-        .to_string();
+    let (_, binding) = begin_login(&f, "idp", "/").await;
     let err = f
         .auth
-        .login_callback("other-provider", "code", &state)
+        .login_callback("other-provider", "code", &binding, Some(&binding))
         .await
         .unwrap_err();
     assert!(
@@ -431,20 +548,7 @@ async fn unbound_identity_is_rejected_without_registration() {
     let f = fixture().await;
     *f.identity_client.external_id.lock().unwrap() = "sub-stranger".into();
 
-    let url = f.auth.login_start("idp", "/").await.unwrap();
-    let state = url
-        .split("state=")
-        .nth(1)
-        .unwrap()
-        .split('&')
-        .next()
-        .unwrap()
-        .to_string();
-    let err = f
-        .auth
-        .login_callback("idp", "code", &state)
-        .await
-        .unwrap_err();
+    let err = complete_login(&f, "/").await.unwrap_err();
     assert!(
         matches!(err, UseCaseError::Forbidden),
         "未绑定外部身份不得自动注册：{err:?}"
@@ -466,18 +570,26 @@ async fn next_path_must_be_site_relative() {
 }
 
 #[tokio::test]
+async fn next_path_rejects_control_characters_and_whitespace() {
+    let f = fixture().await;
+    // `next=/%0d%0aX` 经查询串解码后是真实的 CR/LF：会破坏 Location 头。
+    for bad in ["/\r\nX", "/a b", "/tab\there", "/del\u{7f}"] {
+        let err = f.auth.login_start("idp", bad).await.unwrap_err();
+        assert!(matches!(err, UseCaseError::Invalid(_)), "{bad:?} 应被拒绝");
+    }
+    // 正常路径（含查询与片段）仍放行。
+    for good in ["/admin", "/posts/x?y=1#z", "/a/b_c-d.e~f"] {
+        assert!(
+            f.auth.login_start("idp", good).await.is_ok(),
+            "{good} 应被接受"
+        );
+    }
+}
+
+#[tokio::test]
 async fn logout_revokes_session() {
     let f = fixture().await;
-    let url = f.auth.login_start("idp", "/").await.unwrap();
-    let state = url
-        .split("state=")
-        .nth(1)
-        .unwrap()
-        .split('&')
-        .next()
-        .unwrap()
-        .to_string();
-    let success = f.auth.login_callback("idp", "code", &state).await.unwrap();
+    let success = complete_login(&f, "/").await.unwrap();
 
     f.auth.logout(&success.token).await.unwrap();
     let err = f.auth.actor_from_session(&success.token).await.unwrap_err();
@@ -494,16 +606,7 @@ async fn unknown_provider_rejected() {
 #[tokio::test]
 async fn oidc_carries_pkce_verifier_to_exchange() {
     let f = fixture().await;
-    let url = f.auth.login_start("idp", "/").await.unwrap();
-    let state = url
-        .split("state=")
-        .nth(1)
-        .unwrap()
-        .split('&')
-        .next()
-        .unwrap()
-        .to_string();
-    f.auth.login_callback("idp", "code", &state).await.unwrap();
+    complete_login(&f, "/").await.unwrap();
 
     let exchanges = f.identity_client.exchanges.lock().unwrap();
     assert_eq!(exchanges.len(), 1);

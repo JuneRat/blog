@@ -1,10 +1,12 @@
 //! 认证 HTTP 全链路：/auth/login → 假 IdP 回调 → 会话 cookie → /api/admin/v1/me → CSRF 登出。
 //! 使用真实 PostgreSQL 与内存会话；外部身份客户端为 fake（不发出网络请求）。
 
+mod common;
+
 use std::sync::{Arc, Mutex};
 
 use application::auth::AuthInteractor;
-use application::identity::{CreateUserCmd, RoleInteractor, UserInteractor};
+use application::identity::{Actor, CreateUserCmd, RoleInteractor, UserInteractor};
 use application::ports::{
     Clock, ExternalIdentity, ExternalIdentityClient, OAuthAccountStore, OAuthConfigStore,
     ProviderConfig, ProviderKind, SecureRandom, SessionStore,
@@ -14,8 +16,7 @@ use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use infrastructure::{
     InMemoryOAuthAttemptStore, InMemorySessionStore, PostgresOAuthAccountStore,
-    PostgresOAuthConfigStore, PostgresRbacStore, PostgresUserRepository, SystemClock, connect,
-    migrate,
+    PostgresOAuthConfigStore, PostgresRbacStore, PostgresUserRepository, SystemClock,
 };
 use interfaces::http_auth::{AdminState, AuthState, admin_router, auth_router};
 use sqlx::PgPool;
@@ -77,25 +78,11 @@ struct Stack {
 }
 
 async fn fresh_stack() -> Stack {
-    let admin = connect("postgres://blog:blog@127.0.0.1:5432/postgres")
-        .await
-        .expect("连接管理库失败");
-    sqlx::raw_sql("DROP DATABASE IF EXISTS blog_auth_test WITH (FORCE)")
-        .execute(&admin)
-        .await
-        .unwrap();
-    sqlx::raw_sql("CREATE DATABASE blog_auth_test")
-        .execute(&admin)
-        .await
-        .unwrap();
-    admin.close().await;
+    fresh_stack_with(false).await
+}
 
-    let pool = connect("postgres://blog:blog@127.0.0.1:5432/blog_auth_test")
-        .await
-        .expect("连接测试库失败");
-    migrate(&pool, "../../migrations/postgres")
-        .await
-        .expect("迁移失败");
+async fn fresh_stack_with(secure_cookies: bool) -> Stack {
+    let pool = common::fresh_database("blog_auth_test").await;
 
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
     let user_repo = Arc::new(PostgresUserRepository::new(pool.clone()));
@@ -106,15 +93,18 @@ async fn fresh_stack() -> Stack {
 
     // 用户 + author 角色 + 外部身份绑定。
     let member = users
-        .create_user(CreateUserCmd {
-            username: "httpuser".into(),
-            email: None,
-            display_name: Some("HTTP 用户".into()),
-        })
+        .create_user(
+            &Actor::bootstrap_cli(),
+            CreateUserCmd {
+                username: "httpuser".into(),
+                email: None,
+                display_name: Some("HTTP 用户".into()),
+            },
+        )
         .await
         .unwrap();
     roles
-        .assign_to_username("httpuser", "author")
+        .assign_to_username(&Actor::bootstrap_cli(), "httpuser", "author")
         .await
         .unwrap();
 
@@ -166,7 +156,7 @@ async fn fresh_stack() -> Stack {
 
     let auth_state = AuthState {
         auth: auth.clone(),
-        secure_cookies: false,
+        secure_cookies,
     };
     let admin_state = AdminState {
         auth: auth.clone(),
@@ -227,45 +217,109 @@ fn cookie_value(captured: &[(String, String)]) -> Option<String> {
         })
 }
 
+/// 完成一次带回浏览器绑定的登录；返回（会话 cookie，登录响应头，回调响应头）。
+async fn login(
+    router: &axum::Router,
+    next: &str,
+) -> (String, Vec<(String, String)>, Vec<(String, String)>) {
+    let (status, login_headers, _) = request(
+        router,
+        "GET",
+        &format!("/auth/login?provider=idp&next={next}"),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::TEMPORARY_REDIRECT);
+    let location = login_headers
+        .iter()
+        .find(|(k, _)| k == "location")
+        .map(|(_, v)| v.clone())
+        .unwrap();
+    let state = location
+        .split("state=")
+        .nth(1)
+        .unwrap()
+        .split('&')
+        .next()
+        .unwrap()
+        .to_string();
+    let binding = login_headers
+        .iter()
+        .filter(|(k, _)| k == "set-cookie")
+        .find_map(|(_, v)| {
+            v.split(';')
+                .next()?
+                .trim()
+                .strip_prefix("blog_oauth_state=")
+                .map(str::to_string)
+        })
+        .expect("登录必须下发浏览器绑定 cookie");
+    assert_eq!(binding, state, "绑定值与 state 一致（双重提交）");
+
+    let cookie_header = format!("blog_oauth_state={binding}");
+    let (status, callback_headers, _) = request(
+        router,
+        "GET",
+        &format!("/auth/callback/idp?code=abc&state={state}"),
+        &[("cookie", &cookie_header)],
+    )
+    .await;
+    assert_eq!(status, StatusCode::SEE_OTHER, "回调成功");
+    let cookie = cookie_value(&callback_headers).expect("签发会话 cookie");
+    (cookie, login_headers, callback_headers)
+}
+
+fn set_cookie_named<'a>(headers: &'a [(String, String)], name: &str) -> &'a str {
+    headers
+        .iter()
+        .filter(|(k, _)| k == "set-cookie")
+        .map(|(_, v)| v.as_str())
+        .find(|v| v.starts_with(&format!("{name}=")))
+        .unwrap_or_else(|| panic!("缺少 {name} 的 Set-Cookie：{headers:?}"))
+}
+
 #[tokio::test]
 async fn full_login_me_logout_round_trip() {
     let _g = SERIAL.lock().await;
     let stack = fresh_stack().await;
 
-    // 1. 发起登录 → 302 到假 IdP。
-    let (status, headers, _) = request(
-        &stack.router,
-        "GET",
-        "/auth/login?provider=idp&next=/admin",
-        &[],
-    )
-    .await;
-    assert_eq!(status, StatusCode::TEMPORARY_REDIRECT);
-    let location = headers
+    // 1-2. 发起登录 → 302 到假 IdP；回调带回绑定 cookie → 303 + 会话 cookie。
+    let (cookie, login_headers, callback_headers) = login(&stack.router, "/admin").await;
+    let location = login_headers
         .iter()
         .find(|(k, _)| k == "location")
         .map(|(_, v)| v.clone())
         .unwrap();
     assert!(location.starts_with("https://idp.example/authorize"));
-    let state = location.split("state=").nth(1).unwrap().to_string();
-
-    // 2. 回调 → 303 + 会话 cookie。
-    let (status, headers, _) = request(
-        &stack.router,
-        "GET",
-        &format!("/auth/callback/idp?code=abc&state={state}"),
-        &[],
-    )
-    .await;
-    assert_eq!(status, StatusCode::SEE_OTHER, "回调成功");
-    let redirect = headers
+    let redirect = callback_headers
         .iter()
         .find(|(k, _)| k == "location")
         .map(|(_, v)| v.clone())
         .unwrap();
     assert_eq!(redirect, "/admin", "回跳受控路径");
-    let cookie = cookie_value(&headers).expect("签发会话 cookie");
     assert!(!cookie.is_empty());
+
+    // 会话 cookie：HttpOnly + SameSite=Lax + Max-Age；非 Secure 部署不带 Secure。
+    let session_cookie = set_cookie_named(&callback_headers, "blog_session");
+    assert!(session_cookie.contains("HttpOnly"), "{session_cookie}");
+    assert!(session_cookie.contains("SameSite=Lax"), "{session_cookie}");
+    assert!(session_cookie.contains("Max-Age="), "{session_cookie}");
+    assert!(
+        !session_cookie.contains("Secure"),
+        "非 HTTPS 部署不加 Secure：{session_cookie}"
+    );
+
+    // 登录绑定 cookie：短命、HttpOnly、SameSite=Lax，回调后被清除。
+    let binding_cookie = set_cookie_named(&login_headers, "blog_oauth_state");
+    assert!(binding_cookie.contains("HttpOnly"), "{binding_cookie}");
+    assert!(binding_cookie.contains("SameSite=Lax"), "{binding_cookie}");
+    assert!(binding_cookie.contains("Max-Age=600"), "{binding_cookie}");
+    assert!(!binding_cookie.contains("Secure"), "{binding_cookie}");
+    let cleared = set_cookie_named(&callback_headers, "blog_oauth_state");
+    assert!(
+        cleared.contains("Max-Age=0"),
+        "回调必须清除绑定 cookie：{cleared}"
+    );
 
     // 3. /me → 200，含权限与 CSRF token。
     let (status, _, body) = request(
@@ -336,22 +390,7 @@ async fn unauthenticated_me_is_401_and_cross_origin_logout_rejected() {
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 
     // 登录拿会话。
-    let (_, headers, _) =
-        request(&stack.router, "GET", "/auth/login?provider=idp&next=/", &[]).await;
-    let location = headers
-        .iter()
-        .find(|(k, _)| k == "location")
-        .map(|(_, v)| v.clone())
-        .unwrap();
-    let state = location.split("state=").nth(1).unwrap().to_string();
-    let (_, headers, _) = request(
-        &stack.router,
-        "GET",
-        &format!("/auth/callback/idp?code=abc&state={state}"),
-        &[],
-    )
-    .await;
-    let cookie = cookie_value(&headers).unwrap();
+    let (cookie, _, _) = login(&stack.router, "/").await;
     let (_, _, body) = request(
         &stack.router,
         "GET",
@@ -396,4 +435,108 @@ async fn unknown_provider_login_is_404() {
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+}
+
+#[tokio::test]
+async fn callback_without_browser_binding_is_rejected_and_keeps_attempt() {
+    let _g = SERIAL.lock().await;
+    let stack = fresh_stack().await;
+
+    let (status, login_headers, _) =
+        request(&stack.router, "GET", "/auth/login?provider=idp&next=/", &[]).await;
+    assert_eq!(status, StatusCode::TEMPORARY_REDIRECT);
+    let location = login_headers
+        .iter()
+        .find(|(k, _)| k == "location")
+        .map(|(_, v)| v.clone())
+        .unwrap();
+    let state = location
+        .split("state=")
+        .nth(1)
+        .unwrap()
+        .split('&')
+        .next()
+        .unwrap()
+        .to_string();
+    let binding = set_cookie_named(&login_headers, "blog_oauth_state")
+        .split(';')
+        .next()
+        .unwrap()
+        .trim()
+        .strip_prefix("blog_oauth_state=")
+        .unwrap()
+        .to_string();
+
+    // 攻击者把回调 URL 塞给受害者：受害者浏览器没有绑定 cookie → 拒绝。
+    let (status, _, _) = request(
+        &stack.router,
+        "GET",
+        &format!("/auth/callback/idp?code=abc&state={state}"),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "缺少浏览器绑定必须拒绝");
+
+    // 尝试未被烧掉：同一浏览器随后仍可完成登录。
+    let (status, headers, _) = request(
+        &stack.router,
+        "GET",
+        &format!("/auth/callback/idp?code=abc&state={state}"),
+        &[("cookie", &format!("blog_oauth_state={binding}"))],
+    )
+    .await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    assert!(cookie_value(&headers).is_some(), "正常浏览器仍能完成登录");
+}
+
+#[tokio::test]
+async fn secure_deployment_marks_cookies_secure_and_host_prefixed() {
+    let _g = SERIAL.lock().await;
+    let stack = fresh_stack_with(true).await;
+
+    let (status, login_headers, _) =
+        request(&stack.router, "GET", "/auth/login?provider=idp&next=/", &[]).await;
+    assert_eq!(status, StatusCode::TEMPORARY_REDIRECT);
+
+    // Secure 部署的绑定 cookie 使用 __Host- 前缀（host-only + Path=/）。
+    let binding_cookie = set_cookie_named(&login_headers, "__Host-blog_oauth_state");
+    assert!(binding_cookie.contains("Secure"), "{binding_cookie}");
+    assert!(binding_cookie.contains("Path=/"), "{binding_cookie}");
+    assert!(!binding_cookie.contains("Domain"), "{binding_cookie}");
+
+    let location = login_headers
+        .iter()
+        .find(|(k, _)| k == "location")
+        .map(|(_, v)| v.clone())
+        .unwrap();
+    let state = location
+        .split("state=")
+        .nth(1)
+        .unwrap()
+        .split('&')
+        .next()
+        .unwrap()
+        .to_string();
+    let binding = binding_cookie
+        .split(';')
+        .next()
+        .unwrap()
+        .trim()
+        .strip_prefix("__Host-blog_oauth_state=")
+        .unwrap()
+        .to_string();
+
+    let (status, callback_headers, _) = request(
+        &stack.router,
+        "GET",
+        &format!("/auth/callback/idp?code=abc&state={state}"),
+        &[("cookie", &format!("__Host-blog_oauth_state={binding}"))],
+    )
+    .await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    let session_cookie = set_cookie_named(&callback_headers, "blog_session");
+    assert!(
+        session_cookie.contains("; Secure"),
+        "HTTPS 部署的会话 cookie 必须 Secure：{session_cookie}"
+    );
 }

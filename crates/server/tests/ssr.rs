@@ -1,6 +1,8 @@
 //! 完整装配 + HTTP 集成测试：真实 PostgreSQL + 真实主题模板。
 //! 验证公开 SSR 的可见性边界：发布可读、撤回/草稿/private/软删除不可访问。
 
+mod common;
+
 use std::sync::Arc;
 
 use application::content::{CreatePostCmd, PostInteractor};
@@ -12,7 +14,7 @@ use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use infrastructure::{
     MiniJinjaThemeRenderer, PostgresPostRepository, PostgresPublishedPostQuery, PostgresRbacStore,
-    PostgresUserRepository, SanitizingMarkdownRenderer, SystemClock, connect, migrate,
+    PostgresUserRepository, SanitizingMarkdownRenderer, SystemClock,
 };
 use interfaces::http::public_router_minimal;
 use sqlx::PgPool;
@@ -35,25 +37,7 @@ async fn actor_for(users: &Arc<UserInteractor>, username: &str) -> Actor {
 }
 
 async fn stack() -> Stack {
-    let admin = connect("postgres://blog:blog@127.0.0.1:5432/postgres")
-        .await
-        .expect("连接管理库失败");
-    sqlx::raw_sql("DROP DATABASE IF EXISTS blog_server_test WITH (FORCE)")
-        .execute(&admin)
-        .await
-        .unwrap();
-    sqlx::raw_sql("CREATE DATABASE blog_server_test")
-        .execute(&admin)
-        .await
-        .unwrap();
-    admin.close().await;
-
-    let pool = connect("postgres://blog:blog@127.0.0.1:5432/blog_server_test")
-        .await
-        .expect("连接测试库失败");
-    migrate(&pool, "../../migrations/postgres")
-        .await
-        .expect("迁移失败");
+    let pool = common::fresh_database("blog_server_test").await;
 
     let clock = Arc::new(SystemClock);
     let user_repo: Arc<dyn UserRepository> = Arc::new(PostgresUserRepository::new(pool.clone()));
@@ -83,15 +67,21 @@ async fn stack() -> Stack {
     ));
 
     users
-        .create_user(CreateUserCmd {
-            username: "author".into(),
-            email: None,
-            display_name: Some("作者甲".into()),
-        })
+        .create_user(
+            &Actor::bootstrap_cli(),
+            CreateUserCmd {
+                username: "author".into(),
+                email: None,
+                display_name: Some("作者甲".into()),
+            },
+        )
         .await
         .unwrap();
     // 测试作者需要 author 角色才能创建/发布文章（RBAC 已接入用例）。
-    roles.assign_to_username("author", "author").await.unwrap();
+    roles
+        .assign_to_username(&Actor::bootstrap_cli(), "author", "author")
+        .await
+        .unwrap();
     let author = actor_for(&users, "author").await;
 
     let router = public_router_minimal(public_site);

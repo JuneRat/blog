@@ -6,11 +6,11 @@ use std::sync::{Arc, Mutex};
 use application::content::{CreatePostCmd, EditPostCmd, PostInteractor};
 use application::error::UseCaseError;
 use application::identity::{
-    Actor, CreateUserCmd, PermissionDescriptor, RoleInteractor, UserInteractor,
+    Actor, ActorChannel, CreateUserCmd, PermissionDescriptor, RoleInteractor, UserInteractor,
 };
 use application::ports::{Clock, PostRepository, RbacStore, RoleDto, SaveOutcome, UserRepository};
 use domain::content::post::{PostSnapshot, Visibility};
-use domain::identity::UserSnapshot;
+use domain::identity::{PermissionSet, UserSnapshot};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -210,6 +210,19 @@ impl RbacStore for FakeRbacStore {
         Ok(domain::identity::PermissionSet::from_keys(keys))
     }
 
+    async fn permissions_of_role(
+        &self,
+        role_slug: &str,
+    ) -> Result<domain::identity::PermissionSet, UseCaseError> {
+        let roles = self.roles.lock().unwrap();
+        let perms = roles
+            .get(role_slug)
+            .ok_or_else(|| UseCaseError::NotFound(format!("角色 {role_slug}")))?;
+        Ok(domain::identity::PermissionSet::from_keys(
+            perms.iter().copied(),
+        ))
+    }
+
     async fn assign_role(&self, user_id: Uuid, role_slug: &str) -> Result<(), UseCaseError> {
         if !self.roles.lock().unwrap().contains_key(role_slug) {
             return Err(UseCaseError::NotFound(format!("角色 {role_slug}")));
@@ -261,6 +274,7 @@ struct Fixture {
     users: Arc<UserInteractor>,
     roles: Arc<RoleInteractor>,
     author: Actor,
+    author2: Actor,
     other: Actor,
     editor: Actor,
 }
@@ -283,20 +297,34 @@ async fn fixture() -> Fixture {
 
     for username in ["author", "author2", "other", "editor"] {
         users
-            .create_user(CreateUserCmd {
-                username: username.into(),
-                email: None,
-                display_name: Some(format!("{username}的展示名")),
-            })
+            .create_user(
+                &Actor::bootstrap_cli(),
+                CreateUserCmd {
+                    username: username.into(),
+                    email: None,
+                    display_name: Some(format!("{username}的展示名")),
+                },
+            )
             .await
             .unwrap();
     }
     // author 获 author 角色；editor 获得 any 权限角色；other 无任何角色。
-    roles.assign_to_username("author", "author").await.unwrap();
-    roles.assign_to_username("author2", "author").await.unwrap();
-    roles.assign_to_username("editor", "editor").await.unwrap();
+    let bootstrap = Actor::bootstrap_cli();
+    roles
+        .assign_to_username(&bootstrap, "author", "author")
+        .await
+        .unwrap();
+    roles
+        .assign_to_username(&bootstrap, "author2", "author")
+        .await
+        .unwrap();
+    roles
+        .assign_to_username(&bootstrap, "editor", "editor")
+        .await
+        .unwrap();
 
     let author = users.actor_for_username("author").await.unwrap();
+    let author2 = users.actor_for_username("author2").await.unwrap();
     let other = users.actor_for_username("other").await.unwrap();
     let editor = users.actor_for_username("editor").await.unwrap();
 
@@ -305,6 +333,7 @@ async fn fixture() -> Fixture {
         users,
         roles,
         author,
+        author2,
         other,
         editor,
     }
@@ -607,6 +636,29 @@ async fn reader_scope_blocks_others_drafts() {
         .unwrap_err();
     assert!(matches!(err, UseCaseError::Forbidden));
 
+    // author2 有 own 权限（post.read/post.update）但不是作者：
+    // 这里测的是「不是本人」，而不是「没有权限」。
+    let err = f.posts.find(&f.author2, "secret-draft").await.unwrap_err();
+    assert!(
+        matches!(err, UseCaseError::Forbidden),
+        "own 权限不得跨作者读取：{err:?}"
+    );
+    let err = f
+        .posts
+        .edit(
+            &f.author2,
+            EditPostCmd {
+                target_slug: "secret-draft".into(),
+                title: Some("越权修改".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, UseCaseError::Forbidden),
+        "own 权限不得跨作者编辑：{err:?}"
+    );
     // author 本人可读自己的草稿（own）。
     assert!(f.posts.find(&f.author, "secret-draft").await.is_ok());
     // editor 有 read_any，可读他人草稿。
@@ -642,12 +694,16 @@ async fn author_cannot_publish_others_posts_without_any() {
 #[tokio::test]
 async fn last_owner_cannot_be_removed() {
     let f = fixture().await;
-    f.roles.assign_to_username("author", "owner").await.unwrap();
+    let bootstrap = Actor::bootstrap_cli();
+    f.roles
+        .assign_to_username(&bootstrap, "author", "owner")
+        .await
+        .unwrap();
 
-    // 唯一 Owner：移除被拒。
+    // 唯一 Owner：移除被拒（存储侧最后 Owner 保护）。
     let err = f
         .roles
-        .remove_from_username("author", "owner")
+        .remove_from_username(&bootstrap, "author", "owner")
         .await
         .unwrap_err();
     assert!(
@@ -656,10 +712,13 @@ async fn last_owner_cannot_be_removed() {
     );
 
     // 出现第二个 Owner 后，移除其中一个允许。
-    f.roles.assign_to_username("editor", "owner").await.unwrap();
+    f.roles
+        .assign_to_username(&bootstrap, "editor", "owner")
+        .await
+        .unwrap();
     assert!(
         f.roles
-            .remove_from_username("author", "owner")
+            .remove_from_username(&bootstrap, "author", "owner")
             .await
             .is_ok()
     );
@@ -670,7 +729,7 @@ async fn unknown_role_assignment_is_rejected() {
     let f = fixture().await;
     let err = f
         .roles
-        .assign_to_username("author", "ghost-role")
+        .assign_to_username(&Actor::bootstrap_cli(), "author", "ghost-role")
         .await
         .unwrap_err();
     assert!(matches!(err, UseCaseError::NotFound(_)));
@@ -681,10 +740,136 @@ async fn actor_permissions_are_union_of_roles() {
     let f = fixture().await;
     // author 再叠加 editor 角色 → 并集包含 own + any。
     f.roles
-        .assign_to_username("author", "editor")
+        .assign_to_username(&Actor::bootstrap_cli(), "author", "editor")
         .await
         .unwrap();
     let actor = f.users.actor_for_username("author").await.unwrap();
     assert!(actor.has_permission("post.create"), "own 动作仍在");
     assert!(actor.has_permission("post.update_any"), "any 动作并入");
+}
+
+// ---------------------------------------------------------------------------
+// 身份写路径的 Actor 授权与委派上限（docs §3）
+// ---------------------------------------------------------------------------
+
+fn session_actor_with(keys: impl IntoIterator<Item = &'static str>) -> Actor {
+    Actor::new(
+        domain::identity::UserId::generate(),
+        ActorChannel::Session,
+        PermissionSet::from_keys(keys),
+    )
+}
+
+fn all_registered_permissions() -> Vec<&'static str> {
+    application::identity::PERMISSION_REGISTRY
+        .iter()
+        .map(|d| d.key)
+        .collect()
+}
+
+#[tokio::test]
+async fn create_user_requires_user_manage() {
+    let f = fixture().await;
+    let outsider = session_actor_with(["post.create"]);
+    let err = f
+        .users
+        .create_user(
+            &outsider,
+            CreateUserCmd {
+                username: "intruder".into(),
+                email: None,
+                display_name: None,
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, UseCaseError::Forbidden),
+        "缺 user.manage：{err:?}"
+    );
+
+    // 受控 CLI 引导身份持有全部已注册权限。
+    assert!(
+        f.users
+            .create_user(
+                &Actor::bootstrap_cli(),
+                CreateUserCmd {
+                    username: "invited".into(),
+                    email: None,
+                    display_name: None,
+                },
+            )
+            .await
+            .is_ok()
+    );
+}
+
+#[tokio::test]
+async fn assign_role_requires_role_manage() {
+    let f = fixture().await;
+    let outsider = session_actor_with(["post.create", "user.manage"]);
+    let err = f
+        .roles
+        .assign_to_username(&outsider, "other", "author")
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, UseCaseError::Forbidden),
+        "缺 role.manage：{err:?}"
+    );
+}
+
+#[tokio::test]
+async fn owner_grant_requires_dedicated_ownership_permission() {
+    let f = fixture().await;
+    // 除 ownership.manage 外持有全部已注册权限的会话：仍不能授予 Owner。
+    let without_ownership: Vec<&'static str> = all_registered_permissions()
+        .into_iter()
+        .filter(|key| *key != "ownership.manage")
+        .collect();
+    let err = f
+        .roles
+        .assign_to_username(&session_actor_with(without_ownership), "author", "owner")
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, UseCaseError::Forbidden),
+        "普通角色分配不能授予 Owner：{err:?}"
+    );
+
+    // 持有 ownership.manage 后允许。
+    assert!(
+        f.roles
+            .assign_to_username(
+                &session_actor_with(all_registered_permissions()),
+                "author",
+                "owner"
+            )
+            .await
+            .is_ok()
+    );
+}
+
+#[tokio::test]
+async fn delegation_ceiling_blocks_granting_unheld_permissions() {
+    let f = fixture().await;
+    // 只有 post.create + role.manage 的会话不能授予 author（后者含 post.publish 等）。
+    let weak = session_actor_with(["post.create", "role.manage"]);
+    let err = f
+        .roles
+        .assign_to_username(&weak, "other", "author")
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, UseCaseError::Forbidden),
+        "超出委派上限：{err:?}"
+    );
+
+    // 受控 CLI 引导身份持有全部已注册权限，可授予。
+    assert!(
+        f.roles
+            .assign_to_username(&Actor::bootstrap_cli(), "other", "author")
+            .await
+            .is_ok()
+    );
 }

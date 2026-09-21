@@ -5,21 +5,27 @@
 //! - POST /auth/logout ：受保护写（会话 + CSRF 头），撤销会话。
 //! - GET /api/admin/v1/me ：会话认证的当前用户信息（含 CSRF token 供 SPA 使用）。
 //!
-//! Cookie：不透明高熵令牌，HttpOnly + SameSite=Lax（生产可加 Secure）。
+//! Cookie：不透明高熵令牌，HttpOnly + SameSite=Lax（HTTPS 部署加 Secure）；
+//! 登录另发短命 `blog_oauth_state`（Secure 部署用 `__Host-` 前缀）绑定浏览器。
 //! 会话状态存服务端内存，每次请求重新读取用户与权限。
 
 use std::sync::Arc;
 
-use application::auth::{AuthInteractor, SESSION_COOKIE_NAME};
+use application::auth::{ATTEMPT_TTL_SECS, AuthInteractor, SESSION_COOKIE_NAME};
 use application::content::PostInteractor;
 use application::error::UseCaseError;
 use application::identity::UserInteractor;
 use axum::extract::{Path, Query, State};
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
+use axum::middleware;
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde_json::json;
+
+use crate::http_support::{
+    admin_error, cookie_value, ensure_same_origin, no_store, oauth_state_cookie_name,
+};
 
 #[derive(Clone)]
 pub struct AuthState {
@@ -54,6 +60,7 @@ pub struct AdminState {
 pub fn admin_router(state: AdminState) -> Router {
     Router::new()
         .route("/api/admin/v1/me", get(me))
+        .layer(middleware::from_fn(no_store))
         .with_state(state)
 }
 
@@ -71,7 +78,20 @@ struct LoginQuery {
 async fn login(State(state): State<AuthState>, Query(query): Query<LoginQuery>) -> Response {
     let next = query.next.unwrap_or_else(|| "/".to_string());
     match state.auth.login_start(&query.provider, &next).await {
-        Ok(url) => Redirect::temporary(&url).into_response(),
+        Ok(start) => {
+            // 短命浏览器绑定 cookie：回调必须在同一浏览器回读（防登录 CSRF）。
+            let cookie = format!(
+                "{}={}; Path=/; HttpOnly; SameSite=Lax; Max-Age={ATTEMPT_TTL_SECS}{}",
+                oauth_state_cookie_name(state.secure_cookies),
+                start.browser_binding,
+                secure_suffix(state.secure_cookies)
+            );
+            let mut response = Redirect::temporary(&start.authorize_url).into_response();
+            response
+                .headers_mut()
+                .append(header::SET_COOKIE, cookie_header(cookie));
+            response
+        }
         Err(e) => auth_error(e),
     }
 }
@@ -90,87 +110,93 @@ async fn callback(
     State(state): State<AuthState>,
     Path(provider): Path<String>,
     Query(query): Query<CallbackQuery>,
+    headers: HeaderMap,
 ) -> Response {
+    let binding_cookie = oauth_state_cookie_name(state.secure_cookies);
+    let clear_binding = format!(
+        "{binding_cookie}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0{}",
+        secure_suffix(state.secure_cookies)
+    );
+
     if let Some(err) = query.error {
-        return plain_error(StatusCode::BAD_GATEWAY, &format!("提供商返回错误：{err}"));
+        return with_binding_cleared(
+            plain_error(StatusCode::BAD_GATEWAY, &format!("提供商返回错误：{err}")),
+            clear_binding,
+        );
     }
     let (Some(code), Some(csrf_state)) = (query.code, query.state) else {
-        return plain_error(StatusCode::BAD_REQUEST, "缺少 code 或 state");
+        return with_binding_cleared(
+            plain_error(StatusCode::BAD_REQUEST, "缺少 code 或 state"),
+            clear_binding,
+        );
     };
+    // 浏览器绑定：必须与 state 一致才消费尝试。
+    let binding = cookie_value(&headers, binding_cookie);
     match state
         .auth
-        .login_callback(&provider, &code, &csrf_state)
+        .login_callback(&provider, &code, &csrf_state, binding.as_deref())
         .await
     {
         Ok(success) => {
             let cookie = format!(
                 "{SESSION_COOKIE_NAME}={}; Path=/; HttpOnly; SameSite=Lax; Max-Age={SESSION_COOKIE_MAX_AGE}{}",
                 success.token,
-                if state.secure_cookies { "; Secure" } else { "" }
+                secure_suffix(state.secure_cookies)
             );
-            (
-                StatusCode::SEE_OTHER,
-                [("Set-Cookie", cookie), ("Location", success.next.clone())],
-            )
-                .into_response()
+            let mut response =
+                (StatusCode::SEE_OTHER, [("Location", success.next.clone())]).into_response();
+            response
+                .headers_mut()
+                .append(header::SET_COOKIE, cookie_header(cookie));
+            with_binding_cleared(response, clear_binding)
         }
-        Err(e) => auth_error(e),
+        Err(e) => with_binding_cleared(auth_error(e), clear_binding),
     }
 }
 
 async fn logout(State(state): State<AuthState>, headers: HeaderMap) -> Response {
-    let Some(token) = session_token_from_headers(&headers) else {
-        return plain_error(StatusCode::UNAUTHORIZED, "未登录");
+    let Some(token) = cookie_value(&headers, SESSION_COOKIE_NAME) else {
+        return admin_error(UseCaseError::Unauthenticated);
     };
-    // 退出是受保护写：校验会话与 CSRF 头。
+    // 退出是受保护写：先校验 Origin，再校验会话与 CSRF 头。
+    if let Err(e) = ensure_same_origin(&headers) {
+        return admin_error(e);
+    }
     let record = match state.auth.session_record(&token).await {
         Ok(record) => record,
-        Err(_) => return plain_error(StatusCode::UNAUTHORIZED, "会话已失效"),
+        Err(_) => return admin_error(UseCaseError::Unauthenticated),
     };
     let provided = headers
         .get("x-csrf-token")
         .and_then(|v| v.to_str().ok())
         .unwrap_or_default();
     if provided.is_empty() || provided != record.csrf_token {
-        return plain_error(StatusCode::FORBIDDEN, "CSRF 校验失败");
-    }
-    // Origin 存在时必须同源。
-    if let Some(origin) = headers.get("origin").and_then(|v| v.to_str().ok()) {
-        let host = headers
-            .get("host")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or_default();
-        let origin_host = origin
-            .trim_start_matches("https://")
-            .trim_start_matches("http://");
-        if !origin.eq_ignore_ascii_case(&format!("https://{host}"))
-            && !origin.eq_ignore_ascii_case(&format!("http://{host}"))
-            && origin_host != host
-        {
-            return plain_error(StatusCode::FORBIDDEN, "跨源请求被拒绝");
-        }
+        return admin_error(UseCaseError::Forbidden);
     }
     if let Err(e) = state.auth.logout(&token).await {
-        return auth_error(e);
+        return admin_error(e);
     }
-    let clear = format!("{SESSION_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0");
-    (
-        StatusCode::SEE_OTHER,
-        [("Set-Cookie", clear), ("Location", "/".to_string())],
-    )
-        .into_response()
+    let clear = format!(
+        "{SESSION_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0{}",
+        secure_suffix(state.secure_cookies)
+    );
+    let mut response = (StatusCode::SEE_OTHER, [("Location", "/".to_string())]).into_response();
+    response
+        .headers_mut()
+        .append(header::SET_COOKIE, cookie_header(clear));
+    response
 }
 
 async fn me(State(state): State<AdminState>, headers: HeaderMap) -> Response {
-    let Some(token) = session_token_from_headers(&headers) else {
-        return plain_error(StatusCode::UNAUTHORIZED, "未登录");
+    let Some(token) = cookie_value(&headers, SESSION_COOKIE_NAME) else {
+        return admin_error(UseCaseError::Unauthenticated);
     };
     let (actor, record) = match (
         state.auth.actor_from_session(&token).await,
         state.auth.session_record(&token).await,
     ) {
         (Ok(a), Ok(r)) => (a, r),
-        (Err(e), _) | (_, Err(e)) => return auth_error(e),
+        (Err(e), _) | (_, Err(e)) => return admin_error(e),
     };
     let _ = &state.users;
     let body = json!({
@@ -186,25 +212,30 @@ async fn me(State(state): State<AdminState>, headers: HeaderMap) -> Response {
 // 辅助
 // ---------------------------------------------------------------------------
 
-fn session_token_from_headers(headers: &HeaderMap) -> Option<String> {
-    let cookie = headers.get(axum::http::header::COOKIE)?.to_str().ok()?;
-    for pair in cookie.split(';') {
-        let pair = pair.trim();
-        if let Some(value) = pair.strip_prefix(SESSION_COOKIE_NAME) {
-            let value = value.strip_prefix('=')?;
-            if value.is_empty() {
-                return None;
-            }
-            return Some(value.to_string());
-        }
-    }
-    None
+/// Set-Cookie 的 Secure 后缀（HTTPS 部署必须带上）。
+fn secure_suffix(secure: bool) -> &'static str {
+    if secure { "; Secure" } else { "" }
+}
+
+/// cookie 值只含 CSPRNG hex 与常量属性，转换失败属于不可达的内部错误。
+fn cookie_header(cookie: String) -> HeaderValue {
+    HeaderValue::from_str(&cookie).unwrap_or_else(|_| HeaderValue::from_static(""))
+}
+
+/// 在响应上追加“清除浏览器绑定 cookie”的 Set-Cookie。
+fn with_binding_cleared(mut response: Response, clear_cookie: String) -> Response {
+    response
+        .headers_mut()
+        .append(header::SET_COOKIE, cookie_header(clear_cookie));
+    response
 }
 
 fn plain_error(status: StatusCode, message: &str) -> Response {
     (status, message.to_string()).into_response()
 }
 
+/// 认证/回调路由的错误响应（浏览器导航为主，保持纯文本）。
+/// 内部错误只记日志、回通用文案，不泄漏存储/SQL 细节。
 fn auth_error(e: UseCaseError) -> Response {
     let status = match &e {
         UseCaseError::Unauthenticated => StatusCode::UNAUTHORIZED,
@@ -218,5 +249,9 @@ fn auth_error(e: UseCaseError) -> Response {
             StatusCode::INTERNAL_SERVER_ERROR
         }
     };
-    (status, e.to_string()).into_response()
+    let message = match &e {
+        UseCaseError::Repository(_) | UseCaseError::Render(_) => "服务器内部错误".to_string(),
+        other => other.to_string(),
+    };
+    (status, message).into_response()
 }

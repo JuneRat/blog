@@ -4,6 +4,8 @@
 //! 测试库 DSN 从它推导（同名主机上的 blog_test）。库不可达或主机非 loopback 时
 //! 直接 panic 失败——这些测试是破坏性的（DROP DATABASE），不允许静默跳过后误报通过。
 
+use std::sync::Arc;
+
 use application::error::UseCaseError;
 use application::ports::{
     ContentRenderer, PostRepository, PublishedPostQuery, RbacStore, SaveOutcome,
@@ -88,6 +90,20 @@ async fn seed_user(pool: &PgPool, username: &str) -> uuid::Uuid {
     .await
     .unwrap();
     id
+}
+
+/// 给用户绑定一个外部登录方式（“有效 Owner”判定要求至少一种登录方式）。
+async fn seed_binding(pool: &PgPool, user_id: uuid::Uuid) {
+    sqlx::query(
+        "INSERT INTO oauth_accounts (id, user_id, provider, provider_user_id, created_at, updated_at) \
+         VALUES ($1, $2, 'https://idp.example', $3, now(), now())",
+    )
+    .bind(uuid::Uuid::now_v7())
+    .bind(user_id)
+    .bind(format!("sub-{user_id}"))
+    .execute(pool)
+    .await
+    .unwrap();
 }
 
 fn draft_snapshot(author: uuid::Uuid, slug: &str) -> PostSnapshot {
@@ -485,13 +501,30 @@ async fn rbac_registry_sync_is_idempotent() {
     rbac.sync_builtin_roles(application::identity::BUILTIN_ROLES)
         .await
         .unwrap();
-    // 第二次同步（幂等）不得翻倍或漂移。
+
+    let versions_after_first: Vec<(String, i64)> =
+        sqlx::query_as("SELECT slug, version FROM roles ORDER BY slug")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+
+    // 第二次同步（幂等）不得翻倍、漂移，也不得递增 roles.version。
     rbac.sync_permission_registry(application::identity::PERMISSION_REGISTRY)
         .await
         .unwrap();
     rbac.sync_builtin_roles(application::identity::BUILTIN_ROLES)
         .await
         .unwrap();
+
+    let versions_after_second: Vec<(String, i64)> =
+        sqlx::query_as("SELECT slug, version FROM roles ORDER BY slug")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        versions_after_first, versions_after_second,
+        "重复同步不得递增 roles.version（无变化不动行）"
+    );
 
     let perm_count: i64 = sqlx::query_scalar("SELECT count(*) FROM permissions")
         .fetch_one(&pool)
@@ -511,6 +544,26 @@ async fn rbac_registry_sync_is_idempotent() {
     .await
     .unwrap();
     assert_eq!(author_perms, 5, "Author 恰好 5 个 own 动作");
+
+    // Owner 持有全部已注册权限（含 oauth.manage / ownership.manage）。
+    let owner_perms: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM role_permissions rp \
+         JOIN roles r ON r.id = rp.role_id WHERE r.slug = 'owner'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        owner_perms as usize,
+        application::identity::PERMISSION_REGISTRY.len(),
+        "Owner 持有全部已注册权限"
+    );
+
+    let owner_keys = rbac.permissions_of_role("owner").await.unwrap();
+    assert!(owner_keys.has("ownership.manage"));
+    assert!(owner_keys.has("oauth.manage"));
+    let err = rbac.permissions_of_role("ghost").await.unwrap_err();
+    assert!(matches!(err, application::error::UseCaseError::NotFound(_)));
 
     let roles: Vec<String> = sqlx::query_scalar("SELECT slug FROM roles ORDER BY slug")
         .fetch_all(&pool)
@@ -582,6 +635,8 @@ async fn rbac_last_owner_protection() {
 
     let u1 = seed_user(&pool, "first").await;
     let u2 = seed_user(&pool, "second").await;
+    seed_binding(&pool, u1).await;
+    seed_binding(&pool, u2).await;
 
     rbac.assign_role(u1, "owner").await.unwrap();
 
@@ -607,7 +662,9 @@ async fn rbac_last_owner_protection() {
     .unwrap();
     assert_eq!(owners, 1);
 
-    // 软删除用户不计入有效 Owner：u2 离开后，u1 成为唯一活跃 Owner，不可再被移除。
+    // 软删除用户不计入有效 Owner：u1 重新持有 owner，u2 被软删除后
+    // u1 成为唯一可登录 Owner，不可再被移除。
+    rbac.assign_role(u1, "owner").await.unwrap();
     sqlx::query("UPDATE users SET deleted_at = now() WHERE id = $1")
         .bind(u2)
         .execute(&pool)
@@ -618,4 +675,122 @@ async fn rbac_last_owner_protection() {
         matches!(err, application::error::UseCaseError::Forbidden),
         "软删除的 Owner 不计入有效数量"
     );
+}
+
+#[tokio::test]
+async fn owner_without_login_method_does_not_satisfy_last_owner_guard() {
+    let _g = SERIAL.lock().await;
+    let pool = fresh_database().await;
+    let rbac = rbac_of(&pool);
+    rbac.sync_permission_registry(application::identity::PERMISSION_REGISTRY)
+        .await
+        .unwrap();
+    rbac.sync_builtin_roles(application::identity::BUILTIN_ROLES)
+        .await
+        .unwrap();
+
+    let bound = seed_user(&pool, "bound").await;
+    let unbound = seed_user(&pool, "unbound").await;
+    rbac.assign_role(bound, "owner").await.unwrap();
+    rbac.assign_role(unbound, "owner").await.unwrap();
+    // 只有 bound 有有效登录方式；unbound 是「登不进去的 Owner」。
+    seed_binding(&pool, bound).await;
+
+    // 移除唯一可登录的 Owner 会留下无法登录的 Owner → 拒绝（docs §3）。
+    let err = rbac.remove_role(bound, "owner").await.unwrap_err();
+    assert!(
+        matches!(err, application::error::UseCaseError::Forbidden),
+        "无登录方式的 Owner 不构成有效 Owner：{err:?}"
+    );
+
+    // 给 unbound 绑定登录方式后，才允许移除 bound。
+    seed_binding(&pool, unbound).await;
+    assert!(rbac.remove_role(bound, "owner").await.is_ok());
+}
+
+#[tokio::test]
+async fn owner_without_login_method_can_be_cleaned_up() {
+    let _g = SERIAL.lock().await;
+    let pool = fresh_database().await;
+    let rbac = rbac_of(&pool);
+    rbac.sync_permission_registry(application::identity::PERMISSION_REGISTRY)
+        .await
+        .unwrap();
+    rbac.sync_builtin_roles(application::identity::BUILTIN_ROLES)
+        .await
+        .unwrap();
+
+    let bound = seed_user(&pool, "bound").await;
+    let unbound = seed_user(&pool, "unbound").await;
+    rbac.assign_role(bound, "owner").await.unwrap();
+    rbac.assign_role(unbound, "owner").await.unwrap();
+    seed_binding(&pool, bound).await;
+
+    // 移除登不进去的 Owner 不会减少可用 Owner，允许清理。
+    assert!(rbac.remove_role(unbound, "owner").await.is_ok());
+    // bound 仍是最后可登录 Owner，受保护。
+    let err = rbac.remove_role(bound, "owner").await.unwrap_err();
+    assert!(matches!(err, application::error::UseCaseError::Forbidden));
+}
+
+#[tokio::test]
+async fn removing_role_the_user_does_not_hold_is_noop() {
+    let _g = SERIAL.lock().await;
+    let pool = fresh_database().await;
+    let rbac = rbac_of(&pool);
+    rbac.sync_permission_registry(application::identity::PERMISSION_REGISTRY)
+        .await
+        .unwrap();
+    rbac.sync_builtin_roles(application::identity::BUILTIN_ROLES)
+        .await
+        .unwrap();
+
+    let owner = seed_user(&pool, "owner").await;
+    let plain = seed_user(&pool, "plain").await;
+    rbac.assign_role(owner, "owner").await.unwrap();
+    seed_binding(&pool, owner).await;
+
+    // plain 本来就不是 owner：移除不应因全局 Owner 数而误报 Forbidden。
+    assert!(rbac.remove_role(plain, "owner").await.is_ok());
+    assert!(rbac.remove_role(plain, "author").await.is_ok());
+    // 真正的最后 Owner 仍受保护。
+    let err = rbac.remove_role(owner, "owner").await.unwrap_err();
+    assert!(matches!(err, application::error::UseCaseError::Forbidden));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_last_owner_removal_keeps_at_least_one_loginable_owner() {
+    let _g = SERIAL.lock().await;
+    let pool = fresh_database().await;
+    let rbac = Arc::new(PostgresRbacStore::new(pool.clone()));
+    rbac.sync_permission_registry(application::identity::PERMISSION_REGISTRY)
+        .await
+        .unwrap();
+    rbac.sync_builtin_roles(application::identity::BUILTIN_ROLES)
+        .await
+        .unwrap();
+
+    let u1 = seed_user(&pool, "owner1").await;
+    let u2 = seed_user(&pool, "owner2").await;
+    rbac.assign_role(u1, "owner").await.unwrap();
+    rbac.assign_role(u2, "owner").await.unwrap();
+    seed_binding(&pool, u1).await;
+    seed_binding(&pool, u2).await;
+
+    // 两个并发移除：排他锁 + 锁内复核后应恰好一个成功，至少保留一个可登录 Owner。
+    let (a, b) = tokio::join!(rbac.remove_role(u1, "owner"), rbac.remove_role(u2, "owner"));
+    let succeeded = [a.is_ok(), b.is_ok()].into_iter().filter(|ok| *ok).count();
+    assert_eq!(succeeded, 1, "并发移除只能成功一个：{a:?} / {b:?}");
+
+    let remaining: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM user_roles ur \
+         JOIN roles r ON r.id = ur.role_id \
+         JOIN users u ON u.id = ur.user_id \
+         WHERE r.slug = 'owner' AND u.deleted_at IS NULL \
+           AND EXISTS (SELECT 1 FROM oauth_accounts oa WHERE oa.user_id = u.id)",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(remaining, 1, "并发后仍保留一个可登录 Owner");
 }

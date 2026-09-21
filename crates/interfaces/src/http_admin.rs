@@ -1,8 +1,10 @@
-//! 管理 API：会话认证 + CSRF 的文章写端点。
+//! 管理 API：会话认证 + CSRF/Origin 的文章写端点。
 //!
 //! - 全部响应 `Cache-Control: no-store`；请求体上限 2 MiB。
-//! - 认证/CSRF 由 `AdminAuth` 提取器统一执行：读方法仅需会话，
-//!   写方法（POST/PATCH/PUT/DELETE）额外校验 `X-CSRF-Token`。
+//! - 认证/CSRF/Origin 由 `AdminAuth` 提取器统一执行（共用实现见 `http_support`）：
+//!   读方法仅需会话，写方法（POST/PATCH/PUT/DELETE）额外校验 `X-CSRF-Token`
+//!   与同源 `Origin`。
+//! - 错误契约统一为 JSON：401 带 `WWW-Authenticate: Session`，内部错误只回通用文案。
 //! - 权限由应用层用例执行（own/any）；本层不做业务判断。
 
 use uuid::Uuid;
@@ -10,15 +12,17 @@ use uuid::Uuid;
 use application::content::{CreatePostCmd, EditPostCmd, PostDto, PostVisibility};
 use application::error::UseCaseError;
 use application::identity::Actor;
+use application::ports::SESSION_COOKIE;
 use axum::extract::{FromRef, Path, Query, State};
-use axum::http::{HeaderMap, StatusCode, request::Parts};
-use axum::middleware::{self, Next};
+use axum::http::{StatusCode, request::Parts};
+use axum::middleware;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 
 use crate::http_auth::AdminState;
+use crate::http_support::{admin_error, cookie_value, ensure_same_origin, no_store};
 
 /// 请求体上限（Markdown 正文足够）。
 pub const ADMIN_BODY_LIMIT: usize = 2 * 1024 * 1024;
@@ -62,25 +66,9 @@ impl From<PostDto> for PostJson {
 // 认证 + CSRF 提取器
 // ---------------------------------------------------------------------------
 
-/// 已认证的管理调用（含 CSRF 校验结果）。
+/// 已认证的管理调用（含 CSRF/Origin 校验结果）。
 pub struct AdminAuth {
     pub actor: Actor,
-}
-
-impl AdminAuth {
-    fn token_from_headers(headers: &HeaderMap) -> Option<String> {
-        let cookie = headers.get(axum::http::header::COOKIE)?.to_str().ok()?;
-        for pair in cookie.split(';') {
-            let pair = pair.trim();
-            if let Some(value) = pair.strip_prefix(application::ports::SESSION_COOKIE) {
-                let value = value.strip_prefix('=')?;
-                if !value.is_empty() {
-                    return Some(value.to_string());
-                }
-            }
-        }
-        None
-    }
 }
 
 impl<S> axum::extract::FromRequestParts<S> for AdminAuth
@@ -92,7 +80,7 @@ where
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         let admin = AdminState::from_ref(state);
-        let Some(token) = Self::token_from_headers(&parts.headers) else {
+        let Some(token) = cookie_value(&parts.headers, SESSION_COOKIE) else {
             return Err(admin_error(UseCaseError::Unauthenticated));
         };
         let record = admin
@@ -101,9 +89,10 @@ where
             .await
             .map_err(admin_error)?;
 
-        // 写方法校验 CSRF（读方法不产生副作用）。
+        // 写方法校验 CSRF + Origin（读方法不产生副作用）。
         let write_method = !matches!(parts.method.as_str(), "GET" | "HEAD" | "OPTIONS");
         if write_method {
+            ensure_same_origin(&parts.headers).map_err(admin_error)?;
             let provided = parts
                 .headers
                 .get("x-csrf-token")
@@ -173,15 +162,6 @@ pub fn posts_router(state: AdminState) -> Router {
         .with_state(state)
 }
 
-async fn no_store(req: axum::extract::Request, next: Next) -> Response {
-    let mut response = next.run(req).await;
-    response.headers_mut().insert(
-        axum::http::header::CACHE_CONTROL,
-        axum::http::HeaderValue::from_static("no-store"),
-    );
-    response
-}
-
 // ---------------------------------------------------------------------------
 // 处理器
 // ---------------------------------------------------------------------------
@@ -230,8 +210,12 @@ async fn list_posts(
     State(state): State<AdminState>,
     Query(query): Query<ListQuery>,
 ) -> Response {
+    // 先授权再解析用户名：否则任何已登录用户可用 403/404 差异探测用户是否存在。
     let author_id = match query.author.as_deref() {
         Some(username) if !username.is_empty() => {
+            if !actor.has_permission("post.read_any") {
+                return admin_error(UseCaseError::Forbidden);
+            }
             match state.users.actor_for_username(username).await {
                 Ok(who) => who.user_id,
                 Err(e) => return admin_error(e),
@@ -322,30 +306,4 @@ fn parse_visibility(value: Option<&str>) -> Result<PostVisibility, UseCaseError>
             "visibility 只支持 public/private，收到 {other}"
         ))),
     }
-}
-
-fn admin_error(e: UseCaseError) -> Response {
-    let status = match e {
-        UseCaseError::Unauthenticated => StatusCode::UNAUTHORIZED,
-        UseCaseError::Invalid(_) => StatusCode::BAD_REQUEST,
-        UseCaseError::Conflict(_) => StatusCode::CONFLICT,
-        UseCaseError::VersionConflict => StatusCode::CONFLICT,
-        UseCaseError::NotFound(_) => StatusCode::NOT_FOUND,
-        UseCaseError::Forbidden => StatusCode::FORBIDDEN,
-        UseCaseError::External(_) => StatusCode::BAD_GATEWAY,
-        UseCaseError::Repository(_) | UseCaseError::Render(_) => {
-            tracing::error!(error = %e, "管理 API 内部错误");
-            StatusCode::INTERNAL_SERVER_ERROR
-        }
-    };
-    // 401 必须带 WWW-Authenticate 指示会话入口。
-    let mut response =
-        (status, Json(serde_json::json!({ "error": e.to_string() }))).into_response();
-    if status == StatusCode::UNAUTHORIZED {
-        response.headers_mut().insert(
-            axum::http::header::WWW_AUTHENTICATE,
-            axum::http::HeaderValue::from_static("Session"),
-        );
-    }
-    response
 }

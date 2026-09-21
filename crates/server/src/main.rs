@@ -111,9 +111,12 @@ async fn main() {
                 Arc::new(infrastructure::PostgresOAuthAccountStore::new(pool.clone()));
             let base_url = std::env::var("BLOG_PUBLIC_BASE_URL")
                 .unwrap_or_else(|_| "http://127.0.0.1:8080".into());
-            let secure_cookies = std::env::var("BLOG_SECURE_COOKIES")
-                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-                .unwrap_or(false);
+            // Secure cookie 默认跟随公开基础 URL 的 scheme，避免 HTTPS 部署漏设；
+            // BLOG_SECURE_COOKIES 仅作显式覆盖（如 TLS 终止代理场景）。
+            let secure_cookies = match std::env::var("BLOG_SECURE_COOKIES") {
+                Ok(v) => v == "1" || v.eq_ignore_ascii_case("true"),
+                Err(_) => base_url.starts_with("https://"),
+            };
             let auth = Arc::new(application::auth::AuthInteractor::new(
                 application::auth::AuthDeps {
                     sessions: session_store,

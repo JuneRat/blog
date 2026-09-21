@@ -83,7 +83,20 @@ pub const PERMISSION_REGISTRY: &[PermissionDescriptor] = &[
         name: "站点设置",
         description: "修改普通站点设置；不覆盖受保护的 OAuth 配置。",
     },
+    PermissionDescriptor {
+        key: "oauth.manage",
+        name: "外部身份配置",
+        description: "管理 OAuth 提供商与外部身份绑定；不受普通 settings.manage 覆盖。",
+    },
+    PermissionDescriptor {
+        key: "ownership.manage",
+        name: "所有权操作",
+        description: "授予/移除 Owner 与所有权转移；普通角色分配不得授予 Owner。",
+    },
 ];
+
+/// Owner 角色的稳定 slug：所有权识别只来自该角色的受保护分配。
+pub const OWNER_ROLE_SLUG: &str = "owner";
 
 /// 内置角色定义。slug 由 seed 保留，普通 API 不可创建、改名或删除。
 #[derive(Debug, Clone)]
@@ -113,12 +126,14 @@ pub const BUILTIN_ROLES: &[BuiltinRoleDef] = &[
             "user.manage",
             "role.manage",
             "settings.manage",
+            "oauth.manage",
+            "ownership.manage",
         ],
     },
     BuiltinRoleDef {
         slug: "admin",
         name: "Administrator",
-        description: "管理普通身份与站点设置；不含所有权操作。",
+        description: "管理普通身份与站点设置；不含所有权与外部身份配置。",
         permissions: &["user.manage", "role.manage", "settings.manage"],
     },
     BuiltinRoleDef {
@@ -170,6 +185,17 @@ impl Actor {
             channel,
             permissions,
         }
+    }
+
+    /// 受控 CLI 引导身份：本机 shell 访问等同部署权限，持有全部已注册权限。
+    /// 仅用于 `ControlledCli` 通道的身份/OAuth 引导（首个 Owner 初始化等）；
+    /// 不承载文章归属，`user_id` 为占位值。
+    pub fn bootstrap_cli() -> Self {
+        Self::new(
+            UserId(Uuid::nil()),
+            ActorChannel::ControlledCli,
+            PermissionSet::from_keys(PERMISSION_REGISTRY.iter().map(|d| d.key)),
+        )
     }
 
     /// 写通道守卫：所有写用例入口必须先调用。
@@ -249,7 +275,16 @@ impl UserInteractor {
 
     /// 受控创建用户。username 统一规范化（trim + 小写）后写入，
     /// 唯一性由数据库约束兜底（users_username_key）。角色需另行显式分配。
-    pub async fn create_user(&self, cmd: CreateUserCmd) -> Result<UserDto, UseCaseError> {
+    /// 调用者必须持有 `user.manage`。
+    pub async fn create_user(
+        &self,
+        actor: &Actor,
+        cmd: CreateUserCmd,
+    ) -> Result<UserDto, UseCaseError> {
+        actor.ensure_write_channel()?;
+        if !actor.has_permission("user.manage") {
+            return Err(UseCaseError::Forbidden);
+        }
         let username = domain::identity::normalize_username(&cmd.username)
             .map_err(|e| UseCaseError::Invalid(e.to_string()))?;
         let email = normalize_email(cmd.email).map_err(|e| UseCaseError::Invalid(e.to_string()))?;
@@ -317,9 +352,9 @@ impl UserInteractor {
     }
 }
 
-/// 角色管理用例。M2 首段为受控 CLI 通道（本机信任），
-/// 结构性保护（内置 slug、最后 Owner）始终执行；
-/// 委派矩阵（不能授予自己没有的权限）随管理 HTTP API 一起接入。
+/// 角色管理用例。结构性保护（内置 slug、最后 Owner）始终执行；
+/// 入口接受可信 Actor：普通角色分配要求 `role.manage` 且不得超出调用者的
+/// 权限集合（委派上限，docs §3）；授予/移除 Owner 另需 `ownership.manage`。
 pub struct RoleInteractor {
     rbac: Arc<dyn RbacStore>,
     users: Arc<dyn UserRepository>,
@@ -348,9 +383,49 @@ impl RoleInteractor {
 
     pub async fn assign_to_username(
         &self,
+        actor: &Actor,
         username: &str,
         role_slug: &str,
     ) -> Result<(), UseCaseError> {
+        actor.ensure_write_channel()?;
+        if !actor.has_permission("role.manage") {
+            return Err(UseCaseError::Forbidden);
+        }
+        // 普通角色分配不能授予 Owner：需专门的所有权权限。
+        if role_slug == OWNER_ROLE_SLUG && !actor.has_permission("ownership.manage") {
+            return Err(UseCaseError::Forbidden);
+        }
+        // 委派上限：不能授予自己不具备的权限（未知角色在这里就返回 NotFound）。
+        let role_permissions = self.rbac.permissions_of_role(role_slug).await?;
+        if !actor.permissions().contains_all(&role_permissions) {
+            return Err(UseCaseError::Forbidden);
+        }
+        let user = self.find_active_user(username).await?;
+        self.rbac.assign_role(user.id, role_slug).await
+    }
+
+    pub async fn remove_from_username(
+        &self,
+        actor: &Actor,
+        username: &str,
+        role_slug: &str,
+    ) -> Result<(), UseCaseError> {
+        actor.ensure_write_channel()?;
+        if !actor.has_permission("role.manage") {
+            return Err(UseCaseError::Forbidden);
+        }
+        if role_slug == OWNER_ROLE_SLUG && !actor.has_permission("ownership.manage") {
+            return Err(UseCaseError::Forbidden);
+        }
+        let user = self.find_active_user(username).await?;
+        // 最后 Owner 保护由存储在排他锁下判定并拒绝。
+        self.rbac.remove_role(user.id, role_slug).await
+    }
+
+    async fn find_active_user(
+        &self,
+        username: &str,
+    ) -> Result<domain::identity::UserSnapshot, UseCaseError> {
         let username = domain::identity::normalize_username(username)
             .map_err(|e| UseCaseError::Invalid(e.to_string()))?;
         let user = self
@@ -361,23 +436,7 @@ impl RoleInteractor {
         if user.deleted_at.is_some() {
             return Err(UseCaseError::Forbidden);
         }
-        self.rbac.assign_role(user.id, role_slug).await
-    }
-
-    pub async fn remove_from_username(
-        &self,
-        username: &str,
-        role_slug: &str,
-    ) -> Result<(), UseCaseError> {
-        let username = domain::identity::normalize_username(username)
-            .map_err(|e| UseCaseError::Invalid(e.to_string()))?;
-        let user = self
-            .users
-            .find_by_username(&username)
-            .await?
-            .ok_or_else(|| UseCaseError::NotFound(format!("用户 {username}")))?;
-        // 最后 Owner 保护由存储在排他锁下判定并拒绝。
-        self.rbac.remove_role(user.id, role_slug).await
+        Ok(user)
     }
 }
 

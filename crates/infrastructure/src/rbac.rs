@@ -9,7 +9,7 @@ use sqlx::{Executor, PgPool, Row};
 use uuid::Uuid;
 
 use application::error::UseCaseError;
-use application::identity::{BuiltinRoleDef, PermissionDescriptor};
+use application::identity::{BuiltinRoleDef, OWNER_ROLE_SLUG, PermissionDescriptor};
 use application::ports::{RbacStore, RoleDto};
 use domain::identity::PermissionSet;
 
@@ -31,16 +31,22 @@ impl PostgresRbacStore {
         UseCaseError::Repository(error.to_string())
     }
 
-    async fn role_id_by_slug(&self, slug: &str) -> Result<Option<Uuid>, UseCaseError> {
+    /// 锁内取角色 id：必须复用同一事务连接（pool 只有 5 条连接，
+    /// 持锁时再从池里取连接会与并发身份操作互等直至 acquire 超时）。
+    async fn role_id_by_slug(
+        executor: impl Executor<'_, Database = sqlx::Postgres>,
+        slug: &str,
+    ) -> Result<Option<Uuid>, UseCaseError> {
         let row: Option<(Uuid,)> = sqlx::query_as("SELECT id FROM roles WHERE slug = $1")
             .bind(slug)
-            .fetch_optional(&self.pool)
+            .fetch_optional(executor)
             .await
             .map_err(Self::map_err)?;
         Ok(row.map(|r| r.0))
     }
 
-    /// 未删除且仍持有 owner 角色的用户数。
+    /// 未删除、仍持有 owner 角色、且仍有有效登录方式（oauth_accounts）的用户数。
+    /// docs §3：可能减少有效 Owner 的操作在排他锁下检查至少保留一个「可登录」Owner。
     async fn active_owner_count(
         &self,
         executor: impl Executor<'_, Database = sqlx::Postgres>,
@@ -50,12 +56,43 @@ impl PostgresRbacStore {
              FROM user_roles ur \
              JOIN roles r ON r.id = ur.role_id \
              JOIN users u ON u.id = ur.user_id \
-             WHERE r.slug = 'owner' AND u.deleted_at IS NULL",
+             WHERE r.slug = 'owner' AND u.deleted_at IS NULL \
+               AND EXISTS (SELECT 1 FROM oauth_accounts oa WHERE oa.user_id = u.id)",
         )
         .fetch_one(executor)
         .await
         .map_err(Self::map_err)?;
         Ok(count)
+    }
+
+    /// 用户是否实际持有某角色（决定移除时是否触发最后 Owner 保护）。
+    async fn user_holds_role(
+        executor: impl Executor<'_, Database = sqlx::Postgres>,
+        user_id: Uuid,
+        role_id: Uuid,
+    ) -> Result<bool, UseCaseError> {
+        let row: Option<(i32,)> =
+            sqlx::query_as("SELECT 1 FROM user_roles WHERE user_id = $1 AND role_id = $2")
+                .bind(user_id)
+                .bind(role_id)
+                .fetch_optional(executor)
+                .await
+                .map_err(Self::map_err)?;
+        Ok(row.is_some())
+    }
+
+    /// 用户是否仍有有效登录方式（oauth_accounts 至少一条）。
+    async fn user_has_login_method(
+        executor: impl Executor<'_, Database = sqlx::Postgres>,
+        user_id: Uuid,
+    ) -> Result<bool, UseCaseError> {
+        let row: Option<(i32,)> =
+            sqlx::query_as("SELECT 1 FROM oauth_accounts WHERE user_id = $1 LIMIT 1")
+                .bind(user_id)
+                .fetch_optional(executor)
+                .await
+                .map_err(Self::map_err)?;
+        Ok(row.is_some())
     }
 }
 
@@ -85,27 +122,76 @@ impl RbacStore for PostgresRbacStore {
         for def in defs {
             let mut tx = self.pool.begin().await.map_err(Self::map_err)?;
 
-            // 内置 slug 保留：按 slug upsert，不可改名绕过。
-            sqlx::query(
-                "INSERT INTO roles (id, name, slug, description, version, created_at, updated_at) \
-                 VALUES ($1, $2, $3, $4, 1, now(), now()) \
-                 ON CONFLICT (slug) DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description",
+            let existing: Option<(Uuid, String, Option<String>)> =
+                sqlx::query_as("SELECT id, name, description FROM roles WHERE slug = $1")
+                    .bind(def.slug)
+                    .fetch_optional(&mut *tx)
+                    .await
+                    .map_err(Self::map_err)?;
+
+            let Some((role_id, name, description)) = existing else {
+                // 新建内置角色：version 从 1 起（首次创建不算「修改授权集合」）。
+                let role_id = Uuid::now_v7();
+                sqlx::query(
+                    "INSERT INTO roles (id, name, slug, description, version, created_at, updated_at) \
+                     VALUES ($1, $2, $3, $4, 1, now(), now())",
+                )
+                .bind(role_id)
+                .bind(def.name)
+                .bind(def.slug)
+                .bind(def.description)
+                .execute(&mut *tx)
+                .await
+                .map_err(Self::map_err)?;
+                sqlx::query(
+                    "INSERT INTO role_permissions (role_id, permission_id) \
+                     SELECT $1, p.id FROM permissions p WHERE p.key = ANY($2) \
+                     ON CONFLICT DO NOTHING",
+                )
+                .bind(role_id)
+                .bind(def.permissions)
+                .execute(&mut *tx)
+                .await
+                .map_err(Self::map_err)?;
+                tx.commit().await.map_err(Self::map_err)?;
+                continue;
+            };
+
+            // 已存在：名称/描述/授权集合完全一致时不动任何行（roles.version 不漂移）。
+            let current: Vec<(String,)> = sqlx::query_as(
+                "SELECT p.key FROM role_permissions rp \
+                 JOIN permissions p ON p.id = rp.permission_id \
+                 WHERE rp.role_id = $1",
             )
-            .bind(Uuid::now_v7())
+            .bind(role_id)
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(Self::map_err)?;
+            let mut current_keys: Vec<&str> = current.iter().map(|k| k.0.as_str()).collect();
+            let mut desired: Vec<&str> = def.permissions.to_vec();
+            current_keys.sort_unstable();
+            desired.sort_unstable();
+
+            let unchanged = name == def.name
+                && description.as_deref() == Some(def.description)
+                && current_keys == desired;
+            if unchanged {
+                tx.commit().await.map_err(Self::map_err)?;
+                continue;
+            }
+
+            // 有变化才对齐授权集合并递增 roles.version。
+            sqlx::query(
+                "UPDATE roles SET name = $2, description = $3, version = version + 1, updated_at = now() \
+                 WHERE id = $1",
+            )
+            .bind(role_id)
             .bind(def.name)
-            .bind(def.slug)
             .bind(def.description)
             .execute(&mut *tx)
             .await
             .map_err(Self::map_err)?;
 
-            let (role_id,): (Uuid,) = sqlx::query_as("SELECT id FROM roles WHERE slug = $1")
-                .bind(def.slug)
-                .fetch_one(&mut *tx)
-                .await
-                .map_err(Self::map_err)?;
-
-            // 对齐授权集合：先删多余，再补缺失；有变化才递增 roles.version。
             sqlx::query(
                 "DELETE FROM role_permissions rp \
                  WHERE rp.role_id = $1 \
@@ -124,15 +210,6 @@ impl RbacStore for PostgresRbacStore {
             )
             .bind(role_id)
             .bind(def.permissions)
-            .execute(&mut *tx)
-            .await
-            .map_err(Self::map_err)?;
-
-            sqlx::query(
-                "UPDATE roles SET version = version + 1, updated_at = now() \
-                 WHERE id = $1 AND EXISTS (SELECT 1 FROM role_permissions WHERE role_id = $1)",
-            )
-            .bind(role_id)
             .execute(&mut *tx)
             .await
             .map_err(Self::map_err)?;
@@ -159,6 +236,22 @@ impl RbacStore for PostgresRbacStore {
         Ok(PermissionSet::from_keys(keys.into_iter().map(|k| k.0)))
     }
 
+    async fn permissions_of_role(&self, role_slug: &str) -> Result<PermissionSet, UseCaseError> {
+        let role_id = Self::role_id_by_slug(&self.pool, role_slug)
+            .await?
+            .ok_or_else(|| UseCaseError::NotFound(format!("角色 {role_slug}")))?;
+        let keys: Vec<(String,)> = sqlx::query_as(
+            "SELECT p.key FROM role_permissions rp \
+             JOIN permissions p ON p.id = rp.permission_id \
+             WHERE rp.role_id = $1",
+        )
+        .bind(role_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(Self::map_err)?;
+        Ok(PermissionSet::from_keys(keys.into_iter().map(|k| k.0)))
+    }
+
     async fn assign_role(&self, user_id: Uuid, role_slug: &str) -> Result<(), UseCaseError> {
         let mut tx = self.pool.begin().await.map_err(Self::map_err)?;
         sqlx::query("SELECT pg_advisory_xact_lock($1::int, $2::int)")
@@ -168,8 +261,8 @@ impl RbacStore for PostgresRbacStore {
             .await
             .map_err(Self::map_err)?;
 
-        let role_id = self
-            .role_id_by_slug(role_slug)
+        // 锁取得后复用同一事务连接重新读取（docs §3）。
+        let role_id = Self::role_id_by_slug(&mut *tx, role_slug)
             .await?
             .ok_or_else(|| UseCaseError::NotFound(format!("角色 {role_slug}")))?;
 
@@ -201,16 +294,22 @@ impl RbacStore for PostgresRbacStore {
             .await
             .map_err(Self::map_err)?;
 
-        let role_id = self
-            .role_id_by_slug(role_slug)
+        // 锁取得后复用同一事务连接重新读取（docs §3）。
+        let role_id = Self::role_id_by_slug(&mut *tx, role_slug)
             .await?
             .ok_or_else(|| UseCaseError::NotFound(format!("角色 {role_slug}")))?;
 
-        // 最后 Owner 保护：删除前在排他锁内复核剩余数量。
-        if role_slug == "owner" {
-            let owners = self.active_owner_count(&mut *tx).await?;
-            if owners <= 1 {
-                return Err(UseCaseError::Forbidden);
+        let holds_role = Self::user_holds_role(&mut *tx, user_id, role_id).await?;
+
+        // 最后 Owner 保护：目标确实持有 owner 且仍有登录方式时，
+        // 于排他锁内复核至少保留一个「可登录」Owner（移除登不进去的 Owner 不受限）。
+        if holds_role && role_slug == OWNER_ROLE_SLUG {
+            let target_has_login = Self::user_has_login_method(&mut *tx, user_id).await?;
+            if target_has_login {
+                let owners = self.active_owner_count(&mut *tx).await?;
+                if owners <= 1 {
+                    return Err(UseCaseError::Forbidden);
+                }
             }
         }
 

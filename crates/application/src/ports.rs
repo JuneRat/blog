@@ -80,6 +80,12 @@ pub trait RbacStore: Send + Sync {
         user_id: Uuid,
     ) -> Result<domain::identity::PermissionSet, UseCaseError>;
 
+    /// 角色的授权集合（委派上限判定用；未知 slug 返回 NotFound）。
+    async fn permissions_of_role(
+        &self,
+        role_slug: &str,
+    ) -> Result<domain::identity::PermissionSet, UseCaseError>;
+
     async fn assign_role(&self, user_id: Uuid, role_slug: &str) -> Result<(), UseCaseError>;
 
     /// 移除角色分配；内置保护（如最后一个有效 Owner）由实现拒绝。
@@ -157,6 +163,10 @@ pub trait ContentRenderer: Send + Sync {
 
 /// 会话 cookie 名（前后端共享契约）。
 pub const SESSION_COOKIE: &str = "blog_session";
+
+/// OAuth 浏览器绑定 cookie 基名：`login_start` 下发、`login_callback` 核对。
+/// 生产（Secure）部署使用 `__Host-` 前缀强制 host-only + Path=/（见接口层）。
+pub const OAUTH_STATE_COOKIE: &str = "blog_oauth_state";
 
 /// 服务端会话记录（浏览器只持有不透明令牌）。
 #[derive(Debug, Clone)]

@@ -1,11 +1,13 @@
-//! 管理写 API 集成测试：会话认证 + CSRF + own/any 授权 + 乐观并发。
+//! 管理写 API 集成测试：会话认证 + CSRF + Origin + own/any 授权 + 乐观并发。
 //! 假 IdP 登录拿会话，走 JSON API 全流程。
+
+mod common;
 
 use std::sync::{Arc, Mutex};
 
 use application::auth::{AuthDeps, AuthInteractor};
 use application::content::PostInteractor;
-use application::identity::{CreateUserCmd, RoleInteractor, UserInteractor};
+use application::identity::{Actor, CreateUserCmd, RoleInteractor, UserInteractor};
 use application::ports::{
     Clock, ExternalIdentity, ExternalIdentityClient, OAuthAccountStore, OAuthConfigStore,
     ProviderConfig, ProviderKind, SecureRandom,
@@ -17,7 +19,7 @@ use http_body_util::BodyExt;
 use infrastructure::{
     InMemoryOAuthAttemptStore, InMemorySessionStore, PostgresOAuthAccountStore,
     PostgresOAuthConfigStore, PostgresPostRepository, PostgresRbacStore, PostgresUserRepository,
-    SystemClock, connect, migrate,
+    SystemClock,
 };
 use interfaces::http_admin::posts_router;
 use interfaces::http_auth::{AdminState, AuthState, admin_router, auth_router};
@@ -74,30 +76,13 @@ impl SecureRandom for TestRandom {
 struct Stack {
     router: axum::Router,
     idp: Arc<FakeIdpClient>,
+    roles: Arc<RoleInteractor>,
     #[allow(dead_code)]
     pool: PgPool,
 }
 
 async fn fresh_stack() -> Stack {
-    let admin = connect("postgres://blog:blog@127.0.0.1:5432/postgres")
-        .await
-        .expect("连接管理库失败");
-    sqlx::raw_sql("DROP DATABASE IF EXISTS blog_admin_test WITH (FORCE)")
-        .execute(&admin)
-        .await
-        .unwrap();
-    sqlx::raw_sql("CREATE DATABASE blog_admin_test")
-        .execute(&admin)
-        .await
-        .unwrap();
-    admin.close().await;
-
-    let pool = connect("postgres://blog:blog@127.0.0.1:5432/blog_admin_test")
-        .await
-        .expect("连接测试库失败");
-    migrate(&pool, "../../migrations/postgres")
-        .await
-        .expect("迁移失败");
+    let pool = common::fresh_database("blog_admin_test").await;
 
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
     let user_repo = Arc::new(PostgresUserRepository::new(pool.clone()));
@@ -106,23 +91,30 @@ async fn fresh_stack() -> Stack {
     roles.sync_registry().await.expect("同步权限目录失败");
     let users = Arc::new(UserInteractor::new(user_repo.clone(), rbac, clock.clone()));
 
-    // author / editor / stranger 三个用户，各自绑定外部身份。
+    // author / author2 / editor / stranger 四个用户，各自绑定外部身份。
     let mut ids = std::collections::HashMap::new();
     for (username, role) in [
         ("author", Some("author")),
+        ("author2", Some("author")),
         ("editor", Some("editor")),
         ("stranger", None),
     ] {
         let user = users
-            .create_user(CreateUserCmd {
-                username: username.into(),
-                email: None,
-                display_name: Some(username.into()),
-            })
+            .create_user(
+                &Actor::bootstrap_cli(),
+                CreateUserCmd {
+                    username: username.into(),
+                    email: None,
+                    display_name: Some(username.into()),
+                },
+            )
             .await
             .unwrap();
         if let Some(role) = role {
-            roles.assign_to_username(username, role).await.unwrap();
+            roles
+                .assign_to_username(&Actor::bootstrap_cli(), username, role)
+                .await
+                .unwrap();
         }
         ids.insert(username.to_string(), user.id);
     }
@@ -185,10 +177,16 @@ async fn fresh_stack() -> Stack {
     let router = auth_router(auth_state)
         .merge(admin_router(admin_state.clone()))
         .merge(posts_router(admin_state));
-    Stack { router, idp, pool }
+    Stack {
+        router,
+        idp,
+        roles,
+        pool,
+    }
 }
 
 /// 以指定用户登录，返回 (cookie, csrf)。
+/// 走完整浏览器绑定：login 下发的 `blog_oauth_state` cookie 必须带回 callback。
 async fn login_as(router: &axum::Router, idp: &FakeIdpClient, username: &str) -> (String, String) {
     *idp.external_id.lock().unwrap() = format!("sub-{username}");
     let response = router
@@ -207,13 +205,35 @@ async fn login_as(router: &axum::Router, idp: &FakeIdpClient, username: &str) ->
         .and_then(|v| v.to_str().ok())
         .unwrap()
         .to_string();
-    let state = location.split("state=").nth(1).unwrap().to_string();
+    let state = location
+        .split("state=")
+        .nth(1)
+        .unwrap()
+        .split('&')
+        .next()
+        .unwrap()
+        .to_string();
+    let binding = response
+        .headers()
+        .get_all(axum::http::header::SET_COOKIE)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .find_map(|v| {
+            v.split(';')
+                .next()?
+                .trim()
+                .strip_prefix("blog_oauth_state=")
+                .map(str::to_string)
+        })
+        .expect("登录必须下发浏览器绑定 cookie");
+    assert_eq!(binding, state, "绑定值与 state 一致（双重提交）");
 
     let response = router
         .clone()
         .oneshot(
             Request::builder()
                 .uri(format!("/auth/callback/idp?code=x&state={state}"))
+                .header("cookie", format!("blog_oauth_state={binding}"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -471,6 +491,51 @@ async fn own_any_authorization_matrix() {
     .await;
     assert_eq!(status, StatusCode::CREATED);
 
+    // author2 有 own 权限但不是本人：读/改他人文章必须 403（测的是“不是本人”，不是“无权限”）。
+    let (author2_cookie, author2_csrf) = login_as(&stack.router, &stack.idp, "author2").await;
+    let (status, body) = api(
+        &stack.router,
+        "GET",
+        "/api/admin/v1/posts/matrix-post",
+        Some(&author2_cookie),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "own 权限不得跨作者读取：{body}"
+    );
+    let (status, body) = api(
+        &stack.router,
+        "PATCH",
+        "/api/admin/v1/posts/matrix-post",
+        Some(&author2_cookie),
+        Some(&author2_csrf),
+        Some(r#"{"title":"越权编辑他人文章"}"#),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "own 权限不得跨作者编辑：{body}"
+    );
+    let (status, body) = api(
+        &stack.router,
+        "POST",
+        "/api/admin/v1/posts/matrix-post/publish",
+        Some(&author2_cookie),
+        Some(&author2_csrf),
+        None,
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "own 权限不得跨作者发布：{body}"
+    );
+
     // stranger（无角色）：读/改/发都 403。
     let (stranger_cookie, stranger_csrf) = login_as(&stack.router, &stack.idp, "stranger").await;
     for (method, uri, with_csrf) in [
@@ -621,5 +686,289 @@ async fn validation_and_no_store_headers() {
             .and_then(|v| v.to_str().ok()),
         Some("no-store"),
         "管理 API 不缓存"
+    );
+}
+
+#[tokio::test]
+async fn admin_writes_validate_origin() {
+    let _g = SERIAL.lock().await;
+    let stack = fresh_stack().await;
+    let (cookie, csrf) = login_as(&stack.router, &stack.idp, "author").await;
+
+    let post_with_origin = |origin: &'static str| {
+        let cookie = cookie.clone();
+        let csrf = csrf.clone();
+        let router = stack.router.clone();
+        async move {
+            let response = router
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/admin/v1/posts")
+                        .header("cookie", format!("blog_session={cookie}"))
+                        .header("x-csrf-token", csrf)
+                        .header("content-type", "application/json")
+                        .header("origin", origin)
+                        .header("host", "127.0.0.1:18099")
+                        .body(Body::from(r#"{"title":"来源校验","content":"x"}"#))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            response.status()
+        }
+    };
+
+    assert_eq!(
+        post_with_origin("http://127.0.0.1:18099").await,
+        StatusCode::CREATED
+    );
+    assert_eq!(
+        post_with_origin("https://evil.example").await,
+        StatusCode::FORBIDDEN,
+        "跨源写请求被拒绝"
+    );
+}
+
+#[tokio::test]
+async fn me_is_no_store_and_errors_share_json_contract() {
+    let _g = SERIAL.lock().await;
+    let stack = fresh_stack().await;
+
+    // 未认证 /me：401 + WWW-Authenticate + JSON 错误体 + no-store。
+    let response = stack
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/admin/v1/me")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        response
+            .headers()
+            .get(axum::http::header::WWW_AUTHENTICATE)
+            .and_then(|v| v.to_str().ok()),
+        Some("Session")
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get(axum::http::header::CACHE_CONTROL)
+            .and_then(|v| v.to_str().ok()),
+        Some("no-store"),
+        "带 CSRF token 的响应不得缓存"
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .map(|v| v.starts_with("application/json")),
+        Some(true),
+        "错误契约与其他管理端点一致（JSON）"
+    );
+    let body = String::from_utf8_lossy(&response.into_body().collect().await.unwrap().to_bytes())
+        .to_string();
+    assert!(body.contains("\"error\""), "{body}");
+
+    // 已认证 /me 也带 no-store。
+    let (cookie, _) = login_as(&stack.router, &stack.idp, "author").await;
+    let response = stack
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/admin/v1/me")
+                .header("cookie", format!("blog_session={cookie}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get(axum::http::header::CACHE_CONTROL)
+            .and_then(|v| v.to_str().ok()),
+        Some("no-store")
+    );
+}
+
+#[tokio::test]
+async fn foreign_cookie_does_not_shadow_session() {
+    let _g = SERIAL.lock().await;
+    let stack = fresh_stack().await;
+    let (cookie, _) = login_as(&stack.router, &stack.idp, "author").await;
+
+    // 一个前缀相同、排在前面且为空的干扰 cookie 不得让正常会话被判未登录。
+    let (status, body) = api(
+        &stack.router,
+        "GET",
+        "/api/admin/v1/posts",
+        Some(&cookie),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let response = stack
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/admin/v1/me")
+                .header(
+                    "cookie",
+                    format!("blog_session_extra=1; blog_session=; blog_session={cookie}"),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "前缀干扰 cookie 不应提前中止解析"
+    );
+}
+
+#[tokio::test]
+async fn revoked_role_takes_effect_on_existing_session() {
+    let _g = SERIAL.lock().await;
+    let stack = fresh_stack().await;
+
+    // author 建草稿；editor 凭 read_any 能读到他人工况。
+    let (author_cookie, author_csrf) = login_as(&stack.router, &stack.idp, "author").await;
+    let (status, body) = api(
+        &stack.router,
+        "POST",
+        "/api/admin/v1/posts",
+        Some(&author_cookie),
+        Some(&author_csrf),
+        Some(r#"{"slug":"revoke-post","title":"撤权测试","content":"正文"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+
+    let (editor_cookie, _) = login_as(&stack.router, &stack.idp, "editor").await;
+    let (status, body) = api(
+        &stack.router,
+        "GET",
+        "/api/admin/v1/posts/revoke-post",
+        Some(&editor_cookie),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "撤权前可读：{body}");
+
+    // 撤权（同进程内真实 DB 变更，会话存储未动）。
+    stack
+        .roles
+        .remove_from_username(&Actor::bootstrap_cli(), "editor", "editor")
+        .await
+        .unwrap();
+
+    // 旧 cookie 仍在服务端会话存储中，但每次请求重读权限 → 立即失效。
+    let (status, body) = api(
+        &stack.router,
+        "GET",
+        "/api/admin/v1/posts/revoke-post",
+        Some(&editor_cookie),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "撤权后旧会话必须立即失去权限：{body}"
+    );
+
+    let (status, _, body) = request_me(&stack.router, &editor_cookie).await;
+    assert_eq!(status, StatusCode::OK, "/me 仍是有效会话：{body}");
+    assert!(
+        !body.contains("post.read_any"),
+        "撤权后 /me 不应再返回 any 权限：{body}"
+    );
+}
+
+#[tokio::test]
+async fn soft_deleted_user_session_is_rejected() {
+    let _g = SERIAL.lock().await;
+    let stack = fresh_stack().await;
+    let (cookie, _) = login_as(&stack.router, &stack.idp, "author").await;
+
+    // 账号软删除（§5：软删除后旧 Cookie 不得继续可用）。
+    sqlx::query("UPDATE users SET deleted_at = now() WHERE username = 'author'")
+        .execute(&stack.pool)
+        .await
+        .unwrap();
+
+    let (status, _, body) = request_me(&stack.router, &cookie).await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "软删除后旧会话失效：{body}"
+    );
+}
+
+/// 读取 /me 并返回 (状态, 头, 体)。
+async fn request_me(
+    router: &axum::Router,
+    cookie: &str,
+) -> (StatusCode, axum::http::HeaderMap, String) {
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/admin/v1/me")
+                .header("cookie", format!("blog_session={cookie}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let headers = response.headers().clone();
+    let body = String::from_utf8_lossy(&response.into_body().collect().await.unwrap().to_bytes())
+        .to_string();
+    (status, headers, body)
+}
+
+#[tokio::test]
+async fn internal_errors_return_generic_body_without_leaking_storage_details() {
+    let _g = SERIAL.lock().await;
+    let stack = fresh_stack().await;
+    let (cookie, csrf) = login_as(&stack.router, &stack.idp, "author").await;
+
+    // 制造真实存储错误：文章表被改名（INSERT 将失败）。
+    sqlx::query("ALTER TABLE posts RENAME TO posts_broken")
+        .execute(&stack.pool)
+        .await
+        .unwrap();
+
+    let (status, body) = api(
+        &stack.router,
+        "POST",
+        "/api/admin/v1/posts",
+        Some(&cookie),
+        Some(&csrf),
+        Some(r#"{"title":"x","content":"y"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+    assert!(body.contains("服务器内部错误"), "回通用文案：{body}");
+    assert!(
+        !body.contains("relation") && !body.contains("does not exist"),
+        "不得回显 SQL/存储细节：{body}"
     );
 }

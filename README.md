@@ -33,6 +33,8 @@ blog user show X                     # 查看角色与有效权限并集
 
 - 权限目录是应用可信注册表（`PERMISSION_REGISTRY`），启动时幂等同步，普通入口不能创造任意 key。
 - 文章动作按 own/any 权限对检查（如 `post.update` / `post.update_any`），any 覆盖 own，角色名称不替代动作检查。
+- 身份写路径同样校权：建用户需 `user.manage`，角色分配/移除需 `role.manage`，且不得超出调用者自身权限集合（委派上限）；授予/移除 Owner 另需 `ownership.manage`，OAuth 提供商与绑定需 `oauth.manage`。受控 CLI 以引导身份（本机 shell 信任）持有全部已注册权限。
+- “有效 Owner”= 未软删除 + 持有 owner 角色 + 至少一种有效登录方式（oauth_accounts）；移除最后一个可登录 Owner 会被拒绝，登不进去的 Owner 可被清理。
 - 身份/角色变更在统一 `pg_advisory_xact_lock(2048001,1)` 排他锁下执行（docs/identity-and-admin.md §3）。
 
 ### OAuth 登录与会话（M2 第二段已交付）
@@ -48,10 +50,10 @@ blog oauth bind --user sun --provider keycloak --external-id <sub>
 blog oauth bindings --user sun
 ```
 
-- 浏览器访问 `GET /auth/login?provider=<id>&next=/admin` → OIDC（PKCE S256 + nonce + JWKS 校验）或 GitHub → `GET /auth/callback/{provider}` 签发会话。
+- 浏览器访问 `GET /auth/login?provider=<id>&next=/admin` → OIDC（PKCE S256 + nonce + JWKS 校验）或 GitHub → `GET /auth/callback/{provider}` 签发会话。发起登录会下发短命 `blog_oauth_state` 绑定 cookie（Secure 部署用 `__Host-` 前缀），回调必须由同一浏览器带回，防登录 CSRF。
 - 会话为单实例内存存储（HttpOnly/SameSite=Lax cookie，服务端只存 SHA-256 摘要）；空闲/绝对过期、容量淘汰、重启全部失效。
 - `GET /api/admin/v1/me` 返回当前用户与权限并集（每次重新读取，撤权即时生效）；`POST /auth/logout` 需会话 + `X-CSRF-Token` 头 + 同源 Origin。
-- 相关环境变量：`BLOG_PUBLIC_BASE_URL`（回调 redirect_uri 基址）、`BLOG_SECURE_COOKIES=1`（HTTPS 部署时加 Secure）。
+- 相关环境变量：`BLOG_PUBLIC_BASE_URL`（回调 redirect_uri 基址）、`BLOG_SECURE_COOKIES`（不设时按 `BLOG_PUBLIC_BASE_URL` 的 scheme 推断，HTTPS 部署自动加 Secure）。
 
 ### 管理写 API（M2 第三段已交付）
 
@@ -91,7 +93,7 @@ cargo test --workspace
 - `crates/infrastructure/tests`：真实 PostgreSQL（迁移、约束、三态保存、两连接真并发、公开过滤）。
 - `crates/server/tests`：完整装配 + HTTP（草稿/private/软删除不可访问，撤回即 404，标题/摘要模板转义）。
 
-集成测试需要可写的 PostgreSQL，且**只允许 loopback 主机**：默认 `postgres://blog:blog@127.0.0.1:5432`，可用 `BLOG_TEST_ADMIN_URL` 覆盖（测试库 DSN 自动从它推导），会重建 `blog_test` / `blog_server_test` 数据库。CI 见 `.github/workflows/ci.yml`。
+集成测试需要可写的 PostgreSQL，且**只允许 loopback 主机**：默认 `postgres://blog:blog@127.0.0.1:5432`，可用 `BLOG_TEST_ADMIN_URL` 覆盖（infrastructure 与 server 的测试库 DSN 都自动从它推导），会重建 `blog_test` / `blog_server_test` / `blog_admin_test` / `blog_auth_test` 数据库。CI 见 `.github/workflows/ci.yml`。
 
 ## 结构
 

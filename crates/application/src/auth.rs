@@ -47,6 +47,15 @@ pub struct LoginSuccess {
     pub user_id: Uuid,
 }
 
+/// 登录发起产物：提供商授权 URL + 需写入浏览器的短命绑定值。
+/// 绑定值即 state（双重提交）：回调时必须在同一浏览器 cookie 中回读，
+/// 防止攻击者把自己的授权码/回调 URL 塞给受害者完成登录 CSRF。
+#[derive(Debug)]
+pub struct LoginStart {
+    pub authorize_url: String,
+    pub browser_binding: String,
+}
+
 impl AuthInteractor {
     pub fn new(
         deps: AuthDeps,
@@ -62,8 +71,13 @@ impl AuthInteractor {
         }
     }
 
-    /// 发起登录：生成 state/PKCE/nonce，保存一次性尝试，返回提供商授权 URL。
-    pub async fn login_start(&self, provider_id: &str, next: &str) -> Result<String, UseCaseError> {
+    /// 发起登录：生成 state/PKCE/nonce，保存一次性尝试，返回提供商授权 URL
+    /// 与浏览器绑定值（接口层写入短命 cookie，回调核对）。
+    pub async fn login_start(
+        &self,
+        provider_id: &str,
+        next: &str,
+    ) -> Result<LoginStart, UseCaseError> {
         let config = self.find_config(provider_id).await?;
         let next = sanitize_next(next)?;
 
@@ -100,7 +114,7 @@ impl AuthInteractor {
         self.deps
             .attempts
             .save(
-                state,
+                state.clone(),
                 OAuthAttempt {
                     provider_id: config.id.clone(),
                     verifier,
@@ -111,16 +125,26 @@ impl AuthInteractor {
                 },
             )
             .await?;
-        Ok(url)
+        Ok(LoginStart {
+            authorize_url: url,
+            browser_binding: state,
+        })
     }
 
-    /// 回调：消费尝试、交换授权码、核对绑定并签发会话。
+    /// 回调：先核对浏览器绑定，再原子消费尝试、交换授权码、核对绑定并签发会话。
     pub async fn login_callback(
         &self,
         provider_id: &str,
         code: &str,
         state: &str,
+        browser_binding: Option<&str>,
     ) -> Result<LoginSuccess, UseCaseError> {
+        // 浏览器绑定先于消费：不匹配的请求不得烧掉真实尝试（docs §4 第 2 步）。
+        if browser_binding.is_none_or(|binding| binding.is_empty() || binding != state) {
+            return Err(UseCaseError::Invalid(
+                "浏览器绑定缺失或不匹配，请重新发起登录".into(),
+            ));
+        }
         let attempt = self
             .deps
             .attempts
@@ -212,48 +236,69 @@ impl AuthInteractor {
         self.deps.sessions.revoke_all_for_user(user_id).await
     }
 
-    /// OAuth 配置管理（受控 CLI 通道）。
+    /// OAuth 配置管理（`oauth.manage`；受保护配置不受普通 settings 权限覆盖）。
     pub async fn list_providers(&self) -> Result<Vec<ProviderConfig>, UseCaseError> {
         self.deps.configs.list().await
     }
 
-    pub async fn save_providers(&self, providers: &[ProviderConfig]) -> Result<(), UseCaseError> {
+    pub async fn save_providers(
+        &self,
+        actor: &Actor,
+        providers: &[ProviderConfig],
+    ) -> Result<(), UseCaseError> {
+        actor.ensure_write_channel()?;
+        if !actor.has_permission("oauth.manage") {
+            return Err(UseCaseError::Forbidden);
+        }
         for config in providers {
             validate_provider_config(config)?;
         }
         self.deps.configs.save(providers).await
     }
 
-    /// 显式绑定外部身份（受控 CLI；操作者需核对稳定外部 ID）。
+    /// 显式绑定外部身份（需 `oauth.manage`；操作者需核对稳定外部 ID）。
     pub async fn bind_external_id(
         &self,
+        actor: &Actor,
         username: &str,
         provider_id: &str,
         external_id: &str,
         email: Option<String>,
     ) -> Result<(), UseCaseError> {
+        actor.ensure_write_channel()?;
+        if !actor.has_permission("oauth.manage") {
+            return Err(UseCaseError::Forbidden);
+        }
         let config = self.find_config(provider_id).await?;
         let provider_key = provider_identity_key(&config);
-        let actor = self.users.actor_for_username(username).await?;
+        let target = self.users.actor_for_username(username).await?;
         self.deps
             .accounts
-            .bind(actor.user_id.0, &provider_key, external_id, email)
+            .bind(target.user_id.0, &provider_key, external_id, email)
             .await
     }
 
+    /// 解绑外部身份：需 `oauth.manage`；解绑后清除该用户的内存会话（docs §5）。
     pub async fn unbind_external_id(
         &self,
+        actor: &Actor,
         username: &str,
         provider_id: &str,
         external_id: &str,
     ) -> Result<(), UseCaseError> {
+        actor.ensure_write_channel()?;
+        if !actor.has_permission("oauth.manage") {
+            return Err(UseCaseError::Forbidden);
+        }
         let config = self.find_config(provider_id).await?;
         let provider_key = provider_identity_key(&config);
-        let actor = self.users.actor_for_username(username).await?;
+        let target = self.users.actor_for_username(username).await?;
         self.deps
             .accounts
-            .unbind(actor.user_id.0, &provider_key, external_id)
-            .await
+            .unbind(target.user_id.0, &provider_key, external_id)
+            .await?;
+        // 登录方式发生变化：旧 Cookie 立即失效。
+        self.revoke_sessions_of_user(target.user_id.0).await
     }
 
     pub async fn bindings_of(&self, username: &str) -> Result<Vec<String>, UseCaseError> {
@@ -306,11 +351,50 @@ fn validate_provider_config(config: &ProviderConfig) -> Result<(), UseCaseError>
 }
 
 /// 回跳路径白名单：仅本站相对路径，禁止协议相对与外站。
+/// 同时按字符白名单校验，拒绝控制字符（CR/LF 会破坏 Location 头）与空白。
 pub fn sanitize_next(next: &str) -> Result<&str, UseCaseError> {
+    let invalid = || UseCaseError::Invalid("回跳路径必须是本站相对路径".into());
     if !next.starts_with('/') || next.starts_with("//") || next.contains('\\') {
-        return Err(UseCaseError::Invalid("回跳路径必须是本站相对路径".into()));
+        return Err(invalid());
+    }
+    if !next.chars().all(is_allowed_next_char) {
+        return Err(invalid());
     }
     Ok(next)
+}
+
+/// 允许出现在 `next` 中的字符：URL 路径/查询安全字符 + 非 ASCII 可见字符。
+fn is_allowed_next_char(c: char) -> bool {
+    if c.is_ascii() {
+        c.is_ascii_alphanumeric()
+            || matches!(
+                c,
+                '-' | '_'
+                    | '.'
+                    | '~'
+                    | '/'
+                    | '?'
+                    | '#'
+                    | '['
+                    | ']'
+                    | '@'
+                    | '!'
+                    | '$'
+                    | '&'
+                    | '\''
+                    | '('
+                    | ')'
+                    | '*'
+                    | '+'
+                    | ','
+                    | ';'
+                    | '='
+                    | ':'
+                    | '%'
+            )
+    } else {
+        !c.is_control() && !c.is_whitespace()
+    }
 }
 
 /// cookie 名供接口层使用。
