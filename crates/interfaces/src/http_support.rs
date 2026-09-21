@@ -184,10 +184,26 @@ pub fn ensure_same_origin(headers: &HeaderMap) -> Result<(), UseCaseError> {
     Err(UseCaseError::Forbidden)
 }
 
+/// 管理端稳定业务码清单（docs/identity-and-admin.md §1）。
+///
+/// 客户端按 `code` 分支、不按状态码或文案分支。新增错误变体必须同时在此登记，
+/// 并补 `every_error_variant_maps_to_a_registered_code` 的样例；映射函数本身是穷尽匹配，
+/// 漏掉新变体会直接编译失败。
+pub const ADMIN_ERROR_CODES: &[&str] = &[
+    "unauthenticated",
+    "invalid_request",
+    "version_conflict",
+    "conflict",
+    "not_found",
+    "forbidden",
+    "external_error",
+    "internal_error",
+];
+
 /// 业务错误码：与 HTTP 状态码分离，供客户端做精确分支。
 ///
 /// 关键用例是 409：`version_conflict` 可以用最新 version 重试覆盖，
-/// `conflict`（slug/username 已占用）重试无用。新增错误变体时必须同时给出码。
+/// `conflict`（slug/username 等唯一性冲突）重试无用。
 pub fn admin_error_code(e: &UseCaseError) -> &'static str {
     match e {
         UseCaseError::Unauthenticated => "unauthenticated",
@@ -236,4 +252,48 @@ pub fn admin_error(e: UseCaseError, request_id: &RequestId) -> Response {
         );
     }
     response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 每个错误变体 → 期望业务码；码值一旦发布即视为契约，改动必须是有意为之。
+    fn samples() -> Vec<(UseCaseError, &'static str)> {
+        vec![
+            (UseCaseError::Unauthenticated, "unauthenticated"),
+            (UseCaseError::Invalid("x".into()), "invalid_request"),
+            (UseCaseError::VersionConflict, "version_conflict"),
+            (UseCaseError::Conflict("slug".into()), "conflict"),
+            (UseCaseError::NotFound("x".into()), "not_found"),
+            (UseCaseError::Forbidden, "forbidden"),
+            (UseCaseError::External("x".into()), "external_error"),
+            (UseCaseError::Repository("x".into()), "internal_error"),
+            (UseCaseError::Render("x".into()), "internal_error"),
+        ]
+    }
+
+    #[test]
+    fn every_error_variant_maps_to_a_registered_code() {
+        let mut mapped = std::collections::BTreeSet::new();
+        for (error, expected) in samples() {
+            assert_eq!(
+                admin_error_code(&error),
+                expected,
+                "错误码是稳定契约，改动需同步文档与客户端：{error:?}"
+            );
+            mapped.insert(expected);
+        }
+        let registered: std::collections::BTreeSet<&str> =
+            ADMIN_ERROR_CODES.iter().copied().collect();
+        assert_eq!(
+            mapped, registered,
+            "ADMIN_ERROR_CODES 与映射结果必须一一对应（漏登记或多余登记都会失败）"
+        );
+        assert_eq!(
+            ADMIN_ERROR_CODES.len(),
+            registered.len(),
+            "清单内不得有重复码"
+        );
+    }
 }
