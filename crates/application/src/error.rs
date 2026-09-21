@@ -16,6 +16,14 @@ pub enum UseCaseError {
     #[error("无权执行该操作")]
     Forbidden,
 
+    /// 会话不存在/已过期：HTTP 层映射 401，区别于有身份但权限不足的 403。
+    #[error("未登录或会话已失效")]
+    Unauthenticated,
+
+    /// 外部身份服务（OIDC/GitHub）交互失败：HTTP 层映射 502。
+    #[error("外部身份服务错误：{0}")]
+    External(String),
+
     #[error("{0}")]
     Invalid(String),
 

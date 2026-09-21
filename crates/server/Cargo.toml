@@ -21,3 +21,5 @@ http-body-util = "0.1"
 axum.workspace = true
 time.workspace = true
 sqlx.workspace = true
+async-trait.workspace = true
+uuid.workspace = true

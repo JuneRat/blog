@@ -1,6 +1,6 @@
 # blog
 
-Rust 模块化单体博客。当前进度：**M1 内容闭环 + M2 RBAC 核心**（迁移 → 受控 CLI 写入（按权限） → 公开 SSR 阅读）；OAuth、内存会话与 React 后台为 M2 后续部分。
+Rust 模块化单体博客。当前进度：**M1 内容闭环 + M2 RBAC 核心与会话/OAuth 登录**（迁移 → 权限化 CLI 写入 → 公开 SSR 阅读 → OAuth 登录 + `/api/admin/v1/me`）；管理写 API 与 React 后台为 M2 剩余部分。
 
 ## 快速开始
 
@@ -34,6 +34,24 @@ blog user show X                     # 查看角色与有效权限并集
 - 权限目录是应用可信注册表（`PERMISSION_REGISTRY`），启动时幂等同步，普通入口不能创造任意 key。
 - 文章动作按 own/any 权限对检查（如 `post.update` / `post.update_any`），any 覆盖 own，角色名称不替代动作检查。
 - 身份/角色变更在统一 `pg_advisory_xact_lock(2048001,1)` 排他锁下执行（docs/identity-and-admin.md §3）。
+
+### OAuth 登录与会话（M2 第二段已交付）
+
+```bash
+# 配置提供商（秘密经环境变量 secret_ref 提供，不落库）
+blog oauth add-oidc --id keycloak --issuer https://idp.example.com/realms/main \
+  --client-id demo --secret-ref IDP_SECRET
+blog oauth add-github --client-id gh-demo --secret-ref GH_SECRET
+
+# 受控绑定外部身份（需核对稳定 sub / 数值用户 ID；未绑定身份不得登录）
+blog oauth bind --user sun --provider keycloak --external-id <sub>
+blog oauth bindings --user sun
+```
+
+- 浏览器访问 `GET /auth/login?provider=<id>&next=/admin` → OIDC（PKCE S256 + nonce + JWKS 校验）或 GitHub → `GET /auth/callback/{provider}` 签发会话。
+- 会话为单实例内存存储（HttpOnly/SameSite=Lax cookie，服务端只存 SHA-256 摘要）；空闲/绝对过期、容量淘汰、重启全部失效。
+- `GET /api/admin/v1/me` 返回当前用户与权限并集（每次重新读取，撤权即时生效）；`POST /auth/logout` 需会话 + `X-CSRF-Token` 头 + 同源 Origin。
+- 相关环境变量：`BLOG_PUBLIC_BASE_URL`（回调 redirect_uri 基址）、`BLOG_SECURE_COOKIES=1`（HTTPS 部署时加 Secure）。
 
 环境变量：
 

@@ -7,11 +7,12 @@ use std::io::Read;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use application::auth::AuthInteractor;
 use application::content::PostVisibility;
 use application::content::{CreatePostCmd, EditPostCmd, PostInteractor};
 use application::error::UseCaseError;
 use application::identity::{Actor, CreateUserCmd, RoleInteractor, UserInteractor};
-use application::ports::UserRepository;
+use application::ports::{ProviderConfig, ProviderKind, UserRepository};
 use application::public_site::{PublicSiteInteractor, format_datetime};
 use clap::{Parser, Subcommand};
 
@@ -51,6 +52,12 @@ pub enum Command {
     Role {
         #[command(subcommand)]
         action: RoleAction,
+    },
+
+    /// OAuth 提供商与外部身份绑定（受控 CLI）
+    Oauth {
+        #[command(subcommand)]
+        action: OauthAction,
     },
 
     /// 启动公开 SSR 服务
@@ -96,6 +103,68 @@ pub enum RoleAction {
         user: String,
         #[arg(long)]
         role: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum OauthAction {
+    /// 新增或更新通用 OIDC 提供商（绑定精确 issuer）
+    AddOidc {
+        /// 提供商 id（用于 URL 与回调路径，如 keycloak）
+        #[arg(long)]
+        id: String,
+        /// 精确 issuer URL（https）
+        #[arg(long)]
+        issuer: String,
+        #[arg(long)]
+        client_id: String,
+        /// 保存 client secret 的环境变量名
+        #[arg(long)]
+        secret_ref: String,
+        /// 空格分隔；默认 "openid profile email"
+        #[arg(long)]
+        scopes: Option<String>,
+    },
+    /// 新增或更新 GitHub 提供商
+    AddGithub {
+        #[arg(long, default_value = "github")]
+        id: String,
+        #[arg(long)]
+        client_id: String,
+        #[arg(long)]
+        secret_ref: String,
+        #[arg(long)]
+        scopes: Option<String>,
+    },
+    /// 列出已配置的提供商（不含秘密）
+    List,
+    /// 为用户绑定外部身份（需核对稳定的 sub / 数值用户 ID）
+    Bind {
+        #[arg(long)]
+        user: String,
+        /// 提供商 id
+        #[arg(long)]
+        provider: String,
+        /// 外部稳定用户 ID（OIDC sub / GitHub 数值 id）
+        #[arg(long)]
+        external_id: String,
+        /// 资料快照邮箱（可空）
+        #[arg(long)]
+        email: Option<String>,
+    },
+    /// 解绑外部身份（最后一种登录方式会被拒绝）
+    Unbind {
+        #[arg(long)]
+        user: String,
+        #[arg(long)]
+        provider: String,
+        #[arg(long)]
+        external_id: String,
+    },
+    /// 列出用户的外部身份绑定
+    Bindings {
+        #[arg(long)]
+        user: String,
     },
 }
 
@@ -190,6 +259,8 @@ pub struct CliDeps {
     pub users: Arc<UserInteractor>,
     pub posts: Arc<PostInteractor>,
     pub roles: Arc<RoleInteractor>,
+    pub auth: Arc<AuthInteractor>,
+    pub secure_cookies: bool,
     pub public_site: Arc<PublicSiteInteractor>,
     pub user_repo: Arc<dyn UserRepository>,
     /// 主题静态资源目录（/assets/）。
@@ -208,15 +279,27 @@ pub async fn run(deps: CliDeps, command: Command) -> Result<(), String> {
 
         Command::Role { action } => run_role(deps, action).await,
 
+        Command::Oauth { action } => run_oauth(deps, action).await,
+
         Command::Serve { addr } => {
             let bind = addr
                 .or_else(|| std::env::var("BLOG_BIND").ok())
                 .unwrap_or_else(|| "127.0.0.1:8080".into());
-            let state = PublicSiteState {
+            let public_state = PublicSiteState {
                 site: deps.public_site,
                 health: deps.health,
             };
-            let app = public_router(state, deps.assets_dir);
+            let auth_state = crate::http_auth::AuthState {
+                auth: deps.auth,
+                secure_cookies: deps.secure_cookies,
+            };
+            let admin_state = crate::http_auth::AdminState {
+                auth: auth_state.auth.clone(),
+                users: deps.users,
+            };
+            let app = public_router(public_state, deps.assets_dir)
+                .merge(crate::http_auth::auth_router(auth_state))
+                .merge(crate::http_auth::admin_router(admin_state));
             let listener = tokio::net::TcpListener::bind(&bind)
                 .await
                 .map_err(|e| format!("绑定 {bind} 失败：{e}"))?;
@@ -276,6 +359,127 @@ async fn run_user(deps: CliDeps, action: UserAction) -> Result<(), String> {
             Ok(())
         }
     }
+}
+
+async fn run_oauth(deps: CliDeps, action: OauthAction) -> Result<(), String> {
+    match action {
+        OauthAction::AddOidc {
+            id,
+            issuer,
+            client_id,
+            secret_ref,
+            scopes,
+        } => {
+            let mut providers = deps.auth.list_providers().await.map_err(fmt_error)?;
+            upsert_provider(
+                &mut providers,
+                ProviderConfig {
+                    id,
+                    kind: ProviderKind::Oidc,
+                    issuer: Some(issuer),
+                    client_id,
+                    secret_ref,
+                    scopes: split_scopes(scopes),
+                },
+            );
+            deps.auth
+                .save_providers(&providers)
+                .await
+                .map_err(fmt_error)?;
+            println!("已保存 OIDC 提供商配置（秘密经 secret_ref 从环境读取，不落库）。");
+            Ok(())
+        }
+        OauthAction::AddGithub {
+            id,
+            client_id,
+            secret_ref,
+            scopes,
+        } => {
+            let mut providers = deps.auth.list_providers().await.map_err(fmt_error)?;
+            upsert_provider(
+                &mut providers,
+                ProviderConfig {
+                    id,
+                    kind: ProviderKind::GitHub,
+                    issuer: None,
+                    client_id,
+                    secret_ref,
+                    scopes: split_scopes(scopes),
+                },
+            );
+            deps.auth
+                .save_providers(&providers)
+                .await
+                .map_err(fmt_error)?;
+            println!("已保存 GitHub 提供商配置。");
+            Ok(())
+        }
+        OauthAction::List => {
+            let providers = deps.auth.list_providers().await.map_err(fmt_error)?;
+            if providers.is_empty() {
+                println!("（未配置提供商；用 oauth add-oidc / add-github 添加）");
+            }
+            for p in providers {
+                println!(
+                    "{:<14} {:<6} client_id={} issuer={}",
+                    p.id,
+                    match p.kind {
+                        ProviderKind::Oidc => "oidc",
+                        ProviderKind::GitHub => "github",
+                    },
+                    p.client_id,
+                    p.issuer.unwrap_or_else(|| "-".into())
+                );
+            }
+            Ok(())
+        }
+        OauthAction::Bind {
+            user,
+            provider,
+            external_id,
+            email,
+        } => {
+            deps.auth
+                .bind_external_id(&user, &provider, &external_id, email)
+                .await
+                .map_err(fmt_error)?;
+            println!("已将 {external_id}@{provider} 绑定到用户 {user}。");
+            Ok(())
+        }
+        OauthAction::Unbind {
+            user,
+            provider,
+            external_id,
+        } => {
+            deps.auth
+                .unbind_external_id(&user, &provider, &external_id)
+                .await
+                .map_err(fmt_error)?;
+            println!("已解绑 {external_id}@{provider} 与用户 {user}。");
+            Ok(())
+        }
+        OauthAction::Bindings { user } => {
+            let bindings = deps.auth.bindings_of(&user).await.map_err(fmt_error)?;
+            if bindings.is_empty() {
+                println!("用户 {user} 没有外部身份绑定。");
+            }
+            for b in bindings {
+                println!("{b}");
+            }
+            Ok(())
+        }
+    }
+}
+
+fn upsert_provider(providers: &mut Vec<ProviderConfig>, config: ProviderConfig) {
+    providers.retain(|p| p.id != config.id);
+    providers.push(config);
+}
+
+fn split_scopes(scopes: Option<String>) -> Vec<String> {
+    scopes
+        .map(|s| s.split_whitespace().map(str::to_string).collect())
+        .unwrap_or_default()
 }
 
 async fn run_role(deps: CliDeps, action: RoleAction) -> Result<(), String> {

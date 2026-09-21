@@ -93,6 +93,41 @@ async fn main() {
                 rbac_store.clone(),
                 clock.clone(),
             ));
+
+            // 认证装配：单实例内存会话/尝试 + OAuth 客户端（秘密经环境变量 secret_ref 读取）。
+            let secrets: Arc<dyn application::ports::SecretSource> =
+                Arc::new(infrastructure::EnvSecretSource);
+            let identity_client: Arc<dyn application::ports::ExternalIdentityClient> =
+                Arc::new(infrastructure::ReqwestIdentityClient::new(secrets));
+            let random: Arc<dyn application::ports::SecureRandom> =
+                Arc::new(infrastructure::SystemSecureRandom);
+            let session_store: Arc<dyn application::ports::SessionStore> =
+                Arc::new(infrastructure::InMemorySessionStore::with_defaults());
+            let attempt_store: Arc<dyn application::ports::OAuthAttemptStore> =
+                Arc::new(infrastructure::InMemoryOAuthAttemptStore::with_defaults());
+            let oauth_configs: Arc<dyn application::ports::OAuthConfigStore> =
+                Arc::new(infrastructure::PostgresOAuthConfigStore::new(pool.clone()));
+            let oauth_accounts: Arc<dyn application::ports::OAuthAccountStore> =
+                Arc::new(infrastructure::PostgresOAuthAccountStore::new(pool.clone()));
+            let base_url = std::env::var("BLOG_PUBLIC_BASE_URL")
+                .unwrap_or_else(|_| "http://127.0.0.1:8080".into());
+            let secure_cookies = std::env::var("BLOG_SECURE_COOKIES")
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false);
+            let auth = Arc::new(application::auth::AuthInteractor::new(
+                application::auth::AuthDeps {
+                    sessions: session_store,
+                    attempts: attempt_store,
+                    configs: oauth_configs,
+                    accounts: oauth_accounts,
+                    identity_client,
+                    random,
+                },
+                users.clone(),
+                clock.clone(),
+                base_url,
+            ));
+
             let posts = Arc::new(PostInteractor::new(post_repo.clone(), clock.clone()));
             let public_site = Arc::new(PublicSiteInteractor::new(
                 public_query,
@@ -108,6 +143,8 @@ async fn main() {
                 users,
                 posts,
                 roles,
+                auth,
+                secure_cookies,
                 public_site,
                 user_repo,
                 assets_dir: Some(config.theme_dir.join("assets")),

@@ -157,8 +157,10 @@ pub struct Actor {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActorChannel {
-    /// 受控本机 CLI（M1/M2 当前唯一写通道；不得暴露为公开管理 HTTP）。
+    /// 受控本机 CLI（本机信任的操作通道）。
     ControlledCli,
+    /// 已认证浏览器会话（cookie + CSRF 保护；每次敏感操作重新读权限）。
+    Session,
 }
 
 impl Actor {
@@ -171,11 +173,10 @@ impl Actor {
     }
 
     /// 写通道守卫：所有写用例入口必须先调用。
-    /// M2 增加会话通道时，这里同步收敛为「允许写的通道」白名单，
-    /// 穷举 match 保证新增通道不写用例就无法编译通过。
+    /// 这里是「允许写的通道」白名单；穷举 match 保证新增通道不写用例就无法编译通过。
     pub fn ensure_write_channel(&self) -> Result<(), UseCaseError> {
         match self.channel {
-            ActorChannel::ControlledCli => Ok(()),
+            ActorChannel::ControlledCli | ActorChannel::Session => Ok(()),
         }
     }
 
@@ -275,12 +276,27 @@ impl UserInteractor {
 
     /// 文章作者兜底解析：CLI 未显式指定 --as 时使用文章作者。
     pub async fn actor_for_user_id(&self, id: Uuid) -> Result<Actor, UseCaseError> {
+        self.actor_for_user_id_with_channel(id, ActorChannel::ControlledCli)
+            .await
+    }
+
+    /// 按通道构造 Actor（会话认证走 Session；每次重新读当前权限）。
+    pub async fn actor_for_user_id_with_channel(
+        &self,
+        id: Uuid,
+        channel: ActorChannel,
+    ) -> Result<Actor, UseCaseError> {
         let snapshot = self
             .users
             .find_by_id(id)
             .await?
             .ok_or_else(|| UseCaseError::NotFound("作者用户".into()))?;
-        self.actor_from_snapshot(snapshot).await
+        let user = User::reconstitute(snapshot);
+        if !user.is_active() {
+            return Err(UseCaseError::Forbidden);
+        }
+        let permissions = self.rbac.permissions_of_user(user.id().0).await?;
+        Ok(Actor::new(user.id(), channel, permissions))
     }
 
     pub async fn roles_of_user(&self, id: Uuid) -> Result<Vec<String>, UseCaseError> {

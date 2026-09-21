@@ -7,6 +7,8 @@ edition = "2024"
 application = { path = "../application" }
 axum.workspace = true
 clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tower-http = { version = "0.6", features = ["fs"] }
