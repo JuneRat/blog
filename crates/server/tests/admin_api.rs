@@ -15,6 +15,7 @@ use application::ports::{
 use async_trait::async_trait;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use axum::middleware;
 use http_body_util::BodyExt;
 use infrastructure::{
     InMemoryOAuthAttemptStore, InMemorySessionStore, PostgresOAuthAccountStore,
@@ -23,6 +24,7 @@ use infrastructure::{
 };
 use interfaces::http_admin::posts_router;
 use interfaces::http_auth::{AdminState, AuthState, admin_router, auth_router};
+use interfaces::http_support::request_context;
 use sqlx::PgPool;
 use tower::ServiceExt;
 use uuid::Uuid;
@@ -177,7 +179,9 @@ async fn fresh_stack() -> Stack {
 
     let router = auth_router(auth_state)
         .merge(admin_router(admin_state.clone()))
-        .merge(posts_router(admin_state));
+        .merge(posts_router(admin_state))
+        // 与生产装配一致：最外层请求编号/日志中间件。
+        .layer(middleware::from_fn(request_context));
     Stack {
         router,
         idp,
@@ -466,6 +470,62 @@ async fn duplicate_slug_is_conflict_not_version_conflict() {
     assert!(body.contains("\"code\":\"conflict\""), "{body}");
     assert!(!body.contains("version_conflict"), "{body}");
     assert!(body.contains("slug"), "冲突文案应指向 slug：{body}");
+}
+
+#[tokio::test]
+async fn request_id_is_present_on_auth_rejection_and_json_error() {
+    let _g = SERIAL.lock().await;
+    let stack = fresh_stack().await;
+
+    // 无会话 → 401 由认证提取器提前拒绝：响应头仍必须有编号。
+    let response = stack
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/admin/v1/posts/nope")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let rejected_id = response
+        .headers()
+        .get("x-request-id")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string)
+        .expect("提取器提前拒绝也必须带 x-request-id");
+    assert!(Uuid::parse_str(&rejected_id).is_ok(), "{rejected_id}");
+
+    // 有会话的业务错误 → 404 JSON：body 里的 request_id 必须等于响应头。
+    let (cookie, _csrf) = login_as(&stack.router, &stack.idp, "author").await;
+    let response = stack
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/admin/v1/posts/ghost-slug")
+                .header("cookie", format!("blog_session={cookie}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let header_id = response
+        .headers()
+        .get("x-request-id")
+        .and_then(|v| v.to_str().ok())
+        .unwrap()
+        .to_string();
+    let body = String::from_utf8_lossy(&response.into_body().collect().await.unwrap().to_bytes())
+        .to_string();
+    assert_ne!(rejected_id, header_id, "每个请求编号唯一");
+    assert!(
+        body.contains(&format!("\"request_id\":\"{header_id}\"")),
+        "错误体编号必须等于响应头：{body}"
+    );
 }
 
 #[tokio::test]

@@ -6,7 +6,7 @@
 
 公开站点使用 MiniJinja SSR；后台 React + TypeScript + Vite 通过版本化管理 API 调用用例。推荐同源部署：/admin/* 提供 SPA（`apps/admin`，构建产物不进备份），/api/admin/v1/* 提供 JSON API，/auth/* 提供认证入口。SPA fallback 只注册在 /admin 子树内，不覆盖 API、认证和公开页面。登录页渲染用的 `GET /auth/providers` 是公开只读端点，只返回提供商的 id/展示名/类型。
 
-管理响应和预览使用 Cache-Control: no-store，前端路由守卫只改善体验，权限由后端执行。OpenAPI 维护接口契约，错误响应为 `{"error", "code"}`：`code` 是业务码，同一状态码的不同原因必须可区分（409 的 slug 占用是 `conflict`，版本冲突是 `version_conflict`），客户端不得只按状态码分支；request ID 随日志中间件交付时补齐。编辑携带 expected_version，分页限制上限，批量命令逐项授权。
+管理响应和预览使用 Cache-Control: no-store，前端路由守卫只改善体验，权限由后端执行。OpenAPI 维护接口契约，错误响应为 `{"error", "code", "request_id"}`：`code` 是业务码，同一状态码的不同原因必须可区分（409 的 slug 占用是 `conflict`，版本冲突是 `version_conflict`），客户端不得只按状态码分支；`request_id` 为每请求 UUIDv7，与 `x-request-id` 响应头一致，客户端报障文案需展示它。编辑携带 expected_version，分页限制上限，批量命令逐项授权。
 
 ## 2. RBAC 与权限目录
 
@@ -81,6 +81,6 @@ OAuth 是授权协议；仅 OAuth 平台必须通过受信身份接口适配，�
 
 后台优先实现文章、页面、分类、标签、系列顺序、角色用户、外部身份绑定与站点设置。没有修订表，所以不展示历史恢复；没有媒体表，所以不宣称具备附件库。保存已发布内容会直接更新线上，不能标为“保存草稿”。
 
-运行日志记录 request ID、actor、动作、结果与脱敏摘要，隐藏 Cookie、code、token、密码和秘密。当前 13 表不承诺事务内持久审计；如需不可遗漏的业务审计，须在该功能交付时补充专用存储和事务实现。
+访问日志为每个请求记录 request ID、method/path、结果状态与耗时，actor 只取自服务端验证过的会话（匿名留空），隐藏 Cookie、code、token、密码和秘密；预期 4xx 记 info、5xx 记 warn。它只回答"谁请求了哪个接口、结果如何"，**不构成业务审计**。角色变更、身份绑定等动作仍需记录明确的动作与对象：当前 13 表不承诺事务内持久审计；如需不可遗漏的业务审计，须在该功能交付时补充专用存储和事务实现。
 
 验收覆盖：水平越权、Author 访问他人私有文章、角色编辑/分配提权、Page 站点权限、最后 Owner 并发操作、禁用提供商后的登录方式保护、撤权和写入并发、OAuth 重放/错误 issuer、邮箱碰撞、绑定冲突、重启登录失效、CSRF 与无权限 API 直接访问。

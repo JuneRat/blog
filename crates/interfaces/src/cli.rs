@@ -312,6 +312,10 @@ pub async fn run(deps: CliDeps, command: Command) -> Result<(), String> {
                 .merge(crate::http_admin::posts_router(admin_state));
             // 后台 SPA 挂在 /admin 子树；dist 不存在时保持未注册。
             let app = crate::http::mount_admin_spa(app, deps.admin_dist);
+            // 全站最外层：分配请求编号、记录完成日志、回写 x-request-id（含被提前拒绝的 401/403）。
+            let app = app.layer(axum::middleware::from_fn(
+                crate::http_support::request_context,
+            ));
             let listener = tokio::net::TcpListener::bind(&bind)
                 .await
                 .map_err(|e| format!("绑定 {bind} 失败：{e}"))?;

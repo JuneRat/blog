@@ -22,7 +22,7 @@ use axum::{Json, Router};
 use serde::Deserialize;
 
 use crate::http_auth::AdminState;
-use crate::http_support::{admin_error, cookie_value, ensure_same_origin, no_store};
+use crate::http_support::{RequestId, admin_error, cookie_value, ensure_same_origin, no_store};
 
 /// 请求体上限（Markdown 正文足够）。
 pub const ADMIN_BODY_LIMIT: usize = 2 * 1024 * 1024;
@@ -100,26 +100,35 @@ where
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         let admin = AdminState::from_ref(state);
+        // 提前拒绝（未登录/CSRF/跨源）也必须带上请求编号，故先从扩展取上下文。
+        let request_id = parts
+            .extensions
+            .get::<RequestId>()
+            .cloned()
+            .unwrap_or_else(RequestId::generate);
         let Some(token) = cookie_value(&parts.headers, SESSION_COOKIE) else {
-            return Err(admin_error(UseCaseError::Unauthenticated));
+            return Err(admin_error(UseCaseError::Unauthenticated, &request_id));
         };
         let record = admin
             .auth
             .session_record(&token)
             .await
-            .map_err(admin_error)?;
+            .map_err(|e| admin_error(e, &request_id))?;
 
         // 写方法校验 CSRF + Origin（读方法不产生副作用）。
         let write_method = !matches!(parts.method.as_str(), "GET" | "HEAD" | "OPTIONS");
         if write_method {
-            ensure_same_origin(&parts.headers).map_err(admin_error)?;
+            ensure_same_origin(&parts.headers).map_err(|e| admin_error(e, &request_id))?;
             let provided = parts
                 .headers
                 .get("x-csrf-token")
                 .and_then(|v| v.to_str().ok())
                 .unwrap_or_default();
             if provided.is_empty() || provided != record.csrf_token {
-                return Err(admin_error(UseCaseError::Invalid("CSRF 校验失败".into())));
+                return Err(admin_error(
+                    UseCaseError::Invalid("CSRF 校验失败".into()),
+                    &request_id,
+                ));
             }
         }
 
@@ -127,7 +136,9 @@ where
             .auth
             .actor_from_session(&token)
             .await
-            .map_err(admin_error)?;
+            .map_err(|e| admin_error(e, &request_id))?;
+        // 身份已由会话验证：只有这里可以补录 actor，完成日志才带上它。
+        request_id.set_actor(actor.user_id.0);
         Ok(Self { actor })
     }
 }
@@ -188,12 +199,13 @@ pub fn posts_router(state: AdminState) -> Router {
 
 async fn create_post(
     AdminAuth { actor }: AdminAuth,
+    request_id: RequestId,
     State(state): State<AdminState>,
     Json(body): Json<CreatePostBody>,
 ) -> Response {
     let visibility = match parse_visibility(body.visibility.as_deref()) {
         Ok(v) => v,
-        Err(e) => return admin_error(e),
+        Err(e) => return admin_error(e, &request_id),
     };
     match state
         .posts
@@ -210,23 +222,25 @@ async fn create_post(
         .await
     {
         Ok(dto) => (StatusCode::CREATED, Json(PostDetailJson::from(dto))).into_response(),
-        Err(e) => admin_error(e),
+        Err(e) => admin_error(e, &request_id),
     }
 }
 
 async fn get_post(
     AdminAuth { actor }: AdminAuth,
+    request_id: RequestId,
     State(state): State<AdminState>,
     Path(slug): Path<String>,
 ) -> Response {
     match state.posts.find(&actor, &slug).await {
         Ok(dto) => (StatusCode::OK, Json(PostDetailJson::from(dto))).into_response(),
-        Err(e) => admin_error(e),
+        Err(e) => admin_error(e, &request_id),
     }
 }
 
 async fn list_posts(
     AdminAuth { actor }: AdminAuth,
+    request_id: RequestId,
     State(state): State<AdminState>,
     Query(query): Query<ListQuery>,
 ) -> Response {
@@ -234,11 +248,11 @@ async fn list_posts(
     let author_id = match query.author.as_deref() {
         Some(username) if !username.is_empty() => {
             if !actor.has_permission("post.read_any") {
-                return admin_error(UseCaseError::Forbidden);
+                return admin_error(UseCaseError::Forbidden, &request_id);
             }
             match state.users.actor_for_username(username).await {
                 Ok(who) => who.user_id,
-                Err(e) => return admin_error(e),
+                Err(e) => return admin_error(e, &request_id),
             }
         }
         _ => actor.user_id,
@@ -249,12 +263,13 @@ async fn list_posts(
             Json(list.iter().map(PostJson::from).collect::<Vec<_>>()),
         )
             .into_response(),
-        Err(e) => admin_error(e),
+        Err(e) => admin_error(e, &request_id),
     }
 }
 
 async fn edit_post(
     AdminAuth { actor }: AdminAuth,
+    request_id: RequestId,
     State(state): State<AdminState>,
     Path(slug): Path<String>,
     Json(body): Json<EditPostBody>,
@@ -262,7 +277,7 @@ async fn edit_post(
     let visibility = match body.visibility.as_deref() {
         Some(v) => match parse_visibility(Some(v)) {
             Ok(parsed) => Some(parsed),
-            Err(e) => return admin_error(e),
+            Err(e) => return admin_error(e, &request_id),
         },
         None => None,
     };
@@ -283,12 +298,13 @@ async fn edit_post(
         .await
     {
         Ok(dto) => (StatusCode::OK, Json(PostDetailJson::from(dto))).into_response(),
-        Err(e) => admin_error(e),
+        Err(e) => admin_error(e, &request_id),
     }
 }
 
 async fn publish_post(
     AdminAuth { actor }: AdminAuth,
+    request_id: RequestId,
     State(state): State<AdminState>,
     Path(slug): Path<String>,
     body: Option<Json<VersionBody>>,
@@ -296,12 +312,13 @@ async fn publish_post(
     let expected = body.and_then(|Json(b)| b.expected_version);
     match state.posts.publish(&actor, &slug, expected).await {
         Ok(dto) => (StatusCode::OK, Json(PostDetailJson::from(dto))).into_response(),
-        Err(e) => admin_error(e),
+        Err(e) => admin_error(e, &request_id),
     }
 }
 
 async fn unpublish_post(
     AdminAuth { actor }: AdminAuth,
+    request_id: RequestId,
     State(state): State<AdminState>,
     Path(slug): Path<String>,
     body: Option<Json<VersionBody>>,
@@ -309,7 +326,7 @@ async fn unpublish_post(
     let expected = body.and_then(|Json(b)| b.expected_version);
     match state.posts.withdraw(&actor, &slug, expected).await {
         Ok(dto) => (StatusCode::OK, Json(PostDetailJson::from(dto))).into_response(),
-        Err(e) => admin_error(e),
+        Err(e) => admin_error(e, &request_id),
     }
 }
 

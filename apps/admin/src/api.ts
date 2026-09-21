@@ -10,13 +10,31 @@ import type { Me, PostDetail, PostSummary, ProviderSummary, Visibility } from ".
 export class ApiError extends Error {
   readonly status: number;
   readonly code: string | null;
+  /** 服务端 `x-request-id`；从响应头读取，非 JSON 错误（如 500 HTML）同样可用。 */
+  readonly requestId: string | null;
 
-  constructor(status: number, message: string, code: string | null = null) {
+  constructor(
+    status: number,
+    message: string,
+    code: string | null = null,
+    requestId: string | null = null,
+  ) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.code = code;
+    this.requestId = requestId;
   }
+}
+
+/**
+ * 在用户可见文案后附上请求编号，便于报障时与服务端日志对齐。
+ * 编号为空（例如开发期直接调用未走中间件的路由）时原样返回。
+ */
+export function withRequestId(message: string, requestId: string | null): string {
+  return requestId === null || requestId.length === 0
+    ? message
+    : `${message}（错误编号 ${requestId}）`;
 }
 
 /**
@@ -76,7 +94,12 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
       csrfToken = null;
       unauthorizedHandler?.();
     }
-    throw new ApiError(response.status, errorMessage(data, response.statusText), errorCode(data));
+    throw new ApiError(
+      response.status,
+      errorMessage(data, response.statusText),
+      errorCode(data),
+      response.headers.get("x-request-id"),
+    );
   }
   return data as T;
 }

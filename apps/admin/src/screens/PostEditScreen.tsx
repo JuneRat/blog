@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ApiError, api } from "../api";
+import { ApiError, api, withRequestId } from "../api";
 import { useAuth } from "../auth";
 import { navigate, paths } from "../router";
 import type { EditPostInput } from "../api";
@@ -33,8 +33,8 @@ function toForm(post: PostDetail): FormState {
 
 function messageOf(error: unknown): string {
   if (error instanceof ApiError) {
-    if (error.status === 403) return `没有权限：${error.message}`;
-    return error.message;
+    const base = error.status === 403 ? `没有权限：${error.message}` : error.message;
+    return withRequestId(base, error.requestId);
   }
   return error instanceof Error ? error.message : "未知错误";
 }

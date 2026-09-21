@@ -69,7 +69,9 @@ blog oauth bindings --user sun
 | `POST /api/admin/v1/posts/{slug}/publish` | 发布（`post.publish` / `_any`；幂等） |
 | `POST /api/admin/v1/posts/{slug}/unpublish` | 撤回（`post.unpublish` / `_any`） |
 
-错误语义：JSON `{"error": ..., "code": ...}`，401 未登录（带 `WWW-Authenticate: Session`）、403 越权/CSRF/跨源、404 不存在、409 slug 占用（`code=conflict`）或版本冲突（`code=version_conflict`）、400 校验失败；内部错误只回通用文案（`code=internal_error`）。同一状态码可能对应不同业务原因，客户端按 `code` 分支而不是只看状态码。
+错误语义：JSON `{"error": ..., "code": ..., "request_id": ...}`，401 未登录（带 `WWW-Authenticate: Session`）、403 越权/CSRF/跨源、404 不存在、409 slug 占用（`code=conflict`）或版本冲突（`code=version_conflict`）、400 校验失败；内部错误只回通用文案（`code=internal_error`）。同一状态码可能对应不同业务原因，客户端按 `code` 分支而不是只看状态码。
+
+请求编号与访问日志：全站最外层中间件为每个请求生成 UUIDv7，回写 `x-request-id` 响应头（**含被认证提取器提前拒绝的 401/403**），管理 JSON 错误体的 `request_id` 与响应头一致；后台界面把编号显示在错误提示里，报障时可直接对照服务端日志。每个请求另输出一条完成日志：`method`（不含 query）、`path`、`status`、`elapsed_ms`，以及**仅来自已验证会话**的 `actor_id`（匿名为空）；4xx 记 `info`、5xx 记 `warn`，绝不记录 Cookie、token 与正文。这满足「谁请求了哪个接口、结果如何」，但不等于业务审计——角色变更、身份绑定等动作的动作/对象级审计仍需专用存储。
 
 环境变量：
 

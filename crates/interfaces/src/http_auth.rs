@@ -24,7 +24,7 @@ use axum::{Json, Router};
 use serde_json::json;
 
 use crate::http_support::{
-    admin_error, cookie_value, ensure_same_origin, no_store, oauth_state_cookie_name,
+    RequestId, admin_error, cookie_value, ensure_same_origin, no_store, oauth_state_cookie_name,
 };
 
 #[derive(Clone)]
@@ -81,10 +81,10 @@ struct LoginQuery {
 }
 
 /// 公开只读：登录页可用的提供商摘要（id/展示名/类型，匿名可访问）。
-async fn list_providers(State(state): State<AuthState>) -> Response {
+async fn list_providers(State(state): State<AuthState>, request_id: RequestId) -> Response {
     match state.auth.list_provider_summaries().await {
         Ok(providers) => (StatusCode::OK, Json(providers)).into_response(),
-        Err(e) => admin_error(e),
+        Err(e) => admin_error(e, &request_id),
     }
 }
 
@@ -167,27 +167,33 @@ async fn callback(
     }
 }
 
-async fn logout(State(state): State<AuthState>, headers: HeaderMap) -> Response {
+async fn logout(
+    State(state): State<AuthState>,
+    request_id: RequestId,
+    headers: HeaderMap,
+) -> Response {
     let Some(token) = cookie_value(&headers, SESSION_COOKIE_NAME) else {
-        return admin_error(UseCaseError::Unauthenticated);
+        return admin_error(UseCaseError::Unauthenticated, &request_id);
     };
     // 退出是受保护写：先校验 Origin，再校验会话与 CSRF 头。
     if let Err(e) = ensure_same_origin(&headers) {
-        return admin_error(e);
+        return admin_error(e, &request_id);
     }
     let record = match state.auth.session_record(&token).await {
         Ok(record) => record,
-        Err(_) => return admin_error(UseCaseError::Unauthenticated),
+        Err(_) => return admin_error(UseCaseError::Unauthenticated, &request_id),
     };
     let provided = headers
         .get("x-csrf-token")
         .and_then(|v| v.to_str().ok())
         .unwrap_or_default();
     if provided.is_empty() || provided != record.csrf_token {
-        return admin_error(UseCaseError::Forbidden);
+        return admin_error(UseCaseError::Forbidden, &request_id);
     }
+    // 会话校验通过即视为已验证身份：补录 actor，退出请求的完成日志也能归属到人。
+    request_id.set_actor(record.user_id);
     if let Err(e) = state.auth.logout(&token).await {
-        return admin_error(e);
+        return admin_error(e, &request_id);
     }
     let clear = format!(
         "{SESSION_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0{}",
@@ -200,17 +206,22 @@ async fn logout(State(state): State<AuthState>, headers: HeaderMap) -> Response 
     response
 }
 
-async fn me(State(state): State<AdminState>, headers: HeaderMap) -> Response {
+async fn me(
+    State(state): State<AdminState>,
+    request_id: RequestId,
+    headers: HeaderMap,
+) -> Response {
     let Some(token) = cookie_value(&headers, SESSION_COOKIE_NAME) else {
-        return admin_error(UseCaseError::Unauthenticated);
+        return admin_error(UseCaseError::Unauthenticated, &request_id);
     };
     let (actor, record) = match (
         state.auth.actor_from_session(&token).await,
         state.auth.session_record(&token).await,
     ) {
         (Ok(a), Ok(r)) => (a, r),
-        (Err(e), _) | (_, Err(e)) => return admin_error(e),
+        (Err(e), _) | (_, Err(e)) => return admin_error(e, &request_id),
     };
+    request_id.set_actor(actor.user_id.0);
     let _ = &state.users;
     let body = json!({
         "user_id": actor.user_id.0,
