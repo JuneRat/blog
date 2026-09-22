@@ -29,6 +29,7 @@ describe("parseRoute", () => {
     expect(parseRoute("/admin/tags")).toEqual({ name: "tagList" });
     expect(parseRoute("/admin/users")).toEqual({ name: "userList" });
     expect(parseRoute("/admin/roles")).toEqual({ name: "roleList" });
+    expect(parseRoute("/admin/settings")).toEqual({ name: "settings" });
   });
 
   it("多余路径段与畸形编码进入 invalid，不静默进入别的页面", () => {
@@ -36,9 +37,10 @@ describe("parseRoute", () => {
     expect(parseRoute("/admin/pages/about/edit/x")).toEqual({ name: "invalid" });
     expect(parseRoute("/admin/pages/%")).toEqual({ name: "invalid" });
     expect(parseRoute("/admin/unknown")).toEqual({ name: "invalid" });
-    // 标签/用户/角色是固定单段：多余段不静默忽略。
+    // 标签/用户/角色/设置是固定单段：多余段不静默忽略。
     expect(parseRoute("/admin/tags/rust")).toEqual({ name: "invalid" });
     expect(parseRoute("/admin/users/author")).toEqual({ name: "invalid" });
     expect(parseRoute("/admin/roles/owner")).toEqual({ name: "invalid" });
+    expect(parseRoute("/admin/settings/site")).toEqual({ name: "invalid" });
   });
 });

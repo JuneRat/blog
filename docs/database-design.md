@@ -136,6 +136,13 @@ settings 保存 `key、value、updated_at`，附并发 version。key 为 site/th
 }
 ```
 
+site 分组（标题/描述）已随 M3 第一段交付，语义冻结为：
+
+- **生效优先级**：数据库 site 行 > 环境变量（`BLOG_SITE_TITLE`/`BLOG_SITE_DESCRIPTION`）> 内置默认值。公开页面每次渲染解析（初期无缓存），保存即生效，重启后配置保留；保存动作本身就是「数据库接管」的意图，即使值与回退值相同也落库。
+- **行不完整时按字段回退**：标题缺失或 trim 后为空回退装配值；描述缺失回退、已保存的空串合法（清空描述是有效操作）。存储读取失败时公开页面整体回退，管理读取如实报错。
+- **并发**：version 行不存在视为 0，是首次保存的写入前提；条件写入（UPSERT + CAS）不覆盖并发修改，内容一致的保存幂等不递增版本。
+- **分组隔离**：site 的写路径只触碰 key='site'；oauth 等受保护分组各有专用端口、权限（oauth.manage）与入口，settings API 面上不存在可寻址的其他分组。
+
 主题 ID、版本和声明式配置可以放 theme；不再预建 theme_settings/plugin_settings。oauth 只保存提供商非敏感配置及 secret_ref，不保存 client secret 或访问令牌。公开模板只拿白名单 DTO，不能直接读取整张 settings。
 
 不同 key 使用不同写入权限：settings.manage 不自动赋予 OAuth 提供商修改权；oauth 需专用敏感权限及重新认证。配置中的 ID 引用没有自动 FK，首期导航/图片使用经校验路径或 URL，不承诺资源引用保护；出现管理型资源关系时再设计真实 FK。

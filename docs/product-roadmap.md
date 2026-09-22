@@ -1,6 +1,6 @@
 # 功能范围与实施路线
 
-状态：M1 内容闭环（Post + Page）与 M2 身份/后台**已交付**；M0 主题桥接原型**已完成**（结论可行，见 `spikes/template-bridge/README.md`，正式主题函数冻结不再被阻塞）；M3 进行中：标签闭环、**分类树**与 **Series 目录与并发重排**（管理/引用保护/文章关联/整体重排锁协议/公开系列页）**已交付**，settings、RSS/sitemap、回收站、备份恢复待交付。当前数据库基线为用户确认的 [13 表设计](database-design.md)，最新范围由 [ADR-0008](adr/0008-thirteen-table-blog-core.md) 记录，覆盖此前有冲突的持久化建议。
+状态：M1 内容闭环（Post + Page）与 M2 身份/后台**已交付**；M0 主题桥接原型**已完成**（结论可行，见 `spikes/template-bridge/README.md`，正式主题函数冻结不再被阻塞）；M3 进行中：标签闭环、**分类树**与 **Series 目录与并发重排**（管理/引用保护/文章关联/整体重排锁协议/公开系列页）**已交付**，**settings 第一段（site 分组：站点标题/描述的后台读写闭环、数据库>环境变量>默认值的生效优先级、版本 CAS 与分组隔离）已交付**，RSS/sitemap、回收站、备份恢复与 settings 后续分组（theme/seo 等）待交付。当前数据库基线为用户确认的 [13 表设计](database-design.md)，最新范围由 [ADR-0008](adr/0008-thirteen-table-blog-core.md) 记录，覆盖此前有冲突的持久化建议。
 
 ## 1. 已确认基线
 
@@ -16,7 +16,8 @@
 - M3 已交付第一段：标签目录管理（创建/改名/删除，`tag.manage`，slug 创建后不可改，引用保护拒绝删除）、文章编辑器多标签选择与正文同事务保存（仅标签变化也递增 posts.version）、公开标签页 `/tags/{slug}` 分页（每页 20，只列公开已发布文章）、文章详情展示标签；管理 API `GET/POST /api/admin/v1/tags`、`PATCH/DELETE /api/admin/v1/tags/{slug}`，业务码 `tag_in_use`（409，与 slug 占用区分）。
 - M3 已交付第二段：分类树（创建/更新/移动/删除，category.manage，slug 创建后不可改；移动在分类树事务锁内做深度受限祖先链防环；被文章引用或含子分类时删除受 category_in_use 保护）、文章编辑器分类选择（三态 category_id，与正文/标签同事务，仅分类变化也递增 version）、公开分类页 /categories/（slug） 分页（直接归属）、详情页分类链接。
 - M3 已交付第三段：Series 目录管理与并发重排（创建/更新/删除，series.manage，slug 创建后不可改，被文章引用时删除受 series_in_use 保护）；文章设置系列与序号（三态，同事务保存，位置唯一冲突报 conflict）；整体重排在系列行锁 + series.version 校验下进行，成员按 id 序加锁、位置唯一约束 DEFERRED 到提交检查，递增涉及 posts.version 与 series.version，跨系列移动按 ID 序锁两个系列；重排逐篇核验文章授权（Author 不能借重排改他人文章）；公开系列页 /series/（slug） 按阅读顺序分页（草稿占位不外泄，页内连续编号）。
-- 尚未开始：M3 的 settings/回收站/备份恢复、正式主题数据函数（M0 已验证可行，契约冻结随 M3 主题函数交付）、M4 的邀请/审计/媒体等扩展、M5 上线验收。
+- M3 已交付第四段：settings 第一段——`site` 分组（站点标题/描述）。管理 API `GET/PUT /api/admin/v1/settings/site`（读写都要求 `settings.manage`，内置 admin/owner 持有）；生效优先级数据库 site 行 > 环境变量 `BLOG_SITE_TITLE`/`BLOG_SITE_DESCRIPTION` > 内置默认值，公开页面每次渲染解析（保存即生效，重启后保留），行内缺字段按字段回退、存储读取失败公开页整体回退；`expected_version` 条件写入（未配置行为 0，插入前提），内容一致的保存幂等不递增版本，并发覆盖一方 409 `version_conflict`；标题 trim 非空 ≤200 字符、描述 ≤500 字符（空描述合法）；oauth 等受保护分组不在 settings API 面（未知分组 404），写路径只触碰 key='site'。后台 SPA `/admin/settings`（来源提示 + 统一 409 冲突流程）。
+- 尚未开始：M3 的 RSS/sitemap、Post 回收站、备份恢复、settings 后续分组（theme/seo 等，各自补齐分组校验与授权）、正式主题数据函数（M0 已验证可行，契约冻结随 M3 主题函数交付）、M4 的邀请/审计/媒体等扩展、M5 上线验收。
 
 ## 2. 决策与范围变化
 
@@ -50,7 +51,7 @@
 | M0：主题原型（已完成） | MiniJinja 桥接、预算、请求隔离、查询依赖 | 原型位于 `spikes/template-bridge`，17 项真实库测试全绿，结论**可行**：spawn_blocking 内 `Handle::block_on(timeout(剩余截止时间))` 桥接开销 µs 级；预算组合（deadline/查询/调用/fuel/递归/许可）实测校准；fuel 不限宿主 I/O、输出无引擎上限需宿主实现。结论与措辞见原型 README 与 [ADR-0002](adr/0002-template-data-functions.md) |
 | M1：内容闭环（已交付） | users、posts/pages、草稿→发布→SSR；Post 受控 CLI 驱动（Page 经后台 API） | 单份正文更新语义、version、公开/private 隔离、slug 唯一和根 Page 保留路由；无 React/OAuth 依赖 |
 | M2：身份与后台（已交付） | 核心角色/权限、OIDC/GitHub、CLI 账号开通、单实例内存会话、React 文章与页面编辑 | own/any、角色编辑防提权、Owner 保护、OAuth 防重放、CSRF、重启后会话失效 |
-| M3：核心运营 | 分类树（**已交付**）、标签（**已交付**）、Series 目录与重排（**已交付**：锁协议/引用保护/公开系列页）、Series 排序、settings、主题函数/第二主题、RSS/sitemap、SEO、Post 回收站、备份恢复 | 13 表核心完整；分类防环、系列并发重排、设置隔离、维护备份与隔离恢复 |
+| M3：核心运营 | 分类树（**已交付**）、标签（**已交付**）、Series 目录与重排（**已交付**：锁协议/引用保护/公开系列页）、Series 排序、settings（**第一段已交付**：site 分组后台读写/优先级/版本 CAS/分组隔离）、主题函数/第二主题、RSS/sitemap、SEO、Post 回收站、备份恢复 | 13 表核心完整；分类防环、系列并发重排、设置隔离、维护备份与隔离恢复 |
 | M4：按需扩展 | 邀请、持久审计、媒体；Webhook、外部搜索/统计与可靠 outbox/任务 | 每项补齐自己的存储、权限、失败与恢复规则后才开放；不为维持 13 表省略必要可靠性 |
 | M5：上线验收 | 对拟上线范围做端到端、压测、迁移与完整恢复演练 | 无未实现能力的支持承诺；达到已确定的 RPO/RTO 和部署指标 |
 

@@ -276,3 +276,39 @@ table.posts tbody tr:hover {
   flex-direction: column;
   gap: 0.25rem;
 }
+
+/* 站点设置表单：纵向排布（标题/描述都是长字段，不与提交按钮同行）。 */
+.settings-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  max-width: 480px;
+}
+
+.settings-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+/* 字段容器：label + 控件 + 字符计数纵向排布。 */
+.settings-form .field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.settings-form textarea {
+  resize: vertical;
+}
+
+/* 字符计数：按 Unicode 码点（与后端同口径），超限只变红，不用错误横幅样式。 */
+.settings-form .counter {
+  align-self: flex-end;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.settings-form .counter.over-limit {
+  color: var(--danger);
+}

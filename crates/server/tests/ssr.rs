@@ -95,6 +95,10 @@ async fn stack() -> Stack {
         clock.clone(),
     ));
     let pages = Arc::new(PageInteractor::new(page_repo, clock));
+    let fallback = SiteInfo {
+        title: "测试站点".into(),
+        description: "集成测试".into(),
+    };
     let public_site = Arc::new(PublicSiteInteractor::new(
         public_query,
         public_page_query,
@@ -103,10 +107,9 @@ async fn stack() -> Stack {
         public_series_query,
         markdown,
         theme,
-        SiteInfo {
-            title: "测试站点".into(),
-            description: "集成测试".into(),
-        },
+        // 公开渲染的站点信息经 settings 解析：site 行未配置时回退装配值。
+        Arc::new(infrastructure::PostgresSettingsStore::new(pool.clone())),
+        fallback,
     ));
 
     for username in ["author", "editor"] {

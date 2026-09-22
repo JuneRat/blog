@@ -10,11 +10,12 @@ use application::identity::{RoleInteractor, UserInteractor};
 use application::page::PageInteractor;
 use application::ports::{
     CategoryRepository, PageRepository, PostRepository, PublishedCategoryQuery, PublishedPageQuery,
-    PublishedPostQuery, PublishedSeriesQuery, PublishedTagQuery, SeriesRepository, TagRepository,
-    UserRepository,
+    PublishedPostQuery, PublishedSeriesQuery, PublishedTagQuery, SeriesRepository, SettingsStore,
+    TagRepository, UserRepository,
 };
 use application::public_site::{PublicSiteInteractor, SiteInfo};
 use application::series::SeriesInteractor;
+use application::settings::SettingsInteractor;
 use application::tag::TagInteractor;
 use infrastructure::{
     MiniJinjaThemeRenderer, PostgresCategoryRepository, PostgresPageRepository,
@@ -189,6 +190,19 @@ async fn main() {
             let tags = Arc::new(TagInteractor::new(tag_repo, clock.clone()));
             let categories = Arc::new(CategoryInteractor::new(category_repo, clock.clone()));
             let series = Arc::new(SeriesInteractor::new(series_repo, clock.clone()));
+            // 站点信息：数据库 settings.site > 装配回退值（环境变量/默认值）。
+            // 同一存储实例供公开渲染与管理用例共享，保存后公开页面即时生效。
+            let settings_store: Arc<dyn SettingsStore> =
+                Arc::new(infrastructure::PostgresSettingsStore::new(pool.clone()));
+            let site_fallback = SiteInfo {
+                title: config.site_title,
+                description: config.site_description,
+            };
+            let settings = Arc::new(SettingsInteractor::new(
+                settings_store.clone(),
+                clock.clone(),
+                site_fallback.clone(),
+            ));
             let public_site = Arc::new(PublicSiteInteractor::new(
                 public_query,
                 public_page_query,
@@ -197,10 +211,8 @@ async fn main() {
                 public_series_query,
                 markdown,
                 renderer,
-                SiteInfo {
-                    title: config.site_title,
-                    description: config.site_description,
-                },
+                settings_store,
+                site_fallback,
             ));
 
             let deps = CliDeps {
@@ -210,6 +222,7 @@ async fn main() {
                 tags,
                 categories,
                 series,
+                settings,
                 roles,
                 auth,
                 passwords,

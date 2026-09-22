@@ -9,6 +9,7 @@ import { CategoryListScreen } from "./screens/CategoryListScreen";
 import { SeriesListScreen } from "./screens/SeriesListScreen";
 import { TagListScreen } from "./screens/TagListScreen";
 import { RoleListScreen } from "./screens/RoleListScreen";
+import { SettingsScreen } from "./screens/SettingsScreen";
 import { UserListScreen } from "./screens/UserListScreen";
 
 export function App() {
@@ -70,6 +71,9 @@ export function App() {
   }
   if (route.name === "roleList") {
     return <RoleListScreen />;
+  }
+  if (route.name === "settings") {
+    return <SettingsScreen />;
   }
   return <PostListScreen />;
 }

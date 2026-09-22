@@ -8,8 +8,9 @@ use time::OffsetDateTime;
 use crate::error::UseCaseError;
 use crate::ports::{
     ContentRenderer, PublishedCategoryQuery, PublishedPageQuery, PublishedPostQuery,
-    PublishedSeriesQuery, PublishedTagQuery,
+    PublishedSeriesQuery, PublishedTagQuery, SettingsStore,
 };
+use crate::settings::effective_site;
 use domain::content::is_reserved_root_slug;
 
 /// 模板展示用的时间格式（应用层渲染契约的一部分）。
@@ -19,7 +20,11 @@ pub fn format_datetime(t: OffsetDateTime) -> String {
     t.format(fmt).unwrap_or_else(|_| t.to_string())
 }
 
-/// 站点基础信息（M1 来自装配配置；M3 迁移到 settings 分组）。
+/// 站点基础信息：一次渲染的生效值。
+///
+/// 生效优先级（M3 起由 settings 驱动）：数据库 site 行 > 装配回退值
+/// （环境变量 `BLOG_SITE_TITLE`/`BLOG_SITE_DESCRIPTION` 或内置默认值）。
+/// 解析见 [`crate::settings::effective_site`]。
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SiteInfo {
     pub title: String,
@@ -155,7 +160,10 @@ pub struct PublicSiteInteractor {
     series: Arc<dyn PublishedSeriesQuery>,
     markdown: Arc<dyn ContentRenderer>,
     theme: Arc<dyn ThemeRenderer>,
-    site: SiteInfo,
+    /// settings 的 site 分组（数据库未配置时整体回退）。
+    settings: Arc<dyn SettingsStore>,
+    /// 装配回退值：环境变量/内置默认值（进程内不变）。
+    fallback: SiteInfo,
 }
 
 impl PublicSiteInteractor {
@@ -168,7 +176,8 @@ impl PublicSiteInteractor {
         series: Arc<dyn PublishedSeriesQuery>,
         markdown: Arc<dyn ContentRenderer>,
         theme: Arc<dyn ThemeRenderer>,
-        site: SiteInfo,
+        settings: Arc<dyn SettingsStore>,
+        fallback: SiteInfo,
     ) -> Self {
         Self {
             posts,
@@ -178,7 +187,20 @@ impl PublicSiteInteractor {
             series,
             markdown,
             theme,
-            site,
+            settings,
+            fallback,
+        }
+    }
+
+    /// 本次渲染的生效站点信息：**每次请求解析**，不缓存。
+    ///
+    /// - 行存在：按字段生效（缺字段回退，见 [`effective_site`]）；
+    /// - 行不存在或存储读取失败：整体回退装配值——公开页面不能因为
+    ///   配置读取问题对读者 500，后台保存路径的错误仍会如实上报。
+    pub async fn site_info(&self) -> SiteInfo {
+        match self.settings.find_site().await {
+            Ok(Some(record)) => effective_site(&record.value, &self.fallback),
+            Ok(None) | Err(_) => self.fallback.clone(),
         }
     }
 
@@ -196,7 +218,8 @@ impl PublicSiteInteractor {
                 author_display: s.author_display,
             })
             .collect();
-        self.theme.render_index(&self.site, &summaries)
+        let site = self.site_info().await;
+        self.theme.render_index(&site, &summaries)
     }
 
     /// 渲染公开文章详情；不满足公开条件一律 NotFound（知道 slug 不等于有权读取）。
@@ -232,7 +255,8 @@ impl PublicSiteInteractor {
                 order: s.order,
             }),
         };
-        self.theme.render_post(&self.site, &view)
+        let site = self.site_info().await;
+        self.theme.render_post(&site, &view)
     }
 
     /// 渲染公开页面详情（根路径 `/{slug}`）。
@@ -255,7 +279,8 @@ impl PublicSiteInteractor {
             updated_at: format_datetime(detail.updated_at),
             content_html: self.markdown.render_markdown(&detail.content),
         };
-        self.theme.render_page(&self.site, &view)
+        let site = self.site_info().await;
+        self.theme.render_page(&site, &view)
     }
 
     /// 渲染公开标签页 /tags/{slug}?page=N。
@@ -292,7 +317,8 @@ impl PublicSiteInteractor {
                 })
                 .collect(),
         };
-        self.theme.render_tag(&self.site, &view)
+        let site = self.site_info().await;
+        self.theme.render_tag(&site, &view)
     }
 
     /// 渲染公开分类页 /categories/{slug}?page=N（直接归属，不含子树）。
@@ -326,7 +352,8 @@ impl PublicSiteInteractor {
                 })
                 .collect(),
         };
-        self.theme.render_category(&self.site, &view)
+        let site = self.site_info().await;
+        self.theme.render_category(&site, &view)
     }
 
     /// 渲染公开系列页 /series/{slug}?page=N：按阅读顺序（series_order 升序）。
@@ -365,6 +392,7 @@ impl PublicSiteInteractor {
                 })
                 .collect(),
         };
-        self.theme.render_series(&self.site, &view)
+        let site = self.site_info().await;
+        self.theme.render_series(&site, &view)
     }
 }

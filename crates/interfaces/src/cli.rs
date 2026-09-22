@@ -283,6 +283,8 @@ pub struct CliDeps {
     pub categories: Arc<application::category::CategoryInteractor>,
     /// 系列用例（管理动作 series.manage；重排逐篇核验文章授权）。
     pub series: Arc<application::series::SeriesInteractor>,
+    /// 站点设置用例（settings.manage；只覆盖 site 分组）。
+    pub settings: Arc<application::settings::SettingsInteractor>,
     pub roles: Arc<RoleInteractor>,
     pub auth: Arc<AuthInteractor>,
     /// 本地密码用例（受控设置/重置、清除与限流）。
@@ -332,6 +334,7 @@ pub async fn run(deps: CliDeps, command: Command) -> Result<(), String> {
                 tags: deps.tags,
                 categories: deps.categories,
                 series: deps.series,
+                settings: deps.settings,
                 roles: deps.roles,
                 secure_cookies: deps.secure_cookies,
             };
@@ -343,6 +346,7 @@ pub async fn run(deps: CliDeps, command: Command) -> Result<(), String> {
                 .merge(crate::http_admin::tags_router(admin_state.clone()))
                 .merge(crate::http_admin::categories_router(admin_state.clone()))
                 .merge(crate::http_admin::series_router(admin_state.clone()))
+                .merge(crate::http_admin::settings_router(admin_state.clone()))
                 .merge(crate::http_identity::identity_router(admin_state));
             // 后台 SPA 挂在 /admin 子树；dist 不存在时保持未注册。
             let app = crate::http::mount_admin_spa(app, deps.admin_dist);

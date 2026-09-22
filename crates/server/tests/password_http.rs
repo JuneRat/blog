@@ -201,6 +201,14 @@ async fn fresh_stack_with(throttle_config: ThrottleConfig) -> Stack {
             Arc::new(infrastructure::PostgresSeriesRepository::new(pool.clone())),
             Arc::new(SystemClock),
         )),
+        settings: Arc::new(application::settings::SettingsInteractor::new(
+            Arc::new(infrastructure::PostgresSettingsStore::new(pool.clone())),
+            Arc::new(SystemClock),
+            application::public_site::SiteInfo {
+                title: "测试站点".into(),
+                description: "测试描述".into(),
+            },
+        )),
         roles: roles.clone(),
         secure_cookies: false,
     };

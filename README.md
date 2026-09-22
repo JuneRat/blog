@@ -1,6 +1,6 @@
 # blog
 
-Rust 模块化单体博客。当前进度：**M1 内容闭环（Post + Page）+ M2 RBAC/会话/OAuth/本地密码/管理写 API + React 后台**（迁移 → 权限化写入 → 公开 SSR 阅读 → OAuth 与本地密码登录 → `/api/admin/v1` 文章与页面管理）。
+Rust 模块化单体博客。当前进度：**M1 内容闭环（Post + Page）+ M2 RBAC/会话/OAuth/本地密码/管理写 API + React 后台 + M3 标签/分类/系列与站点设置（settings 第一段）**（迁移 → 权限化写入 → 公开 SSR 阅读 → OAuth 与本地密码登录 → `/api/admin/v1` 内容与站点管理）。
 
 ## 快速开始
 
@@ -94,6 +94,18 @@ blog user show sun                             # 显示「密码登录：已启�
 | `POST /api/admin/v1/pages/{slug}/publish` | 发布页面（`page.publish`；幂等） |
 | `POST /api/admin/v1/pages/{slug}/unpublish` | 撤回页面（`page.unpublish`） |
 | `POST /api/admin/v1/me/password` | 自助改密（会话 + CSRF；需当前密码重新认证；成功后轮换会话） |
+| `GET /api/admin/v1/settings/site` | 站点设置视图（`settings.manage`；生效值 + 来源 + 版本） |
+| `PUT /api/admin/v1/settings/site` | 保存站点标题/描述（`settings.manage`；支持 `expected_version`） |
+
+### 站点设置（settings 第一段，已交付）
+
+站点基本信息（标题、描述）存 `settings` 表的 `site` 分组（JSONB，`schema_version: 1`），读写都要求 `settings.manage`（内置 admin/owner 持有；Editor/Author 不持有）：
+
+- **生效优先级**：数据库 `site` 行 > 环境变量（`BLOG_SITE_TITLE`/`BLOG_SITE_DESCRIPTION`）> 内置默认值。公开页面**每次渲染解析**（无缓存），后台保存后即刻生效；行内缺字段（历史/手工写入）按字段回退，存储读取失败时公开页面整体回退到装配值，配置问题不拖垮读者侧。保存后即由数据库接管——即使值与回退值相同也会落库，此后环境变量调整不再影响站点。
+- **并发**：`GET` 返回 `version`（行不存在为 0），`PUT` 携带 `expected_version` 条件写入；过期一律 409 `version_conflict`，不自动覆盖。与已存储内容完全一致的保存幂等返回，不递增版本。
+- **校验**：标题 trim 后非空且 ≤200 字符；描述 trim 后 ≤500 字符（可清空——已保存的空描述是合法状态，不回退）；请求体上限 16 KiB。
+- **分组隔离**：settings API 面上只有 `/settings/site` 一个地址；oauth 等受保护分组走专用权限（`oauth.manage`）与受控 CLI 入口，未知分组（含 `/settings/oauth`）一律 404，`settings.manage` 借不到道。
+- 响应含 `source: "database" | "fallback"` 与 `version`，后台设置屏据此展示当前来源；SPA 地址 `/admin/settings`，409 冲突流程与编辑器一致（重新加载 / 仍然覆盖）。
 
 页面与文章共用同一套错误契约、乐观并发与首次发布后锁定 slug 的规则；区别是 `page.*` 为站点级权限，且公开地址是根路径 `/{slug}`（`admin`、`api`、`auth`、`posts`、`assets`、`healthz` 等系统路径在创建、改名与发布时都会拒绝，固定路由优先）。幂等操作（重复发布/撤回、无变化的编辑）同样校验显式传入的 `expected_version`：版本不一致一律 `version_conflict`，不会因为「本来就不写库」而假装成功。
 
@@ -112,7 +124,7 @@ blog user show sun                             # 显示「密码登录：已启�
 | `BLOG_THEME_DIR` | `themes/default` | 主题目录（模板 + assets） |
 | `BLOG_MIGRATIONS_DIR` | `migrations/postgres` | 迁移目录 |
 | `BLOG_ADMIN_DIST` | `apps/admin/dist` | 后台 SPA 构建产物；目录不存在时不注册 `/admin` |
-| `BLOG_SITE_TITLE` / `BLOG_SITE_DESCRIPTION` | Sun's Blog / 一个 Rust 博客 | 站点信息（M3 迁入 settings） |
+| `BLOG_SITE_TITLE` / `BLOG_SITE_DESCRIPTION` | Sun's Blog / 一个 Rust 博客 | **回退值**：数据库 `settings.site` 未配置时才生效（见「站点设置」） |
 
 ## 后台 SPA（apps/admin）
 
@@ -125,7 +137,7 @@ pnpm build        # 产物 apps/admin/dist，由 blog serve 按 BLOG_ADMIN_DIST 
 pnpm dev          # 开发服务器 http://localhost:5173/admin/
 ```
 
-`/admin` 由后端只在该子树内注册（`mount_admin_spa`）：`index.html` 与深链回退 `no-cache`，`/admin/assets/*` 的**成功**响应带指纹 `immutable`（缺失资源是 404，同样 `no-cache`，避免错误被缓存固化）。SPA 内部路由为 `/admin/`（文章）、`/admin/posts/new`、`/admin/posts/{slug}/edit`、`/admin/pages`（页面）、`/admin/pages/new`、`/admin/pages/{slug}/edit`——编辑地址带 `/edit` 后缀，slug 恰好是 `new` 的内容才不会与新建页相撞。axum 按路径匹配，SPA fallback 结构上不可能遮挡 `/api`、`/auth`、`/posts/{slug}` 与页面根路径等路由。
+`/admin` 由后端只在该子树内注册（`mount_admin_spa`）：`index.html` 与深链回退 `no-cache`，`/admin/assets/*` 的**成功**响应带指纹 `immutable`（缺失资源是 404，同样 `no-cache`，避免错误被缓存固化）。SPA 内部路由为 `/admin/`（文章）、`/admin/posts/new`、`/admin/posts/{slug}/edit`、`/admin/pages`（页面）、`/admin/pages/new`、`/admin/pages/{slug}/edit`、`/admin/settings`（站点设置，需 `settings.manage`）——编辑地址带 `/edit` 后缀，slug 恰好是 `new` 的内容才不会与新建页相撞。axum 按路径匹配，SPA fallback 结构上不可能遮挡 `/api`、`/auth`、`/posts/{slug}` 与页面根路径等路由。
 
 ### 开发期同源不变量（务必遵守）
 
@@ -150,9 +162,9 @@ cargo test --workspace
 ```
 
 - `crates/domain`：聚合与值对象规则（无数据库），含本地密码策略（长度、含用户名、常见/规律口令）。
-- `crates/application`：用例 + 内存 fake（权限、委派上限、Owner 保护、版本冲突、真并发 join!；密码登录的统一失败语义、等价开销校验、限流、设置/清除与自助改密轮换）。
-- `crates/infrastructure/tests`：真实 PostgreSQL（迁移、约束、三态保存、两连接真并发、公开过滤、RBAC 幂等与 Owner 并发、密码凭据的软删除作用域）；单元测试覆盖 Argon2id 哈希/校验/参数升级与内存限流。
-- `crates/server/tests`：完整装配 + HTTP（会话/CSRF/Origin、own/any 越权、浏览器绑定、撤权与软删除后旧会话、`/auth/providers`、密码登录全链路与限流/Retry-After、改密轮换、SPA 挂载与缓存头、草稿/private 不可公开访问）。
+- `crates/application`：用例 + 内存 fake（权限、委派上限、Owner 保护、版本冲突、真并发 join!；密码登录的统一失败语义、等价开销校验、限流、设置/清除与自助改密轮换；站点设置的优先级回退、非法值、并发保存与「重启」保留）。
+- `crates/infrastructure/tests`：真实 PostgreSQL（迁移、约束、三态保存、两连接真并发、公开过滤、RBAC 幂等与 Owner 并发、密码凭据的软删除作用域、settings 的 UPSERT+CAS/分组隔离/新连接池保留）；单元测试覆盖 Argon2id 哈希/校验/参数升级与内存限流。
+- `crates/server/tests`：完整装配 + HTTP（会话/CSRF/Origin、own/any 越权、浏览器绑定、撤权与软删除后旧会话、`/auth/providers`、密码登录全链路与限流/Retry-After、改密轮换、SPA 挂载与缓存头、草稿/private 不可公开访问、站点设置的认证/越权/CSRF/非法值/版本冲突/未知分组 404 与公开页面即时生效）。
 - `apps/admin`：`pnpm test`（Vitest + React Testing Library）覆盖登录表单、编辑器交互（含标签选择）、标签管理屏、用户与角色屏幕与路由解析；`pnpm build`（`tsc --noEmit` + Vite 构建）检查前端类型与产物。
 - `spikes/template-bridge`：M0 原型（独立 workspace，不在根清单），`cargo test` 跑桥接/预算/隔离集成测试；生产 crate 不依赖它。
 
@@ -186,11 +198,12 @@ docs/               # 设计文档与 ADR
 - 标签闭环（M3 第一段）：目录管理（创建/改名/删除，`tag.manage`，slug 创建后不可改，被引用标签删除受保护，业务码 `tag_in_use`）；文章编辑器多标签选择，正文与标签关系同一事务保存（仅标签变化也递增 version，重复 id 幂等去重）；公开标签页 `/tags/{slug}` 分页（每页 20，只列公开已发布文章，页码越界渲染空页）；文章详情展示标签链接。
 - 分类树（M3 第二段）：创建/更新/移动/删除（category.manage，slug 创建后不可改）；移动在分类树事务锁内做深度受限祖先链校验防环；被文章引用或含子分类时删除受 category_in_use 保护；文章编辑器分类选择与正文/标签同事务保存；公开分类页 /categories/（slug） 分页（直接归属），详情页展示分类链接。
 - Series（M3 第三段）：目录管理（series.manage，被文章引用时删除受 series_in_use 保护）；文章设置系列与序号（同事务，位置唯一冲突为可定位 409）；整体重排在系列行锁 + series.version 前提下进行，成员按 id 序加锁、位置唯一约束 DEFERRED 到提交检查，同时递增涉及 posts.version 与 series.version；重排逐篇核验文章授权；公开系列页 /series/（slug） 按阅读顺序分页（草稿占位不外泄）。
+- 站点设置（M3 第四段）：`settings.site` 分组（标题/描述）的后台读写闭环（settings.manage，读写同权）；生效优先级数据库 > 环境变量 > 默认值，公开页面每次渲染解析、保存即生效、重启后配置保留；expected_version 条件写入（0 = 未配置的插入前提）与内容一致的幂等保存；越权/非法值/并发覆盖/未知分组（含 oauth，404）均有回归测试。
 - M0 主题桥接原型（`spikes/template-bridge`）：同步模板函数 ↔ 异步 SQL 查询桥接验证可行，预算/隔离/失败场景 17 项集成测试；结论见原型 README 与 ADR-0002。
 
 ## 下一步
 
-M2（身份与后台）已交付：RBAC/委派、OAuth 登录闭环、本地密码登录（Argon2id + 限流 + 受控重置）、管理写 API、后台 SPA（文章/页面/用户与角色屏幕）；其后用户与角色管理界面也已交付（见 [身份与后台 §8](docs/identity-and-admin.md)）。M0 主题桥接原型已完成（结论可行）。M3 按 [roadmap](docs/product-roadmap.md) 推进：标签闭环、分类树（防环树锁 + 引用保护）与 Series（并发重排锁协议 + 公开系列页）**已交付**，接下来是 settings、RSS/sitemap、Post 回收站、备份恢复与正式主题函数。
+M2（身份与后台）已交付：RBAC/委派、OAuth 登录闭环、本地密码登录（Argon2id + 限流 + 受控重置）、管理写 API、后台 SPA（文章/页面/用户与角色屏幕）；其后用户与角色管理界面也已交付（见 [身份与后台 §8](docs/identity-and-admin.md)）。M0 主题桥接原型已完成（结论可行）。M3 按 [roadmap](docs/product-roadmap.md) 推进：标签闭环、分类树（防环树锁 + 引用保护）、Series（并发重排锁协议 + 公开系列页）与**站点设置第一段（site 分组：标题/描述）已交付**，接下来是 RSS/sitemap、Post 回收站、备份恢复、settings 后续分组与正式主题函数。
 
 M2 遗留（已知、未做）：
 

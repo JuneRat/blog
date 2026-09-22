@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
  * - 页面：`/admin/pages`（列表）、`/admin/pages/new`、`/admin/pages/{slug}/edit`
  * - 标签：`/admin/tags`
  * - 用户与角色：`/admin/users`、`/admin/roles`
+ * - 站点设置：`/admin/settings`
  *
  * 编辑页带 `/edit` 后缀，使 slug 为 `new` 的内容（`/admin/posts/new/edit`）
  * 不再与新建页（`/admin/posts/new`）相撞——slug 校验对 `new` 是合法的，
@@ -23,6 +24,7 @@ export type Route =
   | { name: "seriesList" }
   | { name: "userList" }
   | { name: "roleList" }
+  | { name: "settings" }
   /** 畸形或多余的路径段：显示提示而不是白屏/静默进入别的页面。 */
   | { name: "invalid" };
 
@@ -76,6 +78,9 @@ export function parseRoute(pathname: string): Route {
   if (segments[0] === "roles") {
     return segments.length === 1 ? { name: "roleList" } : { name: "invalid" };
   }
+  if (segments[0] === "settings") {
+    return segments.length === 1 ? { name: "settings" } : { name: "invalid" };
+  }
 
   if (segments[0] === "pages") {
     if (segments.length === 1) return { name: "pageList" };
@@ -102,6 +107,7 @@ export const paths = {
   series: `${BASE}/series`,
   users: `${BASE}/users`,
   roles: `${BASE}/roles`,
+  settings: `${BASE}/settings`,
 };
 
 /**

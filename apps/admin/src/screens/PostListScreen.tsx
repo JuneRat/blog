@@ -18,6 +18,7 @@ export function PostListScreen() {
   const [error, setError] = useState<string | null>(null);
   const canCreate = me?.permissions.includes("post.create") ?? false;
   const canReadPages = me?.permissions.includes("page.read") ?? false;
+  const canManageSettings = me?.permissions.includes("settings.manage") ?? false;
   const canAdminister =
     (me?.permissions.includes("user.manage") ?? false) ||
     (me?.permissions.includes("role.manage") ?? false);
@@ -59,6 +60,11 @@ export function PostListScreen() {
           {canAdminister && (
             <button type="button" className="button ghost" onClick={() => navigate(paths.users)}>
               用户与角色
+            </button>
+          )}
+          {canManageSettings && (
+            <button type="button" className="button ghost" onClick={() => navigate(paths.settings)}>
+              站点设置
             </button>
           )}
           {canCreate && (

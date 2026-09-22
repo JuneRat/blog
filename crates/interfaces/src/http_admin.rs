@@ -16,6 +16,7 @@ use application::identity::Actor;
 use application::page::{CreatePageCmd, EditPageCmd, PageDto};
 use application::ports::SESSION_COOKIE;
 use application::series::{CreateSeriesCmd, ReorderSeriesCmd, SeriesDto, UpdateSeriesCmd};
+use application::settings::{SaveSiteSettingsCmd, SiteSettingsView};
 use application::tag::{CreateTagCmd, TagDto};
 use axum::extract::{FromRef, Path, Query, State};
 use axum::http::{StatusCode, request::Parts};
@@ -30,6 +31,9 @@ use crate::http_support::{RequestId, admin_error, cookie_value, ensure_same_orig
 
 /// 请求体上限（Markdown 正文足够）。
 pub const ADMIN_BODY_LIMIT: usize = 2 * 1024 * 1024;
+
+/// 站点设置请求体上限：标题 + 描述远小于 1 KiB，超限输入在解析前就拒绝。
+const SETTINGS_BODY_LIMIT: usize = 16 * 1024;
 
 // ---------------------------------------------------------------------------
 // 响应 DTO（时间统一格式化为字符串）
@@ -1067,6 +1071,92 @@ async fn reorder_series(
         .await
     {
         Ok(dto) => (StatusCode::OK, Json(dto)).into_response(),
+        Err(e) => admin_error(e, &request_id),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 站点设置：settings.manage；只注册 site 分组
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Serialize)]
+struct SiteSettingsJson {
+    title: String,
+    description: String,
+    /// "database"（settings.site 行）或 "fallback"（环境变量/默认值，version=0）。
+    source: &'static str,
+    version: i64,
+}
+
+impl From<&SiteSettingsView> for SiteSettingsJson {
+    fn from(view: &SiteSettingsView) -> Self {
+        Self {
+            title: view.title.clone(),
+            description: view.description.clone(),
+            source: match view.source {
+                application::settings::SiteSettingsSource::Database => "database",
+                application::settings::SiteSettingsSource::Fallback => "fallback",
+            },
+            version: view.version,
+        }
+    }
+}
+
+#[derive(Deserialize, Default)]
+pub struct SaveSiteSettingsBody {
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub description: String,
+    pub expected_version: Option<i64>,
+}
+
+/// 站点设置路由。**只有 `/settings/site` 一个地址**：oauth 等受保护分组
+/// 使用专用权限（oauth.manage）与独立入口，不暴露在本 API 面上，
+/// 未知分组（含猜测 `/settings/oauth`）由路由层直接 404。
+pub fn settings_router(state: AdminState) -> Router {
+    Router::new()
+        .route(
+            "/api/admin/v1/settings/site",
+            get(get_site_settings).put(put_site_settings),
+        )
+        .layer(axum::extract::DefaultBodyLimit::max(SETTINGS_BODY_LIMIT))
+        .layer(middleware::from_fn(no_store))
+        .with_state(state)
+}
+
+async fn get_site_settings(
+    AdminAuth { actor }: AdminAuth,
+    request_id: RequestId,
+    State(state): State<AdminState>,
+) -> Response {
+    match state.settings.site_view(&actor).await {
+        Ok(view) => (StatusCode::OK, Json(SiteSettingsJson::from(&view))).into_response(),
+        Err(e) => admin_error(e, &request_id),
+    }
+}
+
+/// 全量替换 site 分组（title/description 必填；PUT 语义）。
+/// 读写都要求 `settings.manage`；expected_version 过期是 409 version_conflict。
+async fn put_site_settings(
+    AdminAuth { actor }: AdminAuth,
+    request_id: RequestId,
+    State(state): State<AdminState>,
+    Json(body): Json<SaveSiteSettingsBody>,
+) -> Response {
+    match state
+        .settings
+        .save_site(
+            &actor,
+            SaveSiteSettingsCmd {
+                title: body.title,
+                description: body.description,
+                expected_version: body.expected_version,
+            },
+        )
+        .await
+    {
+        Ok(view) => (StatusCode::OK, Json(SiteSettingsJson::from(&view))).into_response(),
         Err(e) => admin_error(e, &request_id),
     }
 }

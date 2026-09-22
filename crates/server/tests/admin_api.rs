@@ -181,6 +181,14 @@ async fn fresh_stack() -> Stack {
         series_repo,
         clock.clone(),
     ));
+    let settings = Arc::new(application::settings::SettingsInteractor::new(
+        Arc::new(infrastructure::PostgresSettingsStore::new(pool.clone())),
+        clock.clone(),
+        application::public_site::SiteInfo {
+            title: "测试站点".into(),
+            description: "集成测试".into(),
+        },
+    ));
 
     let sessions: Arc<dyn application::ports::SessionStore> =
         Arc::new(InMemorySessionStore::with_defaults());
@@ -213,6 +221,7 @@ async fn fresh_stack() -> Stack {
         tags,
         categories,
         series,
+        settings,
         roles: roles.clone(),
         secure_cookies: false,
     };

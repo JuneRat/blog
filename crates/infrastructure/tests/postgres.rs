@@ -11,7 +11,7 @@ use application::ports::{
     CategoryRepository, ClearPasswordOutcome, ContentRenderer, OAuthAccountStore, PageRepository,
     PostRepository, PublishedCategoryQuery, PublishedPageQuery, PublishedPostQuery,
     PublishedSeriesQuery, PublishedTagQuery, RbacStore, SaveOutcome, SeriesRepository,
-    TagRepository, UserRepository,
+    SettingsStore, TagRepository, UserRepository,
 };
 use domain::content::page::Page;
 use domain::content::post::{Post, PostSnapshot, PostStatus, Slug, Visibility};
@@ -2213,4 +2213,219 @@ async fn post_series_edit_participates_in_series_version_protocol() {
         .await
         .unwrap();
     assert_eq!(sv4, s2.version + 1, "创建即入系列递增 series.version");
+}
+
+// ---------------------------------------------------------------------------
+// settings 的 site 分组：UPSERT + 版本 CAS、分组隔离与重启保留
+// ---------------------------------------------------------------------------
+
+fn site_value(title: &str, description: &str) -> application::ports::SiteSettingsValue {
+    application::ports::SiteSettingsValue {
+        title: Some(title.into()),
+        description: Some(description.into()),
+    }
+}
+
+#[tokio::test]
+async fn settings_site_upsert_and_version_cas() {
+    let _g = SERIAL.lock().await;
+    let pool = fresh_database().await;
+    let store = infrastructure::PostgresSettingsStore::new(pool.clone());
+
+    // 未配置：find 返回 None。
+    assert!(store.find_site().await.unwrap().is_none());
+
+    // expected=0 且行不存在：插入，版本从 1 起。
+    assert_eq!(
+        store
+            .save_site(
+                &site_value("数据库标题", "数据库描述"),
+                0,
+                OffsetDateTime::now_utc()
+            )
+            .await
+            .unwrap(),
+        SaveOutcome::Saved { new_version: 1 }
+    );
+    let record = store.find_site().await.unwrap().unwrap();
+    assert_eq!(record.version, 1);
+    assert_eq!(
+        (
+            record.value.title.as_deref(),
+            record.value.description.as_deref()
+        ),
+        (Some("数据库标题"), Some("数据库描述"))
+    );
+
+    // 行已存在再用 0 当前提：冲突，不覆盖。
+    assert_eq!(
+        store
+            .save_site(&site_value("抢写", "抢写"), 0, OffsetDateTime::now_utc())
+            .await
+            .unwrap(),
+        SaveOutcome::StaleConflict
+    );
+
+    // 版本匹配：替换并递增。
+    assert_eq!(
+        store
+            .save_site(
+                &site_value("新标题", "新描述"),
+                1,
+                OffsetDateTime::now_utc()
+            )
+            .await
+            .unwrap(),
+        SaveOutcome::Saved { new_version: 2 }
+    );
+    let record = store.find_site().await.unwrap().unwrap();
+    assert_eq!(record.value.title.as_deref(), Some("新标题"));
+
+    // 存储形态：schema_version 随写入落库（按分组自描述，读取侧忽略）。
+    let (schema,): (i64,) =
+        sqlx::query_as("SELECT (value->>'schema_version')::bigint FROM settings WHERE key='site'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(schema, 1);
+    let keys: Vec<String> = sqlx::query_scalar(
+        "SELECT jsonb_object_keys(value) FROM settings WHERE key='site' ORDER BY 1",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(keys, vec!["description", "schema_version", "title"]);
+
+    // 旧版本前提再次写入：冲突，版本停在 2。
+    assert_eq!(
+        store
+            .save_site(&site_value("过期", "过期"), 1, OffsetDateTime::now_utc())
+            .await
+            .unwrap(),
+        SaveOutcome::StaleConflict
+    );
+    let (version,): (i64,) = sqlx::query_as("SELECT version FROM settings WHERE key='site'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(version, 2);
+}
+
+#[tokio::test]
+async fn settings_partial_row_reads_missing_fields_as_none() {
+    let _g = SERIAL.lock().await;
+    let pool = fresh_database().await;
+    // 手工/历史写入的不完整行：缺字段按 None 读出，由应用层逐字段回退。
+    sqlx::query(
+        "INSERT INTO settings (key, value) VALUES ('site', \
+         '{\"schema_version\":1,\"title\":\"手工标题\"}'::jsonb)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let store = infrastructure::PostgresSettingsStore::new(pool);
+    let record = store.find_site().await.unwrap().unwrap();
+    assert_eq!(record.value.title.as_deref(), Some("手工标题"));
+    assert_eq!(record.value.description, None);
+}
+
+#[tokio::test]
+async fn settings_row_survives_new_pool_and_keeps_oauth_group_isolated() {
+    let _g = SERIAL.lock().await;
+    let pool = fresh_database().await;
+    let dsn = std::env::var("BLOG_TEST_ADMIN_URL")
+        .unwrap_or_else(|_| "postgres://blog:blog@127.0.0.1:5432/postgres".into());
+    let test_dsn = test_db_url(&dsn);
+
+    let first = infrastructure::PostgresSettingsStore::new(pool);
+    first
+        .save_site(
+            &site_value("持久标题", "持久描述"),
+            0,
+            OffsetDateTime::now_utc(),
+        )
+        .await
+        .unwrap();
+
+    // 「重启」：丢弃原连接池，用全新连接读同一数据库，配置仍在。
+    let pool2 = connect(&test_dsn).await.unwrap();
+    let second = infrastructure::PostgresSettingsStore::new(pool2.clone());
+    let record = second.find_site().await.unwrap().unwrap();
+    assert_eq!(record.value.title.as_deref(), Some("持久标题"));
+    assert_eq!(record.version, 1);
+
+    // oauth 分组与 site 分组物理隔离：互不触碰对方的行。
+    use application::ports::OAuthConfigStore;
+    let oauth = infrastructure::PostgresOAuthConfigStore::new(pool2.clone());
+    oauth
+        .save(&[application::ports::ProviderConfig {
+            id: "idp".into(),
+            name: None,
+            kind: application::ports::ProviderKind::Oidc,
+            issuer: Some("https://idp.example".into()),
+            client_id: "client".into(),
+            secret_ref: "IDP_SECRET".into(),
+            scopes: vec![],
+        }])
+        .await
+        .unwrap();
+    second
+        .save_site(
+            &site_value("再改一次", "描述"),
+            1,
+            OffsetDateTime::now_utc(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        oauth.list().await.unwrap().len(),
+        1,
+        "site 写入不影响 oauth 分组"
+    );
+    let keys: Vec<String> = sqlx::query_scalar("SELECT key FROM settings ORDER BY key")
+        .fetch_all(&pool2)
+        .await
+        .unwrap();
+    assert_eq!(keys, vec!["oauth", "site"]);
+}
+
+#[tokio::test]
+async fn settings_concurrent_saves_on_two_connections_exactly_one_wins() {
+    let _g = SERIAL.lock().await;
+    let pool = fresh_database().await;
+    let dsn = std::env::var("BLOG_TEST_ADMIN_URL")
+        .unwrap_or_else(|_| "postgres://blog:blog@127.0.0.1:5432/postgres".into());
+    let pool2 = connect(&test_db_url(&dsn)).await.unwrap();
+
+    let a = infrastructure::PostgresSettingsStore::new(pool);
+    let b = infrastructure::PostgresSettingsStore::new(pool2);
+    a.save_site(&site_value("初版", "描述"), 0, OffsetDateTime::now_utc())
+        .await
+        .unwrap();
+
+    let (ra, rb) = {
+        let left = site_value("连接甲", "描述");
+        let right = site_value("连接乙", "描述");
+        let now = OffsetDateTime::now_utc();
+        tokio::join!(a.save_site(&left, 1, now), b.save_site(&right, 1, now),)
+    };
+    let outcomes = [ra.unwrap(), rb.unwrap()];
+    assert_eq!(
+        outcomes
+            .iter()
+            .filter(|o| matches!(o, SaveOutcome::Saved { .. }))
+            .count(),
+        1,
+        "两连接并发保存恰好一方成功：{outcomes:?}"
+    );
+    assert_eq!(
+        outcomes
+            .iter()
+            .filter(|o| matches!(o, SaveOutcome::StaleConflict))
+            .count(),
+        1
+    );
+    let record = a.find_site().await.unwrap().unwrap();
+    assert_eq!(record.version, 2, "只递增一次");
 }

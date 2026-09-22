@@ -144,3 +144,15 @@ export interface SeriesMemberRow {
   author_id: string;
   series_order: number | null;
 }
+
+/** 当前生效值的来源：database（settings.site 行）或 fallback（环境变量/默认值）。 */
+export type SiteSettingsSource = "database" | "fallback";
+
+/** GET/PUT /api/admin/v1/settings/site（读/写都需 settings.manage）。 */
+export interface SiteSettings {
+  title: string;
+  description: string;
+  source: SiteSettingsSource;
+  /** site 行版本；未配置为 0（首次保存以此为 expected_version）。 */
+  version: number;
+}

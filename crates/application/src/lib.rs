@@ -11,6 +11,7 @@ pub mod password;
 pub mod ports;
 pub mod public_site;
 pub mod series;
+pub mod settings;
 pub mod tag;
 pub mod version;
 

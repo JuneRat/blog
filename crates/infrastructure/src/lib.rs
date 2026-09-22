@@ -7,6 +7,7 @@ pub mod persistence;
 pub mod rbac;
 pub mod rendering;
 pub mod sessions;
+pub mod settings;
 pub mod throttle;
 
 pub use oauth::{
@@ -25,4 +26,5 @@ pub use sessions::{
     AttemptStoreConfig, InMemoryOAuthAttemptStore, InMemorySessionStore, SessionStoreConfig,
     SystemSecureRandom,
 };
+pub use settings::PostgresSettingsStore;
 pub use throttle::{InMemoryLoginThrottle, ThrottleConfig};
