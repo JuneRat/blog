@@ -156,10 +156,13 @@ async fn fresh_stack() -> Stack {
         Arc::new(infrastructure::PostgresTagRepository::new(pool.clone()));
     let category_repo: Arc<dyn application::ports::CategoryRepository> =
         Arc::new(PostgresCategoryRepository::new(pool.clone()));
+    let series_repo: Arc<dyn application::ports::SeriesRepository> =
+        Arc::new(infrastructure::PostgresSeriesRepository::new(pool.clone()));
     let posts = Arc::new(PostInteractor::new(
         Arc::new(PostgresPostRepository::new(pool.clone())),
         tag_repo.clone(),
         category_repo.clone(),
+        series_repo.clone(),
         clock.clone(),
     ));
     let pages = Arc::new(PageInteractor::new(
@@ -172,6 +175,10 @@ async fn fresh_stack() -> Stack {
     ));
     let categories = Arc::new(application::category::CategoryInteractor::new(
         category_repo,
+        clock.clone(),
+    ));
+    let series = Arc::new(application::series::SeriesInteractor::new(
+        series_repo,
         clock.clone(),
     ));
 
@@ -205,6 +212,7 @@ async fn fresh_stack() -> Stack {
         pages,
         tags,
         categories,
+        series,
         roles: roles.clone(),
         secure_cookies: false,
     };
@@ -217,6 +225,7 @@ async fn fresh_stack() -> Stack {
         .merge(interfaces::http_admin::categories_router(
             admin_state.clone(),
         ))
+        .merge(interfaces::http_admin::series_router(admin_state.clone()))
         .merge(interfaces::http_identity::identity_router(admin_state))
         // 与生产装配一致：最外层请求编号/日志中间件。
         .layer(middleware::from_fn(request_context));
@@ -2338,4 +2347,217 @@ async fn category_management_and_post_association() {
     .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
     let _ = rust_id;
+}
+
+// ---------------------------------------------------------------------------
+// 系列 API：目录、重排授权与文章关联
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn series_management_reorder_and_post_association() {
+    let _g = SERIAL.lock().await;
+    let stack = fresh_stack().await;
+    let (editor_cookie, editor_csrf) = login_as(&stack.router, &stack.idp, "editor").await;
+    let (author_cookie, author_csrf) = login_as(&stack.router, &stack.idp, "author").await;
+    let (author2_cookie, author2_csrf) = login_as(&stack.router, &stack.idp, "author2").await;
+
+    // author 无 series.manage：创建被拒；目录可读。
+    let (status, body) = api(
+        &stack.router,
+        "POST",
+        "/api/admin/v1/series",
+        Some(&author_cookie),
+        Some(&author_csrf),
+        Some(r#"{"name":"指南","slug":"guide"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    let (status, _) = api(
+        &stack.router,
+        "GET",
+        "/api/admin/v1/series",
+        Some(&author_cookie),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // editor 建系列。
+    let (status, body) = api(
+        &stack.router,
+        "POST",
+        "/api/admin/v1/series",
+        Some(&editor_cookie),
+        Some(&editor_csrf),
+        Some(r#"{"name":"指南","slug":"guide"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let series_id: Uuid = body
+        .split("\"id\":\"")
+        .nth(1)
+        .unwrap()
+        .split('"')
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
+
+    // 两篇作者文章挂入系列（同事务；series 三态对象）。
+    let mut posts = Vec::new();
+    for (slug, order) in [("ser-1", 1), ("ser-2", 2)] {
+        let (status, body) = api(
+            &stack.router,
+            "POST",
+            "/api/admin/v1/posts",
+            Some(&author_cookie),
+            Some(&author_csrf),
+            Some(&format!(
+                r#"{{"slug":"{slug}","title":"{slug}","content":"正文"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+        let version: i64 = body
+            .split("\"version\":")
+            .nth(1)
+            .unwrap()
+            .split(',')
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap();
+        let post_id: Uuid = body
+            .split("\"id\":\"")
+            .nth(1)
+            .unwrap()
+            .split('"')
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap();
+        let (status, body) = api(
+            &stack.router, "PATCH", &format!("/api/admin/v1/posts/{slug}"),
+            Some(&author_cookie), Some(&author_csrf),
+            Some(&format!(r#"{{"series":{{"id":"{series_id}","order":{order}}},"expected_version":{version}}}"#)),
+        ).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        posts.push(post_id);
+    }
+
+    // author2（author 角色，无 any）：系列含他人文章 → 重排 403。
+    let (status, body) = api(
+        &stack.router,
+        "POST",
+        "/api/admin/v1/series/guide/reorder",
+        Some(&author2_cookie),
+        Some(&author2_csrf),
+        Some(&format!(
+            r#"{{"ordered_post_ids":["{}","{}"]}}"#,
+            posts[1], posts[0]
+        )),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "Author 不能借重排改他人文章顺序：{body}"
+    );
+
+    // editor（update_any）重排倒序：成功且返回新 series 版本。
+    let (status, body) = api(
+        &stack.router,
+        "POST",
+        "/api/admin/v1/series/guide/reorder",
+        Some(&editor_cookie),
+        Some(&editor_csrf),
+        Some(&format!(
+            r#"{{"ordered_post_ids":["{}","{}"]}}"#,
+            posts[1], posts[0]
+        )),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body.contains("\"series_version\":2"), "{body}");
+
+    // 集合不一致（漏一篇）→ 400 可定位错误。
+    let (status, body) = api(
+        &stack.router,
+        "POST",
+        "/api/admin/v1/series/guide/reorder",
+        Some(&editor_cookie),
+        Some(&editor_csrf),
+        Some(&format!(r#"{{"ordered_post_ids":["{}"]}}"#, posts[0])),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(body.contains("成员不一致"), "{body}");
+
+    // 退出系列（series: null）后删除保护解除。
+    for slug in ["ser-1", "ser-2"] {
+        let (status, body) = api(
+            &stack.router,
+            "PATCH",
+            &format!("/api/admin/v1/posts/{slug}"),
+            Some(&author_cookie),
+            Some(&author_csrf),
+            Some(r#"{"series":null}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(!body.contains(&series_id.to_string()), "已退出系列：{body}");
+    }
+    let (status, _) = api(
+        &stack.router,
+        "DELETE",
+        "/api/admin/v1/series/guide",
+        Some(&editor_cookie),
+        Some(&editor_csrf),
+        Some(r#"{"expected_version":2}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    // 引用保护：另一系列带成员时删除 → 409 series_in_use。
+    let (status, body) = api(
+        &stack.router,
+        "POST",
+        "/api/admin/v1/series",
+        Some(&editor_cookie),
+        Some(&editor_csrf),
+        Some(r#"{"name":"占用","slug":"occupied"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let occ_id: Uuid = body
+        .split("\"id\":\"")
+        .nth(1)
+        .unwrap()
+        .split('"')
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let (status, body) = api(
+        &stack.router,
+        "PATCH",
+        "/api/admin/v1/posts/ser-1",
+        Some(&author_cookie),
+        Some(&author_csrf),
+        Some(&format!(r#"{{"series":{{"id":"{occ_id}","order":1}}}}"#)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, body) = api(
+        &stack.router,
+        "DELETE",
+        "/api/admin/v1/series/occupied",
+        Some(&editor_cookie),
+        Some(&editor_csrf),
+        Some(r#"{"expected_version":1}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert!(body.contains("\"code\":\"series_in_use\""), "{body}");
 }

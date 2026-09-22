@@ -200,6 +200,7 @@ pub const ADMIN_ERROR_CODES: &[&str] = &[
     "email_taken",
     "tag_in_use",
     "category_in_use",
+    "series_in_use",
     "last_owner",
     "not_found",
     "forbidden",
@@ -236,6 +237,7 @@ pub fn admin_error_code(e: &UseCaseError) -> &'static str {
         UseCaseError::Conflict(kind) => conflict_error_code(*kind),
         UseCaseError::TagInUse(_) => "tag_in_use",
         UseCaseError::CategoryInUse { .. } => "category_in_use",
+        UseCaseError::SeriesInUse(_) => "series_in_use",
         UseCaseError::LastOwnerProtected => "last_owner",
         UseCaseError::NotFound(_) => "not_found",
         UseCaseError::Forbidden => "forbidden",
@@ -259,7 +261,8 @@ pub fn admin_error_status(e: &UseCaseError) -> StatusCode {
         UseCaseError::Conflict(_)
         | UseCaseError::VersionConflict
         | UseCaseError::TagInUse(_)
-        | UseCaseError::CategoryInUse { .. } => StatusCode::CONFLICT,
+        | UseCaseError::CategoryInUse { .. }
+        | UseCaseError::SeriesInUse(_) => StatusCode::CONFLICT,
         UseCaseError::LastOwnerProtected => StatusCode::FORBIDDEN,
         UseCaseError::NotFound(_) => StatusCode::NOT_FOUND,
         UseCaseError::Forbidden => StatusCode::FORBIDDEN,
@@ -346,6 +349,7 @@ mod tests {
                 },
                 "category_in_use",
             ),
+            (UseCaseError::SeriesInUse(4), "series_in_use"),
             (UseCaseError::LastOwnerProtected, "last_owner"),
             (UseCaseError::NotFound("x".into()), "not_found"),
             (UseCaseError::Forbidden, "forbidden"),

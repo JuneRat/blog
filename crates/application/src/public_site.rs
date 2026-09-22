@@ -8,7 +8,7 @@ use time::OffsetDateTime;
 use crate::error::UseCaseError;
 use crate::ports::{
     ContentRenderer, PublishedCategoryQuery, PublishedPageQuery, PublishedPostQuery,
-    PublishedTagQuery,
+    PublishedSeriesQuery, PublishedTagQuery,
 };
 use domain::content::is_reserved_root_slug;
 
@@ -50,6 +50,14 @@ pub struct CategoryCard {
     pub name: String,
 }
 
+/// 详情页上的系列链接（含阅读序号）。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SeriesCard {
+    pub slug: String,
+    pub name: String,
+    pub order: i32,
+}
+
 /// 详情页模板数据契约；content_html 已经过清洗。
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct PostView {
@@ -64,6 +72,8 @@ pub struct PostView {
     pub tags: Vec<TagCard>,
     /// 所属分类（链接到 /categories/{slug}）。
     pub category: Option<CategoryCard>,
+    /// 所属系列（链接到 /series/{slug}；公开序号可能留空档）。
+    pub series: Option<SeriesCard>,
 }
 
 /// 页面详情页模板数据契约；content_html 已经过清洗。
@@ -84,6 +94,25 @@ pub struct CategoryView {
     pub page: i64,
     pub total_pages: i64,
     pub posts: Vec<PostCard>,
+}
+
+/// 公开系列页模板数据契约：按阅读顺序的分页文章列表。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SeriesView {
+    pub series_slug: String,
+    pub series_name: String,
+    pub page: i64,
+    pub total_pages: i64,
+    /// 公开成员的连续阅读序号（1 起；不是 posts.series_order——草稿占位会造成空档）。
+    pub posts: Vec<SeriesPostCard>,
+}
+
+/// 系列页条目：文章卡片 + 阅读序号。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SeriesPostCard {
+    #[serde(flatten)]
+    pub card: PostCard,
+    pub index: i64,
 }
 
 /// 公开标签页模板数据契约：标签头 + 分页文章列表。
@@ -110,28 +139,33 @@ pub trait ThemeRenderer: Send + Sync {
         site: &SiteInfo,
         category: &CategoryView,
     ) -> Result<String, UseCaseError>;
+    fn render_series(&self, site: &SiteInfo, series: &SeriesView) -> Result<String, UseCaseError>;
 }
 
-/// 公开列表页（标签页/分类页）分页大小。
+/// 公开列表页（标签页/分类页/系列页）分页大小。
 pub const TAG_PAGE_SIZE: i64 = 20;
 pub const CATEGORY_PAGE_SIZE: i64 = 20;
+pub const SERIES_PAGE_SIZE: i64 = 20;
 
 pub struct PublicSiteInteractor {
     posts: Arc<dyn PublishedPostQuery>,
     pages: Arc<dyn PublishedPageQuery>,
     tags: Arc<dyn PublishedTagQuery>,
     categories: Arc<dyn PublishedCategoryQuery>,
+    series: Arc<dyn PublishedSeriesQuery>,
     markdown: Arc<dyn ContentRenderer>,
     theme: Arc<dyn ThemeRenderer>,
     site: SiteInfo,
 }
 
 impl PublicSiteInteractor {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         posts: Arc<dyn PublishedPostQuery>,
         pages: Arc<dyn PublishedPageQuery>,
         tags: Arc<dyn PublishedTagQuery>,
         categories: Arc<dyn PublishedCategoryQuery>,
+        series: Arc<dyn PublishedSeriesQuery>,
         markdown: Arc<dyn ContentRenderer>,
         theme: Arc<dyn ThemeRenderer>,
         site: SiteInfo,
@@ -141,6 +175,7 @@ impl PublicSiteInteractor {
             pages,
             tags,
             categories,
+            series,
             markdown,
             theme,
             site,
@@ -190,6 +225,11 @@ impl PublicSiteInteractor {
             category: detail.category.as_ref().map(|c| CategoryCard {
                 slug: c.slug.clone(),
                 name: c.name.clone(),
+            }),
+            series: detail.series.as_ref().map(|s| SeriesCard {
+                slug: s.slug.clone(),
+                name: s.name.clone(),
+                order: s.order,
             }),
         };
         self.theme.render_post(&self.site, &view)
@@ -287,5 +327,44 @@ impl PublicSiteInteractor {
                 .collect(),
         };
         self.theme.render_category(&self.site, &view)
+    }
+
+    /// 渲染公开系列页 /series/{slug}?page=N：按阅读顺序（series_order 升序）。
+    /// 草稿/私密/回收站保留位置但不出现；页内展示的阅读序号按公开成员连续编号，
+    /// 不透出 posts.series_order 的空档。
+    pub async fn render_series(&self, slug: &str, page: i64) -> Result<String, UseCaseError> {
+        let series = self
+            .series
+            .find_public_by_slug(slug)
+            .await?
+            .ok_or_else(|| UseCaseError::NotFound(format!("系列 {slug}")))?;
+        let page = page.max(1);
+        let offset = (page - 1) * SERIES_PAGE_SIZE;
+        let (posts, total) = self
+            .series
+            .list_public_posts_by_series(slug, SERIES_PAGE_SIZE, offset)
+            .await?;
+        let total_pages = ((total + SERIES_PAGE_SIZE - 1) / SERIES_PAGE_SIZE).max(1);
+        let view = SeriesView {
+            series_slug: series.slug,
+            series_name: series.name,
+            page,
+            total_pages,
+            posts: posts
+                .into_iter()
+                .enumerate()
+                .map(|(i, s)| SeriesPostCard {
+                    index: offset + i as i64 + 1,
+                    card: PostCard {
+                        title: s.title,
+                        slug: s.slug,
+                        excerpt: s.excerpt,
+                        published_at: s.published_at.map(format_datetime),
+                        author_display: s.author_display,
+                    },
+                })
+                .collect(),
+        };
+        self.theme.render_series(&self.site, &view)
     }
 }

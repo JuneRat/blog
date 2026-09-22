@@ -8,6 +8,12 @@
     <span class="author">{{ post.author_display }}</span>
   </p>
   {% if post.excerpt %}<p class="excerpt">{{ post.excerpt }}</p>{% endif %}
+  {% if post.series %}
+  <p class="category-link">
+    系列：<a href="/series/{{ post.series.slug }}">{{ post.series.name }}</a>
+    <span class="muted">（阅读顺序 {{ post.series.order }}）</span>
+  </p>
+  {% endif %}
   {% if post.category %}
   <p class="category-link">
     分类：<a href="/categories/{{ post.category.slug }}">{{ post.category.name }}</a>

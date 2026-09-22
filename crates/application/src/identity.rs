@@ -114,6 +114,11 @@ pub const PERMISSION_REGISTRY: &[PermissionDescriptor] = &[
         description: "创建/更新/移动/删除分类树；防环在分类树事务锁内校验。",
     },
     PermissionDescriptor {
+        key: "series.manage",
+        name: "系列管理",
+        description: "创建/更新/删除系列与整体重排；改他人文章仍需相应 any 权限。",
+    },
+    PermissionDescriptor {
         key: "user.manage",
         name: "账号管理",
         description: "管理普通账号（受委派与 Owner 限制约束）。",
@@ -177,6 +182,7 @@ pub const BUILTIN_ROLES: &[BuiltinRoleDef] = &[
             "page.delete",
             "tag.manage",
             "category.manage",
+            "series.manage",
             "user.manage",
             "role.manage",
             "settings.manage",
@@ -208,6 +214,7 @@ pub const BUILTIN_ROLES: &[BuiltinRoleDef] = &[
             "page.delete",
             "tag.manage",
             "category.manage",
+            "series.manage",
         ],
     },
     BuiltinRoleDef {

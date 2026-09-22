@@ -10,7 +10,8 @@ use application::error::{ConflictKind, UseCaseError};
 use application::ports::{
     CategoryRepository, ClearPasswordOutcome, ContentRenderer, OAuthAccountStore, PageRepository,
     PostRepository, PublishedCategoryQuery, PublishedPageQuery, PublishedPostQuery,
-    PublishedTagQuery, RbacStore, SaveOutcome, TagRepository, UserRepository,
+    PublishedSeriesQuery, PublishedTagQuery, RbacStore, SaveOutcome, SeriesRepository,
+    TagRepository, UserRepository,
 };
 use domain::content::page::Page;
 use domain::content::post::{Post, PostSnapshot, PostStatus, Slug, Visibility};
@@ -1891,4 +1892,230 @@ async fn post_category_saved_in_same_transaction_and_public_page_filters() {
         UseCaseError::Invalid(ref m) if m.contains("分类") => {}
         other => panic!("期望分类不存在错误，得到 {other:?}"),
     }
+}
+
+// ---------------------------------------------------------------------------
+// 系列：重排锁协议、引用保护与公开页
+// ---------------------------------------------------------------------------
+
+async fn seed_series(
+    pool: &sqlx::PgPool,
+    name: &str,
+    slug: &str,
+) -> domain::content::SeriesSnapshot {
+    let repo = infrastructure::PostgresSeriesRepository::new(pool.clone());
+    let series = domain::content::Series::new(
+        name.into(),
+        domain::content::post::Slug::new(slug).unwrap(),
+        None,
+        OffsetDateTime::now_utc(),
+    )
+    .unwrap();
+    let snapshot = series.snapshot();
+    repo.insert(&snapshot).await.unwrap();
+    snapshot
+}
+
+/// 建一篇挂入系列的文章（直接写库，绕过用例）。
+async fn post_in_series(
+    pool: &sqlx::PgPool,
+    author: uuid::Uuid,
+    series: uuid::Uuid,
+    slug: &str,
+    order: i32,
+) -> PostSnapshot {
+    let repo = PostgresPostRepository::new(pool.clone());
+    let mut snapshot = draft_snapshot(author, slug);
+    snapshot.series_id = Some(series);
+    snapshot.series_order = Some(order);
+    repo.insert(&snapshot, &[]).await.unwrap();
+    snapshot
+}
+
+#[tokio::test]
+async fn series_reorder_rewrites_orders_and_bumps_versions() {
+    let _g = SERIAL.lock().await;
+    let pool = fresh_database().await;
+    let author = seed_user(&pool, "author").await;
+    let s = seed_series(&pool, "指南", "guide").await;
+    let a = post_in_series(&pool, author, s.id, "part-1", 1).await;
+    let b = post_in_series(&pool, author, s.id, "part-2", 2).await;
+
+    // 完整排列倒序。
+    let outcome = repo_of(&pool)
+        .reorder(s.id, s.version, &[b.id, a.id])
+        .await
+        .unwrap();
+    assert_eq!(
+        outcome,
+        application::ports::ReorderOutcome::Reordered {
+            new_version: s.version + 1
+        }
+    );
+
+    // 顺序重写为 1..n；posts.version 与 series.version 递增。
+    let rows: Vec<(String, i32, i64)> = sqlx::query_as(
+        "SELECT slug, series_order, version FROM posts WHERE series_id = $1 ORDER BY series_order",
+    )
+    .bind(s.id)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        rows,
+        vec![
+            ("part-2".into(), 1, b.version + 1),
+            ("part-1".into(), 2, a.version + 1),
+        ]
+    );
+    let (sv,): (i64,) = sqlx::query_as("SELECT version FROM series WHERE id = $1")
+        .bind(s.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(sv, s.version + 1);
+}
+
+fn repo_of(pool: &sqlx::PgPool) -> infrastructure::PostgresSeriesRepository {
+    infrastructure::PostgresSeriesRepository::new(pool.clone())
+}
+
+#[tokio::test]
+async fn series_reorder_rejects_stale_version_and_mismatched_membership() {
+    let _g = SERIAL.lock().await;
+    let pool = fresh_database().await;
+    let author = seed_user(&pool, "author").await;
+    let s = seed_series(&pool, "指南", "guide").await;
+    let a = post_in_series(&pool, author, s.id, "part-1", 1).await;
+    let b = post_in_series(&pool, author, s.id, "part-2", 2).await;
+
+    // 旧 series.version：拒绝（防旧目录重排）。
+    assert_eq!(
+        repo_of(&pool)
+            .reorder(s.id, s.version + 99, &[a.id, b.id])
+            .await
+            .unwrap(),
+        application::ports::ReorderOutcome::StaleSeriesVersion
+    );
+    // 不完整的集合：拒绝，不落任何写入。
+    assert_eq!(
+        repo_of(&pool)
+            .reorder(s.id, s.version, &[a.id])
+            .await
+            .unwrap(),
+        application::ports::ReorderOutcome::MembershipMismatch
+    );
+    let (pa,): (i64,) = sqlx::query_as("SELECT version FROM posts WHERE id = $1")
+        .bind(a.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(pa, a.version, "失败的重排不递增文章版本");
+}
+
+#[tokio::test]
+async fn concurrent_reorders_exactly_one_wins_on_series_version() {
+    let _g = SERIAL.lock().await;
+    let pool = fresh_database().await;
+    let author = seed_user(&pool, "author").await;
+    let s = seed_series(&pool, "并发", "race").await;
+    let a = post_in_series(&pool, author, s.id, "r-1", 1).await;
+    let b = post_in_series(&pool, author, s.id, "r-2", 2).await;
+
+    // 两个连接都用同一 expected 版本竞争：恰好一个成功，另一个 StaleSeriesVersion。
+    let pool2 = pool.clone();
+    let (first, second) = tokio::join!(
+        async {
+            repo_of(&pool)
+                .reorder(s.id, s.version, &[a.id, b.id])
+                .await
+                .unwrap()
+        },
+        async {
+            repo_of(&pool2)
+                .reorder(s.id, s.version, &[b.id, a.id])
+                .await
+                .unwrap()
+        },
+    );
+    let outcomes = [first, second];
+    let ok = outcomes
+        .iter()
+        .filter(|o| {
+            **o == application::ports::ReorderOutcome::Reordered {
+                new_version: s.version + 1,
+            }
+        })
+        .count();
+    let stale = outcomes
+        .iter()
+        .filter(|o| **o == application::ports::ReorderOutcome::StaleSeriesVersion)
+        .count();
+    assert_eq!((ok, stale), (1, 1), "恰好一个重排成功：{outcomes:?}");
+}
+
+#[tokio::test]
+async fn series_delete_protects_referenced_posts() {
+    let _g = SERIAL.lock().await;
+    let pool = fresh_database().await;
+    let author = seed_user(&pool, "author").await;
+    let s = seed_series(&pool, "指南", "guide").await;
+    post_in_series(&pool, author, s.id, "part-1", 1).await;
+
+    match repo_of(&pool).delete(s.id, s.version).await.unwrap() {
+        application::ports::SeriesDeleteOutcome::Referenced { count } => assert_eq!(count, 1),
+        other => panic!("期望引用保护，得到 {other:?}"),
+    }
+    let result = sqlx::query("DELETE FROM series WHERE id = $1")
+        .bind(s.id)
+        .execute(&pool)
+        .await;
+    assert!(result.is_err(), "FK RESTRICT 兜底");
+
+    // 解除关联后可删。
+    sqlx::query("UPDATE posts SET series_id = NULL, series_order = NULL WHERE series_id = $1")
+        .bind(s.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    match repo_of(&pool).delete(s.id, s.version).await.unwrap() {
+        application::ports::SeriesDeleteOutcome::Deleted => {}
+        other => panic!("期望删除成功，得到 {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn post_series_position_conflict_maps_to_series_position() {
+    let _g = SERIAL.lock().await;
+    let pool = fresh_database().await;
+    let author = seed_user(&pool, "author").await;
+    let s = seed_series(&pool, "指南", "guide").await;
+    let repo = PostgresPostRepository::new(pool.clone());
+    post_in_series(&pool, author, s.id, "occ-1", 1).await;
+
+    // 换到已占用的位置：unique 冲突翻译为 SeriesPosition。
+    let snapshot = draft_snapshot(author, "occ-2");
+    repo.insert(&snapshot, &[]).await.unwrap();
+    let edit = {
+        let mut snap = snapshot.clone();
+        snap.series_id = Some(s.id);
+        snap.series_order = Some(1);
+        snap
+    };
+    match repo
+        .save(&edit, snapshot.version, OffsetDateTime::now_utc(), None)
+        .await
+        .unwrap_err()
+    {
+        UseCaseError::Conflict(ConflictKind::SeriesPosition) => {}
+        other => panic!("期望系列位置冲突，得到 {other:?}"),
+    }
+
+    // 公开系列页：按序号升序、只列公开成员（草稿占位造成空档但不外泄）。
+    let query = infrastructure::PostgresPublishedSeriesQuery::new(pool.clone());
+    let (posts, total) = query
+        .list_public_posts_by_series("guide", 20, 0)
+        .await
+        .unwrap();
+    assert_eq!((posts.len(), total), (0, 0), "草稿不出现在公开系列页");
 }

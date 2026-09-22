@@ -36,6 +36,7 @@ pub fn public_router(state: PublicSiteState, assets_dir: Option<PathBuf>) -> Rou
         .route("/posts/{slug}", get(post_detail))
         .route("/tags/{slug}", get(tag_detail))
         .route("/categories/{slug}", get(category_detail))
+        .route("/series/{slug}", get(series_detail))
         .route("/healthz", get(healthz))
         .route("/{slug}", get(page_detail))
         .fallback(not_found)
@@ -150,6 +151,25 @@ async fn category_detail(
         Ok(html) => Html(html).into_response(),
         Err(UseCaseError::NotFound(_)) => {
             (StatusCode::NOT_FOUND, "<h1>404</h1><p>分类不存在。</p>").into_response()
+        }
+        Err(e) => server_error(e),
+    }
+}
+
+/// 公开系列页 /series/{slug}?page=N：按阅读顺序分页；未知系列 404。
+async fn series_detail(
+    State(state): State<PublicSiteState>,
+    Path(slug): Path<String>,
+    Query(query): Query<TagPageQuery>,
+) -> Response {
+    match state
+        .site
+        .render_series(&slug, query.page.unwrap_or(1))
+        .await
+    {
+        Ok(html) => Html(html).into_response(),
+        Err(UseCaseError::NotFound(_)) => {
+            (StatusCode::NOT_FOUND, "<h1>404</h1><p>系列不存在。</p>").into_response()
         }
         Err(e) => server_error(e),
     }

@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ApiError, api, categoryApi, withRequestId } from "../api";
+import { ApiError, api, categoryApi, seriesApi, withRequestId } from "../api";
 import { useAuth } from "../auth";
 import { navigate, paths } from "../router";
 import type { EditPostInput } from "../api";
-import type { CategorySummary, PostDetail, TagSummary, Visibility } from "../types";
+import type { CategorySummary, PostDetail, SeriesSummary, TagSummary, Visibility } from "../types";
 
 interface FormState {
   slug: string;
@@ -15,6 +15,10 @@ interface FormState {
   tagIds: string[];
   /** 分类 id（null = 未分类）。 */
   categoryId: string | null;
+  /** 系列 id（null = 不属于任何系列）。 */
+  seriesId: string | null;
+  /** 系列内序号（seriesId 非空时为正整数）。 */
+  seriesOrder: string;
 }
 
 const EMPTY_FORM: FormState = {
@@ -25,6 +29,8 @@ const EMPTY_FORM: FormState = {
   visibility: "public",
   tagIds: [],
   categoryId: null,
+  seriesId: null,
+  seriesOrder: "",
 };
 
 function toForm(post: PostDetail): FormState {
@@ -36,6 +42,8 @@ function toForm(post: PostDetail): FormState {
     visibility: post.visibility,
     tagIds: [...post.tag_ids],
     categoryId: post.category_id,
+    seriesId: post.series_id,
+    seriesOrder: post.series_order === null ? "" : String(post.series_order),
   };
 }
 
@@ -62,7 +70,9 @@ function formEquals(left: FormState, right: FormState): boolean {
     left.content === right.content &&
     left.visibility === right.visibility &&
     sameTags(left.tagIds, right.tagIds) &&
-    left.categoryId === right.categoryId
+    left.categoryId === right.categoryId &&
+    left.seriesId === right.seriesId &&
+    left.seriesOrder.trim() === right.seriesOrder.trim()
   );
 }
 
@@ -87,6 +97,10 @@ function mergeServer(current: FormState, sent: FormState, server: FormState): Fo
   // 标签是集合字段：用户没动过勾选才接受服务器值，动过则保留本地选择。
   const tags = sameTags(current.tagIds, sent.tagIds) ? server.tagIds : current.tagIds;
   const categoryId = current.categoryId === sent.categoryId ? server.categoryId : current.categoryId;
+  const seriesChanged =
+    current.seriesId !== sent.seriesId || current.seriesOrder.trim() !== sent.seriesOrder.trim();
+  const seriesId = seriesChanged ? current.seriesId : server.seriesId;
+  const seriesOrder = seriesChanged ? current.seriesOrder : server.seriesOrder;
   return {
     slug: pickServer("slug", current, sent, server),
     title: pickServer("title", current, sent, server),
@@ -95,6 +109,8 @@ function mergeServer(current: FormState, sent: FormState, server: FormState): Fo
     visibility: pickServer("visibility", current, sent, server),
     tagIds: tags,
     categoryId,
+    seriesId,
+    seriesOrder,
   };
 }
 
@@ -129,6 +145,8 @@ export function PostEditScreen({ slug }: { slug: string | null }) {
   const [catalog, setCatalog] = useState<TagSummary[] | null>(null);
   /** 分类目录（编辑器选择器）。 */
   const [categoryCatalog, setCategoryCatalog] = useState<CategorySummary[] | null>(null);
+  /** 系列目录（编辑器选择器）。 */
+  const [seriesCatalog, setSeriesCatalog] = useState<SeriesSummary[] | null>(null);
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -191,10 +209,15 @@ export function PostEditScreen({ slug }: { slug: string | null }) {
     let cancelled = false;
     void (async () => {
       try {
-        const [tags, categories] = await Promise.all([api.listTags(), categoryApi.list()]);
+        const [tags, categories, seriesList] = await Promise.all([
+          api.listTags(),
+          categoryApi.list(),
+          seriesApi.list(),
+        ]);
         if (!cancelled) {
           setCatalog(tags);
           setCategoryCatalog(categories);
+          setSeriesCatalog(seriesList);
         }
       } catch (e) {
         // 目录加载失败不阻塞正文编辑：只是暂时无法勾选标签。
@@ -264,7 +287,16 @@ export function PostEditScreen({ slug }: { slug: string | null }) {
       visibility: current.visibility,
       tag_ids: current.tagIds,
       category_id: current.categoryId,
+      series: seriesPayload(current),
     };
+  }
+
+  /** 系列载荷：未选系列 → null（退出）；选了系列带正整数序号 → 对象；序号非法 → undefined 交由调用方校验。 */
+  function seriesPayload(current: FormState): { id: string; order: number } | null | undefined {
+    if (current.seriesId === null) return null;
+    const order = Number.parseInt(current.seriesOrder.trim(), 10);
+    if (!Number.isFinite(order) || order <= 0) return undefined;
+    return { id: current.seriesId, order };
   }
 
   /** 勾选/取消一个标签（集合操作）。 */
@@ -291,6 +323,7 @@ export function PostEditScreen({ slug }: { slug: string | null }) {
           visibility: sent.visibility,
           tag_ids: sent.tagIds,
           category_id: sent.categoryId ?? undefined,
+          series: seriesPayload(sent) ?? undefined,
         });
         // 先本地同步（含创建期间的新输入），再更新地址；效果钩子会跳过重载。
         applyServer(created, sent);
@@ -525,6 +558,38 @@ export function PostEditScreen({ slug }: { slug: string | null }) {
             ))}
           </select>
         </label>
+        <label>
+          系列
+          <select
+            value={form.seriesId ?? ""}
+            onChange={(event) =>
+              commitForm({
+                ...formRef.current,
+                seriesId: event.target.value.length > 0 ? event.target.value : null,
+              })
+            }
+          >
+            <option value="">（不属于系列）</option>
+            {(seriesCatalog ?? []).map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        {form.seriesId !== null && (
+          <label>
+            系列内序号
+            <input
+              inputMode="numeric"
+              value={form.seriesOrder}
+              onChange={(event) =>
+                commitForm({ ...formRef.current, seriesOrder: event.target.value })
+              }
+              placeholder="正整数；同一系列内唯一"
+            />
+          </label>
+        )}
         <fieldset className="tag-picker">
           <legend>标签</legend>
           {catalogError !== null && <p className="error">{catalogError}</p>}

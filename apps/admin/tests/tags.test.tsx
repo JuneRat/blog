@@ -2,7 +2,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
-import { ApiError, api } from "../src/api";
+import { ApiError, api, seriesApi } from "../src/api";
 import { navigate, paths } from "../src/router";
 import type { TagSummary } from "../src/types";
 
@@ -18,6 +18,7 @@ vi.mock("../src/api", async (importOriginal) => {
   return {
     ...original,
     categoryApi: { list: vi.fn() },
+    seriesApi: { list: vi.fn() },
     api: {
       listTags: vi.fn(),
       createTag: vi.fn(),
@@ -133,12 +134,15 @@ describe("文章编辑器标签选择", () => {
     author_id: "author-id",
     tag_ids: ["tag-rust"],
     category_id: null,
+    series_id: null,
+    series_order: null,
   };
 
   beforeEach(() => {
     window.history.replaceState(null, "", paths.editPost(post.slug));
     vi.mocked(api.listTags).mockResolvedValue([essay, rust]);
     vi.mocked(api.categoryApi.list).mockResolvedValue([]);
+  vi.mocked(seriesApi.list).mockResolvedValue([]);
     const apiAny = api as unknown as Record<string, ReturnType<typeof vi.fn>>;
     apiAny.getPost = vi.fn().mockResolvedValue(post);
     apiAny.updatePost = vi.fn();

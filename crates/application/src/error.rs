@@ -85,6 +85,11 @@ pub enum UseCaseError {
     #[error("分类仍被 {posts} 篇文章引用、仍有 {children} 个子分类；先解除引用并移走子分类")]
     CategoryInUse { posts: i64, children: i64 },
 
+    /// 删除仍被文章引用的系列被拒绝（引用保护，任何可见性都占用）。
+    /// HTTP 层映射 409 + `series_in_use`。
+    #[error("系列仍被 {0} 篇文章引用，先解除关联再删除")]
+    SeriesInUse(i64),
+
     #[error("无权执行该操作")]
     Forbidden,
 

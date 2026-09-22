@@ -347,6 +347,61 @@ impl TagRepository for FakeTagRepo {
     }
 }
 
+/// 系列目录 fake：文章用例只依赖 existing_id，恒报存在。
+struct FakeSeriesRepo;
+
+#[async_trait::async_trait]
+impl application::ports::SeriesRepository for FakeSeriesRepo {
+    async fn insert(
+        &self,
+        _snapshot: &domain::content::SeriesSnapshot,
+    ) -> Result<(), UseCaseError> {
+        Ok(())
+    }
+    async fn find_by_slug(
+        &self,
+        _slug: &str,
+    ) -> Result<Option<domain::content::SeriesSnapshot>, UseCaseError> {
+        Ok(None)
+    }
+    async fn list(&self) -> Result<Vec<application::ports::SeriesWithUsage>, UseCaseError> {
+        Ok(Vec::new())
+    }
+    async fn update(
+        &self,
+        _id: uuid::Uuid,
+        _name: &str,
+        _description: Option<&str>,
+        _expected_version: i64,
+    ) -> Result<Option<domain::content::SeriesSnapshot>, UseCaseError> {
+        Ok(None)
+    }
+    async fn delete(
+        &self,
+        _id: uuid::Uuid,
+        _expected_version: i64,
+    ) -> Result<application::ports::SeriesDeleteOutcome, UseCaseError> {
+        Ok(application::ports::SeriesDeleteOutcome::Gone)
+    }
+    async fn existing_id(&self, _id: uuid::Uuid) -> Result<bool, UseCaseError> {
+        Ok(true)
+    }
+    async fn members_of(
+        &self,
+        _series_id: uuid::Uuid,
+    ) -> Result<Vec<application::ports::SeriesMember>, UseCaseError> {
+        Ok(Vec::new())
+    }
+    async fn reorder(
+        &self,
+        _series_id: uuid::Uuid,
+        _expected: i64,
+        _ordered: &[uuid::Uuid],
+    ) -> Result<application::ports::ReorderOutcome, UseCaseError> {
+        Ok(application::ports::ReorderOutcome::Reordered { new_version: 1 })
+    }
+}
+
 /// 分类目录 fake：文章用例只依赖 existing_id（存在性校验），恒报存在。
 struct FakeCategoryRepo;
 
@@ -556,6 +611,7 @@ async fn fixture() -> Fixture {
         post_repo,
         tag_repo.clone(),
         Arc::new(FakeCategoryRepo),
+        Arc::new(FakeSeriesRepo),
         clock,
     ));
 
@@ -615,6 +671,7 @@ fn draft_cmd(slug: &str) -> CreatePostCmd {
         visibility: Visibility::Public,
         tag_ids: Vec::new(),
         category_id: None,
+        series: None,
     }
 }
 
@@ -863,6 +920,7 @@ async fn publish_requires_content() {
                 visibility: Visibility::Public,
                 tag_ids: Vec::new(),
                 category_id: None,
+                series: None,
             },
         )
         .await
@@ -902,6 +960,7 @@ async fn generated_slug_occupied_at_creation() {
                 visibility: Visibility::Public,
                 tag_ids: Vec::new(),
                 category_id: None,
+                series: None,
             },
         )
         .await

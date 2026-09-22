@@ -9,6 +9,7 @@ import type {
   PostSummary,
   ProviderSummary,
   RoleSummary,
+  SeriesSummary,
   CategorySummary,
   TagSummary,
   Visibility,
@@ -128,6 +129,8 @@ export interface CreatePostInput {
   tag_ids?: string[];
   /** 初始分类 id。 */
   category_id?: string;
+  /** 初始系列与序号。 */
+  series?: { id: string; order: number };
 }
 
 export interface EditPostInput {
@@ -140,6 +143,8 @@ export interface EditPostInput {
   tag_ids?: string[];
   /** null = 清空分类；id = 设置；缺省不触碰。 */
   category_id?: string | null;
+  /** null = 退出系列；对象 = 设置系列与序号；缺省不触碰。 */
+  series?: { id: string; order: number } | null;
   expected_version?: number;
 }
 
@@ -389,5 +394,56 @@ export const categoryApi = {
     request<void>(`/api/admin/v1/categories/${encodeURIComponent(slug)}`, {
       method: "DELETE",
       body: JSON.stringify({ expected_version: expectedVersion }),
+    }),
+};
+
+export interface CreateSeriesInput {
+  name: string;
+  slug: string;
+  description?: string;
+}
+
+export interface UpdateSeriesInput {
+  name: string;
+  description?: string;
+  expected_version?: number;
+}
+
+/** 系列目录：读取开放；管理需 series.manage（重排逐篇核验文章授权）。 */
+export const seriesApi = {
+  list: (): Promise<SeriesSummary[]> =>
+    request<SeriesSummary[]>("/api/admin/v1/series"),
+
+  create: (input: CreateSeriesInput): Promise<SeriesSummary> =>
+    request<SeriesSummary>("/api/admin/v1/series", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+
+  update: (slug: string, input: UpdateSeriesInput): Promise<SeriesSummary> =>
+    request<SeriesSummary>(`/api/admin/v1/series/${encodeURIComponent(slug)}`, {
+      method: "PATCH",
+      body: JSON.stringify(input),
+    }),
+
+  /** 删除：仍被文章引用时 409 series_in_use。 */
+  remove: (slug: string, expectedVersion?: number): Promise<void> =>
+    request<void>(`/api/admin/v1/series/${encodeURIComponent(slug)}`, {
+      method: "DELETE",
+      body: JSON.stringify({ expected_version: expectedVersion }),
+    }),
+
+  /** 整体重排（完整排列 + series 版本前提；改他人文章需 any 权限）。 */
+  reorder: (
+    slug: string,
+    orderedPostIds: string[],
+    expectedSeriesVersion?: number,
+  ): Promise<{ series_version: number; ordered_post_ids: string[] }> =>
+    request(`/api/admin/v1/series/${encodeURIComponent(slug)}/reorder`, {
+      method: "POST",
+      body: JSON.stringify({
+        ordered_post_ids: orderedPostIds,
+        expected_series_version: expectedSeriesVersion,
+      }),
     }),
 };

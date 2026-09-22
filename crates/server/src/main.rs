@@ -10,15 +10,18 @@ use application::identity::{RoleInteractor, UserInteractor};
 use application::page::PageInteractor;
 use application::ports::{
     CategoryRepository, PageRepository, PostRepository, PublishedCategoryQuery, PublishedPageQuery,
-    PublishedPostQuery, PublishedTagQuery, TagRepository, UserRepository,
+    PublishedPostQuery, PublishedSeriesQuery, PublishedTagQuery, SeriesRepository, TagRepository,
+    UserRepository,
 };
 use application::public_site::{PublicSiteInteractor, SiteInfo};
+use application::series::SeriesInteractor;
 use application::tag::TagInteractor;
 use infrastructure::{
     MiniJinjaThemeRenderer, PostgresCategoryRepository, PostgresPageRepository,
     PostgresPostRepository, PostgresPublishedCategoryQuery, PostgresPublishedPageQuery,
-    PostgresPublishedPostQuery, PostgresPublishedTagQuery, PostgresRbacStore,
-    PostgresTagRepository, PostgresUserRepository, SanitizingMarkdownRenderer, SystemClock,
+    PostgresPublishedPostQuery, PostgresPublishedSeriesQuery, PostgresPublishedTagQuery,
+    PostgresRbacStore, PostgresSeriesRepository, PostgresTagRepository, PostgresUserRepository,
+    SanitizingMarkdownRenderer, SystemClock,
 };
 use interfaces::cli::{CliDeps, Command, parse_args};
 
@@ -107,6 +110,10 @@ async fn main() {
                 Arc::new(PostgresCategoryRepository::new(pool.clone()));
             let public_category_query: Arc<dyn PublishedCategoryQuery> =
                 Arc::new(PostgresPublishedCategoryQuery::new(pool.clone()));
+            let series_repo: Arc<dyn SeriesRepository> =
+                Arc::new(PostgresSeriesRepository::new(pool.clone()));
+            let public_series_query: Arc<dyn PublishedSeriesQuery> =
+                Arc::new(PostgresPublishedSeriesQuery::new(pool.clone()));
 
             let renderer = Arc::new(
                 MiniJinjaThemeRenderer::load(&config.theme_dir).expect("加载主题模板失败"),
@@ -175,16 +182,19 @@ async fn main() {
                 post_repo.clone(),
                 tag_repo.clone(),
                 category_repo.clone(),
+                series_repo.clone(),
                 clock.clone(),
             ));
             let pages = Arc::new(PageInteractor::new(page_repo, clock.clone()));
             let tags = Arc::new(TagInteractor::new(tag_repo, clock.clone()));
             let categories = Arc::new(CategoryInteractor::new(category_repo, clock.clone()));
+            let series = Arc::new(SeriesInteractor::new(series_repo, clock.clone()));
             let public_site = Arc::new(PublicSiteInteractor::new(
                 public_query,
                 public_page_query,
                 public_tag_query,
                 public_category_query,
+                public_series_query,
                 markdown,
                 renderer,
                 SiteInfo {
@@ -199,6 +209,7 @@ async fn main() {
                 pages,
                 tags,
                 categories,
+                series,
                 roles,
                 auth,
                 passwords,

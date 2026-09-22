@@ -22,6 +22,7 @@ vi.mock("../src/api", async (importOriginal) => {
       getPost: vi.fn(), createPost: vi.fn(), updatePost: vi.fn(),
       publishPost: vi.fn(), unpublishPost: vi.fn(), listTags: vi.fn(),
       categoryApi: { list: vi.fn() },
+      seriesApi: { list: vi.fn() },
     },
   };
 });
@@ -50,6 +51,7 @@ beforeEach(() => {
   // 标签目录：空目录即可（编辑器只渲染选择区）。
   vi.mocked(api.listTags).mockResolvedValue([]);
   vi.mocked(api.categoryApi.list).mockResolvedValue([]);
+  vi.mocked(api.seriesApi.list).mockResolvedValue([]);
 });
 afterEach(cleanup);
 

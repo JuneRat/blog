@@ -39,6 +39,8 @@ struct Stack {
     tags: Arc<dyn TagRepository>,
     /// 分类目录（测试直接预置分类）。
     categories: Arc<dyn CategoryRepository>,
+    /// 系列目录（测试直接预置系列）。
+    series: Arc<dyn application::ports::SeriesRepository>,
     #[allow(dead_code)]
     users: Arc<UserInteractor>,
     pool: PgPool,
@@ -80,10 +82,16 @@ async fn stack() -> Stack {
         Arc::new(PostgresCategoryRepository::new(pool.clone()));
     let public_category_query: Arc<dyn PublishedCategoryQuery> =
         Arc::new(PostgresPublishedCategoryQuery::new(pool.clone()));
+    let series_repo: Arc<dyn application::ports::SeriesRepository> =
+        Arc::new(infrastructure::PostgresSeriesRepository::new(pool.clone()));
+    let public_series_query: Arc<dyn application::ports::PublishedSeriesQuery> = Arc::new(
+        infrastructure::PostgresPublishedSeriesQuery::new(pool.clone()),
+    );
     let posts = Arc::new(PostInteractor::new(
         post_repo,
         tag_repo.clone(),
         category_repo.clone(),
+        series_repo.clone(),
         clock.clone(),
     ));
     let pages = Arc::new(PageInteractor::new(page_repo, clock));
@@ -92,6 +100,7 @@ async fn stack() -> Stack {
         public_page_query,
         public_tag_query,
         public_category_query,
+        public_series_query,
         markdown,
         theme,
         SiteInfo {
@@ -137,6 +146,7 @@ async fn stack() -> Stack {
         pages,
         tags: tag_repo,
         categories: category_repo,
+        series: series_repo,
         users,
         pool,
         author,
@@ -165,6 +175,7 @@ fn cmd(slug: &str, title: &str) -> CreatePostCmd {
         visibility: domain_visibility_public(),
         tag_ids: Vec::new(),
         category_id: None,
+        series: None,
     }
 }
 
@@ -427,6 +438,7 @@ async fn tag_page_lists_public_posts_and_hides_drafts_and_private() {
                 visibility: application::content::PostVisibility::Public,
                 tag_ids: vec![rust],
                 category_id: None,
+                series: None,
             },
         )
         .await
@@ -449,6 +461,7 @@ async fn tag_page_lists_public_posts_and_hides_drafts_and_private() {
                 visibility: application::content::PostVisibility::Public,
                 tag_ids: vec![rust],
                 category_id: None,
+                series: None,
             },
         )
         .await
@@ -466,6 +479,7 @@ async fn tag_page_lists_public_posts_and_hides_drafts_and_private() {
                 visibility: application::content::PostVisibility::Private,
                 tag_ids: vec![rust],
                 category_id: None,
+                series: None,
             },
         )
         .await
@@ -517,6 +531,7 @@ async fn tag_page_paginates_public_posts() {
                     visibility: application::content::PostVisibility::Public,
                     tag_ids: vec![rust],
                     category_id: None,
+                    series: None,
                 },
             )
             .await
@@ -587,6 +602,7 @@ async fn category_page_lists_public_posts_and_hides_drafts() {
                     visibility: application::content::PostVisibility::Public,
                     tag_ids: Vec::new(),
                     category_id: Some(cat_snapshot.id),
+                    series: None,
                 },
             )
             .await
@@ -612,4 +628,72 @@ async fn category_page_lists_public_posts_and_hides_drafts() {
     let (status, body) = get(&stack.router, "/posts/cat-visible").await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert!(body.contains(r#"href="/categories/tech""#), "{body}");
+}
+
+#[tokio::test]
+async fn series_page_lists_public_posts_in_reading_order() {
+    let _g = SERIAL.lock().await;
+    let stack = stack().await;
+    let series = domain::content::Series::new(
+        "指南".into(),
+        domain::content::post::Slug::new("guide").unwrap(),
+        None,
+        time::OffsetDateTime::now_utc(),
+    )
+    .unwrap();
+    let s = series.snapshot();
+    stack.series.insert(&s).await.unwrap();
+
+    // 三篇挂系列：公开(序2)、草稿(序1)、公开(序3)。草稿占位但不出现。
+    for (slug, order, publish) in [
+        ("guide-draft", 1, false),
+        ("guide-first", 2, true),
+        ("guide-second", 3, true),
+    ] {
+        stack
+            .posts
+            .create(
+                &stack.author,
+                CreatePostCmd {
+                    slug: Some(slug.into()),
+                    title: format!("标题-{slug}"),
+                    excerpt: None,
+                    content: "正文".into(),
+                    visibility: application::content::PostVisibility::Public,
+                    tag_ids: Vec::new(),
+                    category_id: None,
+                    series: Some((s.id, order)),
+                },
+            )
+            .await
+            .unwrap();
+        if publish {
+            stack
+                .posts
+                .publish(&stack.author, slug, None)
+                .await
+                .unwrap();
+        }
+    }
+
+    let (status, body) = get(&stack.router, "/series/guide").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body.contains("指南"), "{body}");
+    // 阅读序号按公开成员连续编号（1、2），草稿不出现、不透出空档。
+    let first = body.find("标题-guide-first").unwrap();
+    let second = body.find("标题-guide-second").unwrap();
+    assert!(first < second, "按 series_order 升序：{body}");
+    assert!(!body.contains("guide-draft"), "{body}");
+    assert!(
+        body.contains("value=\"1\"") && body.contains("value=\"2\""),
+        "连续阅读序号：{body}"
+    );
+
+    let (status, _) = get(&stack.router, "/series/ghost").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    // 详情页展示系列链接与阅读顺序。
+    let (status, body) = get(&stack.router, "/posts/guide-first").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body.contains(r#"href="/series/guide""#), "{body}");
 }

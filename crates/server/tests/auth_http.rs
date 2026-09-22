@@ -144,6 +144,7 @@ async fn fresh_stack_with(secure_cookies: bool) -> Stack {
         std::sync::Arc::new(infrastructure::PostgresCategoryRepository::new(
             pool.clone(),
         )),
+        std::sync::Arc::new(infrastructure::PostgresSeriesRepository::new(pool.clone())),
         std::sync::Arc::new(infrastructure::SystemClock),
     ));
     let pages = Arc::new(application::page::PageInteractor::new(
@@ -185,6 +186,10 @@ async fn fresh_stack_with(secure_cookies: bool) -> Stack {
             std::sync::Arc::new(infrastructure::PostgresCategoryRepository::new(
                 pool.clone(),
             )),
+            std::sync::Arc::new(infrastructure::SystemClock),
+        )),
+        series: Arc::new(application::series::SeriesInteractor::new(
+            std::sync::Arc::new(infrastructure::PostgresSeriesRepository::new(pool.clone())),
             std::sync::Arc::new(infrastructure::SystemClock),
         )),
         roles,

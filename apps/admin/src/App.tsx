@@ -6,6 +6,7 @@ import { PageListScreen } from "./screens/PageListScreen";
 import { PostEditScreen } from "./screens/PostEditScreen";
 import { PostListScreen } from "./screens/PostListScreen";
 import { CategoryListScreen } from "./screens/CategoryListScreen";
+import { SeriesListScreen } from "./screens/SeriesListScreen";
 import { TagListScreen } from "./screens/TagListScreen";
 import { RoleListScreen } from "./screens/RoleListScreen";
 import { UserListScreen } from "./screens/UserListScreen";
@@ -60,6 +61,9 @@ export function App() {
   }
   if (route.name === "categoryList") {
     return <CategoryListScreen />;
+  }
+  if (route.name === "seriesList") {
+    return <SeriesListScreen />;
   }
   if (route.name === "userList") {
     return <UserListScreen />;

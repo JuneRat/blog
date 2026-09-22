@@ -185,11 +185,12 @@ docs/               # 设计文档与 ADR
 - 系列位置唯一约束（可延后）交换、外键 RESTRICT、用户名/slug 冲突映射。
 - 标签闭环（M3 第一段）：目录管理（创建/改名/删除，`tag.manage`，slug 创建后不可改，被引用标签删除受保护，业务码 `tag_in_use`）；文章编辑器多标签选择，正文与标签关系同一事务保存（仅标签变化也递增 version，重复 id 幂等去重）；公开标签页 `/tags/{slug}` 分页（每页 20，只列公开已发布文章，页码越界渲染空页）；文章详情展示标签链接。
 - 分类树（M3 第二段）：创建/更新/移动/删除（category.manage，slug 创建后不可改）；移动在分类树事务锁内做深度受限祖先链校验防环；被文章引用或含子分类时删除受 category_in_use 保护；文章编辑器分类选择与正文/标签同事务保存；公开分类页 /categories/（slug） 分页（直接归属），详情页展示分类链接。
+- Series（M3 第三段）：目录管理（series.manage，被文章引用时删除受 series_in_use 保护）；文章设置系列与序号（同事务，位置唯一冲突为可定位 409）；整体重排在系列行锁 + series.version 前提下进行，成员按 id 序加锁、位置唯一约束 DEFERRED 到提交检查，同时递增涉及 posts.version 与 series.version；重排逐篇核验文章授权；公开系列页 /series/（slug） 按阅读顺序分页（草稿占位不外泄）。
 - M0 主题桥接原型（`spikes/template-bridge`）：同步模板函数 ↔ 异步 SQL 查询桥接验证可行，预算/隔离/失败场景 17 项集成测试；结论见原型 README 与 ADR-0002。
 
 ## 下一步
 
-M2（身份与后台）已交付：RBAC/委派、OAuth 登录闭环、本地密码登录（Argon2id + 限流 + 受控重置）、管理写 API、后台 SPA（文章/页面/用户与角色屏幕）；其后用户与角色管理界面也已交付（见 [身份与后台 §8](docs/identity-and-admin.md)）。M0 主题桥接原型已完成（结论可行）。M3 按 [roadmap](docs/product-roadmap.md) 推进：标签闭环与分类树（防环树锁 + 引用保护 + 公开分类页）**已交付**，接下来是 Series 排序、settings、RSS/sitemap、Post 回收站、备份恢复与正式主题函数。
+M2（身份与后台）已交付：RBAC/委派、OAuth 登录闭环、本地密码登录（Argon2id + 限流 + 受控重置）、管理写 API、后台 SPA（文章/页面/用户与角色屏幕）；其后用户与角色管理界面也已交付（见 [身份与后台 §8](docs/identity-and-admin.md)）。M0 主题桥接原型已完成（结论可行）。M3 按 [roadmap](docs/product-roadmap.md) 推进：标签闭环、分类树（防环树锁 + 引用保护）与 Series（并发重排锁协议 + 公开系列页）**已交付**，接下来是 settings、RSS/sitemap、Post 回收站、备份恢复与正式主题函数。
 
 M2 遗留（已知、未做）：
 

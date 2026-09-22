@@ -37,6 +37,8 @@ export interface PostSummary {
   author_id: string;
   tag_ids: string[];
   category_id: string | null;
+  series_id: string | null;
+  series_order: number | null;
 }
 
 /** 单篇详情：摘要 + Markdown 源文（编辑器数据源）。 */
@@ -119,4 +121,26 @@ export interface CategorySummary {
   version: number;
   /** 直接归属的公开文章计数。 */
   pub_post_count: number;
+}
+
+/** GET /api/admin/v1/series 列表条目（系列目录）。 */
+export interface SeriesSummary {
+  id: string;
+  slug: string;
+  name: string;
+  description: string | null;
+  version: number;
+  /** 成员总数（含草稿/私密——它们保留位置）。 */
+  post_count: number;
+  pub_post_count: number;
+}
+
+/** 系列成员（重排与目录展示）。 */
+export interface SeriesMemberRow {
+  id: string;
+  slug: string;
+  title: string;
+  status: string;
+  author_id: string;
+  series_order: number | null;
 }

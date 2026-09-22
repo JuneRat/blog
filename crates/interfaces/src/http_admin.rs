@@ -15,6 +15,7 @@ use application::error::UseCaseError;
 use application::identity::Actor;
 use application::page::{CreatePageCmd, EditPageCmd, PageDto};
 use application::ports::SESSION_COOKIE;
+use application::series::{CreateSeriesCmd, ReorderSeriesCmd, SeriesDto, UpdateSeriesCmd};
 use application::tag::{CreateTagCmd, TagDto};
 use axum::extract::{FromRef, Path, Query, State};
 use axum::http::{StatusCode, request::Parts};
@@ -49,6 +50,8 @@ struct PostJson {
     tag_ids: Vec<Uuid>,
     /// 所属分类 id（None = 未分类）。
     category_id: Option<Uuid>,
+    series_id: Option<Uuid>,
+    series_order: Option<i32>,
 }
 
 impl From<&PostDto> for PostJson {
@@ -67,6 +70,8 @@ impl From<&PostDto> for PostJson {
             author_id: dto.author_id,
             tag_ids: dto.tag_ids.clone(),
             category_id: dto.category_id,
+            series_id: dto.series_id,
+            series_order: dto.series_order,
         }
     }
 }
@@ -182,6 +187,9 @@ pub struct CreatePostBody {
     /// 初始分类 id（存在性由用例校验）。
     #[serde(default)]
     pub category_id: Option<Uuid>,
+    /// 初始系列与序号。
+    #[serde(default)]
+    pub series: Option<SeriesBody>,
 }
 
 #[derive(Deserialize, Default)]
@@ -196,7 +204,17 @@ pub struct EditPostBody {
     /// 三态：缺省不修改；null 清空分类；id 设置分类。
     #[serde(default, deserialize_with = "deserialize_double_option")]
     pub category_id: Option<Option<Uuid>>,
+    /// 三态：缺省不修改；null 退出系列；对象设置系列与序号。
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    pub series: Option<Option<SeriesBody>>,
     pub expected_version: Option<i64>,
+}
+
+/// 文章的系列归属载荷（同事务保存）。
+#[derive(Deserialize, Clone, Copy)]
+pub struct SeriesBody {
+    pub id: Uuid,
+    pub order: i32,
 }
 
 #[derive(Deserialize, Default)]
@@ -250,6 +268,7 @@ async fn create_post(
                 visibility,
                 tag_ids: body.tag_ids,
                 category_id: body.category_id,
+                series: body.series.map(|s| (s.id, s.order)),
             },
         )
         .await
@@ -327,6 +346,7 @@ async fn edit_post(
                 visibility,
                 tag_ids: body.tag_ids,
                 category_id: body.category_id,
+                series: body.series.map(|opt| opt.map(|s| (s.id, s.order))),
                 expected_version: body.expected_version,
             },
         )
@@ -837,6 +857,172 @@ async fn delete_category(
     let expected = body.and_then(|Json(b)| b.expected_version);
     match state.categories.delete(&actor, &slug, expected).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => admin_error(e, &request_id),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 系列目录：管理（series.manage）+ 重排 + 目录读取
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Serialize)]
+struct SeriesJson {
+    id: Uuid,
+    slug: String,
+    name: String,
+    description: Option<String>,
+    version: i64,
+    /// 成员总数（含草稿/私密/回收站——它们保留位置）。
+    post_count: i64,
+    pub_post_count: i64,
+}
+
+impl From<&SeriesDto> for SeriesJson {
+    fn from(dto: &SeriesDto) -> Self {
+        Self {
+            id: dto.id,
+            slug: dto.slug.clone(),
+            name: dto.name.clone(),
+            description: dto.description.clone(),
+            version: dto.version,
+            post_count: dto.post_count,
+            pub_post_count: dto.public_post_count,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+pub struct CreateSeriesBody {
+    pub name: String,
+    pub slug: String,
+    pub description: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+pub struct UpdateSeriesBody {
+    pub name: String,
+    pub description: Option<String>,
+    pub expected_version: Option<i64>,
+}
+
+#[derive(Deserialize)]
+pub struct ReorderBody {
+    /// 系列内全部文章 id 按目标顺序（完整排列）。
+    pub ordered_post_ids: Vec<Uuid>,
+    pub expected_series_version: Option<i64>,
+}
+
+pub fn series_router(state: AdminState) -> Router {
+    Router::new()
+        .route("/api/admin/v1/series", get(list_series).post(create_series))
+        .route(
+            "/api/admin/v1/series/{slug}",
+            axum::routing::patch(update_series).delete(delete_series),
+        )
+        .route("/api/admin/v1/series/{slug}/reorder", post(reorder_series))
+        .layer(axum::extract::DefaultBodyLimit::max(ADMIN_BODY_LIMIT))
+        .layer(middleware::from_fn(no_store))
+        .with_state(state)
+}
+
+async fn list_series(
+    AdminAuth { actor }: AdminAuth,
+    request_id: RequestId,
+    State(state): State<AdminState>,
+) -> Response {
+    match state.series.list(&actor).await {
+        Ok(list) => (
+            StatusCode::OK,
+            Json(list.iter().map(SeriesJson::from).collect::<Vec<_>>()),
+        )
+            .into_response(),
+        Err(e) => admin_error(e, &request_id),
+    }
+}
+
+async fn create_series(
+    AdminAuth { actor }: AdminAuth,
+    request_id: RequestId,
+    State(state): State<AdminState>,
+    Json(body): Json<CreateSeriesBody>,
+) -> Response {
+    match state
+        .series
+        .create(
+            &actor,
+            CreateSeriesCmd {
+                name: body.name,
+                slug: body.slug,
+                description: body.description,
+            },
+        )
+        .await
+    {
+        Ok(dto) => (StatusCode::CREATED, Json(SeriesJson::from(&dto))).into_response(),
+        Err(e) => admin_error(e, &request_id),
+    }
+}
+
+async fn update_series(
+    AdminAuth { actor }: AdminAuth,
+    request_id: RequestId,
+    State(state): State<AdminState>,
+    Path(slug): Path<String>,
+    Json(body): Json<UpdateSeriesBody>,
+) -> Response {
+    match state
+        .series
+        .update(
+            &actor,
+            &slug,
+            UpdateSeriesCmd {
+                name: body.name,
+                description: body.description,
+                expected_version: body.expected_version,
+            },
+        )
+        .await
+    {
+        Ok(dto) => (StatusCode::OK, Json(SeriesJson::from(&dto))).into_response(),
+        Err(e) => admin_error(e, &request_id),
+    }
+}
+
+async fn delete_series(
+    AdminAuth { actor }: AdminAuth,
+    request_id: RequestId,
+    State(state): State<AdminState>,
+    Path(slug): Path<String>,
+    body: Option<Json<VersionBody>>,
+) -> Response {
+    let expected = body.and_then(|Json(b)| b.expected_version);
+    match state.series.delete(&actor, &slug, expected).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => admin_error(e, &request_id),
+    }
+}
+
+/// 整体重排：series.manage + 逐篇文章授权（own/any）；完整排列契约。
+async fn reorder_series(
+    AdminAuth { actor }: AdminAuth,
+    request_id: RequestId,
+    State(state): State<AdminState>,
+    Path(slug): Path<String>,
+    Json(body): Json<ReorderBody>,
+) -> Response {
+    match state
+        .series
+        .reorder(
+            &actor,
+            &slug,
+            ReorderSeriesCmd {
+                ordered_post_ids: body.ordered_post_ids,
+                expected_series_version: body.expected_series_version,
+            },
+        )
+        .await
+    {
+        Ok(dto) => (StatusCode::OK, Json(dto)).into_response(),
         Err(e) => admin_error(e, &request_id),
     }
 }

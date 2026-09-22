@@ -5,7 +5,7 @@ use std::path::Path;
 
 use application::error::UseCaseError;
 use application::public_site::{
-    CategoryView, PageView, PostCard, PostView, SiteInfo, TagView, ThemeRenderer,
+    CategoryView, PageView, PostCard, PostView, SeriesView, SiteInfo, TagView, ThemeRenderer,
 };
 use minijinja::Environment;
 use pulldown_cmark::{Options, Parser, html::push_html};
@@ -69,6 +69,12 @@ struct CategoryContext<'a> {
     category: &'a CategoryView,
 }
 
+#[derive(serde::Serialize)]
+struct SeriesContext<'a> {
+    site: &'a SiteInfo,
+    series: &'a SeriesView,
+}
+
 /// MiniJinja 主题渲染器：启动时加载并解析主题模板，请求期复用。
 pub struct MiniJinjaThemeRenderer {
     env: Environment<'static>,
@@ -86,6 +92,7 @@ impl MiniJinjaThemeRenderer {
             "page.html",
             "tag.html",
             "category.html",
+            "series.html",
         ] {
             let path = theme_dir.join("templates").join(name);
             let source = std::fs::read_to_string(&path)
@@ -139,6 +146,14 @@ impl ThemeRenderer for MiniJinjaThemeRenderer {
         let ctx = CategoryContext { site, category };
         self.env
             .get_template("category.html")
+            .and_then(|t| t.render(ctx))
+            .map_err(|e| UseCaseError::Render(e.to_string()))
+    }
+
+    fn render_series(&self, site: &SiteInfo, series: &SeriesView) -> Result<String, UseCaseError> {
+        let ctx = SeriesContext { site, series };
+        self.env
+            .get_template("series.html")
             .and_then(|t| t.render(ctx))
             .map_err(|e| UseCaseError::Render(e.to_string()))
     }

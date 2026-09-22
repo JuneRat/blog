@@ -288,6 +288,90 @@ pub trait CategoryRepository: Send + Sync {
     async fn public_count(&self, id: Uuid) -> Result<i64, UseCaseError>;
 }
 
+/// 系列目录条目：含公开文章计数与总成员数。
+#[derive(Debug, Clone, PartialEq)]
+pub struct SeriesWithUsage {
+    pub snapshot: domain::content::SeriesSnapshot,
+    /// 系列内全部文章数（含草稿/私密/回收站——它们保留位置）。
+    pub post_count: i64,
+    /// 其中公开可见（published+public+未删除）的文章数。
+    pub public_post_count: i64,
+}
+
+/// 系列删除的受控结果。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SeriesDeleteOutcome {
+    Deleted,
+    StaleVersion,
+    /// 仍被文章引用（任何可见性）：引用保护拒绝删除。
+    Referenced {
+        count: i64,
+    },
+    Gone,
+}
+
+/// 重排结果：集合不匹配表示调用方持有的目录已过期。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReorderOutcome {
+    /// 成功；返回递增后的 series.version。
+    Reordered {
+        new_version: i64,
+    },
+    StaleSeriesVersion,
+    /// 提交的文章集合与系列当前成员不一致（须重读目录再排）。
+    MembershipMismatch,
+    SeriesGone,
+}
+
+/// 系列成员视图（重排授权用：每篇文章的作者）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SeriesMember {
+    pub post_id: Uuid,
+    pub author_id: Uuid,
+}
+
+#[async_trait]
+pub trait SeriesRepository: Send + Sync {
+    async fn insert(&self, snapshot: &domain::content::SeriesSnapshot) -> Result<(), UseCaseError>;
+    async fn find_by_slug(
+        &self,
+        slug: &str,
+    ) -> Result<Option<domain::content::SeriesSnapshot>, UseCaseError>;
+    async fn list(&self) -> Result<Vec<SeriesWithUsage>, UseCaseError>;
+
+    /// 条件更新（CAS）：name/描述一次提交；命中返回新快照，未命中 None。
+    async fn update(
+        &self,
+        id: Uuid,
+        name: &str,
+        description: Option<&str>,
+        expected_version: i64,
+    ) -> Result<Option<domain::content::SeriesSnapshot>, UseCaseError>;
+
+    /// 条件删除：仍被任何文章引用（含草稿/私密/回收站）时拒绝。
+    async fn delete(
+        &self,
+        id: Uuid,
+        expected_version: i64,
+    ) -> Result<SeriesDeleteOutcome, UseCaseError>;
+
+    /// 文章设置系列前的存在性校验。
+    async fn existing_id(&self, id: Uuid) -> Result<bool, UseCaseError>;
+
+    /// 系列当前成员（按 series_order 升序；重排授权与目录展示用）。
+    async fn members_of(&self, series_id: Uuid) -> Result<Vec<SeriesMember>, UseCaseError>;
+
+    /// 并发安全重排：系列行锁 + series.version 校验 + 成员行锁（按 id 序）
+    /// + DEFERRED 位置唯一约束，更新全部成员顺序与 posts.version，
+    /// 并递增 series.version。见 docs/database-design.md §4。
+    async fn reorder(
+        &self,
+        series_id: Uuid,
+        expected_series_version: i64,
+        ordered_post_ids: &[Uuid],
+    ) -> Result<ReorderOutcome, UseCaseError>;
+}
+
 // ---------------------------------------------------------------------------
 // Page（站点级内容，无作者归属）
 // ---------------------------------------------------------------------------
@@ -396,6 +480,14 @@ pub struct PublicCategoryRef {
     pub name: String,
 }
 
+/// 公开文章上的系列引用（含阅读序号）。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PublicSeriesRef {
+    pub slug: String,
+    pub name: String,
+    pub order: i32,
+}
+
 /// 公开详情（正文为 Markdown 源文，渲染交给出站端口）。
 #[derive(Debug, Clone)]
 pub struct PublicPostDetail {
@@ -411,6 +503,8 @@ pub struct PublicPostDetail {
     pub tags: Vec<PublicTagRef>,
     /// 所属分类（至多一个；分类目录本身公开）。
     pub category: Option<PublicCategoryRef>,
+    /// 所属系列与阅读序号（公开页序号可能因草稿占位而留空档）。
+    pub series: Option<PublicSeriesRef>,
 }
 
 #[async_trait]
@@ -439,6 +533,29 @@ pub struct PublicTagSummary {
 pub struct PublicCategorySummary {
     pub slug: String,
     pub name: String,
+}
+
+/// 公开系列页数据源。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PublicSeriesSummary {
+    pub slug: String,
+    pub name: String,
+}
+
+#[async_trait]
+pub trait PublishedSeriesQuery: Send + Sync {
+    async fn find_public_by_slug(
+        &self,
+        slug: &str,
+    ) -> Result<Option<PublicSeriesSummary>, UseCaseError>;
+
+    /// 系列内公开文章按 series_order 升序分页（含总数）。
+    async fn list_public_posts_by_series(
+        &self,
+        series_slug: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<(Vec<PublicPostSummary>, i64), UseCaseError>;
 }
 
 #[async_trait]

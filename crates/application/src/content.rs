@@ -33,6 +33,8 @@ pub struct CreatePostCmd {
     pub tag_ids: Vec<Uuid>,
     /// 初始分类（存在性由用例校验）。
     pub category_id: Option<Uuid>,
+    /// 初始系列与序号（None = 不加入系列）。
+    pub series: Option<(Uuid, i32)>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -48,6 +50,8 @@ pub struct EditPostCmd {
     pub tag_ids: Option<Vec<Uuid>>,
     /// 三态：None 不修改；Some(None) 清空分类；Some(Some(id)) 设置分类。
     pub category_id: Option<Option<Uuid>>,
+    /// 三态：None 不修改；Some(None) 退出系列；Some(Some((id, order))) 设置。
+    pub series: Option<Option<(Uuid, i32)>>,
     /// None 表示使用读取到的当前版本（仍可检测读后并发修改）。
     pub expected_version: Option<i64>,
 }
@@ -72,6 +76,9 @@ pub struct PostDto {
     pub tag_ids: Vec<Uuid>,
     /// 所属分类 id（至多一个；None = 未分类）。
     pub category_id: Option<Uuid>,
+    /// 所属系列与序号（同空或同非空）。
+    pub series_id: Option<Uuid>,
+    pub series_order: Option<i32>,
 }
 
 impl PostDto {
@@ -91,6 +98,8 @@ impl PostDto {
             author_id: s.author_id,
             tag_ids,
             category_id: s.category_id,
+            series_id: s.series_id,
+            series_order: s.series_order,
         }
     }
 }
@@ -101,6 +110,8 @@ pub struct PostInteractor {
     tags: Arc<dyn TagRepository>,
     /// 分类存在性校验（文章设置分类的前置检查；写关系仍在 PostRepository 事务内）。
     categories: Arc<dyn crate::ports::CategoryRepository>,
+    /// 系列存在性校验（文章设置系列的前置检查；写关系仍在 PostRepository 事务内）。
+    series: Arc<dyn crate::ports::SeriesRepository>,
     clock: Arc<dyn Clock>,
 }
 
@@ -109,12 +120,14 @@ impl PostInteractor {
         posts: Arc<dyn PostRepository>,
         tags: Arc<dyn TagRepository>,
         categories: Arc<dyn crate::ports::CategoryRepository>,
+        series: Arc<dyn crate::ports::SeriesRepository>,
         clock: Arc<dyn Clock>,
     ) -> Self {
         Self {
             posts,
             tags,
             categories,
+            series,
             clock,
         }
     }
@@ -133,6 +146,9 @@ impl PostInteractor {
         if let Some(category_id) = cmd.category_id {
             self.validate_category(category_id).await?;
         }
+        if let Some((series_id, _)) = cmd.series {
+            self.validate_series(series_id).await?;
+        }
         let post = Post::create_draft(
             actor.user_id,
             slug,
@@ -145,7 +161,9 @@ impl PostInteractor {
         .map_err(|e| UseCaseError::Invalid(e.to_string()))?;
         let mut snapshot = post.snapshot();
         snapshot.category_id = cmd.category_id;
-        // 正文与初始标签/分类关系同一事务写入。
+        snapshot.series_id = cmd.series.map(|(id, _)| id);
+        snapshot.series_order = cmd.series.map(|(_, order)| order);
+        // 正文与初始标签/分类/系列关系同一事务写入。
         self.posts.insert(&snapshot, &tag_ids).await?;
         Ok(PostDto::from_snapshot(&snapshot, tag_ids))
     }
@@ -161,6 +179,9 @@ impl PostInteractor {
 
         if let Some(Some(category_id)) = cmd.category_id {
             self.validate_category(category_id).await?;
+        }
+        if let Some(Some((series_id, _))) = cmd.series {
+            self.validate_series(series_id).await?;
         }
         let new_tags = match cmd.tag_ids {
             Some(ids) => Some(self.validate_tags(ids).await?),
@@ -184,6 +205,7 @@ impl PostInteractor {
                 content: cmd.content,
                 visibility: cmd.visibility,
                 category_id: cmd.category_id,
+                series: cmd.series,
             })
             .map_err(|e| UseCaseError::Invalid(e.to_string()))?;
 
@@ -312,6 +334,16 @@ impl PostInteractor {
             SaveOutcome::StaleConflict => Err(UseCaseError::VersionConflict),
             SaveOutcome::Gone => Err(UseCaseError::NotFound("文章（已被删除）".into())),
         }
+    }
+
+    /// 系列存在性校验：未知 id 报为可定位的参数错误。
+    async fn validate_series(&self, series_id: Uuid) -> Result<(), UseCaseError> {
+        if !self.series.existing_id(series_id).await? {
+            return Err(UseCaseError::Invalid(format!(
+                "所选系列不存在：{series_id}"
+            )));
+        }
+        Ok(())
     }
 
     /// 分类存在性校验：未知 id 报为可定位的参数错误。

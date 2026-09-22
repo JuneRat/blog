@@ -168,6 +168,9 @@ pub struct PostPatch {
     pub content: Option<String>,
     pub visibility: Option<Visibility>,
     pub category_id: Option<Option<Uuid>>,
+    /// 系列归属三态：None 不修改；Some(None) 退出系列；Some(Some((id, order)))
+    /// 设置系列与序号（order 必须为正整数；同空同非空由类型形状保证）。
+    pub series: Option<Option<(Uuid, i32)>>,
 }
 
 /// Post 聚合。字段私有，状态转换只经由行为方法。
@@ -288,6 +291,18 @@ impl Post {
             .unwrap_or_else(|| self.snapshot.content.clone());
         let new_visibility = patch.visibility.unwrap_or(self.snapshot.visibility);
         let new_category_id = patch.category_id.unwrap_or(self.snapshot.category_id);
+        let new_series = match patch.series {
+            None => (self.snapshot.series_id, self.snapshot.series_order),
+            Some(None) => (None, None),
+            Some(Some((series_id, order))) => {
+                if order <= 0 {
+                    return Err(PostError::InvalidSlug(format!(
+                        "系列序号必须为正整数，收到 {order}"
+                    )));
+                }
+                (Some(series_id), Some(order))
+            }
+        };
         let slug_changed = match patch.slug.as_deref() {
             Some(new_slug) => new_slug != self.snapshot.slug,
             None => false,
@@ -336,6 +351,11 @@ impl Post {
         }
         if new_category_id != self.snapshot.category_id {
             self.snapshot.category_id = new_category_id;
+            changed = true;
+        }
+        if new_series != (self.snapshot.series_id, self.snapshot.series_order) {
+            self.snapshot.series_id = new_series.0;
+            self.snapshot.series_order = new_series.1;
             changed = true;
         }
         if slug_changed {
