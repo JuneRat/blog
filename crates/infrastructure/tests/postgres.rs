@@ -1941,15 +1941,16 @@ async fn series_reorder_rewrites_orders_and_bumps_versions() {
     let a = post_in_series(&pool, author, s.id, "part-1", 1).await;
     let b = post_in_series(&pool, author, s.id, "part-2", 2).await;
 
+    // 基线：两篇 post_in_series 的 insert 已递增系列版本两次。
     // 完整排列倒序。
     let outcome = repo_of(&pool)
-        .reorder(s.id, s.version, &[b.id, a.id])
+        .reorder(s.id, s.version + 2, &[b.id, a.id])
         .await
         .unwrap();
     assert_eq!(
         outcome,
         application::ports::ReorderOutcome::Reordered {
-            new_version: s.version + 1
+            new_version: s.version + 3
         }
     );
 
@@ -1973,7 +1974,7 @@ async fn series_reorder_rewrites_orders_and_bumps_versions() {
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert_eq!(sv, s.version + 1);
+    assert_eq!(sv, s.version + 3);
 }
 
 fn repo_of(pool: &sqlx::PgPool) -> infrastructure::PostgresSeriesRepository {
@@ -2000,7 +2001,7 @@ async fn series_reorder_rejects_stale_version_and_mismatched_membership() {
     // 不完整的集合：拒绝，不落任何写入。
     assert_eq!(
         repo_of(&pool)
-            .reorder(s.id, s.version, &[a.id])
+            .reorder(s.id, s.version + 2, &[a.id])
             .await
             .unwrap(),
         application::ports::ReorderOutcome::MembershipMismatch
@@ -2024,16 +2025,17 @@ async fn concurrent_reorders_exactly_one_wins_on_series_version() {
 
     // 两个连接都用同一 expected 版本竞争：恰好一个成功，另一个 StaleSeriesVersion。
     let pool2 = pool.clone();
+    let base = s.version + 2; // 两篇 insert 已递增。
     let (first, second) = tokio::join!(
         async {
             repo_of(&pool)
-                .reorder(s.id, s.version, &[a.id, b.id])
+                .reorder(s.id, base, &[a.id, b.id])
                 .await
                 .unwrap()
         },
         async {
             repo_of(&pool2)
-                .reorder(s.id, s.version, &[b.id, a.id])
+                .reorder(s.id, base, &[b.id, a.id])
                 .await
                 .unwrap()
         },
@@ -2043,7 +2045,7 @@ async fn concurrent_reorders_exactly_one_wins_on_series_version() {
         .iter()
         .filter(|o| {
             **o == application::ports::ReorderOutcome::Reordered {
-                new_version: s.version + 1,
+                new_version: s.version + 3,
             }
         })
         .count();
@@ -2062,7 +2064,7 @@ async fn series_delete_protects_referenced_posts() {
     let s = seed_series(&pool, "指南", "guide").await;
     post_in_series(&pool, author, s.id, "part-1", 1).await;
 
-    match repo_of(&pool).delete(s.id, s.version).await.unwrap() {
+    match repo_of(&pool).delete(s.id, s.version + 1).await.unwrap() {
         application::ports::SeriesDeleteOutcome::Referenced { count } => assert_eq!(count, 1),
         other => panic!("期望引用保护，得到 {other:?}"),
     }
@@ -2078,7 +2080,7 @@ async fn series_delete_protects_referenced_posts() {
         .execute(&pool)
         .await
         .unwrap();
-    match repo_of(&pool).delete(s.id, s.version).await.unwrap() {
+    match repo_of(&pool).delete(s.id, s.version + 1).await.unwrap() {
         application::ports::SeriesDeleteOutcome::Deleted => {}
         other => panic!("期望删除成功，得到 {other:?}"),
     }
@@ -2118,4 +2120,97 @@ async fn post_series_position_conflict_maps_to_series_position() {
         .await
         .unwrap();
     assert_eq!((posts.len(), total), (0, 0), "草稿不出现在公开系列页");
+}
+
+#[tokio::test]
+async fn post_series_edit_participates_in_series_version_protocol() {
+    let _g = SERIAL.lock().await;
+    let pool = fresh_database().await;
+    let author = seed_user(&pool, "author").await;
+    let s = seed_series(&pool, "协议", "protocol").await;
+    let repo = PostgresPostRepository::new(pool.clone());
+    let series_repo = repo_of(&pool);
+    let a = post_in_series(&pool, author, s.id, "pp-1", 1).await;
+    let b = post_in_series(&pool, author, s.id, "pp-2", 2).await;
+
+    // P1 回归：文章编辑改序号必须递增 series.version——
+    // 否则手持旧系列版本的重排仍会成功，覆盖刚保存的位置。
+    let moved = {
+        let mut snap = a.clone();
+        snap.series_order = Some(5);
+        snap
+    };
+    match repo
+        .save(&moved, a.version, OffsetDateTime::now_utc(), None)
+        .await
+        .unwrap()
+    {
+        SaveOutcome::Saved { new_version } => assert_eq!(new_version, a.version + 1),
+        other => panic!("得到 {other:?}"),
+    }
+    let (sv,): (i64,) = sqlx::query_as("SELECT version FROM series WHERE id = $1")
+        .bind(s.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    // 基线：post_in_series×2 的 insert 已递增过两次（创建即入系列）。
+    assert_eq!(sv, s.version + 3, "insert×2 + 本次序号变化各递增一次");
+
+    // 用编辑前的系列版本重排：现在必须被拒（旧目录失效）。
+    assert_eq!(
+        series_repo
+            .reorder(s.id, s.version, &[a.id, b.id])
+            .await
+            .unwrap(),
+        application::ports::ReorderOutcome::StaleSeriesVersion,
+        "旧系列版本不得再重排"
+    );
+
+    // 退出系列同样递增（旧目录成员集已变）。
+    let left = {
+        let mut snap = moved.clone();
+        snap.series_id = None;
+        snap.series_order = None;
+        snap
+    };
+    repo.save(&left, moved.version + 1, OffsetDateTime::now_utc(), None)
+        .await
+        .unwrap();
+    let (sv2,): (i64,) = sqlx::query_as("SELECT version FROM series WHERE id = $1")
+        .bind(s.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(sv2, s.version + 4, "退出系列再递增一次");
+
+    // 与文章归属无关的纯正文编辑不递增系列版本。
+    let content_only = {
+        let mut snap = left.clone();
+        snap.content = "只改正文".into();
+        snap
+    };
+    repo.save(
+        &content_only,
+        left.version + 1,
+        OffsetDateTime::now_utc(),
+        None,
+    )
+    .await
+    .unwrap();
+    let (sv3,): (i64,) = sqlx::query_as("SELECT version FROM series WHERE id = $1")
+        .bind(s.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(sv3, s.version + 4, "纯正文编辑不动系列版本");
+
+    // 创建即入系列：insert 也递增。
+    let s2 = seed_series(&pool, "新系列", "fresh").await;
+    post_in_series(&pool, author, s2.id, "pp-3", 1).await;
+    let (sv4,): (i64,) = sqlx::query_as("SELECT version FROM series WHERE id = $1")
+        .bind(s2.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(sv4, s2.version + 1, "创建即入系列递增 series.version");
 }

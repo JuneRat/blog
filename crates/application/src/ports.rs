@@ -323,11 +323,17 @@ pub enum ReorderOutcome {
     SeriesGone,
 }
 
-/// 系列成员视图（重排授权用：每篇文章的作者）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// 系列成员视图（重排授权与管理目录共用：含文章概要与作者）。
+#[derive(Debug, Clone, PartialEq)]
 pub struct SeriesMember {
     pub post_id: Uuid,
     pub author_id: Uuid,
+    pub slug: String,
+    pub title: String,
+    /// draft/published/archived（成员含草稿/私密——它们保留位置）。
+    pub status: String,
+    pub visibility: String,
+    pub series_order: i32,
 }
 
 #[async_trait]
@@ -358,7 +364,7 @@ pub trait SeriesRepository: Send + Sync {
     /// 文章设置系列前的存在性校验。
     async fn existing_id(&self, id: Uuid) -> Result<bool, UseCaseError>;
 
-    /// 系列当前成员（按 series_order 升序；重排授权与目录展示用）。
+    /// 系列当前成员（按 series_order 升序；重排授权与管理目录展示共用）。
     async fn members_of(&self, series_id: Uuid) -> Result<Vec<SeriesMember>, UseCaseError>;
 
     /// 并发安全重排：系列行锁 + series.version 校验 + 成员行锁（按 id 序）

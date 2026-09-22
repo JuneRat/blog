@@ -239,6 +239,20 @@ impl SeriesInteractor {
         }
     }
 
+    /// 管理目录视图：系列全部成员（含他人草稿/私密——重排会改动它们的位置，
+    /// 目录必须完整）。要求 series.manage（持有者 Owner/Editor 均具备 post.read_any）。
+    pub async fn members(
+        &self,
+        actor: &Actor,
+        target_slug: &str,
+    ) -> Result<Vec<crate::ports::SeriesMember>, UseCaseError> {
+        if !actor.has_permission("series.manage") {
+            return Err(UseCaseError::Forbidden);
+        }
+        let series = self.load(target_slug).await?;
+        self.series.members_of(series.id()).await
+    }
+
     async fn load(&self, slug: &str) -> Result<Series, UseCaseError> {
         let snapshot = self
             .series

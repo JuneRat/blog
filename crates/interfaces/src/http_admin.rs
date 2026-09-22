@@ -920,6 +920,7 @@ pub fn series_router(state: AdminState) -> Router {
             axum::routing::patch(update_series).delete(delete_series),
         )
         .route("/api/admin/v1/series/{slug}/reorder", post(reorder_series))
+        .route("/api/admin/v1/series/{slug}/members", get(series_members))
         .layer(axum::extract::DefaultBodyLimit::max(ADMIN_BODY_LIMIT))
         .layer(middleware::from_fn(no_store))
         .with_state(state)
@@ -998,6 +999,48 @@ async fn delete_series(
     let expected = body.and_then(|Json(b)| b.expected_version);
     match state.series.delete(&actor, &slug, expected).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => admin_error(e, &request_id),
+    }
+}
+
+/// 管理目录：系列全部成员（含他人草稿/私密——重排会改动它们的位置）；
+/// 需 series.manage（持有者 Owner/Editor 均具备 post.read_any）。
+#[derive(serde::Serialize)]
+struct SeriesMemberJson {
+    id: Uuid,
+    slug: String,
+    title: String,
+    status: String,
+    visibility: String,
+    author_id: Uuid,
+    series_order: i32,
+}
+
+async fn series_members(
+    AdminAuth { actor }: AdminAuth,
+    request_id: RequestId,
+    State(state): State<AdminState>,
+    Path(slug): Path<String>,
+) -> Response {
+    match state.series.members(&actor, &slug).await {
+        Ok(members) => (
+            StatusCode::OK,
+            Json(
+                members
+                    .iter()
+                    .map(|m| SeriesMemberJson {
+                        id: m.post_id,
+                        slug: m.slug.clone(),
+                        title: m.title.clone(),
+                        status: m.status.clone(),
+                        visibility: m.visibility.clone(),
+                        author_id: m.author_id,
+                        series_order: m.series_order,
+                    })
+                    .collect::<Vec<_>>(),
+            ),
+        )
+            .into_response(),
         Err(e) => admin_error(e, &request_id),
     }
 }

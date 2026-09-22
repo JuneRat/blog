@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { ApiError, api, seriesApi, withRequestId } from "../api";
+import { ApiError, seriesApi, withRequestId } from "../api";
 import { useAuth } from "../auth";
 import { navigate, paths } from "../router";
 import type { SeriesMemberRow, SeriesSummary } from "../types";
@@ -41,15 +41,17 @@ export function SeriesListScreen() {
   const load = useCallback(async () => {
     setError(null);
     try {
-      const [list, posts] = await Promise.all([seriesApi.list(), api.listPosts()]);
+      // 成员走专用目录端点：包含**其他作者**的成员（重排会改动它们的位置，
+      // 无参 listPosts 只回当前作者的文章，多人系列会缺员并导致重排被拒）。
+      const list = await seriesApi.list();
+      const memberLists = await Promise.all(list.map((s) => seriesApi.members(s.slug)));
       setSeries(list);
-      // 成员来自一次文章列表拉取（含草稿/私密——它们保留位置）。
       const bySeries: Record<string, SeriesMemberRow[]> = {};
-      for (const s of list) {
-        bySeries[s.id] = posts
-          .filter((p) => p.series_id === s.id)
-          .sort((a, b) => (a.series_order ?? 0) - (b.series_order ?? 0));
-      }
+      list.forEach((s, i) => {
+        bySeries[s.id] = (memberLists[i] ?? []).sort(
+          (a, b) => (a.series_order ?? 0) - (b.series_order ?? 0),
+        );
+      });
       setMembers(bySeries);
     } catch (e) {
       setSeries([]);

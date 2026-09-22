@@ -17,7 +17,7 @@ vi.mock("../src/api", async (importOriginal) => {
   const original = await importOriginal<typeof import("../src/api")>();
   return {
     ...original,
-    seriesApi: { list: vi.fn(), create: vi.fn(), update: vi.fn(), remove: vi.fn(), reorder: vi.fn() },
+    seriesApi: { list: vi.fn(), create: vi.fn(), update: vi.fn(), remove: vi.fn(), reorder: vi.fn(), members: vi.fn() },
     categoryApi: { list: vi.fn() },
     api: { ...original.api, listPosts: vi.fn(), listTags: vi.fn() },
   };
@@ -41,6 +41,10 @@ beforeEach(() => {
   vi.resetAllMocks();
   window.history.replaceState(null, "", paths.series);
   vi.mocked(seriesApi.list).mockResolvedValue([guide]);
+  vi.mocked(seriesApi.members).mockResolvedValue([
+    { ...posts[0], visibility: "public" },
+    { ...posts[1], visibility: "public" },
+  ]);
   vi.mocked(api.listPosts).mockResolvedValue(posts);
   vi.mocked(api.listTags).mockResolvedValue([]);
   vi.mocked(categoryApi.list).mockResolvedValue([]);
@@ -92,5 +96,69 @@ describe("系列管理屏", () => {
     fireEvent.click(screen.getByRole("button", { name: "删除" }));
     await waitFor(() => expect(seriesApi.remove).toHaveBeenCalledWith("guide", 3));
     expect(screen.getByText(/2 篇文章引用/)).toBeTruthy();
+  });
+});
+
+describe("文章编辑器系列校验", () => {
+  const post = {
+    id: "post-id", slug: "ed-1", title: "标题", content: "正文", excerpt: null,
+    status: "draft", visibility: "public" as const, version: 2,
+    published_at: null, updated_at: "2026-09-22T00:00:00Z", author_id: "me",
+    tag_ids: [], category_id: null, series_id: null, series_order: null,
+  };
+
+  beforeEach(() => {
+    window.history.replaceState(null, "", paths.newPost);
+    vi.mocked(api.listTags).mockResolvedValue([]);
+    vi.mocked(categoryApi.list).mockResolvedValue([]);
+    vi.mocked(seriesApi.list).mockResolvedValue([
+      { id: "ser-1", slug: "guide", name: "指南", description: null, version: 1, post_count: 0, pub_post_count: 0 },
+    ]);
+    const apiAny = api as unknown as Record<string, ReturnType<typeof vi.fn>>;
+    apiAny.createPost = vi.fn().mockResolvedValue(post);
+    apiAny.getPost = vi.fn().mockResolvedValue(post);
+    apiAny.updatePost = vi.fn();
+  });
+
+  it("选择系列但序号为空：展示错误且不发请求（不静默丢系列）", async () => {
+    render(<App />);
+    const title = await screen.findByLabelText("标题");
+    fireEvent.change(title, { target: { value: "新篇" } });
+    fireEvent.change(await screen.findByLabelText("系列"), { target: { value: "ser-1" } });
+    // 序号留空。
+    fireEvent.click(screen.getByRole("button", { name: "保存并更新线上" }));
+
+    expect(
+      screen.getByText("选择了系列时，系列内序号必须是正整数（如 1、2、3）。"),
+    ).toBeTruthy();
+    const apiAny = api as unknown as Record<string, ReturnType<typeof vi.fn>>;
+    expect(apiAny.createPost).not.toHaveBeenCalled();
+  });
+
+  it("小数序号（1.5）被拒绝，不被 parseInt 截断", async () => {
+    render(<App />);
+    fireEvent.change(await screen.findByLabelText("标题"), { target: { value: "新篇" } });
+    fireEvent.change(await screen.findByLabelText("系列"), { target: { value: "ser-1" } });
+    fireEvent.change(screen.getByLabelText("系列内序号"), { target: { value: "1.5" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存并更新线上" }));
+
+    expect(screen.getByText(/正整数/)).toBeTruthy();
+    const apiAny = api as unknown as Record<string, ReturnType<typeof vi.fn>>;
+    expect(apiAny.createPost).not.toHaveBeenCalled();
+  });
+
+  it("合法序号随载荷提交系列", async () => {
+    render(<App />);
+    fireEvent.change(await screen.findByLabelText("标题"), { target: { value: "新篇" } });
+    fireEvent.change(await screen.findByLabelText("系列"), { target: { value: "ser-1" } });
+    fireEvent.change(screen.getByLabelText("系列内序号"), { target: { value: "3" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存并更新线上" }));
+
+    const apiAny = api as unknown as Record<string, ReturnType<typeof vi.fn>>;
+    await waitFor(() =>
+      expect(apiAny.createPost).toHaveBeenCalledWith(
+        expect.objectContaining({ series: { id: "ser-1", order: 3 } }),
+      ),
+    );
   });
 });

@@ -2,7 +2,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
-import { ApiError, api } from "../src/api";
+import { ApiError, api, seriesApi } from "../src/api";
 import { navigate, paths } from "../src/router";
 import type { PostDetail } from "../src/types";
 
@@ -18,11 +18,11 @@ vi.mock("../src/api", async (importOriginal) => {
   return {
     ...original,
     categoryApi: { list: vi.fn() },
+    seriesApi: { list: vi.fn() },
     api: {
       getPost: vi.fn(), createPost: vi.fn(), updatePost: vi.fn(),
       publishPost: vi.fn(), unpublishPost: vi.fn(), listTags: vi.fn(),
       categoryApi: { list: vi.fn() },
-      seriesApi: { list: vi.fn() },
     },
   };
 });
@@ -31,7 +31,7 @@ const post: PostDetail = {
   id: "post-id", slug: "first", title: "原始标题", content: "原始正文",
   excerpt: null, status: "draft", visibility: "public", version: 1,
   published_at: null, updated_at: "2026-09-22T00:00:00Z", author_id: "author-id",
-  tag_ids: [], category_id: null,
+  tag_ids: [], category_id: null, series_id: null, series_order: null,
 };
 
 function deferred<T>() {
@@ -51,7 +51,7 @@ beforeEach(() => {
   // 标签目录：空目录即可（编辑器只渲染选择区）。
   vi.mocked(api.listTags).mockResolvedValue([]);
   vi.mocked(api.categoryApi.list).mockResolvedValue([]);
-  vi.mocked(api.seriesApi.list).mockResolvedValue([]);
+  vi.mocked(seriesApi.list).mockResolvedValue([]);
 });
 afterEach(cleanup);
 

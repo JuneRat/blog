@@ -468,8 +468,13 @@ impl PostRepository for PostgresPostRepository {
     }
 
     async fn insert(&self, snapshot: &PostSnapshot, tag_ids: &[Uuid]) -> Result<(), UseCaseError> {
-        // 正文与初始标签关系同一事务：半套写入不应对外可见。
+        // 正文与初始标签/系列关系同一事务：半套写入不应对外可见。
         let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        // 创建即入系列：先锁系列行并递增其版本（加入即改变成员目录，
+        // 旧目录上的重排必须失效——与 save/重排共用系列锁协议）。
+        if let Some(series_id) = snapshot.series_id {
+            bump_series_versions(&mut tx, &[series_id]).await?;
+        }
         sqlx::query(
             r#"
             INSERT INTO posts (
@@ -516,9 +521,49 @@ impl PostRepository for PostgresPostRepository {
         now: OffsetDateTime,
         tag_ids: Option<&[Uuid]>,
     ) -> Result<SaveOutcome, UseCaseError> {
-        // 正文（或仅标签关系）与 version 递增在同一事务：
+        // 正文（或仅标签/系列关系）与 version 递增在同一事务：
         // 观察者不会看到新正文配旧标签（或反之）的混合状态。
+        //
+        // 系列锁协议（P1 修复）：文章加入/退出/移动系列与整体重排共用同一协议——
+        // 锁定顺序恒为「系列行（按 id 序）→ 文章行」，与重排一致（防死锁）；
+        // 系列归属或序号变化时递增**相关系列**（旧+新）的 version，
+        // 让手持旧目录/旧系列版本的重排立即失效（docs/database-design.md §4）。
         let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+
+        // 1. 读当前文章（无锁快照）：拿旧系列归属与存活状态做三态判定。
+        let current: Option<(Option<Uuid>, Option<i32>, i64, bool)> = sqlx::query_as(
+            "SELECT series_id, series_order, version, deleted_at IS NULL FROM posts WHERE id = $1",
+        )
+        .bind(snapshot.id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(map_sqlx_error)?;
+        let Some((old_series, old_order, current_version, alive)) = current else {
+            tx.commit().await.map_err(map_sqlx_error)?;
+            return Ok(SaveOutcome::Gone);
+        };
+        if !alive {
+            tx.commit().await.map_err(map_sqlx_error)?;
+            return Ok(SaveOutcome::Gone);
+        }
+        if current_version != expected_version {
+            tx.commit().await.map_err(map_sqlx_error)?;
+            return Ok(SaveOutcome::StaleConflict);
+        }
+
+        // 2. 系列归属/序号变化：按 id 序锁定受影响系列（旧+新去重）并递增版本。
+        let series_changed = (old_series, old_order) != (snapshot.series_id, snapshot.series_order);
+        if series_changed {
+            let mut affected: Vec<Uuid> = [old_series, snapshot.series_id]
+                .into_iter()
+                .flatten()
+                .collect();
+            affected.sort();
+            affected.dedup();
+            bump_series_versions(&mut tx, &affected).await?;
+        }
+
+        // 3. 更新文章（此时系列行锁在手，与重排的锁序一致）。
         let updated = sqlx::query(
             r#"
             UPDATE posts SET
@@ -549,22 +594,9 @@ impl PostRepository for PostgresPostRepository {
         .map_err(map_sqlx_error)?;
 
         let Some(row) = updated else {
-            // 写入未命中：区分「版本过期」（可重试）与「记录已消失」（不可重试）。
-            // 无写入发生，直接放弃事务。
-            let current =
-                sqlx::query("SELECT version, deleted_at IS NULL AS alive FROM posts WHERE id = $1")
-                    .bind(snapshot.id)
-                    .fetch_optional(&mut *tx)
-                    .await
-                    .map_err(map_sqlx_error)?;
-            let outcome = match current {
-                Some(row) if row.try_get::<bool, _>("alive").map_err(map_row_error)? => {
-                    SaveOutcome::StaleConflict
-                }
-                _ => SaveOutcome::Gone,
-            };
+            // 版本在步骤 1 之后被并发改写：不再有写入，放弃事务。
             tx.rollback().await.map_err(map_sqlx_error)?;
-            return Ok(outcome);
+            return Ok(SaveOutcome::StaleConflict);
         };
 
         if let Some(tag_ids) = tag_ids {
@@ -595,6 +627,29 @@ impl PostRepository for PostgresPostRepository {
                 .map_err(map_sqlx_error)?;
         Ok(rows.into_iter().map(|(id,)| id).collect())
     }
+}
+
+/// 按固定 id 序锁定系列行并递增 version：文章加入/退出/移动系列与整体重排
+/// 共用的系列锁协议（锁序恒为「系列（id 序）→ 文章」，防死锁）。
+/// `ids` 必须已排序去重。旧系列必存在（FK RESTRICT 挡住被引用删除）；
+/// 新系列由用例前置校验，并发删除由 FK 违规翻译兜底。
+async fn bump_series_versions(
+    tx: &mut sqlx::PgConnection,
+    ids: &[Uuid],
+) -> Result<(), UseCaseError> {
+    sqlx::query("SELECT id FROM series WHERE id = ANY($1::uuid[]) ORDER BY id FOR UPDATE")
+        .bind(ids)
+        .execute(&mut *tx)
+        .await
+        .map_err(map_sqlx_error)?;
+    sqlx::query(
+        "UPDATE series SET version = version + 1, updated_at = now()          WHERE id = ANY($1::uuid[])",
+    )
+    .bind(ids)
+    .execute(&mut *tx)
+    .await
+    .map_err(map_sqlx_error)?;
+    Ok(())
 }
 
 /// 批量写入文章标签关系。`unnest` 展开保证一条语句完成；
@@ -1702,18 +1757,30 @@ impl SeriesRepository for PostgresSeriesRepository {
     }
 
     async fn members_of(&self, series_id: Uuid) -> Result<Vec<SeriesMember>, UseCaseError> {
-        let rows: Vec<(Uuid, Uuid)> = sqlx::query_as(
-            "SELECT id, author_id FROM posts WHERE series_id = $1 AND deleted_at IS NULL \
+        let rows = sqlx::query(
+            "SELECT id, author_id, slug, title, status, visibility, series_order \
+             FROM posts WHERE series_id = $1 AND deleted_at IS NULL \
              ORDER BY series_order, id",
         )
         .bind(series_id)
         .fetch_all(&self.pool)
         .await
         .map_err(map_sqlx_error)?;
-        Ok(rows
-            .into_iter()
-            .map(|(post_id, author_id)| SeriesMember { post_id, author_id })
-            .collect())
+        rows.iter()
+            .map(|row| {
+                Ok(SeriesMember {
+                    post_id: row.try_get("id").map_err(map_row_error)?,
+                    author_id: row.try_get("author_id").map_err(map_row_error)?,
+                    slug: row.try_get("slug").map_err(map_row_error)?,
+                    title: row.try_get("title").map_err(map_row_error)?,
+                    status: row.try_get::<String, _>("status").map_err(map_row_error)?,
+                    visibility: row
+                        .try_get::<String, _>("visibility")
+                        .map_err(map_row_error)?,
+                    series_order: row.try_get("series_order").map_err(map_row_error)?,
+                })
+            })
+            .collect()
     }
 
     /// 重排锁协议（docs/database-design.md §4）：

@@ -2479,7 +2479,8 @@ async fn series_management_reorder_and_post_association() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert!(body.contains("\"series_version\":2"), "{body}");
+    // 版本轨迹：创建 1 + 两篇加入各 +1（系列锁协议）+ 重排 +1 = 4。
+    assert!(body.contains("\"series_version\":4"), "{body}");
 
     // 集合不一致（漏一篇）→ 400 可定位错误。
     let (status, body) = api(
@@ -2514,7 +2515,7 @@ async fn series_management_reorder_and_post_association() {
         "/api/admin/v1/series/guide",
         Some(&editor_cookie),
         Some(&editor_csrf),
-        Some(r#"{"expected_version":2}"#),
+        Some(r#"{"expected_version":6}"#),
     )
     .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
@@ -2555,9 +2556,108 @@ async fn series_management_reorder_and_post_association() {
         "/api/admin/v1/series/occupied",
         Some(&editor_cookie),
         Some(&editor_csrf),
-        Some(r#"{"expected_version":1}"#),
+        Some(r#"{"expected_version":2}"#),
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
     assert!(body.contains("\"code\":\"series_in_use\""), "{body}");
+}
+
+#[tokio::test]
+async fn series_members_endpoint_lists_other_authors_posts() {
+    let _g = SERIAL.lock().await;
+    let stack = fresh_stack().await;
+    let (editor_cookie, editor_csrf) = login_as(&stack.router, &stack.idp, "editor").await;
+    let (author_cookie, author_csrf) = login_as(&stack.router, &stack.idp, "author").await;
+    let (author2_cookie, _author2_csrf) = login_as(&stack.router, &stack.idp, "author2").await;
+
+    let (status, body) = api(
+        &stack.router,
+        "POST",
+        "/api/admin/v1/series",
+        Some(&editor_cookie),
+        Some(&editor_csrf),
+        Some(r#"{"name":"多人","slug":"multi"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let series_id: Uuid = body
+        .split("\"id\":\"")
+        .nth(1)
+        .unwrap()
+        .split('"')
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
+
+    // author 与 author2 各一篇挂入系列（他人文章必须出现在成员目录里）。
+    for (user, cookie, csrf, slug) in [
+        ("author", &author_cookie, &author_csrf, "mem-1"),
+        ("author2", &author2_cookie, &_author2_csrf, "mem-2"),
+    ] {
+        let _ = user;
+        let (status, body) = api(
+            &stack.router,
+            "POST",
+            "/api/admin/v1/posts",
+            Some(cookie),
+            Some(csrf),
+            Some(&format!(
+                r#"{{"slug":"{slug}","title":"{slug}","content":"正文"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+        let version: i64 = body
+            .split("\"version\":")
+            .nth(1)
+            .unwrap()
+            .split(',')
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap();
+        let (status, body) = api(
+            &stack.router,
+            "PATCH",
+            &format!("/api/admin/v1/posts/{slug}"),
+            Some(cookie),
+            Some(csrf),
+            Some(&format!(
+                r#"{{"series":{{"id":"{series_id}","order":{}}},"expected_version":{version}}}"#,
+                if slug == "mem-1" { 1 } else { 2 }
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+    }
+
+    // editor（series.manage）：成员目录含两位作者的文章。
+    let (status, body) = api(
+        &stack.router,
+        "GET",
+        "/api/admin/v1/series/multi/members",
+        Some(&editor_cookie),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        body.contains("mem-1") && body.contains("mem-2"),
+        "含他人文章：{body}"
+    );
+
+    // author（无 series.manage）：403——他人草稿不因目录端点泄漏。
+    let (status, body) = api(
+        &stack.router,
+        "GET",
+        "/api/admin/v1/series/multi/members",
+        Some(&author_cookie),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
 }

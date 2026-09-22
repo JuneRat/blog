@@ -291,12 +291,17 @@ export function PostEditScreen({ slug }: { slug: string | null }) {
     };
   }
 
-  /** 系列载荷：未选系列 → null（退出）；选了系列带正整数序号 → 对象；序号非法 → undefined 交由调用方校验。 */
-  function seriesPayload(current: FormState): { id: string; order: number } | null | undefined {
+  /** 系列序号严格校验：正整数。Number("1.5") 不是整数、parseInt 不会截断，
+   * 空白/0/负数/小数/非数字一律拒绝——非法值必须阻止提交而不是静默丢掉系列。 */
+  function validSeriesOrder(value: string): boolean {
+    const n = Number(value.trim());
+    return Number.isInteger(n) && n > 0;
+  }
+
+  /** 系列载荷：未选系列 → null（退出）；选了系列 → 对象（调用前已通过校验）。 */
+  function seriesPayload(current: FormState): { id: string; order: number } | null {
     if (current.seriesId === null) return null;
-    const order = Number.parseInt(current.seriesOrder.trim(), 10);
-    if (!Number.isFinite(order) || order <= 0) return undefined;
-    return { id: current.seriesId, order };
+    return { id: current.seriesId, order: Number(current.seriesOrder.trim()) };
   }
 
   /** 勾选/取消一个标签（集合操作）。 */
@@ -309,6 +314,11 @@ export function PostEditScreen({ slug }: { slug: string | null }) {
   }
 
   async function save(): Promise<void> {
+    // 系列序号是提交前提：非法值直接阻止，绝不静默丢弃系列选择。
+    if (formRef.current.seriesId !== null && !validSeriesOrder(formRef.current.seriesOrder)) {
+      setError("选择了系列时，系列内序号必须是正整数（如 1、2、3）。");
+      return;
+    }
     setError(null);
     setNotice(null);
     setBusy(true);
@@ -412,6 +422,11 @@ export function PostEditScreen({ slug }: { slug: string | null }) {
    */
   async function setPublished(publish: boolean): Promise<void> {
     if (slug === null) return;
+    // 保存未存编辑走同一前提校验。
+    if (formRef.current.seriesId !== null && !validSeriesOrder(formRef.current.seriesOrder)) {
+      setError("选择了系列时，系列内序号必须是正整数（如 1、2、3）。");
+      return;
+    }
     setError(null);
     setNotice(null);
     setBusy(true);

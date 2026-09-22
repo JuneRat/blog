@@ -11,6 +11,7 @@ import type {
   RoleSummary,
   SeriesSummary,
   CategorySummary,
+  SeriesMemberRow,
   TagSummary,
   Visibility,
 } from "./types";
@@ -432,6 +433,12 @@ export const seriesApi = {
       method: "DELETE",
       body: JSON.stringify({ expected_version: expectedVersion }),
     }),
+
+  /** 管理目录：系列全部成员（含他人草稿/私密）；需 series.manage。 */
+  members: (slug: string): Promise<SeriesMemberRow[]> =>
+    request<SeriesMemberRow[]>(
+      `/api/admin/v1/series/${encodeURIComponent(slug)}/members`,
+    ),
 
   /** 整体重排（完整排列 + series 版本前提；改他人文章需 any 权限）。 */
   reorder: (
