@@ -2,3 +2,6 @@
 /.pnpm-store
 /apps/admin/node_modules
 /apps/admin/dist
+# M0 主题桥接原型：独立 workspace 的构建产物与锁文件不入库。
+/spikes/template-bridge/target
+/spikes/template-bridge/Cargo.lock

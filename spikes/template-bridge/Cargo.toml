@@ -1,0 +1,24 @@
+# M0 主题桥接原型（spike）。
+# 空 [workspace] 表使其脱离仓库根 workspace；生产 crate 不得依赖本工程。
+[workspace]
+
+[package]
+name = "template-bridge"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+# 版本对齐根 Cargo.toml 的 workspace.dependencies（tokio/minijinja/sqlx/uuid/thiserror）。
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+# fuel 特性非默认：set_fuel / ErrorKind::OutOfFuel 需要显式开启（见 README 能力边界）。
+minijinja = { version = "2", features = ["fuel"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "time", "uuid"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+
+[profile.release]
+# 计时场景用 release；默认优化级别即可，不引入 criterion。
+debug = false

@@ -1905,6 +1905,7 @@ dependencies = [
  "application",
  "async-trait",
  "axum",
+ "domain",
  "http-body-util",
  "infrastructure",
  "interfaces",
