@@ -10,11 +10,11 @@ use sqlx::{Executor, PgPool, Row};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use application::error::UseCaseError;
+use application::error::{ConflictKind, UseCaseError};
 use application::ports::{
-    ClearPasswordOutcome, Clock, HealthCheck, PageRepository, PasswordCredential, PostRepository,
-    PublicPageDetail, PublicPostDetail, PublicPostSummary, PublishedPageQuery, PublishedPostQuery,
-    SaveOutcome, UserRepository,
+    AdminUserRow, ClearPasswordOutcome, Clock, HealthCheck, PageRepository, PasswordCredential,
+    PostRepository, PublicPageDetail, PublicPostDetail, PublicPostSummary, PublishedPageQuery,
+    PublishedPostQuery, SaveOutcome, UserRepository,
 };
 use domain::content::page::{PageSnapshot, PageStatus};
 use domain::content::post::{PostSnapshot, PostStatus, Visibility};
@@ -97,16 +97,20 @@ impl HealthCheck for PgHealthCheck {
 // 错误映射
 // ---------------------------------------------------------------------------
 
-/// 唯一约束名 → 冲突字段友好名。
-fn unique_conflict_target(error: &PgDatabaseError) -> Option<&'static str> {
+/// 唯一约束名 → 结构化冲突原因。
+///
+/// 这里只做「约束名到枚举」的翻译；是否给某个原因分配独立业务码由接口层决定。
+/// 未知约束回 `Unknown`：仍然拒绝写入，只是不给前端编造字段名。
+fn unique_conflict_target(error: &PgDatabaseError) -> Option<ConflictKind> {
     match error.constraint()? {
-        "posts_slug_key" | "pages_slug_key" => Some("slug"),
-        "users_username_key" => Some("username"),
-        "users_email_key" => Some("email"),
-        "posts_series_position_unique" => Some("该系列位置"),
-        "oauth_accounts_provider_provider_user_id_key" => Some("外部身份"),
-        "categories_slug_key" | "series_slug_key" | "tags_slug_key" => Some("slug"),
-        "roles_slug_key" | "permissions_key_key" => Some("标识"),
+        "posts_slug_key" | "pages_slug_key" => Some(ConflictKind::Slug),
+        "users_username_key" => Some(ConflictKind::Username),
+        "users_email_key" => Some(ConflictKind::Email),
+        "posts_series_position_unique" => Some(ConflictKind::SeriesPosition),
+        "oauth_accounts_provider_provider_user_id_key" => Some(ConflictKind::ExternalIdentity),
+        "categories_slug_key" | "series_slug_key" | "tags_slug_key" => Some(ConflictKind::Slug),
+        "roles_slug_key" => Some(ConflictKind::RoleSlug),
+        "permissions_key_key" => Some(ConflictKind::PermissionKey),
         _ => None,
     }
 }
@@ -116,9 +120,10 @@ fn map_sqlx_error(error: sqlx::Error) -> UseCaseError {
         let pg = db.try_downcast_ref::<PgDatabaseError>();
         if let Some(pg) = pg
             && pg.code() == "23505"
-            && let Some(target) = unique_conflict_target(pg)
         {
-            return UseCaseError::Conflict(target.to_string());
+            return UseCaseError::Conflict(
+                unique_conflict_target(pg).unwrap_or(ConflictKind::Unknown),
+            );
         }
     }
     UseCaseError::Repository(error.to_string())
@@ -198,6 +203,42 @@ impl UserRepository for PostgresUserRepository {
         .await
         .map_err(map_sqlx_error)?;
         row.as_ref().map(user_from_row).transpose()
+    }
+
+    async fn list_admin(&self, limit: i64, offset: i64) -> Result<Vec<AdminUserRow>, UseCaseError> {
+        // 登录方式与 RBAC 的最后 Owner 判定保持同一谓词（oauth 或 password_hash），
+        // 否则界面会提示「可登录」而后端拒绝，两处定义漂移。
+        let rows = sqlx::query(
+            "SELECT u.id, u.username, u.email, u.display_name, \
+                    (u.deleted_at IS NOT NULL) AS deleted, \
+                    (u.password_hash IS NOT NULL) AS password_enabled, \
+                    (SELECT count(*) FROM oauth_accounts oa WHERE oa.user_id = u.id) \
+                        AS external_identities \
+             FROM users u \
+             ORDER BY u.username \
+             LIMIT $1 OFFSET $2",
+        )
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_sqlx_error)?;
+
+        rows.iter()
+            .map(|row| {
+                Ok(AdminUserRow {
+                    id: row.try_get("id").map_err(map_row_error)?,
+                    username: row.try_get("username").map_err(map_row_error)?,
+                    email: row.try_get("email").map_err(map_row_error)?,
+                    display_name: row.try_get("display_name").map_err(map_row_error)?,
+                    deleted: row.try_get("deleted").map_err(map_row_error)?,
+                    password_enabled: row.try_get("password_enabled").map_err(map_row_error)?,
+                    external_identities: row
+                        .try_get("external_identities")
+                        .map_err(map_row_error)?,
+                })
+            })
+            .collect()
     }
 
     async fn set_password_hash(&self, user_id: Uuid, phc_hash: &str) -> Result<(), UseCaseError> {

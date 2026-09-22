@@ -6,7 +6,7 @@
 
 公开站点使用 MiniJinja SSR；后台 React + TypeScript + Vite 通过版本化管理 API 调用用例。推荐同源部署：/admin/* 提供 SPA（`apps/admin`，构建产物不进备份），/api/admin/v1/* 提供 JSON API，/auth/* 提供认证入口。SPA fallback 只注册在 /admin 子树内，不覆盖 API、认证和公开页面。登录页渲染用的 `GET /auth/providers` 是公开只读端点，只返回提供商的 id/展示名/类型。
 
-管理响应和预览使用 Cache-Control: no-store，前端路由守卫只改善体验，权限由后端执行。OpenAPI 维护接口契约，错误响应为 `{"error", "code", "request_id"}`：`code` 是业务码，同一状态码的不同原因必须可区分（409 的 slug 占用是 `conflict`，版本冲突是 `version_conflict`），客户端不得只按状态码分支；`request_id` 为每请求 UUIDv7，与 `x-request-id` 响应头一致，客户端报障文案需展示它。编辑携带 expected_version，分页限制上限，批量命令逐项授权。
+管理响应和预览使用 Cache-Control: no-store，前端路由守卫只改善体验，权限由后端执行。OpenAPI 维护接口契约，错误响应为 `{"error", "code", "request_id"}`：`code` 是业务码，同一状态码的不同原因必须可区分（409 的 slug 占用是 `conflict`，版本冲突是 `version_conflict`，用户名/邮箱占用分别是 `username_taken`/`email_taken`；403 的最后可登录 Owner 保护是 `last_owner`），客户端不得只按状态码分支；`request_id` 为每请求 UUIDv7，与 `x-request-id` 响应头一致，客户端报障文案需展示它。编辑携带 expected_version，分页限制上限，批量命令逐项授权。
 
 ## 2. RBAC 与权限目录
 
@@ -81,7 +81,7 @@ OAuth 是授权协议；仅 OAuth 平台必须通过受信身份接口适配，�
 
 ## 6. 后台与验证
 
-后台优先实现文章、页面、分类、标签、系列顺序、角色用户、外部身份绑定与站点设置。没有修订表，所以不展示历史恢复；没有媒体表，所以不宣称具备附件库。保存已发布内容会直接更新线上，不能标为“保存草稿”。
+后台优先实现文章、页面、分类、标签、系列顺序、角色用户、外部身份绑定与站点设置。没有修订表，所以不展示历史恢复；没有媒体表，所以不宣称具备附件库。保存已发布内容会直接更新线上，不能标为“保存草稿”。当前后台已交付：文章与页面编辑、用户与角色管理（见 §8；角色目录只读，分配在用户界面完成）。
 
 访问日志为每个请求记录 request ID、method/path、结果状态与耗时，actor 只取自服务端验证过的会话（匿名留空），隐藏 Cookie、code、token、密码和秘密；预期 4xx 记 info、5xx 记 warn。它只回答"谁请求了哪个接口、结果如何"，**不构成业务审计**。角色变更、身份绑定等动作仍需记录明确的动作与对象：当前 13 表不承诺事务内持久审计；如需不可遗漏的业务审计，须在该功能交付时补充专用存储和事务实现。
 
@@ -168,3 +168,40 @@ OAuth 是授权协议；仅 OAuth 平台必须通过受信身份接口适配，�
 | `rate_limited` | 429（带 `Retry-After`） | 登录失败次数超阈值，临时锁定 |
 
 它们与既有码并列，改动需同步 [接口契约](#1-前后台结构)、前端与穷举映射测试。
+
+## 8. 用户与角色管理界面
+
+状态：已实现。用例复用 §2/§3 的账号与角色操作，接口层只做传输映射，不重复实现权限判断。
+
+### 8.1 接口
+
+全部挂在 `/api/admin/v1` 下，响应 `Cache-Control: no-store`；写方法需会话 + `X-CSRF-Token` + 同源 `Origin`：
+
+| 方法 | 路径 | 所需权限 | 说明 |
+|---|---|---|---|
+| GET | `/users` | `user.manage` 或 `role.manage` | 账号列表：用户名、邮箱、展示名、角色、登录方式；`limit` 缺省 50、上限 200 |
+| POST | `/users` | `user.manage` | 创建账号（不自动分配角色） |
+| GET | `/roles` | `role.manage` 或 `user.manage` | 角色目录：slug、名称、内置标记、权限数 |
+| PUT | `/users/{username}/roles/{role}` | `role.manage` | 幂等分配；授予 Owner 另需 `ownership.manage`；不得超出调用者权限集合 |
+| DELETE | `/users/{username}/roles/{role}` | `role.manage` | 移除；移除 Owner 另需 `ownership.manage`；最后一个可登录 Owner 受保护 |
+
+列表一次批量读取整页角色（不是逐账号查询），并用一次**全局**计数给出每行的 `is_last_loginable_owner`；只回账号字段与登录方式（`can_login`），绝不回 `password_hash`。
+
+### 8.2 结构化冲突码
+
+`UseCaseError::Conflict(ConflictKind)` 取代裸字符串：适配器把数据库约束名翻译成稳定枚举，接口层再映射业务码。同一个 409 下：
+
+| code | 结构化原因 | 界面消费者 |
+|---|---|---|
+| `username_taken` | `ConflictKind::Username` | 创建账号表单定位到用户名 |
+| `email_taken` | `ConflictKind::Email` | 创建账号表单定位到邮箱 |
+| `conflict` | slug 等其余唯一冲突 | 沿用既有通用码 |
+
+只有已有界面消费者的字段才分配专属业务码；新增字段必须同时更新 `unique_conflict_target`、`admin_error_code` 的穷尽映射与穷举测试，否则编译或测试失败。
+
+### 8.3 保护与撤权
+
+- **最后一个可登录 Owner**：列表的 `can_login` 与存储的 `active_owner_count` 使用同一谓词（未软删除，且至少一条外部身份或已启用本地密码），两处定义不得漂移。移除会减少有效 Owner 时在身份排他锁下拒绝，返回 **403 `last_owner`**——与笼统的 `forbidden` 分开，界面据此解释原因而不是显示“无权操作”。**「是否最后一个」必须由后端按全站计数返回**（`is_last_loginable_owner`）：列表分页上限 200，另一个可登录 Owner 可能在后续页，前端按当前页推断会误标并错误禁用移除。界面据此提前禁用只是提示，真正的边界始终在后端。
+- **角色目录**：`GET /roles` 失败时必须与「目录为空」区分展示并可重试；把一次网络故障显示成“暂无可分配角色”会静默阻断角色分配。
+- **撤权后会话失效**：角色分配/移除递增目标用户 `users.version`，其旧 cookie 下一次请求即判未登录（§5）。重复分配同一角色是幂等的，不递增版本、不登出。若操作目标是本人，界面在成功后重新读 `/me`，直接进入登录态而不是继续显示已失效会话。
+- **委派上限与所有权**：接口层不重复判断，`RoleInteractor` 在用例层执行——不能授予自己不具备的权限；授予/移除 Owner 需要专门权限。

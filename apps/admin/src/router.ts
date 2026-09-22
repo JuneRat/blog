@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
  * 后台内部路由：
  * - 文章：`/admin/`（列表）、`/admin/posts/new`、`/admin/posts/{slug}/edit`
  * - 页面：`/admin/pages`（列表）、`/admin/pages/new`、`/admin/pages/{slug}/edit`
+ * - 用户与角色：`/admin/users`、`/admin/roles`
  *
  * 编辑页带 `/edit` 后缀，使 slug 为 `new` 的内容（`/admin/posts/new/edit`）
  * 不再与新建页（`/admin/posts/new`）相撞——slug 校验对 `new` 是合法的，
@@ -16,6 +17,8 @@ export type Route =
   | { name: "pageList" }
   | { name: "pageNew" }
   | { name: "pageEdit"; slug: string }
+  | { name: "userList" }
+  | { name: "roleList" }
   /** 畸形或多余的路径段：显示提示而不是白屏/静默进入别的页面。 */
   | { name: "invalid" };
 
@@ -53,6 +56,14 @@ export function parseRoute(pathname: string): Route {
 
   if (segments.length === 0) return { name: "list" };
 
+  // 用户与角色是固定单段路由：多余路径段不静默忽略。
+  if (segments[0] === "users") {
+    return segments.length === 1 ? { name: "userList" } : { name: "invalid" };
+  }
+  if (segments[0] === "roles") {
+    return segments.length === 1 ? { name: "roleList" } : { name: "invalid" };
+  }
+
   if (segments[0] === "pages") {
     if (segments.length === 1) return { name: "pageList" };
     if (segments.length === 2 && segments[1] === "new") return { name: "pageNew" };
@@ -73,6 +84,8 @@ export const paths = {
   pages: `${BASE}/pages`,
   newPage: `${BASE}/pages/new`,
   editPage: (slug: string): string => `${BASE}/pages/${encodeURIComponent(slug)}/edit`,
+  users: `${BASE}/users`,
+  roles: `${BASE}/roles`,
 };
 
 /**

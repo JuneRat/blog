@@ -18,6 +18,9 @@ export function PageListScreen() {
   const [pages, setPages] = useState<PageSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const canCreate = me?.permissions.includes("page.create") ?? false;
+  const canAdminister =
+    (me?.permissions.includes("user.manage") ?? false) ||
+    (me?.permissions.includes("role.manage") ?? false);
 
   const load = useCallback(async () => {
     setError(null);
@@ -41,6 +44,11 @@ export function PageListScreen() {
           <button type="button" className="button ghost" onClick={() => navigate(paths.list)}>
             我的文章
           </button>
+          {canAdminister && (
+            <button type="button" className="button ghost" onClick={() => navigate(paths.users)}>
+              用户与角色
+            </button>
+          )}
           {canCreate && (
             <button type="button" className="button" onClick={() => navigate(paths.newPage)}>
               新建页面

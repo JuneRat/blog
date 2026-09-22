@@ -202,6 +202,15 @@ impl UserRepository for FakeUserRepo {
         Ok(self.users.lock().unwrap().get(username).cloned())
     }
 
+    // 密码用例不涉及账号管理列表；返回空列表即可。
+    async fn list_admin(
+        &self,
+        _limit: i64,
+        _offset: i64,
+    ) -> Result<Vec<application::ports::AdminUserRow>, UseCaseError> {
+        Ok(vec![])
+    }
+
     async fn set_password_hash(&self, user_id: Uuid, phc_hash: &str) -> Result<(), UseCaseError> {
         self.set_hash(user_id, phc_hash);
         Ok(())

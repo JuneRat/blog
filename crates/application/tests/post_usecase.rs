@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use application::content::{CreatePostCmd, EditPostCmd, PostInteractor};
-use application::error::UseCaseError;
+use application::error::{ConflictKind, UseCaseError};
 use application::identity::{
     Actor, ActorChannel, CreateUserCmd, PermissionDescriptor, RoleInteractor, UserInteractor,
 };
@@ -71,7 +71,7 @@ impl PostRepository for FakePostRepo {
     async fn insert(&self, snapshot: &PostSnapshot) -> Result<(), UseCaseError> {
         let mut posts = self.posts.lock().unwrap();
         if posts.contains_key(&snapshot.slug) {
-            return Err(UseCaseError::Conflict("slug".into()));
+            return Err(UseCaseError::Conflict(ConflictKind::Slug));
         }
         posts.insert(snapshot.slug.clone(), snapshot.clone());
         Ok(())
@@ -125,7 +125,7 @@ impl UserRepository for FakeUserRepo {
     async fn insert(&self, snapshot: &UserSnapshot) -> Result<(), UseCaseError> {
         let mut users = self.users.lock().unwrap();
         if users.contains_key(&snapshot.username) {
-            return Err(UseCaseError::Conflict("username".into()));
+            return Err(UseCaseError::Conflict(ConflictKind::Username));
         }
         users.insert(snapshot.username.clone(), snapshot.clone());
         Ok(())
@@ -143,6 +143,29 @@ impl UserRepository for FakeUserRepo {
 
     async fn find_by_username(&self, username: &str) -> Result<Option<UserSnapshot>, UseCaseError> {
         Ok(self.users.lock().unwrap().get(username).cloned())
+    }
+
+    async fn list_admin(
+        &self,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<application::ports::AdminUserRow>, UseCaseError> {
+        let mut users: Vec<UserSnapshot> = self.users.lock().unwrap().values().cloned().collect();
+        users.sort_by(|a, b| a.username.cmp(&b.username));
+        Ok(users
+            .into_iter()
+            .skip(offset.max(0) as usize)
+            .take(limit.max(0) as usize)
+            .map(|u| application::ports::AdminUserRow {
+                id: u.id,
+                username: u.username,
+                email: u.email,
+                display_name: u.display_name,
+                deleted: u.deleted_at.is_some(),
+                password_enabled: false,
+                external_identities: 0,
+            })
+            .collect())
     }
 
     // 文章用例不涉及本地密码；保持显式失败以便误用时立刻暴露。
@@ -272,7 +295,7 @@ impl RbacStore for FakeRbacStore {
 
     async fn remove_role(&self, user_id: Uuid, role_slug: &str) -> Result<(), UseCaseError> {
         if role_slug == "owner" && self.owners() <= 1 {
-            return Err(UseCaseError::Forbidden);
+            return Err(UseCaseError::LastOwnerProtected);
         }
         self.assignments
             .lock()
@@ -302,6 +325,22 @@ impl RbacStore for FakeRbacStore {
             .filter(|(uid, _)| *uid == user_id)
             .map(|(_, slug)| slug.clone())
             .collect())
+    }
+
+    async fn roles_of_users(&self, user_ids: &[Uuid]) -> Result<Vec<(Uuid, String)>, UseCaseError> {
+        let assignments = self.assignments.lock().unwrap();
+        let mut rows: Vec<(Uuid, String)> = assignments
+            .iter()
+            .filter(|(uid, _)| user_ids.contains(uid))
+            .map(|(uid, slug)| (*uid, slug.clone()))
+            .collect();
+        rows.sort();
+        Ok(rows)
+    }
+
+    async fn loginable_owner_count(&self) -> Result<i64, UseCaseError> {
+        // Fake 身份没有登录方式概念：owner 分配数即「可登录 Owner」数。
+        Ok(self.owners())
     }
 }
 
@@ -881,7 +920,7 @@ async fn last_owner_cannot_be_removed() {
         .await
         .unwrap_err();
     assert!(
-        matches!(err, UseCaseError::Forbidden),
+        matches!(err, UseCaseError::LastOwnerProtected),
         "最后 Owner 保护：{err:?}"
     );
 

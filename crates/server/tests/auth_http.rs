@@ -171,6 +171,7 @@ async fn fresh_stack_with(secure_cookies: bool) -> Stack {
         passwords,
         posts,
         pages,
+        roles,
         secure_cookies,
     };
 

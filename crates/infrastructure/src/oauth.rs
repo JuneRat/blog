@@ -11,7 +11,7 @@ use serde::Deserialize;
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
-use application::error::UseCaseError;
+use application::error::{ConflictKind, UseCaseError};
 use application::ports::{
     ExternalIdentity, ExternalIdentityClient, OAuthAccountStore, OAuthConfigStore, ProviderConfig,
     ProviderKind, SecretSource,
@@ -526,7 +526,7 @@ impl OAuthAccountStore for PostgresOAuthAccountStore {
         .map_err(|e| UseCaseError::Repository(e.to_string()))?;
         if result.rows_affected() == 0 {
             // 绑定冲突：该外部身份已属于某个账号；邮箱碰撞不自动合并。
-            return Err(UseCaseError::Conflict("外部身份".into()));
+            return Err(UseCaseError::Conflict(ConflictKind::ExternalIdentity));
         }
         sqlx::query("UPDATE users SET version = version + 1, updated_at = now() WHERE id = $1")
             .bind(user_id)

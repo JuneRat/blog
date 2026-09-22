@@ -1,5 +1,53 @@
 //! 用例层统一错误。领域错误表达业务规则；适配器把技术错误映射为端口约定的错误。
 
+/// 唯一性冲突的结构化原因。
+///
+/// 数据库只给出约束名，适配器把它翻译成稳定枚举，接口层再映射成业务码：
+/// 同一个 409 下，`username`/`email` 必须能被前端区分（谁占了、给出哪条文案），
+/// 不能只回一个笼统的 `conflict`。新增字段时同步 `unique_conflict_target` 与
+/// `admin_error_code` 的穷尽映射；只有已有界面消费者的字段才分配专属业务码。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConflictKind {
+    /// 文章/页面等 slug 占用；沿用既有 `conflict` 业务码。
+    Slug,
+    /// 用户名占用（`users_username_key`）。
+    Username,
+    /// 邮箱占用（`users_email_key`）。
+    Email,
+    /// 系列内序号占用。
+    SeriesPosition,
+    /// 外部身份已被别的账号绑定。
+    ExternalIdentity,
+    /// 角色标识占用。
+    RoleSlug,
+    /// 权限标识占用。
+    PermissionKey,
+    /// 无法归类的唯一约束：仍然拒绝，但只回通用冲突。
+    Unknown,
+}
+
+impl ConflictKind {
+    /// 面向用户与日志的字段名（与既有文案保持一致）。
+    pub fn field(self) -> &'static str {
+        match self {
+            Self::Slug => "slug",
+            Self::Username => "username",
+            Self::Email => "email",
+            Self::SeriesPosition => "该系列位置",
+            Self::ExternalIdentity => "外部身份",
+            Self::RoleSlug => "角色标识",
+            Self::PermissionKey => "权限标识",
+            Self::Unknown => "记录",
+        }
+    }
+}
+
+impl std::fmt::Display for ConflictKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.field())
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum UseCaseError {
     #[error("未找到：{0}")]
@@ -9,9 +57,17 @@ pub enum UseCaseError {
     #[error("版本冲突：内容已被并发修改，请基于最新版本重试")]
     VersionConflict,
 
-    /// 数据库唯一约束兜底命中的冲突（slug、username 等）。
+    /// 数据库唯一约束兜底命中的冲突（slug、username、email 等）。
+    /// 结构化原因让接口层能给出可区分的业务码，而不是只回一个笼统的 409。
     #[error("{0} 已被占用")]
-    Conflict(String),
+    Conflict(ConflictKind),
+
+    /// 会移除最后一个「可登录」Owner 的操作被拒绝（docs/identity-and-admin.md §3）。
+    ///
+    /// 与「没有权限」区分开：调用者可能确实持有 `ownership.manage`，只是这次操作
+    /// 会让站点失去唯一能登录的 Owner。前端必须能解释原因，而不是显示“无权操作”。
+    #[error("不能移除最后一个可登录的 Owner")]
+    LastOwnerProtected,
 
     #[error("无权执行该操作")]
     Forbidden,

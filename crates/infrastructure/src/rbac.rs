@@ -313,7 +313,7 @@ impl RbacStore for PostgresRbacStore {
             if target_has_login {
                 let owners = self.active_owner_count(&mut *tx).await?;
                 if owners <= 1 {
-                    return Err(UseCaseError::Forbidden);
+                    return Err(UseCaseError::LastOwnerProtected);
                 }
             }
         }
@@ -370,5 +370,26 @@ impl RbacStore for PostgresRbacStore {
         .await
         .map_err(Self::map_err)?;
         Ok(rows.into_iter().map(|r| r.0).collect())
+    }
+
+    async fn roles_of_users(&self, user_ids: &[Uuid]) -> Result<Vec<(Uuid, String)>, UseCaseError> {
+        // 空 IN 列表直接短路：`= ANY('{}')` 虽合法，但省一次往返更清晰。
+        if user_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let rows: Vec<(Uuid, String)> = sqlx::query_as(
+            "SELECT ur.user_id, r.slug FROM user_roles ur JOIN roles r ON r.id = ur.role_id \
+             WHERE ur.user_id = ANY($1) ORDER BY ur.user_id, r.slug",
+        )
+        .bind(user_ids)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(Self::map_err)?;
+        Ok(rows)
+    }
+
+    async fn loginable_owner_count(&self) -> Result<i64, UseCaseError> {
+        // 复用 `remove_role` 保护使用的同一私有查询与谓词，避免两处定义漂移。
+        self.active_owner_count(&self.pool).await
     }
 }

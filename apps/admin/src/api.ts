@@ -1,4 +1,6 @@
 import type {
+  AdminUser,
+  CreatedUser,
   Me,
   PageDetail,
   PageSummary,
@@ -6,6 +8,7 @@ import type {
   PostDetail,
   PostSummary,
   ProviderSummary,
+  RoleSummary,
   Visibility,
 } from "./types";
 
@@ -152,6 +155,12 @@ export interface PasswordLoginInput {
   next?: string;
 }
 
+export interface CreateUserInput {
+  username: string;
+  email?: string;
+  display_name?: string;
+}
+
 export const api = {
   me: (): Promise<Me> => request<Me>("/api/admin/v1/me"),
 
@@ -229,8 +238,47 @@ export const api = {
       body: JSON.stringify({ expected_version: expectedVersion }),
     }),
 
+  /** 账号列表：需 `user.manage` 或 `role.manage`，否则 403 forbidden。 */
+  listUsers: (limit?: number, offset?: number): Promise<AdminUser[]> => {
+    const query = new URLSearchParams();
+    if (limit !== undefined) query.set("limit", String(limit));
+    if (offset !== undefined) query.set("offset", String(offset));
+    const encoded = query.toString();
+    const suffix = encoded.length > 0 ? `?${encoded}` : "";
+    return request<AdminUser[]>(`/api/admin/v1/users${suffix}`);
+  },
+
+  /**
+   * 创建账号（需 `user.manage`）。用户名/邮箱占用是 409，但业务码不同：
+   * `username_taken` / `email_taken`，界面据此把错误定位到对应字段。
+   */
+  createUser: (input: CreateUserInput): Promise<CreatedUser> =>
+    request<CreatedUser>("/api/admin/v1/users", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+
+  /** 角色目录：内置 slug 与权限数量；需 `role.manage` 或 `user.manage`。 */
+  listRoles: (): Promise<RoleSummary[]> => request<RoleSummary[]>("/api/admin/v1/roles"),
+
+  /**
+   * 分配/移除角色（需 `role.manage`；Owner 还需 `ownership.manage`）。
+   * 会递增目标用户的 `users.version`，其旧会话立即失效；重复分配是幂等的。
+   * 最后一个可登录 Owner 的移除被拒：403 `last_owner`。
+   */
+  assignRole: (username: string, role: string): Promise<unknown> =>
+    request<unknown>(rolePath(username, role), { method: "PUT" }),
+
+  removeRole: (username: string, role: string): Promise<unknown> =>
+    request<unknown>(rolePath(username, role), { method: "DELETE" }),
+
   logout: (): Promise<unknown> => request<unknown>("/auth/logout", { method: "POST" }),
 };
+
+/** 角色分配路径：用户名与 slug 都做百分号编码，避免路径段注入。 */
+function rolePath(username: string, role: string): string {
+  return `/api/admin/v1/users/${encodeURIComponent(username)}/roles/${encodeURIComponent(role)}`;
+}
 
 /**
  * 构造登录 URL。`provider` 必须来自 `/auth/providers`（后端不接受缺失 provider）；

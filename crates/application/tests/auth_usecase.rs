@@ -343,6 +343,15 @@ impl UserRepository for FakeUserRepo {
         Ok(self.users.lock().unwrap().get(username).cloned())
     }
 
+    // 认证用例不涉及账号管理列表；返回空列表即可。
+    async fn list_admin(
+        &self,
+        _limit: i64,
+        _offset: i64,
+    ) -> Result<Vec<application::ports::AdminUserRow>, UseCaseError> {
+        Ok(vec![])
+    }
+
     // OAuth 用例不涉及本地密码；保持显式失败以便误用时立刻暴露。
     async fn set_password_hash(&self, _user_id: Uuid, _phc_hash: &str) -> Result<(), UseCaseError> {
         unimplemented!("auth 用例不使用密码凭据")
@@ -422,6 +431,15 @@ impl application::ports::RbacStore for NoopRbac {
     }
     async fn roles_of_user(&self, _user_id: Uuid) -> Result<Vec<String>, UseCaseError> {
         Ok(vec![])
+    }
+    async fn roles_of_users(
+        &self,
+        _user_ids: &[Uuid],
+    ) -> Result<Vec<(Uuid, String)>, UseCaseError> {
+        Ok(vec![])
+    }
+    async fn loginable_owner_count(&self) -> Result<i64, UseCaseError> {
+        Ok(0)
     }
 }
 

@@ -59,3 +59,40 @@ export interface PageSummary {
 export interface PageDetail extends PageSummary {
   content: string;
 }
+
+/** GET /api/admin/v1/users 列表条目（账号管理）。 */
+export interface AdminUser {
+  id: string;
+  username: string;
+  email: string | null;
+  display_name: string | null;
+  deleted: boolean;
+  /** 至少一种登录方式（本地密码或外部身份）；Owner 保护看这个谓词。 */
+  can_login: boolean;
+  /**
+   * 全局判定：该账号是最后一个可登录的 Owner，移除其 Owner 角色会被后端拒绝。
+   * 由后端按全站计数得出，不受列表分页影响。
+   */
+  is_last_loginable_owner: boolean;
+  password_enabled: boolean;
+  external_identities: number;
+  roles: string[];
+}
+
+/** POST /api/admin/v1/users 成功响应。 */
+export interface CreatedUser {
+  id: string;
+  username: string;
+  display_name: string | null;
+  created_at: string;
+}
+
+/** GET /api/admin/v1/roles 列表条目。 */
+export interface RoleSummary {
+  slug: string;
+  name: string;
+  description: string | null;
+  /** 内置角色由 seed 保留，普通 API 不可创建/改名/删除。 */
+  builtin: boolean;
+  permission_count: number;
+}

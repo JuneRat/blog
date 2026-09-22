@@ -11,7 +11,7 @@
 
 use std::sync::{Arc, OnceLock};
 
-use application::error::UseCaseError;
+use application::error::{ConflictKind, UseCaseError};
 use application::ports::OAUTH_STATE_COOKIE;
 use axum::Json;
 use axum::extract::{FromRequestParts, Request};
@@ -196,16 +196,34 @@ pub const ADMIN_ERROR_CODES: &[&str] = &[
     "rate_limited",
     "version_conflict",
     "conflict",
+    "username_taken",
+    "email_taken",
+    "last_owner",
     "not_found",
     "forbidden",
     "external_error",
     "internal_error",
 ];
 
+/// 唯一性冲突 → 业务码。
+///
+/// slug 占用沿用历史上的 `conflict`（已在文档与测试中冻结），
+/// username/email 有明确的界面消费者（账号创建表单定位到具体字段），因此给独立码；
+/// 其余原因暂不分配独立码，保持通用 `conflict`。
+pub fn conflict_error_code(kind: ConflictKind) -> &'static str {
+    match kind {
+        ConflictKind::Username => "username_taken",
+        ConflictKind::Email => "email_taken",
+        _ => "conflict",
+    }
+}
+
 /// 业务错误码：与 HTTP 状态码分离，供客户端做精确分支。
 ///
 /// 关键用例是 409：`version_conflict` 可以用最新 version 重试覆盖，
-/// `conflict`（slug/username 等唯一性冲突）重试无用。
+/// `conflict`（slug 等唯一性冲突）重试无用；username/email 另有专属码。
+/// `last_owner` 用 403：调用者可能持有 `ownership.manage`，被拒是因为会失去
+/// 最后一个可登录 Owner，前端需要显示与「无权操作」不同的原因。
 pub fn admin_error_code(e: &UseCaseError) -> &'static str {
     match e {
         UseCaseError::Unauthenticated => "unauthenticated",
@@ -213,7 +231,8 @@ pub fn admin_error_code(e: &UseCaseError) -> &'static str {
         UseCaseError::Invalid(_) => "invalid_request",
         UseCaseError::RateLimited { .. } => "rate_limited",
         UseCaseError::VersionConflict => "version_conflict",
-        UseCaseError::Conflict(_) => "conflict",
+        UseCaseError::Conflict(kind) => conflict_error_code(*kind),
+        UseCaseError::LastOwnerProtected => "last_owner",
         UseCaseError::NotFound(_) => "not_found",
         UseCaseError::Forbidden => "forbidden",
         UseCaseError::External(_) => "external_error",
@@ -234,6 +253,7 @@ pub fn admin_error_status(e: &UseCaseError) -> StatusCode {
         UseCaseError::RateLimited { .. } => StatusCode::TOO_MANY_REQUESTS,
         UseCaseError::Invalid(_) => StatusCode::BAD_REQUEST,
         UseCaseError::Conflict(_) | UseCaseError::VersionConflict => StatusCode::CONFLICT,
+        UseCaseError::LastOwnerProtected => StatusCode::FORBIDDEN,
         UseCaseError::NotFound(_) => StatusCode::NOT_FOUND,
         UseCaseError::Forbidden => StatusCode::FORBIDDEN,
         UseCaseError::External(_) => StatusCode::BAD_GATEWAY,
@@ -304,7 +324,14 @@ mod tests {
                 "rate_limited",
             ),
             (UseCaseError::VersionConflict, "version_conflict"),
-            (UseCaseError::Conflict("slug".into()), "conflict"),
+            (UseCaseError::Conflict(ConflictKind::Slug), "conflict"),
+            (
+                UseCaseError::Conflict(ConflictKind::Username),
+                "username_taken",
+            ),
+            (UseCaseError::Conflict(ConflictKind::Email), "email_taken"),
+            (UseCaseError::Conflict(ConflictKind::Unknown), "conflict"),
+            (UseCaseError::LastOwnerProtected, "last_owner"),
             (UseCaseError::NotFound("x".into()), "not_found"),
             (UseCaseError::Forbidden, "forbidden"),
             (UseCaseError::External("x".into()), "external_error"),
@@ -325,6 +352,7 @@ mod tests {
                 StatusCode::TOO_MANY_REQUESTS,
             ),
             (UseCaseError::Forbidden, StatusCode::FORBIDDEN),
+            (UseCaseError::LastOwnerProtected, StatusCode::FORBIDDEN),
             (
                 UseCaseError::Repository("x".into()),
                 StatusCode::INTERNAL_SERVER_ERROR,

@@ -94,13 +94,16 @@ async fn fresh_stack() -> Stack {
     roles.sync_registry().await.expect("同步权限目录失败");
     let users = Arc::new(UserInteractor::new(user_repo.clone(), rbac, clock.clone()));
 
-    // author / author2 / editor / stranger 四个用户，各自绑定外部身份。
+    // author / author2 / editor / stranger / admin / owner：覆盖内容 own/any、
+    // 账号管理（user.manage + role.manage）与所有权（ownership.manage）三类边界。
     let mut ids = std::collections::HashMap::new();
     for (username, role) in [
         ("author", Some("author")),
         ("author2", Some("author")),
         ("editor", Some("editor")),
         ("stranger", None),
+        ("admin", Some("admin")),
+        ("owner", Some("owner")),
     ] {
         let user = users
             .create_user(
@@ -186,13 +189,15 @@ async fn fresh_stack() -> Stack {
         passwords,
         posts,
         pages,
+        roles: roles.clone(),
         secure_cookies: false,
     };
 
     let router = auth_router(auth_state)
         .merge(admin_router(admin_state.clone()))
         .merge(posts_router(admin_state.clone()))
-        .merge(interfaces::http_admin::pages_router(admin_state))
+        .merge(interfaces::http_admin::pages_router(admin_state.clone()))
+        .merge(interfaces::http_identity::identity_router(admin_state))
         // 与生产装配一致：最外层请求编号/日志中间件。
         .layer(middleware::from_fn(request_context));
     Stack {
@@ -1094,6 +1099,16 @@ async fn request_me(
     (status, headers, body)
 }
 
+/// 从账号列表 JSON 里取某个用户名的条目；找不到直接失败（避免断言静默落空）。
+fn listed_user(body: &str, username: &str) -> serde_json::Value {
+    let users: Vec<serde_json::Value> = serde_json::from_str(body)
+        .unwrap_or_else(|e| panic!("账号列表不是 JSON 数组：{e}：{body}"));
+    users
+        .into_iter()
+        .find(|user| user["username"] == username)
+        .unwrap_or_else(|| panic!("列表中没有 {username}：{body}"))
+}
+
 #[tokio::test]
 async fn internal_errors_return_generic_body_without_leaking_storage_details() {
     let _g = SERIAL.lock().await;
@@ -1311,4 +1326,485 @@ async fn page_full_crud_round_trip_with_site_level_permissions() {
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert!(body.contains("\"status\":\"draft\""), "{body}");
+}
+
+// ---------------------------------------------------------------------------
+// 用户与角色管理 API（http_identity）：授权边界、最后可登录 Owner、撤权会话失效
+// ---------------------------------------------------------------------------
+
+/// 无会话者、以及有会话但无 `user.manage`/`role.manage` 者，账号接口一律拒绝；
+/// 有权限者也不能越过委派上限或所有权边界。
+#[tokio::test]
+async fn account_api_enforces_permission_boundaries() {
+    let _g = SERIAL.lock().await;
+    let stack = fresh_stack().await;
+
+    // 未登录：认证提取器先拒。
+    let (status, body) = api(
+        &stack.router,
+        "GET",
+        "/api/admin/v1/users",
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+    assert!(body.contains("\"code\":\"unauthenticated\""), "{body}");
+
+    // 有会话但没有账号管理权限：读列表同样拒绝（不泄漏用户名与邮箱）。
+    for who in ["author", "stranger"] {
+        let (cookie, csrf) = login_as(&stack.router, &stack.idp, who).await;
+        for (method, uri, payload) in [
+            ("GET", "/api/admin/v1/users", None),
+            ("GET", "/api/admin/v1/roles", None),
+            ("POST", "/api/admin/v1/users", Some(r#"{"username":"x"}"#)),
+            ("PUT", "/api/admin/v1/users/author/roles/editor", None),
+            ("DELETE", "/api/admin/v1/users/author/roles/author", None),
+        ] {
+            let (status, res) = api(
+                &stack.router,
+                method,
+                uri,
+                Some(&cookie),
+                Some(&csrf),
+                payload,
+            )
+            .await;
+            assert_eq!(
+                status,
+                StatusCode::FORBIDDEN,
+                "{who} {method} {uri} 应被拒绝：{res}"
+            );
+            assert!(res.contains("\"code\":\"forbidden\""), "{res}");
+        }
+    }
+
+    // admin 持 user.manage + role.manage：可列出账号并创建，但不能越过权限边界。
+    let (admin_cookie, admin_csrf) = login_as(&stack.router, &stack.idp, "admin").await;
+    let (status, body) = api(
+        &stack.router,
+        "GET",
+        "/api/admin/v1/users",
+        Some(&admin_cookie),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body.contains("\"username\":\"author\""), "{body}");
+    // 列表带可登录标记（界面据此在移除 Owner 前提示），且不含任何凭据材料。
+    assert!(body.contains("\"can_login\":true"), "{body}");
+    assert!(body.contains("\"roles\":[\"author\"]"), "{body}");
+    assert!(
+        !body.contains("password_hash") && !body.contains("$argon2"),
+        "列表不得泄漏凭据：{body}"
+    );
+
+    // editor 的授权集合不是 admin 的子集 → 委派上限拒绝（即使持有 role.manage）。
+    let (status, body) = api(
+        &stack.router,
+        "PUT",
+        "/api/admin/v1/users/author/roles/editor",
+        Some(&admin_cookie),
+        Some(&admin_csrf),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert!(body.contains("\"code\":\"forbidden\""), "{body}");
+
+    // 授予 Owner 需要专门的 ownership.manage。
+    let (status, body) = api(
+        &stack.router,
+        "PUT",
+        "/api/admin/v1/users/author/roles/owner",
+        Some(&admin_cookie),
+        Some(&admin_csrf),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+
+    // admin 可以创建账号，但角色仍需另行分配。
+    let (status, body) = api(
+        &stack.router,
+        "POST",
+        "/api/admin/v1/users",
+        Some(&admin_cookie),
+        Some(&admin_csrf),
+        Some(r#"{"username":"drafted","display_name":"待分配"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert!(body.contains("\"username\":\"drafted\""), "{body}");
+}
+
+/// 用户名与邮箱占用必须给出可区分的业务码，创建表单据此把错误定位到字段。
+#[tokio::test]
+async fn username_and_email_conflicts_reach_the_ui_as_distinct_codes() {
+    let _g = SERIAL.lock().await;
+    let stack = fresh_stack().await;
+    let (cookie, csrf) = login_as(&stack.router, &stack.idp, "admin").await;
+
+    let (status, body) = api(
+        &stack.router,
+        "POST",
+        "/api/admin/v1/users",
+        Some(&cookie),
+        Some(&csrf),
+        Some(r#"{"username":"newcomer","email":"newcomer@example.com","display_name":"新人"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+
+    // 用户名占用。
+    let (status, body) = api(
+        &stack.router,
+        "POST",
+        "/api/admin/v1/users",
+        Some(&cookie),
+        Some(&csrf),
+        Some(r#"{"username":"newcomer","email":"other@example.com"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert!(body.contains("\"code\":\"username_taken\""), "{body}");
+    assert!(body.contains("username"), "文案应指向用户名：{body}");
+
+    // 邮箱占用（用户名不同）。
+    let (status, body) = api(
+        &stack.router,
+        "POST",
+        "/api/admin/v1/users",
+        Some(&cookie),
+        Some(&csrf),
+        Some(r#"{"username":"another","email":"newcomer@example.com"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert!(body.contains("\"code\":\"email_taken\""), "{body}");
+    assert!(body.contains("email"), "文案应指向邮箱：{body}");
+
+    // 规范化（trim + 小写）后仍是同一个用户名。
+    let (status, body) = api(
+        &stack.router,
+        "POST",
+        "/api/admin/v1/users",
+        Some(&cookie),
+        Some(&csrf),
+        Some(r#"{"username":"  NewComer  "}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert!(body.contains("\"code\":\"username_taken\""), "{body}");
+}
+
+/// 最后一个「可登录」Owner 的 Owner 角色不能被移除；登不进去的 Owner 不构成有效 Owner。
+#[tokio::test]
+async fn last_loginable_owner_is_protected_with_a_dedicated_code() {
+    let _g = SERIAL.lock().await;
+    let stack = fresh_stack().await;
+
+    // 直接建一个没有任何登录方式的 Owner：它不满足「可登录」，不构成有效 Owner。
+    let ghost = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO users (id, username, display_name, version, created_at, updated_at) \
+         VALUES ($1, 'ghost', '影子 Owner', 1, now(), now())",
+    )
+    .bind(ghost)
+    .execute(&stack.pool)
+    .await
+    .unwrap();
+    stack
+        .roles
+        .assign_to_username(&Actor::bootstrap_cli(), "ghost", "owner")
+        .await
+        .unwrap();
+
+    let (cookie, csrf) = login_as(&stack.router, &stack.idp, "owner").await;
+
+    // 列表把「可登录」暴露给界面，便于事前提示。
+    let (status, body) = api(
+        &stack.router,
+        "GET",
+        "/api/admin/v1/users",
+        Some(&cookie),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        body.contains("\"username\":\"ghost\"") && body.contains("\"can_login\":false"),
+        "{body}"
+    );
+    // 后端给出全局结论：ghost 不可登录 → 不是「最后一个可登录 Owner」；
+    // owner 是唯一可登录 Owner → 标记为受保护。
+    assert_eq!(
+        listed_user(&body, "ghost")["can_login"].as_bool(),
+        Some(false)
+    );
+    assert_eq!(
+        listed_user(&body, "ghost")["is_last_loginable_owner"].as_bool(),
+        Some(false)
+    );
+    assert_eq!(
+        listed_user(&body, "owner")["is_last_loginable_owner"].as_bool(),
+        Some(true)
+    );
+
+    // 唯一可登录 Owner 被保护：专属业务码，而不是笼统的 forbidden。
+    let (status, body) = api(
+        &stack.router,
+        "DELETE",
+        "/api/admin/v1/users/owner/roles/owner",
+        Some(&cookie),
+        Some(&csrf),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert!(body.contains("\"code\":\"last_owner\""), "{body}");
+    assert!(!body.contains("\"code\":\"forbidden\""), "{body}");
+
+    // 登不进去的 Owner 可以清理：它不减少可用 Owner。
+    let (status, body) = api(
+        &stack.router,
+        "DELETE",
+        "/api/admin/v1/users/ghost/roles/owner",
+        Some(&cookie),
+        Some(&csrf),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+
+    // 出现第二个可登录 Owner 后，原 Owner 的 Owner 角色允许移除。
+    let second = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO users (id, username, display_name, version, created_at, updated_at) \
+         VALUES ($1, 'owner2', '第二 Owner', 1, now(), now())",
+    )
+    .bind(second)
+    .execute(&stack.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO oauth_accounts (id, user_id, provider, provider_user_id, created_at, updated_at) \
+         VALUES ($1, $2, 'https://idp.example', 'sub-owner2', now(), now())",
+    )
+    .bind(Uuid::now_v7())
+    .bind(second)
+    .execute(&stack.pool)
+    .await
+    .unwrap();
+    stack
+        .roles
+        .assign_to_username(&Actor::bootstrap_cli(), "owner2", "owner")
+        .await
+        .unwrap();
+
+    // 全局计数变为 2：两个 Owner 都不再被标记为「最后一个可登录 Owner」。
+    let (status, body) = api(
+        &stack.router,
+        "GET",
+        "/api/admin/v1/users",
+        Some(&cookie),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        listed_user(&body, "owner")["is_last_loginable_owner"].as_bool(),
+        Some(false)
+    );
+    assert_eq!(
+        listed_user(&body, "owner2")["is_last_loginable_owner"].as_bool(),
+        Some(false)
+    );
+
+    let (status, body) = api(
+        &stack.router,
+        "DELETE",
+        "/api/admin/v1/users/owner/roles/owner",
+        Some(&cookie),
+        Some(&csrf),
+        None,
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::NO_CONTENT,
+        "有第二个可登录 Owner 时应允许：{body}"
+    );
+}
+
+/// 回归：`is_last_loginable_owner` 必须按全站计数判定，不能只看当前页。
+///
+/// 若按页推断，第一页里唯一的 Owner 会被误标成「最后一个可登录 Owner」，
+/// 界面随即错误禁用移除——即使另一个可登录 Owner 就在后续页。
+#[tokio::test]
+async fn last_owner_flag_is_global_across_pages() {
+    let _g = SERIAL.lock().await;
+    let stack = fresh_stack().await;
+
+    // 两个可登录 Owner：`aaa-owner` 排在第一页，`zzz-owner` 落在后续页。
+    for (username, external) in [
+        ("aaa-owner", "sub-aaa-owner"),
+        ("zzz-owner", "sub-zzz-owner"),
+    ] {
+        let id = Uuid::now_v7();
+        sqlx::query(
+            "INSERT INTO users (id, username, display_name, version, created_at, updated_at) \
+             VALUES ($1, $2, $3, 1, now(), now())",
+        )
+        .bind(id)
+        .bind(username)
+        .bind(username)
+        .execute(&stack.pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO oauth_accounts (id, user_id, provider, provider_user_id, created_at, updated_at) \
+             VALUES ($1, $2, 'https://idp.example', $3, now(), now())",
+        )
+        .bind(Uuid::now_v7())
+        .bind(id)
+        .bind(external)
+        .execute(&stack.pool)
+        .await
+        .unwrap();
+        stack
+            .roles
+            .assign_to_username(&Actor::bootstrap_cli(), username, "owner")
+            .await
+            .unwrap();
+    }
+
+    let (cookie, _) = login_as(&stack.router, &stack.idp, "owner").await;
+    let (status, body) = api(
+        &stack.router,
+        "GET",
+        "/api/admin/v1/users?limit=1",
+        Some(&cookie),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    // 该页只有 aaa-owner；全站还有 owner 与 zzz-owner 两个可登录 Owner。
+    assert!(
+        !body.contains("zzz-owner"),
+        "确认另一个 Owner 在后续页：{body}"
+    );
+    assert_eq!(
+        listed_user(&body, "aaa-owner")["is_last_loginable_owner"].as_bool(),
+        Some(false),
+        "最后 Owner 必须按全局计数判定，不能按当前页推断：{body}"
+    );
+}
+
+/// 通过账号 API 改角色会递增 `users.version`，目标用户的旧会话立即失效；
+/// 重复分配同一角色是幂等的，不应把用户意外登出。
+#[tokio::test]
+async fn role_change_through_api_invalidates_the_target_session() {
+    let _g = SERIAL.lock().await;
+    let stack = fresh_stack().await;
+
+    let (author_cookie, _) = login_as(&stack.router, &stack.idp, "author").await;
+    let (status, _, body) = request_me(&stack.router, &author_cookie).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    // owner 持有全部权限，可分配 editor；admin 因委派上限不行。
+    let (owner_cookie, owner_csrf) = login_as(&stack.router, &stack.idp, "owner").await;
+    let (status, body) = api(
+        &stack.router,
+        "PUT",
+        "/api/admin/v1/users/author/roles/editor",
+        Some(&owner_cookie),
+        Some(&owner_csrf),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+
+    // 授权集合变化递增目标用户版本：旧 cookie 立即被判为未登录。
+    let (status, _, body) = request_me(&stack.router, &author_cookie).await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "改角色后目标用户旧会话必须失效：{body}"
+    );
+
+    // 重新登录：拿到新角色的权限。
+    let (author_cookie, _) = login_as(&stack.router, &stack.idp, "author").await;
+    let (status, _, body) = request_me(&stack.router, &author_cookie).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body.contains("post.read_any"), "重新登录应带新权限：{body}");
+
+    // 幂等重复分配：不再递增版本，会话保持有效。
+    let (status, _) = api(
+        &stack.router,
+        "PUT",
+        "/api/admin/v1/users/author/roles/editor",
+        Some(&owner_cookie),
+        Some(&owner_csrf),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _, body) = request_me(&stack.router, &author_cookie).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "重复分配同一角色不应撤销会话：{body}"
+    );
+
+    // 移除角色 → 会话再次失效。
+    let (status, _) = api(
+        &stack.router,
+        "DELETE",
+        "/api/admin/v1/users/author/roles/editor",
+        Some(&owner_cookie),
+        Some(&owner_csrf),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _, body) = request_me(&stack.router, &author_cookie).await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "移除角色后旧会话必须失效：{body}"
+    );
+}
+
+/// 对自己改角色同样递增版本：操作成功，但本人当前会话随之下线。
+/// 界面据此在成功后重新读 `/me`，而不是继续显示已失效的登录态。
+#[tokio::test]
+async fn self_role_change_logs_the_actor_out() {
+    let _g = SERIAL.lock().await;
+    let stack = fresh_stack().await;
+
+    let (owner_cookie, owner_csrf) = login_as(&stack.router, &stack.idp, "owner").await;
+    // Owner 本就有全部权限，但尚未持有 editor 角色；插入新分配会递增版本。
+    let (status, body) = api(
+        &stack.router,
+        "PUT",
+        "/api/admin/v1/users/owner/roles/editor",
+        Some(&owner_cookie),
+        Some(&owner_csrf),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+
+    let (status, _, body) = request_me(&stack.router, &owner_cookie).await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "改自己的角色也会让本人会话失效：{body}"
+    );
 }

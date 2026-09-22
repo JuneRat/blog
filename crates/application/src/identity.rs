@@ -301,6 +301,31 @@ impl UserDto {
     }
 }
 
+/// 账号管理列表默认页大小与硬上限。
+/// 上限既防一次拉取无限账号，也让下面批量查角色的 `IN` 列表有界。
+pub const ADMIN_USER_PAGE_DEFAULT: i64 = 50;
+pub const ADMIN_USER_PAGE_MAX: i64 = 200;
+
+/// 账号管理列表条目：账号字段 + 角色 + 登录方式是否存在。
+///
+/// `can_login` 与最后 Owner 保护使用同一谓词，界面可据它在移除 Owner 前提示；
+/// `is_last_loginable_owner` 是**全局**结论（不受分页影响）：为 true 时移除其
+/// Owner 角色会被 `remove_role` 拒绝。邮箱只回给持有
+/// `user.manage`/`role.manage` 的调用者。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AdminUserDto {
+    pub id: Uuid,
+    pub username: String,
+    pub email: Option<String>,
+    pub display_name: Option<String>,
+    pub deleted: bool,
+    pub can_login: bool,
+    pub is_last_loginable_owner: bool,
+    pub password_enabled: bool,
+    pub external_identities: i64,
+    pub roles: Vec<String>,
+}
+
 pub struct CreateUserCmd {
     pub username: String,
     pub email: Option<String>,
@@ -344,6 +369,65 @@ impl UserInteractor {
         let snapshot = user.snapshot();
         self.users.insert(&snapshot).await?;
         Ok(UserDto::from_snapshot(&snapshot))
+    }
+
+    /// 账号管理列表：持有 `user.manage` 或 `role.manage` 才可读取。
+    ///
+    /// 读取不改状态，因此不要求写通道，但仍由用例执行授权——接口层不做权限判断。
+    /// 角色一次批量读取，避免逐账号查询。
+    ///
+    /// `is_last_loginable_owner` 由**全局**可登录 Owner 数判定，不能按当前页推断：
+    /// 另一个可登录 Owner 落在后续页时，按页推断会误标并错误禁用移除
+    /// （docs §8.3）。这里读出全局计数，逐行给出结论；存储侧执行时仍会复核。
+    pub async fn list_users(
+        &self,
+        actor: &Actor,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<AdminUserDto>, UseCaseError> {
+        if !can_administer_accounts(actor) {
+            return Err(UseCaseError::Forbidden);
+        }
+        let limit = if limit <= 0 {
+            ADMIN_USER_PAGE_DEFAULT
+        } else {
+            limit.min(ADMIN_USER_PAGE_MAX)
+        };
+        let offset = offset.max(0);
+
+        let rows = self.users.list_admin(limit, offset).await?;
+        let ids: Vec<Uuid> = rows.iter().map(|row| row.id).collect();
+        let mut roles: std::collections::HashMap<Uuid, Vec<String>> =
+            std::collections::HashMap::new();
+        for (user_id, slug) in self.rbac.roles_of_users(&ids).await? {
+            roles.entry(user_id).or_default().push(slug);
+        }
+        let loginable_owners = self.rbac.loginable_owner_count().await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| {
+                let can_login = row.can_login();
+                let roles = roles.remove(&row.id).unwrap_or_default();
+                // 与 remove_role 的保护条件同构：确实持有 owner 且可登录，
+                // 且全站只剩这一个可登录 Owner。
+                let is_last_loginable_owner = can_login
+                    && loginable_owners <= 1
+                    && roles.iter().any(|slug| slug == OWNER_ROLE_SLUG);
+                AdminUserDto {
+                    id: row.id,
+                    username: row.username,
+                    email: row.email,
+                    display_name: row.display_name,
+                    deleted: row.deleted,
+                    can_login,
+                    is_last_loginable_owner,
+                    password_enabled: row.password_enabled,
+                    external_identities: row.external_identities,
+                    roles,
+                }
+            })
+            .collect())
     }
 
     /// 按用户名解析 Actor：同一规范化路径 + 软删除拒绝 + 读取当前权限并集。
@@ -438,7 +522,10 @@ impl RoleInteractor {
         self.rbac.sync_builtin_roles(BUILTIN_ROLES).await
     }
 
-    pub async fn list(&self) -> Result<Vec<RoleDto>, UseCaseError> {
+    pub async fn list(&self, actor: &Actor) -> Result<Vec<RoleDto>, UseCaseError> {
+        if !can_administer_accounts(actor) {
+            return Err(UseCaseError::Forbidden);
+        }
         let mut roles = self.rbac.list_roles().await?;
         for role in &mut roles {
             role.builtin = BUILTIN_ROLES.iter().any(|d| d.slug == role.slug);
@@ -503,6 +590,12 @@ impl RoleInteractor {
         }
         Ok(user)
     }
+}
+
+/// 账号与角色管理读取所需的权限：`user.manage` 或 `role.manage` 任一即可。
+/// 只有 `role.manage` 的委派管理员也必须能看到账号列表才能分配角色。
+fn can_administer_accounts(actor: &Actor) -> bool {
+    actor.has_permission("user.manage") || actor.has_permission("role.manage")
 }
 
 /// email 规范化：trim；空串视为未提供；形状校验复用 domain 规则。

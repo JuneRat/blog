@@ -18,6 +18,9 @@ export function PostListScreen() {
   const [error, setError] = useState<string | null>(null);
   const canCreate = me?.permissions.includes("post.create") ?? false;
   const canReadPages = me?.permissions.includes("page.read") ?? false;
+  const canAdminister =
+    (me?.permissions.includes("user.manage") ?? false) ||
+    (me?.permissions.includes("role.manage") ?? false);
 
   const load = useCallback(async () => {
     setError(null);
@@ -42,6 +45,11 @@ export function PostListScreen() {
           {canReadPages && (
             <button type="button" className="button ghost" onClick={() => navigate(paths.pages)}>
               独立页面
+            </button>
+          )}
+          {canAdminister && (
+            <button type="button" className="button ghost" onClick={() => navigate(paths.users)}>
+              用户与角色
             </button>
           )}
           {canCreate && (

@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use application::error::UseCaseError;
+use application::error::{ConflictKind, UseCaseError};
 use application::identity::{Actor, ActorChannel};
 use application::page::{CreatePageCmd, EditPageCmd, PageInteractor};
 use application::ports::{Clock, PageRepository, SaveOutcome};
@@ -51,7 +51,7 @@ impl PageRepository for FakePageRepo {
     async fn insert(&self, snapshot: &PageSnapshot) -> Result<(), UseCaseError> {
         let mut pages = self.pages.lock().unwrap();
         if pages.contains_key(&snapshot.slug) {
-            return Err(UseCaseError::Conflict("slug".into()));
+            return Err(UseCaseError::Conflict(ConflictKind::Slug));
         }
         pages.insert(snapshot.slug.clone(), snapshot.clone());
         Ok(())

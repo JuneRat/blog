@@ -55,11 +55,41 @@ pub struct PasswordCredential {
     pub version: i64,
 }
 
+/// 账号管理列表行：用户基本字段 + 是否仍有登录方式。
+///
+/// 「是否可登录」是最后 Owner 保护判定的输入（docs §3），界面据此在移除 Owner
+/// 角色前给出提示；因此它必须与 `PostgresRbacStore::active_owner_count` 用同一套
+/// 定义——未软删除，且至少一条 oauth_accounts 或已启用本地密码。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdminUserRow {
+    pub id: Uuid,
+    pub username: String,
+    pub email: Option<String>,
+    pub display_name: Option<String>,
+    pub deleted: bool,
+    /// `users.password_hash IS NOT NULL`。
+    pub password_enabled: bool,
+    /// oauth_accounts 条数。
+    pub external_identities: i64,
+}
+
+impl AdminUserRow {
+    /// 未软删除且至少一种登录方式：与 RBAC 存储的最后 Owner 判定同义。
+    pub fn can_login(&self) -> bool {
+        !self.deleted && (self.password_enabled || self.external_identities > 0)
+    }
+}
+
 #[async_trait]
 pub trait UserRepository: Send + Sync {
     async fn insert(&self, snapshot: &UserSnapshot) -> Result<(), UseCaseError>;
     async fn find_by_id(&self, id: Uuid) -> Result<Option<UserSnapshot>, UseCaseError>;
     async fn find_by_username(&self, username: &str) -> Result<Option<UserSnapshot>, UseCaseError>;
+
+    /// 管理列表：按用户名排序的分页读取（含软删除账号，供界面标注）。
+    ///
+    /// 调用方负责给出已收敛的 `limit`/`offset`；实现方不再做范围裁剪。
+    async fn list_admin(&self, limit: i64, offset: i64) -> Result<Vec<AdminUserRow>, UseCaseError>;
 
     // --- 本地密码凭据 ---
     //
@@ -190,6 +220,18 @@ pub trait RbacStore: Send + Sync {
     async fn list_roles(&self) -> Result<Vec<RoleDto>, UseCaseError>;
 
     async fn roles_of_user(&self, user_id: Uuid) -> Result<Vec<String>, UseCaseError>;
+
+    /// 批量读取多个用户的角色 slug（`(user_id, slug)` 对，按用户与 slug 排序）。
+    ///
+    /// 管理列表一次读整页账号的角色；逐个 `roles_of_user` 会退化成 N+1 查询。
+    async fn roles_of_users(&self, user_ids: &[Uuid]) -> Result<Vec<(Uuid, String)>, UseCaseError>;
+
+    /// 全站「可登录」Owner 数：未软删除、持有 owner 角色、且仍有登录方式。
+    ///
+    /// 这是**全局**计数，不受管理列表分页影响。列表接口用它判断某个账号是不是
+    /// 最后一个可登录 Owner；若前端按当前页推断，另一个 Owner 落在后续页时就会
+    /// 被误判并错误禁用移除。与 `remove_role` 的最后 Owner 保护使用同一谓词。
+    async fn loginable_owner_count(&self) -> Result<i64, UseCaseError>;
 }
 
 // ---------------------------------------------------------------------------

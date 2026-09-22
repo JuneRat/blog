@@ -5,4 +5,5 @@ pub mod cli;
 pub mod http;
 pub mod http_admin;
 pub mod http_auth;
+pub mod http_identity;
 pub mod http_support;

@@ -183,6 +183,7 @@ async fn fresh_stack_with(throttle_config: ThrottleConfig) -> Stack {
         passwords,
         posts,
         pages,
+        roles: roles.clone(),
         secure_cookies: false,
     };
     let router = auth_router(auth_state)

@@ -12,7 +12,7 @@
 - 当前采用 users、oauth_accounts、roles、permissions、user_roles、role_permissions、categories、series、posts、tags、post_tags、pages、settings 共 13 表。
 - 一篇文章最多一个分类、一个系列，多个标签；分类可有父节点，系列有文章顺序；Page 独立且无文章组织关系。
 - 不预建修订、路径、媒体、会话、令牌、通知或任务等辅助表；这些能力需要时再扩展。
-- 当前已实现：M1 的 Post 内容闭环与公开 SSR、Page 的创建/编辑/发布/撤回与根路径 `/{slug}` 公开访问（含系统保留路径校验）；M2 的 RBAC、OAuth 登录、单实例会话、管理写 API 与 React 后台；M2 之后的本地密码认证（Argon2id + 登录限流 + 受控重置，见 [ADR-0009](adr/0009-local-password-authentication.md)）。Post 的受控 CLI 写通道已交付；Page 目前只经后台管理 API，尚未提供 CLI 子命令。
+- 当前已实现：M1 的 Post 内容闭环与公开 SSR、Page 的创建/编辑/发布/撤回与根路径 `/{slug}` 公开访问（含系统保留路径校验）；M2 的 RBAC、OAuth 登录、单实例会话、管理写 API 与 React 后台；M2 之后的本地密码认证（Argon2id + 登录限流 + 受控重置，见 [ADR-0009](adr/0009-local-password-authentication.md)），以及后台用户与角色管理（账号列表/创建、角色目录、角色分配与移除，含授权边界、最后可登录 Owner 保护与撤权会话失效；角色目录只读，自定义角色的创建/授权编辑仍属后续，见 [身份与后台 §8](identity-and-admin.md)）。Post 的受控 CLI 写通道已交付；Page 目前只经后台管理 API，尚未提供 CLI 子命令。
 - 尚未开始：M0 主题原型（`spikes/template-bridge` 不存在）、M3 的分类/标签/Series/settings/回收站/备份恢复、M4 的邀请/审计/媒体等扩展、M5 上线验收。
 
 ## 2. 决策与范围变化

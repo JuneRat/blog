@@ -323,13 +323,15 @@ pub async fn run(deps: CliDeps, command: Command) -> Result<(), String> {
                 passwords: deps.passwords,
                 posts: deps.posts,
                 pages: deps.pages,
+                roles: deps.roles,
                 secure_cookies: deps.secure_cookies,
             };
             let app = public_router(public_state, deps.assets_dir)
                 .merge(crate::http_auth::auth_router(auth_state))
                 .merge(crate::http_auth::admin_router(admin_state.clone()))
                 .merge(crate::http_admin::posts_router(admin_state.clone()))
-                .merge(crate::http_admin::pages_router(admin_state));
+                .merge(crate::http_admin::pages_router(admin_state.clone()))
+                .merge(crate::http_identity::identity_router(admin_state));
             // 后台 SPA 挂在 /admin 子树；dist 不存在时保持未注册。
             let app = crate::http::mount_admin_spa(app, deps.admin_dist);
             // 全站最外层：分配请求编号、记录完成日志、回写 x-request-id（含被提前拒绝的 401/403）。
@@ -623,7 +625,11 @@ async fn run_role(deps: CliDeps, action: RoleAction) -> Result<(), String> {
             Ok(())
         }
         RoleAction::List => {
-            let roles = deps.roles.list().await.map_err(fmt_error)?;
+            let roles = deps
+                .roles
+                .list(&Actor::bootstrap_cli())
+                .await
+                .map_err(fmt_error)?;
             println!("{:<10} {:<16} {:<8} 权限数", "slug", "名称", "内置");
             for role in roles {
                 println!(

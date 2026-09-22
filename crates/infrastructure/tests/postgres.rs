@@ -6,14 +6,14 @@
 
 use std::sync::Arc;
 
-use application::error::UseCaseError;
+use application::error::{ConflictKind, UseCaseError};
 use application::ports::{
     ClearPasswordOutcome, ContentRenderer, OAuthAccountStore, PageRepository, PostRepository,
     PublishedPageQuery, PublishedPostQuery, RbacStore, SaveOutcome, UserRepository,
 };
 use domain::content::page::Page;
 use domain::content::post::{Post, PostSnapshot, PostStatus, Slug, Visibility};
-use domain::identity::UserId;
+use domain::identity::{User, UserId};
 use infrastructure::{
     PostgresOAuthAccountStore, PostgresPageRepository, PostgresPostRepository,
     PostgresPublishedPageQuery, PostgresPublishedPostQuery, PostgresRbacStore,
@@ -187,8 +187,8 @@ async fn duplicate_slug_is_rejected_as_conflict() {
         .await
         .unwrap_err();
     match err {
-        UseCaseError::Conflict(target) => assert_eq!(target, "slug"),
-        other => panic!("期望 Conflict，得到 {other:?}"),
+        UseCaseError::Conflict(ConflictKind::Slug) => {}
+        other => panic!("期望 Conflict(Slug)，得到 {other:?}"),
     }
 }
 
@@ -234,8 +234,8 @@ async fn series_position_rules_enforced_by_constraints() {
     b.series_order = Some(2);
     let err = repo.insert(&b).await.unwrap_err();
     match err {
-        UseCaseError::Conflict(target) => assert_eq!(target, "该系列位置"),
-        other => panic!("期望 Conflict，得到 {other:?}"),
+        UseCaseError::Conflict(ConflictKind::SeriesPosition) => {}
+        other => panic!("期望 Conflict(SeriesPosition)，得到 {other:?}"),
     }
 
     // 不同位置可以插入；留空档合法。
@@ -656,7 +656,7 @@ async fn rbac_last_owner_protection() {
     // 唯一 Owner：移除被拒。
     let err = rbac.remove_role(u1, "owner").await.unwrap_err();
     assert!(
-        matches!(err, application::error::UseCaseError::Forbidden),
+        matches!(err, application::error::UseCaseError::LastOwnerProtected),
         "最后 Owner 不能被移除：{err:?}"
     );
 
@@ -685,7 +685,7 @@ async fn rbac_last_owner_protection() {
         .unwrap();
     let err = rbac.remove_role(u1, "owner").await.unwrap_err();
     assert!(
-        matches!(err, application::error::UseCaseError::Forbidden),
+        matches!(err, application::error::UseCaseError::LastOwnerProtected),
         "软删除的 Owner 不计入有效数量"
     );
 }
@@ -712,7 +712,7 @@ async fn owner_without_login_method_does_not_satisfy_last_owner_guard() {
     // 移除唯一可登录的 Owner 会留下无法登录的 Owner → 拒绝（docs §3）。
     let err = rbac.remove_role(bound, "owner").await.unwrap_err();
     assert!(
-        matches!(err, application::error::UseCaseError::Forbidden),
+        matches!(err, application::error::UseCaseError::LastOwnerProtected),
         "无登录方式的 Owner 不构成有效 Owner：{err:?}"
     );
 
@@ -743,7 +743,10 @@ async fn owner_without_login_method_can_be_cleaned_up() {
     assert!(rbac.remove_role(unbound, "owner").await.is_ok());
     // bound 仍是最后可登录 Owner，受保护。
     let err = rbac.remove_role(bound, "owner").await.unwrap_err();
-    assert!(matches!(err, application::error::UseCaseError::Forbidden));
+    assert!(matches!(
+        err,
+        application::error::UseCaseError::LastOwnerProtected
+    ));
 }
 
 /// 回归：本地密码是有效登录方式，只用密码（无 oauth）的最后 Owner 必须受保护。
@@ -769,7 +772,7 @@ async fn password_only_last_owner_is_protected() {
 
     let err = rbac.remove_role(alice, "owner").await.unwrap_err();
     assert!(
-        matches!(err, application::error::UseCaseError::Forbidden),
+        matches!(err, application::error::UseCaseError::LastOwnerProtected),
         "密码型最后 Owner 不能被移除：{err:?}"
     );
 
@@ -814,7 +817,10 @@ async fn deleted_password_only_owner_can_be_cleaned_up() {
 
     // alice 现在是唯一可登录 Owner，受保护。
     let err = rbac.remove_role(alice, "owner").await.unwrap_err();
-    assert!(matches!(err, application::error::UseCaseError::Forbidden));
+    assert!(matches!(
+        err,
+        application::error::UseCaseError::LastOwnerProtected
+    ));
 }
 
 #[tokio::test]
@@ -839,7 +845,10 @@ async fn removing_role_the_user_does_not_hold_is_noop() {
     assert!(rbac.remove_role(plain, "author").await.is_ok());
     // 真正的最后 Owner 仍受保护。
     let err = rbac.remove_role(owner, "owner").await.unwrap_err();
-    assert!(matches!(err, application::error::UseCaseError::Forbidden));
+    assert!(matches!(
+        err,
+        application::error::UseCaseError::LastOwnerProtected
+    ));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -898,7 +907,7 @@ async fn page_repository_crud_version_and_public_query() {
     let mut snapshot = page.snapshot();
     pages.insert(&snapshot).await.unwrap();
 
-    // pages.slug 唯一：不同 id、相同 slug 的插入映射为 Conflict("slug")。
+    // pages.slug 唯一：不同 id、相同 slug 的插入映射为 Conflict(Slug)。
     let duplicate = Page::create_draft(
         Slug::new("about").unwrap(),
         "重复页面".into(),
@@ -909,7 +918,7 @@ async fn page_repository_crud_version_and_public_query() {
     .unwrap();
     let err = pages.insert(&duplicate.snapshot()).await.unwrap_err();
     assert!(
-        matches!(err, UseCaseError::Conflict(ref target) if target == "slug"),
+        matches!(err, UseCaseError::Conflict(ConflictKind::Slug)),
         "{err:?}"
     );
 
@@ -1259,4 +1268,104 @@ async fn password_clear_and_unbind_both_block_on_the_identity_lock() {
     .await
     .unwrap();
     assert!(remaining >= 1, "至少保留一种登录方式，实际剩 {remaining}");
+}
+
+#[tokio::test]
+async fn duplicate_username_and_email_map_to_structured_conflicts() {
+    let _g = SERIAL.lock().await;
+    let pool = fresh_database().await;
+    let users = PostgresUserRepository::new(pool.clone());
+    let now = OffsetDateTime::now_utc();
+
+    let first = User::new("alice", Some("alice@example.com".into()), None, now)
+        .unwrap()
+        .snapshot();
+    users.insert(&first).await.unwrap();
+
+    // 用户名占用：唯一约束 users_username_key → Conflict(Username)。
+    let same_name = User::new("alice", Some("other@example.com".into()), None, now)
+        .unwrap()
+        .snapshot();
+    match users.insert(&same_name).await.unwrap_err() {
+        UseCaseError::Conflict(ConflictKind::Username) => {}
+        other => panic!("期望 Conflict(Username)，得到 {other:?}"),
+    }
+
+    // 邮箱占用（用户名不同）：users_email_key → Conflict(Email)。
+    let same_email = User::new("bob", Some("alice@example.com".into()), None, now)
+        .unwrap()
+        .snapshot();
+    match users.insert(&same_email).await.unwrap_err() {
+        UseCaseError::Conflict(ConflictKind::Email) => {}
+        other => panic!("期望 Conflict(Email)，得到 {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn admin_listing_reports_login_methods_and_roles_in_bulk() {
+    let _g = SERIAL.lock().await;
+    let pool = fresh_database().await;
+    let rbac = rbac_of(&pool);
+    rbac.sync_permission_registry(application::identity::PERMISSION_REGISTRY)
+        .await
+        .unwrap();
+    rbac.sync_builtin_roles(application::identity::BUILTIN_ROLES)
+        .await
+        .unwrap();
+
+    let bound = seed_user(&pool, "bound").await;
+    let password_only = seed_user(&pool, "password-only").await;
+    seed_user(&pool, "plain").await;
+    // 软删除账号即使仍有绑定也不可登录：与 active_owner_count 的谓词一致。
+    let deleted = seed_user(&pool, "deleted").await;
+    seed_binding(&pool, bound).await;
+    seed_binding(&pool, deleted).await;
+    seed_password(&pool, password_only).await;
+    sqlx::query("UPDATE users SET deleted_at = now() WHERE id = $1")
+        .bind(deleted)
+        .execute(&pool)
+        .await
+        .unwrap();
+    rbac.assign_role(bound, "owner").await.unwrap();
+    rbac.assign_role(password_only, "editor").await.unwrap();
+
+    let users = PostgresUserRepository::new(pool.clone());
+    let rows = users.list_admin(50, 0).await.unwrap();
+    assert_eq!(rows.len(), 4);
+    let row = |name: &str| rows.iter().find(|r| r.username == name).unwrap();
+    assert!(row("bound").can_login(), "oauth 绑定即一种登录方式");
+    assert!(row("password-only").can_login(), "本地密码即一种登录方式");
+    assert_eq!(row("password-only").external_identities, 0);
+    assert!(!row("plain").can_login(), "既无密码也无外部身份");
+    assert!(
+        row("deleted").deleted && !row("deleted").can_login(),
+        "软删除账号不可登录，即使仍有外部身份"
+    );
+    assert_eq!(row("deleted").external_identities, 1);
+
+    // 批量角色查询与逐个查询结果一致，且不串号。
+    let ids: Vec<uuid::Uuid> = rows.iter().map(|r| r.id).collect();
+    let roles = rbac.roles_of_users(&ids).await.unwrap();
+    assert_eq!(roles.len(), 2);
+    assert!(roles.contains(&(bound, "owner".to_string())));
+    assert!(roles.contains(&(password_only, "editor".to_string())));
+}
+
+#[tokio::test]
+async fn admin_listing_paginates_in_stable_username_order() {
+    let _g = SERIAL.lock().await;
+    let pool = fresh_database().await;
+    for username in ["carol", "alice", "bob"] {
+        seed_user(&pool, username).await;
+    }
+
+    let users = PostgresUserRepository::new(pool.clone());
+    let first = users.list_admin(2, 0).await.unwrap();
+    let rest = users.list_admin(2, 2).await.unwrap();
+    let names: Vec<&str> = first
+        .iter()
+        .chain(rest.iter())
+        .map(|r| r.username.as_str())
+        .collect();
+    assert_eq!(names, ["alice", "bob", "carol"]);
 }

@@ -5,6 +5,8 @@ import { PageEditScreen } from "./screens/PageEditScreen";
 import { PageListScreen } from "./screens/PageListScreen";
 import { PostEditScreen } from "./screens/PostEditScreen";
 import { PostListScreen } from "./screens/PostListScreen";
+import { RoleListScreen } from "./screens/RoleListScreen";
+import { UserListScreen } from "./screens/UserListScreen";
 
 export function App() {
   const { status } = useAuth();
@@ -49,6 +51,13 @@ export function App() {
   }
   if (route.name === "pageNew") {
     return <PageEditScreen slug={null} />;
+  }
+  // 路由守卫只改善体验：真正的权限判断在用例与接口层，无权限时后端返回 403。
+  if (route.name === "userList") {
+    return <UserListScreen />;
+  }
+  if (route.name === "roleList") {
+    return <RoleListScreen />;
   }
   return <PostListScreen />;
 }
