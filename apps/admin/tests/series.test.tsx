@@ -162,3 +162,56 @@ describe("文章编辑器系列校验", () => {
     );
   });
 });
+
+describe("系列屏：混合系列不可读不连带清空独著系列", () => {
+  const solo: SeriesSummary = {
+    id: "ser-solo", slug: "solo", name: "独著",
+    description: null, version: 1, post_count: 1, pub_post_count: 1,
+  };
+  const mixed: SeriesSummary = {
+    id: "ser-mixed", slug: "mixed", name: "混合",
+    description: null, version: 1, post_count: 2, pub_post_count: 2,
+  };
+  const ownPost = {
+    id: "p1", slug: "solo-1", title: "我的独著篇", status: "published",
+    visibility: "public", version: 1, published_at: null, updated_at: "",
+    author_id: "me", series_order: 1,
+  };
+
+  beforeEach(() => {
+    window.history.replaceState(null, "", paths.series);
+    vi.mocked(seriesApi.list).mockResolvedValue([solo, mixed]);
+    // 独著可读；混合（含他人文章，无 read_any）403。
+    vi.mocked(seriesApi.members).mockImplementation(async (slug: string) => {
+      if (slug === "solo") return [{ ...ownPost }];
+      throw new ApiError(403, "无权执行该操作", "forbidden", "req-x");
+    });
+    vi.mocked(api.listTags).mockResolvedValue([]);
+    vi.mocked(categoryApi.list).mockResolvedValue([]);
+  });
+
+  it("可读系列照常展示成员，不可读系列显示权限提示而非清空", async () => {
+    render(<App />);
+    // 独著系列仍然可见且带成员。
+    await waitFor(() => expect(screen.getByText("我的独著篇")).toBeTruthy());
+    expect(screen.getByText("独著")).toBeTruthy();
+    expect(screen.getByText("混合")).toBeTruthy();
+    // 混合系列：权限提示，不是「还没有文章加入」的空目录文案。
+    expect(screen.getByText(/成员目录不可读/)).toBeTruthy();
+    expect(screen.queryByText("还没有文章加入这个系列。")).toBeNull();
+    // 独著系列的重排按钮仍在；混合系列的重排按钮（↑/↓）不出现。
+    expect(screen.getAllByRole("button", { name: "↑" }).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("目录列表本身失败才清空并报全局错误", async () => {
+    vi.mocked(seriesApi.list).mockRejectedValue(
+      new ApiError(401, "未登录或会话已失效", "unauthenticated", "req-y"),
+    );
+    render(<App />);
+    await waitFor(() => expect(screen.getByText(/未登录/)).toBeTruthy());
+    // 全局失败：目录清空，系列条目不渲染；空态文案只在无错误时出现。
+    expect(screen.queryByText("独著")).toBeNull();
+    expect(screen.queryByText("混合")).toBeNull();
+    expect(screen.queryByText(/成员目录不可读/)).toBeNull();
+  });
+});

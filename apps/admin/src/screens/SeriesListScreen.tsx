@@ -32,6 +32,9 @@ export function SeriesListScreen() {
   const { me } = useAuth();
   const [series, setSeries] = useState<SeriesSummary[] | null>(null);
   const [members, setMembers] = useState<Record<string, SeriesMemberRow[]>>({});
+  /** 成员目录不可读的系列（id → 原因）：显示权限提示并禁用重排，
+   * 不当成空目录——空目录会误导「还没有文章加入」，也删掉了重排入口。 */
+  const [unreadable, setUnreadable] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -40,23 +43,37 @@ export function SeriesListScreen() {
 
   const load = useCallback(async () => {
     setError(null);
+    // 目录列表本身失败才是全局错误（清列表）。
+    let current: SeriesSummary[];
     try {
-      // 成员走专用目录端点：包含**其他作者**的成员（重排会改动它们的位置，
-      // 无参 listPosts 只回当前作者的文章，多人系列会缺员并导致重排被拒）。
-      const list = await seriesApi.list();
-      const memberLists = await Promise.all(list.map((s) => seriesApi.members(s.slug)));
-      setSeries(list);
-      const bySeries: Record<string, SeriesMemberRow[]> = {};
-      list.forEach((s, i) => {
-        bySeries[s.id] = (memberLists[i] ?? []).sort(
-          (a, b) => (a.series_order ?? 0) - (b.series_order ?? 0),
-        );
-      });
-      setMembers(bySeries);
+      current = await seriesApi.list();
     } catch (e) {
       setSeries([]);
       setError(messageOf(e));
+      return;
     }
+    setSeries(current);
+    // 成员目录逐系列处理：任一 403 不得连带清空其它系列——
+    // 混合系列（含他人文章）对本用户不可读是**正常状态**，
+    // 它不该让可管理的独著系列一起消失。
+    const bySeries: Record<string, SeriesMemberRow[]> = {};
+    const blocked: Record<string, string> = {};
+    await Promise.all(
+      current.map(async (s) => {
+        try {
+          // 成员走专用目录端点：包含其他作者的成员（重排会改动它们的位置，
+          // 无参 listPosts 只回当前作者的文章，多人系列会缺员）。
+          const rows = await seriesApi.members(s.slug);
+          bySeries[s.id] = [...rows].sort(
+            (a, b) => (a.series_order ?? 0) - (b.series_order ?? 0),
+          );
+        } catch (e) {
+          blocked[s.id] = messageOf(e);
+        }
+      }),
+    );
+    setMembers(bySeries);
+    setUnreadable(blocked);
   }, []);
 
   useEffect(() => {
@@ -198,7 +215,12 @@ export function SeriesListScreen() {
                 </button>
               )}
             </header>
-            {(members[s.id] ?? []).length === 0 ? (
+            {unreadable[s.id] !== undefined ? (
+              <p className="error">
+                成员目录不可读：{unreadable[s.id]}（重排需要全部成员的读取权限；他人文章所在系列对无
+                post.read_any 的调用者不可见。）
+              </p>
+            ) : (members[s.id] ?? []).length === 0 ? (
               <p className="muted">还没有文章加入这个系列。</p>
             ) : (
               <ol className="post-list series-admin-list">
@@ -211,7 +233,7 @@ export function SeriesListScreen() {
                         {post.author_id !== me?.user_id ? " · 他人文章" : ""}
                       </span>
                     </div>
-                    {canManage && (
+                    {canManage && unreadable[s.id] === undefined && (
                       <div className="post-item-actions">
                         <button
                           type="button"
