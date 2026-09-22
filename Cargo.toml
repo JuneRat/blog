@@ -17,7 +17,7 @@ thiserror = "2"
 async-trait = "0.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync"] }
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "time", "uuid", "migrate", "json"] }
 axum = "0.8"
 clap = { version = "4", features = ["derive"] }
@@ -32,3 +32,7 @@ jsonwebtoken = "10"
 sha2 = "0.10"
 getrandom = "0.3"
 base64 = "0.22"
+# 本地密码凭据：Argon2id（PHC 字符串自描述参数，便于按策略升级重哈希）。
+argon2 = { version = "0.5", features = ["std"] }
+# 受控 CLI 的隐藏口令输入（不回显、不进入 argv 与 shell 历史）。
+rpassword = "7"

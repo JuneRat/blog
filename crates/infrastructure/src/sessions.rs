@@ -150,7 +150,7 @@ impl InMemorySessionStore {
 
 #[async_trait]
 impl SessionStore for InMemorySessionStore {
-    async fn create(&self, user_id: Uuid) -> Result<String, UseCaseError> {
+    async fn create(&self, user_id: Uuid, user_version: i64) -> Result<String, UseCaseError> {
         // 令牌生成需要系统随机；由应用层 SecureRandom 注入更纯粹，
         // 但存储自身也必须保证摘要在同一路径下计算，故内部直接生成。
         let mut buf = [0u8; 32];
@@ -178,6 +178,7 @@ impl SessionStore for InMemorySessionStore {
                 csrf_token,
                 created_at: now,
                 last_seen_at: now,
+                user_version,
             },
         });
         state.by_user.entry(user_id).or_default().push(digest);
@@ -328,11 +329,11 @@ mod tests {
         let u2 = Uuid::now_v7();
         let u3 = Uuid::now_v7();
 
-        let t1 = store.create(u1).await.unwrap();
+        let t1 = store.create(u1, 1).await.unwrap();
         *now.lock().unwrap() += time::Duration::seconds(5);
-        let t2 = store.create(u2).await.unwrap();
+        let t2 = store.create(u2, 1).await.unwrap();
         *now.lock().unwrap() += time::Duration::seconds(5);
-        let _t3 = store.create(u3).await.unwrap();
+        let _t3 = store.create(u3, 1).await.unwrap();
 
         // 容量淘汰 t1：u1 的索引项必须一起消失，否则 by_user 单调增长。
         assert!(store.validate(&t1).await.unwrap().is_none());
@@ -356,9 +357,9 @@ mod tests {
         let user = Uuid::now_v7();
         let other = Uuid::now_v7();
 
-        let t1 = store.create(user).await.unwrap();
-        let t2 = store.create(user).await.unwrap();
-        let t3 = store.create(other).await.unwrap();
+        let t1 = store.create(user, 1).await.unwrap();
+        let t2 = store.create(user, 1).await.unwrap();
+        let t3 = store.create(other, 1).await.unwrap();
 
         store.revoke_all_for_user(user).await.unwrap();
 

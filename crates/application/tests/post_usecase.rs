@@ -144,6 +144,42 @@ impl UserRepository for FakeUserRepo {
     async fn find_by_username(&self, username: &str) -> Result<Option<UserSnapshot>, UseCaseError> {
         Ok(self.users.lock().unwrap().get(username).cloned())
     }
+
+    // 文章用例不涉及本地密码；保持显式失败以便误用时立刻暴露。
+    async fn set_password_hash(&self, _user_id: Uuid, _phc_hash: &str) -> Result<(), UseCaseError> {
+        unimplemented!("post 用例不使用密码凭据")
+    }
+
+    async fn compare_and_set_password_hash(
+        &self,
+        _user_id: Uuid,
+        _expected: Option<&str>,
+        _new_hash: &str,
+    ) -> Result<Option<i64>, UseCaseError> {
+        unimplemented!("post 用例不使用密码凭据")
+    }
+
+    async fn clear_password_hash_guarded(
+        &self,
+        _user_id: Uuid,
+    ) -> Result<application::ports::ClearPasswordOutcome, UseCaseError> {
+        unimplemented!("post 用例不使用密码凭据")
+    }
+
+    async fn clear_password_hash(&self, _user_id: Uuid) -> Result<(), UseCaseError> {
+        unimplemented!("post 用例不使用密码凭据")
+    }
+
+    async fn find_password_credential(
+        &self,
+        _username: &str,
+    ) -> Result<Option<application::ports::PasswordCredential>, UseCaseError> {
+        unimplemented!("post 用例不使用密码凭据")
+    }
+
+    async fn password_hash_of(&self, _user_id: Uuid) -> Result<Option<String>, UseCaseError> {
+        unimplemented!("post 用例不使用密码凭据")
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -6,10 +6,14 @@ use std::sync::Arc;
 
 use application::content::PostInteractor;
 use application::identity::{RoleInteractor, UserInteractor};
-use application::ports::{PostRepository, PublishedPostQuery, UserRepository};
+use application::page::PageInteractor;
+use application::ports::{
+    PageRepository, PostRepository, PublishedPageQuery, PublishedPostQuery, UserRepository,
+};
 use application::public_site::{PublicSiteInteractor, SiteInfo};
 use infrastructure::{
-    MiniJinjaThemeRenderer, PostgresPostRepository, PostgresPublishedPostQuery, PostgresRbacStore,
+    MiniJinjaThemeRenderer, PostgresPageRepository, PostgresPostRepository,
+    PostgresPublishedPageQuery, PostgresPublishedPostQuery, PostgresRbacStore,
     PostgresUserRepository, SanitizingMarkdownRenderer, SystemClock,
 };
 use interfaces::cli::{CliDeps, Command, parse_args};
@@ -81,12 +85,16 @@ async fn main() {
                 Arc::new(PostgresUserRepository::new(pool.clone()));
             let post_repo: Arc<dyn PostRepository> =
                 Arc::new(PostgresPostRepository::new(pool.clone()));
+            let page_repo: Arc<dyn PageRepository> =
+                Arc::new(PostgresPageRepository::new(pool.clone()));
             let rbac_store = Arc::new(PostgresRbacStore::new(pool.clone()));
             let roles = Arc::new(RoleInteractor::new(rbac_store.clone(), user_repo.clone()));
             // 迁移后同步权限目录与内置角色（幂等；受控初始化命令的一部分）。
             roles.sync_registry().await.expect("同步权限目录失败");
             let public_query: Arc<dyn PublishedPostQuery> =
                 Arc::new(PostgresPublishedPostQuery::new(pool.clone()));
+            let public_page_query: Arc<dyn PublishedPageQuery> =
+                Arc::new(PostgresPublishedPageQuery::new(pool.clone()));
 
             let renderer = Arc::new(
                 MiniJinjaThemeRenderer::load(&config.theme_dir).expect("加载主题模板失败"),
@@ -114,6 +122,21 @@ async fn main() {
                 Arc::new(infrastructure::PostgresOAuthConfigStore::new(pool.clone()));
             let oauth_accounts: Arc<dyn application::ports::OAuthAccountStore> =
                 Arc::new(infrastructure::PostgresOAuthAccountStore::new(pool.clone()));
+
+            // 本地密码：Argon2id 哈希（限并发）+ 内存失败限流；与 OAuth 共用会话存储。
+            let hasher: Arc<dyn application::ports::PasswordHasher> =
+                Arc::new(infrastructure::Argon2PasswordHasher::with_defaults());
+            let login_throttle: Arc<dyn application::ports::LoginThrottle> =
+                Arc::new(infrastructure::InMemoryLoginThrottle::with_defaults());
+            let passwords = Arc::new(application::password::PasswordInteractor::new(
+                application::password::PasswordDeps {
+                    users: user_repo.clone(),
+                    hasher,
+                    throttle: login_throttle,
+                    sessions: session_store.clone(),
+                },
+            ));
+
             let base_url = std::env::var("BLOG_PUBLIC_BASE_URL")
                 .unwrap_or_else(|_| "http://127.0.0.1:8080".into());
             // Secure cookie 默认跟随公开基础 URL 的 scheme，避免 HTTPS 部署漏设；
@@ -137,8 +160,10 @@ async fn main() {
             ));
 
             let posts = Arc::new(PostInteractor::new(post_repo.clone(), clock.clone()));
+            let pages = Arc::new(PageInteractor::new(page_repo, clock.clone()));
             let public_site = Arc::new(PublicSiteInteractor::new(
                 public_query,
+                public_page_query,
                 markdown,
                 renderer,
                 SiteInfo {
@@ -150,8 +175,10 @@ async fn main() {
             let deps = CliDeps {
                 users,
                 posts,
+                pages,
                 roles,
                 auth,
+                passwords,
                 secure_cookies,
                 public_site,
                 user_repo,

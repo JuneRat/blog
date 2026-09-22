@@ -1,17 +1,21 @@
 import { useEffect, useState } from "react";
 
 /**
- * 后台内部路由：`/admin/`（列表）、`/admin/posts/new`（新建）、
- * `/admin/posts/{slug}/edit`（编辑）。
+ * 后台内部路由：
+ * - 文章：`/admin/`（列表）、`/admin/posts/new`、`/admin/posts/{slug}/edit`
+ * - 页面：`/admin/pages`（列表）、`/admin/pages/new`、`/admin/pages/{slug}/edit`
  *
- * 编辑页带 `/edit` 后缀，使 slug 为 `new` 的文章（`/admin/posts/new/edit`）
+ * 编辑页带 `/edit` 后缀，使 slug 为 `new` 的内容（`/admin/posts/new/edit`）
  * 不再与新建页（`/admin/posts/new`）相撞——slug 校验对 `new` 是合法的，
  * 冲突必须在路由层解决，而不是靠前端补一段保留字校验。
  */
 export type Route =
   | { name: "list" }
-  | { name: "new" }
-  | { name: "edit"; slug: string }
+  | { name: "postNew" }
+  | { name: "postEdit"; slug: string }
+  | { name: "pageList" }
+  | { name: "pageNew" }
+  | { name: "pageEdit"; slug: string }
   /** 畸形或多余的路径段：显示提示而不是白屏/静默进入别的页面。 */
   | { name: "invalid" };
 
@@ -29,12 +33,18 @@ function decodeSegment(segment: string): string | null {
   }
 }
 
+/** `{section}/{slug}` 与 `{section}/{slug}/edit` 两种可接受形状。 */
+function editSlug(segments: string[]): string | null {
+  if (segments.length === 2 || (segments.length === 3 && segments[2] === "edit")) {
+    const slug = decodeSegment(segments[1]);
+    return slug !== null && slug.length > 0 ? slug : null;
+  }
+  return null;
+}
+
 /**
- * 解析后台内部路由。只接受固定形状，**多余路径段不再被静默忽略**：
- * - `/admin/` → list；
- * - `/admin/posts/new` → new；
- * - `/admin/posts/{slug}/edit` → edit（`/admin/posts/{slug}` 作为兼容别名）；
- * - 其余（含畸形编码）→ invalid。
+ * 解析后台内部路由。只接受固定形状，**多余路径段不再被静默忽略**；
+ * 其余（含畸形编码）→ invalid。
  */
 export function parseRoute(pathname: string): Route {
   const underBase = pathname === BASE || pathname.startsWith(`${BASE}/`);
@@ -42,24 +52,27 @@ export function parseRoute(pathname: string): Route {
   const segments = rest.split("/").filter((segment) => segment.length > 0);
 
   if (segments.length === 0) return { name: "list" };
-  if (segments[0] !== "posts") return { name: "invalid" };
 
-  // `/admin/posts/new`：新建页固定地址（先于通用 {slug} 判定）。
-  if (segments.length === 2 && segments[1] === "new") return { name: "new" };
-
-  // `/admin/posts/{slug}`（兼容旧地址）与 `/admin/posts/{slug}/edit`。
-  if (segments.length === 2 || (segments.length === 3 && segments[2] === "edit")) {
-    const slug = decodeSegment(segments[1]);
-    if (slug === null || slug.length === 0) return { name: "invalid" };
-    return { name: "edit", slug };
+  if (segments[0] === "pages") {
+    if (segments.length === 1) return { name: "pageList" };
+    if (segments.length === 2 && segments[1] === "new") return { name: "pageNew" };
+    const slug = editSlug(segments);
+    return slug === null ? { name: "invalid" } : { name: "pageEdit", slug };
   }
-  return { name: "invalid" };
+
+  if (segments[0] !== "posts") return { name: "invalid" };
+  if (segments.length === 2 && segments[1] === "new") return { name: "postNew" };
+  const slug = editSlug(segments);
+  return slug === null ? { name: "invalid" } : { name: "postEdit", slug };
 }
 
 export const paths = {
   list: `${BASE}/`,
   newPost: `${BASE}/posts/new`,
   editPost: (slug: string): string => `${BASE}/posts/${encodeURIComponent(slug)}/edit`,
+  pages: `${BASE}/pages`,
+  newPage: `${BASE}/pages/new`,
+  editPage: (slug: string): string => `${BASE}/pages/${encodeURIComponent(slug)}/edit`,
 };
 
 /**

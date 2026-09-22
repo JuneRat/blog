@@ -2,20 +2,24 @@
 //!
 //! - GET /auth/login?provider=&next= ：发起 OAuth，302 到提供商。
 //! - GET /auth/callback/{provider} ：消费 state、签发会话 cookie、303 回跳。
+//! - POST /auth/login/password ：本地密码登录（JSON；失败统一 invalid_credentials）。
 //! - POST /auth/logout ：受保护写（会话 + CSRF 头），撤销会话。
 //! - GET /api/admin/v1/me ：会话认证的当前用户信息（含 CSRF token 供 SPA 使用）。
+//! - POST /api/admin/v1/me/password ：自助改密（会话 + CSRF + 当前密码重新认证）。
 //!
 //! Cookie：不透明高熵令牌，HttpOnly + SameSite=Lax（HTTPS 部署加 Secure）；
 //! 登录另发短命 `blog_oauth_state`（Secure 部署用 `__Host-` 前缀）绑定浏览器。
 //! 会话状态存服务端内存，每次请求重新读取用户与权限。
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use application::auth::{ATTEMPT_TTL_SECS, AuthInteractor, SESSION_COOKIE_NAME};
 use application::content::PostInteractor;
 use application::error::UseCaseError;
 use application::identity::UserInteractor;
-use axum::extract::{Path, Query, State};
+use application::password::PasswordInteractor;
+use axum::extract::{ConnectInfo, DefaultBodyLimit, Extension, Path, Query, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::middleware;
 use axum::response::{IntoResponse, Redirect, Response};
@@ -24,12 +28,14 @@ use axum::{Json, Router};
 use serde_json::json;
 
 use crate::http_support::{
-    RequestId, admin_error, cookie_value, ensure_same_origin, no_store, oauth_state_cookie_name,
+    RequestId, admin_error, admin_error_with_status, cookie_value, ensure_same_origin, no_store,
+    oauth_state_cookie_name,
 };
 
 #[derive(Clone)]
 pub struct AuthState {
     pub auth: Arc<AuthInteractor>,
+    pub passwords: Arc<PasswordInteractor>,
     /// 生产 HTTPS 部署开启（Set-Cookie: Secure）。
     pub secure_cookies: bool,
 }
@@ -37,9 +43,18 @@ pub struct AuthState {
 /// 会话 cookie 的 Max-Age（与存储绝对过期对齐的保守值，秒）。
 const SESSION_COOKIE_MAX_AGE: u64 = 7 * 24 * 3600;
 
+/// 密码相关请求体上限：口令是短字符串，4 KiB 足以容纳任何合法请求，
+/// 同时把「用超长输入放大 KDF/解析开销」的尝试挡在用例之前。
+const PASSWORD_BODY_LIMIT: usize = 4 * 1024;
+
 pub fn auth_router(state: AuthState) -> Router {
     let providers_route = Router::new()
         .route("/auth/providers", get(list_providers))
+        .layer(middleware::from_fn(no_store))
+        .with_state(state.clone());
+    let password_route = Router::new()
+        .route("/auth/login/password", post(password_login))
+        .layer(DefaultBodyLimit::max(PASSWORD_BODY_LIMIT))
         .layer(middleware::from_fn(no_store))
         .with_state(state.clone());
     Router::new()
@@ -48,6 +63,7 @@ pub fn auth_router(state: AuthState) -> Router {
         .route("/auth/logout", post(logout))
         .with_state(state)
         .merge(providers_route)
+        .merge(password_route)
 }
 
 // ---------------------------------------------------------------------------
@@ -58,13 +74,21 @@ pub fn auth_router(state: AuthState) -> Router {
 pub struct AdminState {
     pub auth: Arc<AuthInteractor>,
     pub users: Arc<UserInteractor>,
+    /// 本地密码用例（登录限流、设置/清除、自助改密）。
+    pub passwords: Arc<PasswordInteractor>,
     /// 管理写 API 的文章用例（http_admin 模块使用）。
     pub posts: Arc<PostInteractor>,
+    /// 管理写 API 的页面用例（站点级 page.* 权限）。
+    pub pages: Arc<application::page::PageInteractor>,
+    /// 与 AuthState 保持一致：改密后重签会话 cookie 需要 Secure 属性。
+    pub secure_cookies: bool,
 }
 
 pub fn admin_router(state: AdminState) -> Router {
     Router::new()
         .route("/api/admin/v1/me", get(me))
+        .route("/api/admin/v1/me/password", post(change_password))
+        .layer(DefaultBodyLimit::max(PASSWORD_BODY_LIMIT))
         .layer(middleware::from_fn(no_store))
         .with_state(state)
 }
@@ -110,6 +134,57 @@ async fn login(State(state): State<AuthState>, Query(query): Query<LoginQuery>) 
 }
 
 #[derive(serde::Deserialize)]
+struct PasswordLoginBody {
+    username: String,
+    password: String,
+    #[serde(default)]
+    next: Option<String>,
+}
+
+/// 本地密码登录：JSON 请求体 → 会话 cookie。
+///
+/// 匿名写操作没有可用的 CSRF token，靠同源 Origin 校验 + SameSite=Lax cookie
+/// 防登录 CSRF；用户名字段本身不区分存在性，失败统一 `invalid_credentials`。
+async fn password_login(
+    State(state): State<AuthState>,
+    request_id: RequestId,
+    headers: HeaderMap,
+    connect_info: Option<Extension<ConnectInfo<SocketAddr>>>,
+    Json(body): Json<PasswordLoginBody>,
+) -> Response {
+    if let Err(e) = ensure_same_origin(&headers) {
+        return admin_error(e, &request_id);
+    }
+    // 只使用 socket 对端地址做限流键，不读取可伪造的转发头。
+    let client_key = connect_info.map(|Extension(ConnectInfo(addr))| addr.ip().to_string());
+    let next = body.next.unwrap_or_else(|| "/admin/".to_string());
+    match state
+        .passwords
+        .login(&body.username, &body.password, client_key.as_deref(), &next)
+        .await
+    {
+        Ok(login) => {
+            request_id.set_actor(login.user_id);
+            let mut response = (
+                StatusCode::OK,
+                Json(json!({ "user_id": login.user_id, "next": login.next })),
+            )
+                .into_response();
+            response.headers_mut().append(
+                header::SET_COOKIE,
+                cookie_header(session_cookie(
+                    &login.token,
+                    state.secure_cookies,
+                    SESSION_COOKIE_MAX_AGE,
+                )),
+            );
+            response
+        }
+        Err(e) => admin_error(e, &request_id),
+    }
+}
+
+#[derive(serde::Deserialize)]
 struct CallbackQuery {
     #[serde(default)]
     code: Option<String>,
@@ -151,11 +226,8 @@ async fn callback(
         .await
     {
         Ok(success) => {
-            let cookie = format!(
-                "{SESSION_COOKIE_NAME}={}; Path=/; HttpOnly; SameSite=Lax; Max-Age={SESSION_COOKIE_MAX_AGE}{}",
-                success.token,
-                secure_suffix(state.secure_cookies)
-            );
+            let cookie =
+                session_cookie(&success.token, state.secure_cookies, SESSION_COOKIE_MAX_AGE);
             let mut response =
                 (StatusCode::SEE_OTHER, [("Location", success.next.clone())]).into_response();
             response
@@ -195,10 +267,7 @@ async fn logout(
     if let Err(e) = state.auth.logout(&token).await {
         return admin_error(e, &request_id);
     }
-    let clear = format!(
-        "{SESSION_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0{}",
-        secure_suffix(state.secure_cookies)
-    );
+    let clear = session_cookie("", state.secure_cookies, 0);
     let mut response = (StatusCode::SEE_OTHER, [("Location", "/".to_string())]).into_response();
     response
         .headers_mut()
@@ -232,9 +301,97 @@ async fn me(
     (StatusCode::OK, Json(body)).into_response()
 }
 
+#[derive(serde::Deserialize)]
+struct ChangePasswordBody {
+    /// 已启用密码登录时必填：用于重新认证（docs §5）。
+    #[serde(default)]
+    current_password: Option<String>,
+    new_password: String,
+}
+
+/// 自助改密：会话 + CSRF + Origin 三重保护，成功后轮换会话 cookie。
+async fn change_password(
+    State(state): State<AdminState>,
+    request_id: RequestId,
+    headers: HeaderMap,
+    connect_info: Option<Extension<ConnectInfo<SocketAddr>>>,
+    Json(body): Json<ChangePasswordBody>,
+) -> Response {
+    let Some(token) = cookie_value(&headers, SESSION_COOKIE_NAME) else {
+        return admin_error(UseCaseError::Unauthenticated, &request_id);
+    };
+    if let Err(e) = ensure_same_origin(&headers) {
+        return admin_error(e, &request_id);
+    }
+    let record = match state.auth.session_record(&token).await {
+        Ok(record) => record,
+        Err(_) => return admin_error(UseCaseError::Unauthenticated, &request_id),
+    };
+    let provided = headers
+        .get("x-csrf-token")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default();
+    if provided.is_empty() || provided != record.csrf_token {
+        return admin_error(UseCaseError::Forbidden, &request_id);
+    }
+    let actor = match state.auth.actor_from_session(&token).await {
+        Ok(actor) => actor,
+        Err(e) => return admin_error(e, &request_id),
+    };
+    request_id.set_actor(actor.user_id.0);
+
+    // 重新认证与登录共用失败预算；来源地址维度只取 socket 对端，不读转发头。
+    let client_key = connect_info.map(|Extension(ConnectInfo(addr))| addr.ip().to_string());
+    match state
+        .passwords
+        .change_own_password(
+            &actor,
+            body.current_password.as_deref(),
+            &body.new_password,
+            client_key.as_deref(),
+        )
+        .await
+    {
+        Ok(new_token) => {
+            let csrf_token = match state.auth.session_record(&new_token).await {
+                Ok(record) => record.csrf_token,
+                Err(e) => return admin_error(e, &request_id),
+            };
+            let mut response = (
+                StatusCode::OK,
+                Json(json!({ "user_id": actor.user_id.0, "csrf_token": csrf_token })),
+            )
+                .into_response();
+            response.headers_mut().append(
+                header::SET_COOKIE,
+                cookie_header(session_cookie(
+                    &new_token,
+                    state.secure_cookies,
+                    SESSION_COOKIE_MAX_AGE,
+                )),
+            );
+            response
+        }
+        // 已登录状态下「当前密码不对」不是掉线：用 403 而非 401，
+        // 否则前端会把用户当成会话失效直接清空登录态。
+        Err(e @ UseCaseError::InvalidCredentials) => {
+            admin_error_with_status(e, StatusCode::FORBIDDEN, &request_id)
+        }
+        Err(e) => admin_error(e, &request_id),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // 辅助
 // ---------------------------------------------------------------------------
+
+/// 会话 cookie 的完整 Set-Cookie 值；`max_age = 0` 即清除。
+fn session_cookie(token: &str, secure: bool, max_age: u64) -> String {
+    format!(
+        "{SESSION_COOKIE_NAME}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={max_age}{}",
+        secure_suffix(secure)
+    )
+}
 
 /// Set-Cookie 的 Secure 后缀（HTTPS 部署必须带上）。
 fn secure_suffix(secure: bool) -> &'static str {
@@ -263,6 +420,8 @@ fn plain_error(status: StatusCode, message: &str) -> Response {
 fn auth_error(e: UseCaseError) -> Response {
     let status = match &e {
         UseCaseError::Unauthenticated => StatusCode::UNAUTHORIZED,
+        UseCaseError::InvalidCredentials => StatusCode::UNAUTHORIZED,
+        UseCaseError::RateLimited { .. } => StatusCode::TOO_MANY_REQUESTS,
         UseCaseError::Invalid(_) | UseCaseError::Conflict(_) => StatusCode::BAD_REQUEST,
         UseCaseError::NotFound(_) => StatusCode::NOT_FOUND,
         UseCaseError::Forbidden => StatusCode::FORBIDDEN,

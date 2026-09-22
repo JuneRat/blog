@@ -198,13 +198,13 @@ impl AuthInteractor {
             .await?
             .ok_or(UseCaseError::Forbidden)?;
 
-        let actor = self
+        let (actor, revision) = self
             .users
-            .actor_for_user_id_with_channel(user_id, ActorChannel::Session)
+            .actor_with_revision(user_id, ActorChannel::Session)
             .await
             .map_err(|_| UseCaseError::Forbidden)?;
 
-        let token = self.deps.sessions.create(user_id).await?;
+        let token = self.deps.sessions.create(user_id, revision).await?;
         Ok(LoginSuccess {
             token,
             next: sanitize_next(&attempt.next)?.to_string(),
@@ -212,7 +212,10 @@ impl AuthInteractor {
         })
     }
 
-    /// 从会话令牌解析 Actor：校验会话并重新读取当前用户与权限（旧 cookie 不可绕过撤权）。
+    /// 从会话令牌解析 Actor：校验会话、重新读取当前用户与权限，并核对身份修订号。
+    ///
+    /// 版本比对让**跨进程**的改密/改角色/软删除同样立刻生效——CLI 在另一个进程
+    /// 改了 `users.version`，这里读到的版本就不再等于会话签发时的值。
     pub async fn actor_from_session(&self, token: &str) -> Result<Actor, UseCaseError> {
         let record: SessionRecord = self
             .deps
@@ -220,10 +223,16 @@ impl AuthInteractor {
             .validate(token)
             .await?
             .ok_or(UseCaseError::Unauthenticated)?;
-        self.users
-            .actor_for_user_id_with_channel(record.user_id, ActorChannel::Session)
+        let (actor, revision) = self
+            .users
+            .actor_with_revision(record.user_id, ActorChannel::Session)
             .await
-            .map_err(|_| UseCaseError::Unauthenticated)
+            .map_err(|_| UseCaseError::Unauthenticated)?;
+        if revision != record.user_version {
+            // 账号身份材料已变化（改密/改角色/软删除）：旧会话立即失效。
+            return Err(UseCaseError::Unauthenticated);
+        }
+        Ok(actor)
     }
 
     /// 会话元数据（含 CSRF token）；用于受保护写请求的 CSRF 校验。

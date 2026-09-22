@@ -4,6 +4,41 @@
 //! `BLOG_TEST_ADMIN_URL`（默认 loopback 的 postgres 库），与 README/.env.example 一致。
 #![allow(dead_code)]
 
+use std::sync::Arc;
+
+use application::password::{PasswordDeps, PasswordInteractor};
+use application::ports::{LoginThrottle, SessionStore, UserRepository};
+
+/// 测试装配的本地密码用例：真实 Argon2id（生产参数）+ 默认限流。
+///
+/// 会话存储由调用方注入，保证与认证用例看到同一份状态。
+pub fn password_interactor(
+    user_repo: Arc<dyn UserRepository>,
+    sessions: Arc<dyn SessionStore>,
+) -> Arc<PasswordInteractor> {
+    password_interactor_with_throttle(
+        user_repo,
+        sessions,
+        Arc::new(infrastructure::InMemoryLoginThrottle::with_defaults()),
+    )
+}
+
+/// 同 [`password_interactor`]，但注入自定义限流。
+///
+/// 用于把阈值调低，避免为跑满生产阈值（账号 5 / 来源地址 50 次）做同样多次真实 Argon2 校验。
+pub fn password_interactor_with_throttle(
+    user_repo: Arc<dyn UserRepository>,
+    sessions: Arc<dyn SessionStore>,
+    throttle: Arc<dyn LoginThrottle>,
+) -> Arc<PasswordInteractor> {
+    Arc::new(PasswordInteractor::new(PasswordDeps {
+        users: user_repo,
+        hasher: Arc::new(infrastructure::Argon2PasswordHasher::with_defaults()),
+        throttle,
+        sessions,
+    }))
+}
+
 pub fn admin_url() -> String {
     std::env::var("BLOG_TEST_ADMIN_URL")
         .unwrap_or_else(|_| "postgres://blog:blog@127.0.0.1:5432/postgres".into())

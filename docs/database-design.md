@@ -60,7 +60,7 @@ username 和用户主邮箱在写入前采用固定规范化策略，软删除�
 
 provider 表示稳定的提供商实例，而不只是任意的“oidc”字符串：OIDC 使用精确 issuer 作为身份命名空间，GitHub 使用固定平台实例标识；provider_user_id 分别使用 sub 或稳定数值用户 ID。配置别名、显示名或 GitHub login 不能替代身份键。
 
-password_hash 预留本地登录能力，OAuth-only 用户为空；本版并不因此自动开放密码登录、密码重置或公开注册。只做登录时不长期保存 access_token/refresh_token；以后调用第三方 API 再单独设计加密凭据存储。
+`password_hash` 存 Argon2id 的 PHC 字符串（算法与参数自描述，可透明升级），OAuth-only 用户为空。本地密码登录、限流、重置与泄露处置契约见 [身份与后台 §7](identity-and-admin.md)；自助找回需要一次性令牌存储与邮件投递，本版未交付。只做登录时不长期保存 access_token/refresh_token；以后调用第三方 API 再单独设计加密凭据存储。
 
 users 的业务引用默认 RESTRICT；账号优先软删除/匿名化，不能级联删除其文章。avatar、cover 是 URL/受控静态资源路径，不是已经实现上传、附件引用或文件回收。
 

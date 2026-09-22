@@ -1,6 +1,8 @@
 import { useAuth } from "./auth";
 import { navigate, paths, useRoute } from "./router";
 import { LoginScreen } from "./screens/LoginScreen";
+import { PageEditScreen } from "./screens/PageEditScreen";
+import { PageListScreen } from "./screens/PageListScreen";
 import { PostEditScreen } from "./screens/PostEditScreen";
 import { PostListScreen } from "./screens/PostListScreen";
 
@@ -31,13 +33,22 @@ export function App() {
       </div>
     );
   }
-  if (route.name === "edit") {
-    // 不按 slug 加 key：改名时 slug 变化只更新地址，组件内已合并好的表单不应被重载覆盖；
-    // 真正切换到另一篇文章时，编辑屏自己会按 slug 变化重新加载。
+  // 编辑器不按 slug 加 key：改名时 slug 变化只更新地址，组件内已合并好的表单不应被重载覆盖；
+  // 真正切换到另一篇内容时，编辑屏自己会按 slug 变化重新加载。
+  if (route.name === "postEdit") {
     return <PostEditScreen slug={route.slug} />;
   }
-  if (route.name === "new") {
+  if (route.name === "postNew") {
     return <PostEditScreen slug={null} />;
+  }
+  if (route.name === "pageList") {
+    return <PageListScreen />;
+  }
+  if (route.name === "pageEdit") {
+    return <PageEditScreen slug={route.slug} />;
+  }
+  if (route.name === "pageNew") {
+    return <PageEditScreen slug={null} />;
   }
   return <PostListScreen />;
 }

@@ -140,13 +140,17 @@ async fn fresh_stack_with(secure_cookies: bool) -> Stack {
         Arc::new(infrastructure::PostgresPostRepository::new(pool.clone())),
         std::sync::Arc::new(infrastructure::SystemClock),
     ));
+    let pages = Arc::new(application::page::PageInteractor::new(
+        Arc::new(infrastructure::PostgresPageRepository::new(pool.clone())),
+        std::sync::Arc::new(infrastructure::SystemClock),
+    ));
 
     let auth = Arc::new(AuthInteractor::new(
         application::auth::AuthDeps {
-            sessions,
+            sessions: sessions.clone(),
             attempts,
             configs,
-            accounts,
+            accounts: accounts.clone(),
             identity_client,
             random,
         },
@@ -154,15 +158,20 @@ async fn fresh_stack_with(secure_cookies: bool) -> Stack {
         clock,
         "http://127.0.0.1:18099".into(),
     ));
+    let passwords = common::password_interactor(user_repo.clone(), sessions);
 
     let auth_state = AuthState {
         auth: auth.clone(),
+        passwords: passwords.clone(),
         secure_cookies,
     };
     let admin_state = AdminState {
-        auth: auth.clone(),
+        auth,
         users,
+        passwords,
         posts,
+        pages,
+        secure_cookies,
     };
 
     let router = auth_router(auth_state)

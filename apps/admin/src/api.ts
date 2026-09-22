@@ -1,4 +1,13 @@
-import type { Me, PostDetail, PostSummary, ProviderSummary, Visibility } from "./types";
+import type {
+  Me,
+  PageDetail,
+  PageSummary,
+  PasswordLoginResult,
+  PostDetail,
+  PostSummary,
+  ProviderSummary,
+  Visibility,
+} from "./types";
 
 /**
  * 后端统一错误契约 `{error, code}`；status 供调用方分支（401/403/409）。
@@ -121,10 +130,43 @@ export interface EditPostInput {
   expected_version?: number;
 }
 
+export interface CreatePageInput {
+  slug?: string;
+  title: string;
+  content: string;
+  visibility: Visibility;
+}
+
+export interface EditPageInput {
+  new_slug?: string;
+  title?: string;
+  content?: string;
+  visibility?: Visibility;
+  expected_version?: number;
+}
+
+export interface PasswordLoginInput {
+  username: string;
+  password: string;
+  /** 仅本站相对路径；缺省由后端使用 /admin/。 */
+  next?: string;
+}
+
 export const api = {
   me: (): Promise<Me> => request<Me>("/api/admin/v1/me"),
 
   providers: (): Promise<ProviderSummary[]> => request<ProviderSummary[]>("/auth/providers"),
+
+  /**
+   * 本地密码登录：成功后服务端下发会话 cookie，调用方随后刷新 `/me`。
+   * 失败（用户名不存在或密码错误）统一 401 `invalid_credentials`；
+   * 连续失败会被限流（429 `rate_limited`，`Retry-After` 给出等待秒数）。
+   */
+  loginWithPassword: (input: PasswordLoginInput): Promise<PasswordLoginResult> =>
+    request<PasswordLoginResult>("/auth/login/password", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
 
   listPosts: (author?: string): Promise<PostSummary[]> =>
     request<PostSummary[]>(
@@ -154,6 +196,35 @@ export const api = {
 
   unpublishPost: (slug: string, expectedVersion?: number): Promise<PostDetail> =>
     request<PostDetail>(`/api/admin/v1/posts/${encodeURIComponent(slug)}/unpublish`, {
+      method: "POST",
+      body: JSON.stringify({ expected_version: expectedVersion }),
+    }),
+
+  listPages: (): Promise<PageSummary[]> => request<PageSummary[]>("/api/admin/v1/pages"),
+
+  getPage: (slug: string): Promise<PageDetail> =>
+    request<PageDetail>(`/api/admin/v1/pages/${encodeURIComponent(slug)}`),
+
+  createPage: (input: CreatePageInput): Promise<PageDetail> =>
+    request<PageDetail>("/api/admin/v1/pages", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+
+  updatePage: (slug: string, input: EditPageInput): Promise<PageDetail> =>
+    request<PageDetail>(`/api/admin/v1/pages/${encodeURIComponent(slug)}`, {
+      method: "PATCH",
+      body: JSON.stringify(input),
+    }),
+
+  publishPage: (slug: string, expectedVersion?: number): Promise<PageDetail> =>
+    request<PageDetail>(`/api/admin/v1/pages/${encodeURIComponent(slug)}/publish`, {
+      method: "POST",
+      body: JSON.stringify({ expected_version: expectedVersion }),
+    }),
+
+  unpublishPage: (slug: string, expectedVersion?: number): Promise<PageDetail> =>
+    request<PageDetail>(`/api/admin/v1/pages/${encodeURIComponent(slug)}/unpublish`, {
       method: "POST",
       body: JSON.stringify({ expected_version: expectedVersion }),
     }),

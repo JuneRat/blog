@@ -23,3 +23,4 @@ time.workspace = true
 sqlx.workspace = true
 async-trait.workspace = true
 uuid.workspace = true
+serde_json.workspace = true

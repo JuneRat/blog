@@ -29,7 +29,7 @@ async fn session_validate_refreshes_idle_and_respects_absolute_expiry() {
         Box::new(clock),
     );
 
-    let token = store.create(Uuid::now_v7()).await.unwrap();
+    let token = store.create(Uuid::now_v7(), 1).await.unwrap();
     assert!(
         store.validate(&token).await.unwrap().is_some(),
         "刚创建可校验"
@@ -40,7 +40,7 @@ async fn session_validate_refreshes_idle_and_respects_absolute_expiry() {
     assert!(store.validate(&token).await.unwrap().is_none(), "空闲过期");
 
     // 空闲窗口内活动可续期，但绝对上限不可逾越。
-    let token2 = store.create(Uuid::now_v7()).await.unwrap();
+    let token2 = store.create(Uuid::now_v7(), 1).await.unwrap();
     let mut elapsed = 0;
     while elapsed < 3500 {
         *now.lock().unwrap() += time::Duration::seconds(50);
@@ -58,15 +58,27 @@ async fn session_validate_refreshes_idle_and_respects_absolute_expiry() {
 }
 
 #[tokio::test]
+async fn session_record_carries_issuing_user_version() {
+    let store = InMemorySessionStore::with_defaults();
+    let user = Uuid::now_v7();
+    let token = store.create(user, 42).await.unwrap();
+    let record = store.validate(&token).await.unwrap().expect("会话有效");
+    assert_eq!(
+        record.user_version, 42,
+        "会话必须记住签发时的 users.version，供跨进程改密/撤权比对"
+    );
+}
+
+#[tokio::test]
 async fn session_revoke_and_revoke_all_for_user() {
     let (_now, clock) = mutable_now();
     let store = InMemorySessionStore::with_defaults();
     let _ = clock; // 默认系统时钟即可
     let user = Uuid::now_v7();
 
-    let t1 = store.create(user).await.unwrap();
-    let t2 = store.create(user).await.unwrap();
-    let t3 = store.create(Uuid::now_v7()).await.unwrap();
+    let t1 = store.create(user, 1).await.unwrap();
+    let t2 = store.create(user, 1).await.unwrap();
+    let t3 = store.create(Uuid::now_v7(), 1).await.unwrap();
 
     store.revoke(&t1).await.unwrap();
     assert!(store.validate(&t1).await.unwrap().is_none());
@@ -95,12 +107,12 @@ async fn session_capacity_evicts_least_recently_active() {
         Box::new(clock),
     );
 
-    let t1 = store.create(Uuid::now_v7()).await.unwrap();
+    let t1 = store.create(Uuid::now_v7(), 1).await.unwrap();
     *now.lock().unwrap() += time::Duration::seconds(5);
-    let _t2 = store.create(Uuid::now_v7()).await.unwrap();
+    let _t2 = store.create(Uuid::now_v7(), 1).await.unwrap();
     *now.lock().unwrap() += time::Duration::seconds(5);
     // 第三个会话触发容量淘汰：t1 最久未活跃。
-    let _t3 = store.create(Uuid::now_v7()).await.unwrap();
+    let _t3 = store.create(Uuid::now_v7(), 1).await.unwrap();
 
     assert!(
         store.validate(&t1).await.unwrap().is_none(),

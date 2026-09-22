@@ -548,10 +548,7 @@ impl OAuthAccountStore for PostgresOAuthAccountStore {
             .await
             .map_err(|e| UseCaseError::Repository(e.to_string()))?;
         // 身份变更走统一排他锁（docs §3 协议）。
-        sqlx::query("SELECT pg_advisory_xact_lock($1::int, $2::int)")
-            .bind(2048001)
-            .bind(1)
-            .execute(&mut *tx)
+        crate::persistence::acquire_identity_lock(&mut *tx)
             .await
             .map_err(|e| UseCaseError::Repository(e.to_string()))?;
 

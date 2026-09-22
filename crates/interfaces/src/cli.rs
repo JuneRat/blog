@@ -12,6 +12,7 @@ use application::content::PostVisibility;
 use application::content::{CreatePostCmd, EditPostCmd, PostInteractor};
 use application::error::UseCaseError;
 use application::identity::{Actor, CreateUserCmd, RoleInteractor, UserInteractor};
+use application::password::PasswordInteractor;
 use application::ports::{ProviderConfig, ProviderKind, UserRepository};
 use application::public_site::{PublicSiteInteractor, format_datetime};
 use clap::{Parser, Subcommand};
@@ -82,6 +83,17 @@ pub enum UserAction {
     },
     /// 查看用户
     Show { username: String },
+    /// 设置/重置本地密码（Argon2id）；这是密码重置的唯一入口
+    Passwd {
+        #[arg(long)]
+        user: String,
+        /// 从 stdin 读取密码；交互终端下缺省提示隐藏输入并二次确认
+        #[arg(long)]
+        password_stdin: bool,
+        /// 清除密码（禁用密码登录）；已是最后一种登录方式时拒绝
+        #[arg(long, conflicts_with = "password_stdin")]
+        clear: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -264,8 +276,11 @@ pub enum PostAction {
 pub struct CliDeps {
     pub users: Arc<UserInteractor>,
     pub posts: Arc<PostInteractor>,
+    pub pages: Arc<application::page::PageInteractor>,
     pub roles: Arc<RoleInteractor>,
     pub auth: Arc<AuthInteractor>,
+    /// 本地密码用例（受控设置/重置、清除与限流）。
+    pub passwords: Arc<PasswordInteractor>,
     pub secure_cookies: bool,
     pub public_site: Arc<PublicSiteInteractor>,
     pub user_repo: Arc<dyn UserRepository>,
@@ -299,17 +314,22 @@ pub async fn run(deps: CliDeps, command: Command) -> Result<(), String> {
             };
             let auth_state = crate::http_auth::AuthState {
                 auth: deps.auth,
+                passwords: deps.passwords.clone(),
                 secure_cookies: deps.secure_cookies,
             };
             let admin_state = crate::http_auth::AdminState {
                 auth: auth_state.auth.clone(),
                 users: deps.users,
+                passwords: deps.passwords,
                 posts: deps.posts,
+                pages: deps.pages,
+                secure_cookies: deps.secure_cookies,
             };
             let app = public_router(public_state, deps.assets_dir)
                 .merge(crate::http_auth::auth_router(auth_state))
                 .merge(crate::http_auth::admin_router(admin_state.clone()))
-                .merge(crate::http_admin::posts_router(admin_state));
+                .merge(crate::http_admin::posts_router(admin_state.clone()))
+                .merge(crate::http_admin::pages_router(admin_state));
             // 后台 SPA 挂在 /admin 子树；dist 不存在时保持未注册。
             let app = crate::http::mount_admin_spa(app, deps.admin_dist);
             // 全站最外层：分配请求编号、记录完成日志、回写 x-request-id（含被提前拒绝的 401/403）。
@@ -320,10 +340,14 @@ pub async fn run(deps: CliDeps, command: Command) -> Result<(), String> {
                 .await
                 .map_err(|e| format!("绑定 {bind} 失败：{e}"))?;
             println!("公开站点已启动：http://{bind}");
-            axum::serve(listener, app)
-                .with_graceful_shutdown(shutdown_signal())
-                .await
-                .map_err(|e| format!("服务退出：{e}"))?;
+            // 连接信息供密码登录按来源地址限流（只信任 socket 对端，不读转发头）。
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .with_graceful_shutdown(shutdown_signal())
+            .await
+            .map_err(|e| format!("服务退出：{e}"))?;
             Ok(())
         }
     }
@@ -362,6 +386,11 @@ async fn run_user(deps: CliDeps, action: UserAction) -> Result<(), String> {
                 .roles_of_user(actor.user_id.0)
                 .await
                 .map_err(fmt_error)?;
+            let password_enabled = deps
+                .passwords
+                .password_enabled(&username)
+                .await
+                .map_err(fmt_error)?;
             println!("用户 {}（id={}）", username, actor.user_id.0);
             println!(
                 "角色：{}",
@@ -375,9 +404,75 @@ async fn run_user(deps: CliDeps, action: UserAction) -> Result<(), String> {
                 "权限：{}",
                 actor.permissions().keys().collect::<Vec<_>>().join(", ")
             );
+            println!(
+                "密码登录：{}",
+                if password_enabled {
+                    "已启用"
+                } else {
+                    "未启用"
+                }
+            );
+            Ok(())
+        }
+        UserAction::Passwd {
+            user,
+            password_stdin,
+            clear,
+        } => {
+            // 受控 CLI 以引导身份执行；密码重置是部署权限，不开放为公开入口。
+            if clear {
+                deps.passwords
+                    .clear_password(&Actor::bootstrap_cli(), &user)
+                    .await
+                    .map_err(fmt_error)?;
+                println!("已清除用户 {user} 的本地密码（密码登录已禁用），并撤销其全部会话。");
+                return Ok(());
+            }
+            let password = read_new_password(password_stdin)?;
+            deps.passwords
+                .set_password(&Actor::bootstrap_cli(), &user, &password)
+                .await
+                .map_err(fmt_error)?;
+            println!("已为用户 {user} 设置本地密码；其全部既有会话已撤销，请用新密码重新登录。");
             Ok(())
         }
     }
+}
+
+/// 读取新密码。
+///
+/// 有意**不提供** `--password` 参数：命令行参数会出现在进程表与 shell 历史里。
+/// `--password-stdin`（或 stdin 非终端时）读取整段输入并只去掉一个行尾；
+/// 交互终端下隐藏回显并二次确认。
+fn read_new_password(password_stdin: bool) -> Result<String, String> {
+    use std::io::IsTerminal as _;
+
+    let password = if password_stdin || !std::io::stdin().is_terminal() {
+        let mut buffer = String::new();
+        std::io::stdin()
+            .read_to_string(&mut buffer)
+            .map_err(|e| format!("读取 stdin 失败：{e}"))?;
+        strip_one_line_ending(&buffer).to_string()
+    } else {
+        let first =
+            rpassword::prompt_password("新密码：").map_err(|e| format!("读取密码失败：{e}"))?;
+        let second = rpassword::prompt_password("再次输入新密码：")
+            .map_err(|e| format!("读取密码失败：{e}"))?;
+        if first != second {
+            return Err("两次输入的密码不一致".into());
+        }
+        first
+    };
+    if password.is_empty() {
+        return Err("密码不能为空".into());
+    }
+    Ok(password)
+}
+
+/// 只去掉一个行尾（`\n` 或 `\r\n`）；其余字符原样保留（空格是合法密码字符）。
+fn strip_one_line_ending(input: &str) -> &str {
+    let trimmed = input.strip_suffix('\n').unwrap_or(input);
+    trimmed.strip_suffix('\r').unwrap_or(trimmed)
 }
 
 async fn run_oauth(deps: CliDeps, action: OauthAction) -> Result<(), String> {

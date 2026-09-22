@@ -9,6 +9,7 @@ use uuid::Uuid;
 
 use crate::error::UseCaseError;
 use crate::identity::{BuiltinRoleDef, PermissionDescriptor};
+use domain::content::page::PageSnapshot;
 use domain::content::post::PostSnapshot;
 use domain::identity::UserSnapshot;
 
@@ -44,11 +45,106 @@ pub trait PostRepository: Send + Sync {
     ) -> Result<SaveOutcome, UseCaseError>;
 }
 
+/// 登录用密码凭据：只含校验所需最小信息，不携带软删除等实体状态。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PasswordCredential {
+    pub user_id: Uuid,
+    /// PHC 格式的 Argon2id 字符串（算法与参数自描述）。
+    pub password_hash: String,
+    /// 读取时的 `users.version`：会话签发时绑定它，避免并发改密后用旧口令建会话。
+    pub version: i64,
+}
+
 #[async_trait]
 pub trait UserRepository: Send + Sync {
     async fn insert(&self, snapshot: &UserSnapshot) -> Result<(), UseCaseError>;
     async fn find_by_id(&self, id: Uuid) -> Result<Option<UserSnapshot>, UseCaseError>;
     async fn find_by_username(&self, username: &str) -> Result<Option<UserSnapshot>, UseCaseError>;
+
+    // --- 本地密码凭据 ---
+    //
+    // 口令材料单独走这几个方法，不进入 `UserSnapshot`，避免哈希随实体到处传播。
+
+    /// 写入/覆盖密码哈希（调用方已完成策略校验与哈希），并递增 `users.version`。
+    ///
+    /// **无条件覆盖**，只用于受控重置/设置（`user.manage`）：那是明确要「以本次为准」。
+    /// 任何可能被并发写入抢先的场景都必须走 [`Self::compare_and_set_password_hash`]。
+    async fn set_password_hash(&self, user_id: Uuid, phc_hash: &str) -> Result<(), UseCaseError>;
+
+    /// 条件写入（compare-and-swap）：仅当当前值等于 `expected` 时替换，并递增版本。
+    ///
+    /// `expected = None` 表示「当前必须为空」（OAuth 用户设置初始密码）。
+    /// 写入成功返回本次更新原子产生的版本，未命中返回 None。
+    /// 会话必须绑定该版本，不能重新读取并借用后续凭据变更的版本。
+    /// 用途是让并发的凭据写入不会互相覆盖：
+    /// 登录时的透明升级、自助改密、设置初始密码都走这里——否则一次并发的
+    /// 自助改密就能把管理员刚下发的强制重置口令覆盖掉。
+    async fn compare_and_set_password_hash(
+        &self,
+        user_id: Uuid,
+        expected: Option<&str>,
+        new_hash: &str,
+    ) -> Result<Option<i64>, UseCaseError>;
+
+    /// 清除密码哈希（禁用密码登录），并递增 `users.version`。
+    ///
+    /// 不做保护：只应在「确定还有其他登录方式」时调用。带保护请用
+    /// [`Self::clear_password_hash_guarded`]。
+    async fn clear_password_hash(&self, user_id: Uuid) -> Result<(), UseCaseError>;
+
+    /// 在身份排他锁内清除密码，并原子校验该用户仍有其他登录方式。
+    ///
+    /// 「检查是否还有别的登录方式」与「清除密码」必须与解绑外部身份用**同一把锁、
+    /// 同一事务**：分开做会让两条路径各自看到「对方还在」而同时通过，最终把账号的
+    /// 登录方式清空（write skew）。
+    async fn clear_password_hash_guarded(
+        &self,
+        user_id: Uuid,
+    ) -> Result<ClearPasswordOutcome, UseCaseError>;
+
+    /// 未软删除用户的密码凭据；未设置密码或已软删除返回 None。
+    /// 软删除用户在查询层就被排除，登录失败路径因此无法区分「不存在」与「已停用」。
+    async fn find_password_credential(
+        &self,
+        username: &str,
+    ) -> Result<Option<PasswordCredential>, UseCaseError>;
+
+    /// 按 id 读取当前哈希（供自助改密重新认证；未设置返回 None）。
+    async fn password_hash_of(&self, user_id: Uuid) -> Result<Option<String>, UseCaseError>;
+}
+
+/// [`UserRepository::clear_password_hash_guarded`] 的结果。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClearPasswordOutcome {
+    /// 已清除（该用户仍有其他登录方式）。
+    Cleared,
+    /// 该用户本来就没有启用密码登录。
+    NoPassword,
+    /// 密码是最后一种登录方式，拒绝清除。
+    LastLoginMethod,
+}
+
+// ---------------------------------------------------------------------------
+// Page（站点级内容，无作者归属）
+// ---------------------------------------------------------------------------
+
+/// Page 写侧端口。Page 无软删除：不存在「已消失但仍是版本冲突」之外的第三态，
+/// 但沿用同一 `SaveOutcome` 以便与 Post 的并发语义保持一致。
+#[async_trait]
+pub trait PageRepository: Send + Sync {
+    async fn find_by_slug(&self, slug: &str) -> Result<Option<PageSnapshot>, UseCaseError>;
+    async fn find_by_id(&self, id: Uuid) -> Result<Option<PageSnapshot>, UseCaseError>;
+    /// 站点级列表：无作者过滤，按更新时间倒序。
+    async fn list(&self) -> Result<Vec<PageSnapshot>, UseCaseError>;
+    async fn insert(&self, snapshot: &PageSnapshot) -> Result<(), UseCaseError>;
+
+    /// 条件保存：`expected_version` 匹配当前记录时写入并 version+1。
+    async fn save(
+        &self,
+        snapshot: &PageSnapshot,
+        expected_version: i64,
+        now: OffsetDateTime,
+    ) -> Result<SaveOutcome, UseCaseError>;
 }
 
 /// 视图用角色条目。
@@ -137,6 +233,25 @@ pub trait PublishedPostQuery: Send + Sync {
     ) -> Result<Option<PublicPostDetail>, UseCaseError>;
 }
 
+/// 公开页面详情（Page 无作者、无软删除）。
+#[derive(Debug, Clone)]
+pub struct PublicPageDetail {
+    pub title: String,
+    pub slug: String,
+    pub published_at: Option<OffsetDateTime>,
+    pub updated_at: OffsetDateTime,
+    pub content: String,
+}
+
+#[async_trait]
+pub trait PublishedPageQuery: Send + Sync {
+    /// 只返回 status=published AND visibility=public 的页面。
+    async fn find_public_by_slug(
+        &self,
+        slug: &str,
+    ) -> Result<Option<PublicPageDetail>, UseCaseError>;
+}
+
 // ---------------------------------------------------------------------------
 // 基础能力端口
 // ---------------------------------------------------------------------------
@@ -175,13 +290,20 @@ pub struct SessionRecord {
     pub csrf_token: String,
     pub created_at: OffsetDateTime,
     pub last_seen_at: OffsetDateTime,
+    /// 签发时账号的 `users.version`（身份修订号）。
+    ///
+    /// 校验会话时与当前版本比对：改密、改角色、软删除都会递增该版本，
+    /// 因此**跨进程**动作（例如运维在另一个进程跑 `blog user passwd`）也能
+    /// 让旧会话立即失效，而不依赖只在同一进程有效的「内存撤销」。
+    pub user_version: i64,
 }
 
 /// 单实例内存会话存储：有 TTL 与容量上限，重启全部失效。
 #[async_trait]
 pub trait SessionStore: Send + Sync {
     /// 创建会话，返回不透明令牌（明文只出现一次；服务端保存验证摘要）。
-    async fn create(&self, user_id: Uuid) -> Result<String, UseCaseError>;
+    /// `user_version` 为签发时账号的 `users.version`，校验时用于比对。
+    async fn create(&self, user_id: Uuid, user_version: i64) -> Result<String, UseCaseError>;
     /// 校验令牌并刷新 last_seen；过期/未知/已撤销返回 None。
     async fn validate(&self, token: &str) -> Result<Option<SessionRecord>, UseCaseError>;
     async fn revoke(&self, token: &str) -> Result<(), UseCaseError>;
@@ -312,4 +434,75 @@ pub trait SecureRandom: Send + Sync {
 /// secret_ref → 秘密值（环境变量等部署来源）。
 pub trait SecretSource: Send + Sync {
     fn secret_for(&self, secret_ref: &str) -> Result<String, UseCaseError>;
+}
+
+// ---------------------------------------------------------------------------
+// 本地密码：哈希与登录限流
+// ---------------------------------------------------------------------------
+
+/// 口令哈希端口。实现方负责选参数、随机盐与并发上限。
+///
+/// 必须是内存硬 KDF（当前为 Argon2id）：验证在常量时间内完成，
+/// 且单次成本足以让离线爆破昂贵。异步是因为 KDF 是长时间 CPU 计算，
+/// 实现方应在阻塞线程池执行，避免占住异步执行器。
+#[async_trait]
+pub trait PasswordHasher: Send + Sync {
+    /// 生成 PHC 字符串（自描述算法/参数/盐）；同一明文每次结果不同。
+    async fn hash(&self, password: &str) -> Result<String, UseCaseError>;
+
+    /// 常量时间校验。存储值格式非法返回 Err（存储损坏，按内部错误处理），
+    /// 密码不匹配返回 Ok(false)。
+    async fn verify(&self, password: &str, phc_hash: &str) -> Result<bool, UseCaseError>;
+
+    /// 存储参数是否弱于当前策略（成功登录后据此升级重哈希）；无法解析时返回 true。
+    fn needs_rehash(&self, phc_hash: &str) -> bool;
+}
+
+/// 限流主体：用户名与客户端地址分开计数，两者阈值不同。
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ThrottleSubject {
+    /// 规范化后的用户名（截断后），用于账号维度的锁定。
+    User(String),
+    /// 与服务端直接建立 TCP 连接的客户端地址。
+    ///
+    /// 只使用 socket 对端地址，**不信任 `X-Forwarded-For` 等可伪造头**；
+    /// 反向代理后的真实客户端地址需要部署侧显式配置可信转发，另行设计。
+    Client(String),
+}
+
+/// 限流判定结果。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ThrottleDecision {
+    pub allowed: bool,
+    /// 被拒绝时的建议等待秒数（≥1）。
+    pub retry_after_secs: u64,
+}
+
+/// 登录失败限流/临时锁定端口。
+///
+/// 采用**预占**模型：必须在昂贵的凭据校验（Argon2 约 19 MiB / 数十毫秒）**之前**
+/// `reserve`，出结果后按结果 `record_failure` 或 `record_success`；中途放弃则 `release`。
+/// 只在事后记失败（先读检查、再慢慢校验、最后才计数）会留下 TOCTOU 窗口：
+/// N 个并发请求会在任何一次失败被记录之前全部通过检查，阈值形同虚设。
+///
+/// 并发额度与已累计失败共享同一个上限，因此「同时在飞」的尝试也不会超发。
+/// 本端口是进程内的短临界区，操作必须同步且不执行阻塞 I/O，便于在 Drop 中归还。
+/// 返回 Err 时不得改变预占状态；release 必须可靠归还，以免请求取消泄漏额度。
+pub trait LoginThrottle: Send + Sync {
+    /// 预占一次尝试额度。锁定中直接拒绝（既不占额度，也不延长锁定）。
+    fn reserve(&self, subject: &ThrottleSubject) -> Result<ThrottleDecision, UseCaseError>;
+
+    /// 归还一次预占（未得出结论就返回：回跳非法、另一维度已锁定、内部错误等）。
+    /// 只归还额度，不影响已累计的失败次数。
+    fn release(&self, subject: &ThrottleSubject) -> Result<(), UseCaseError>;
+
+    /// 预占转为失败：失败计数 +1，达到阈值即进入临时锁定。
+    fn record_failure(&self, subject: &ThrottleSubject) -> Result<(), UseCaseError>;
+
+    /// 预占转为成功。
+    ///
+    /// [`ThrottleSubject::User`]：清空历史失败和锁定，只归还本次预占，保留其他在飞请求。
+    /// [`ThrottleSubject::Client`]：只归还本次预占，**不清**历史失败——否则攻击者
+    /// 可以用自己的账号反复成功登录，把来源地址维度的计数清零。
+    fn record_success(&self, subject: &ThrottleSubject) -> Result<(), UseCaseError>;
 }

@@ -18,6 +18,12 @@ export interface Me {
   channel: "session";
 }
 
+/** POST /auth/login/password（成功时另下发会话 cookie） */
+export interface PasswordLoginResult {
+  user_id: string;
+  next: string;
+}
+
 /** 列表条目：摘要形态，不含正文。 */
 export interface PostSummary {
   id: string;
@@ -34,5 +40,22 @@ export interface PostSummary {
 /** 单篇详情：摘要 + Markdown 源文（编辑器数据源）。 */
 export interface PostDetail extends PostSummary {
   excerpt: string | null;
+  content: string;
+}
+
+/** 页面列表条目：站点级内容，无作者与摘要。 */
+export interface PageSummary {
+  id: string;
+  slug: string;
+  title: string;
+  status: string;
+  visibility: Visibility;
+  version: number;
+  published_at: string | null;
+  updated_at: string;
+}
+
+/** 页面详情：摘要 + Markdown 源文（编辑器数据源）。 */
+export interface PageDetail extends PageSummary {
   content: string;
 }

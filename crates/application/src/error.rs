@@ -20,6 +20,15 @@ pub enum UseCaseError {
     #[error("未登录或会话已失效")]
     Unauthenticated,
 
+    /// 凭据无效：用户名不存在、密码错误或账号不可登录，统一返回同一错误，
+    /// 不区分具体原因（避免用户名枚举）。HTTP 层映射 401。
+    #[error("用户名或密码不正确")]
+    InvalidCredentials,
+
+    /// 登录失败次数超过阈值后的临时锁定；`retry_after_secs` 供 HTTP `Retry-After`。
+    #[error("尝试过于频繁，请在 {retry_after_secs} 秒后重试")]
+    RateLimited { retry_after_secs: u64 },
+
     /// 外部身份服务（OIDC/GitHub）交互失败：HTTP 层映射 502。
     #[error("外部身份服务错误：{0}")]
     External(String),

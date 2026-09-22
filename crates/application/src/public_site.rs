@@ -6,7 +6,8 @@ use std::sync::Arc;
 use time::OffsetDateTime;
 
 use crate::error::UseCaseError;
-use crate::ports::{ContentRenderer, PublishedPostQuery};
+use crate::ports::{ContentRenderer, PublishedPageQuery, PublishedPostQuery};
+use domain::content::is_reserved_root_slug;
 
 /// 模板展示用的时间格式（应用层渲染契约的一部分）。
 /// CLI 输出复用同一格式，保证各端一致。
@@ -44,14 +45,26 @@ pub struct PostView {
     pub content_html: String,
 }
 
+/// 页面详情页模板数据契约；content_html 已经过清洗。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PageView {
+    pub title: String,
+    pub slug: String,
+    pub published_at: Option<String>,
+    pub updated_at: String,
+    pub content_html: String,
+}
+
 /// 主题渲染端口：入站层不得绕过此端口直接使用模板引擎。
 pub trait ThemeRenderer: Send + Sync {
     fn render_index(&self, site: &SiteInfo, posts: &[PostCard]) -> Result<String, UseCaseError>;
     fn render_post(&self, site: &SiteInfo, post: &PostView) -> Result<String, UseCaseError>;
+    fn render_page(&self, site: &SiteInfo, page: &PageView) -> Result<String, UseCaseError>;
 }
 
 pub struct PublicSiteInteractor {
     posts: Arc<dyn PublishedPostQuery>,
+    pages: Arc<dyn PublishedPageQuery>,
     markdown: Arc<dyn ContentRenderer>,
     theme: Arc<dyn ThemeRenderer>,
     site: SiteInfo,
@@ -60,12 +73,14 @@ pub struct PublicSiteInteractor {
 impl PublicSiteInteractor {
     pub fn new(
         posts: Arc<dyn PublishedPostQuery>,
+        pages: Arc<dyn PublishedPageQuery>,
         markdown: Arc<dyn ContentRenderer>,
         theme: Arc<dyn ThemeRenderer>,
         site: SiteInfo,
     ) -> Self {
         Self {
             posts,
+            pages,
             markdown,
             theme,
             site,
@@ -106,5 +121,28 @@ impl PublicSiteInteractor {
             content_html: self.markdown.render_markdown(&detail.content),
         };
         self.theme.render_post(&self.site, &view)
+    }
+
+    /// 渲染公开页面详情（根路径 `/{slug}`）。
+    ///
+    /// 保留路径在这里再次拒绝：即使历史数据或迁移绕过了创建/发布校验，
+    /// 也不能让页面顶掉 `/admin`、`/api` 等系统入口。
+    pub async fn render_page(&self, slug: &str) -> Result<String, UseCaseError> {
+        if is_reserved_root_slug(slug) {
+            return Err(UseCaseError::NotFound(format!("页面 {slug}")));
+        }
+        let detail = self
+            .pages
+            .find_public_by_slug(slug)
+            .await?
+            .ok_or_else(|| UseCaseError::NotFound(format!("页面 {slug}")))?;
+        let view = PageView {
+            title: detail.title.clone(),
+            slug: detail.slug.clone(),
+            published_at: detail.published_at.map(format_datetime),
+            updated_at: format_datetime(detail.updated_at),
+            content_html: self.markdown.render_markdown(&detail.content),
+        };
+        self.theme.render_page(&self.site, &view)
     }
 }

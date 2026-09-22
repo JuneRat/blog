@@ -4,7 +4,7 @@
 use std::path::Path;
 
 use application::error::UseCaseError;
-use application::public_site::{PostCard, PostView, SiteInfo, ThemeRenderer};
+use application::public_site::{PageView, PostCard, PostView, SiteInfo, ThemeRenderer};
 use minijinja::Environment;
 use pulldown_cmark::{Options, Parser, html::push_html};
 
@@ -49,17 +49,23 @@ struct PostContext<'a> {
     post: &'a PostView,
 }
 
+#[derive(serde::Serialize)]
+struct PageContext<'a> {
+    site: &'a SiteInfo,
+    page: &'a PageView,
+}
+
 /// MiniJinja 主题渲染器：启动时加载并解析主题模板，请求期复用。
 pub struct MiniJinjaThemeRenderer {
     env: Environment<'static>,
 }
 
 impl MiniJinjaThemeRenderer {
-    /// M1 最小模板集：base/index/post。完整主题清单随 M3 交付。
+    /// M1 最小模板集：base/index/post/page。完整主题清单随 M3 交付。
     /// 模板在启动时一次性加载；Environment 复用要求 'static，故按启动期资源泄漏源码。
     pub fn load(theme_dir: &Path) -> Result<Self, UseCaseError> {
         let mut env = Environment::new();
-        for name in ["base.html", "index.html", "post.html"] {
+        for name in ["base.html", "index.html", "post.html", "page.html"] {
             let path = theme_dir.join("templates").join(name);
             let source = std::fs::read_to_string(&path)
                 .map_err(|e| UseCaseError::Render(format!("读取模板 {name} 失败：{e}")))?;
@@ -84,6 +90,14 @@ impl ThemeRenderer for MiniJinjaThemeRenderer {
         let ctx = PostContext { site, post };
         self.env
             .get_template("post.html")
+            .and_then(|t| t.render(ctx))
+            .map_err(|e| UseCaseError::Render(e.to_string()))
+    }
+
+    fn render_page(&self, site: &SiteInfo, page: &PageView) -> Result<String, UseCaseError> {
+        let ctx = PageContext { site, page };
+        self.env
+            .get_template("page.html")
             .and_then(|t| t.render(ctx))
             .map_err(|e| UseCaseError::Render(e.to_string()))
     }

@@ -5,7 +5,10 @@ pub mod auth;
 pub mod content;
 pub mod error;
 pub mod identity;
+pub mod page;
+pub mod password;
 pub mod ports;
 pub mod public_site;
+pub mod version;
 
 pub use error::UseCaseError;

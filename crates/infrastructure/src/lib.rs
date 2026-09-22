@@ -2,17 +2,20 @@
 //! 实现应用层端口并隐藏具体库类型；数据库事务对象不暴露给 application。
 
 pub mod oauth;
+pub mod password;
 pub mod persistence;
 pub mod rbac;
 pub mod rendering;
 pub mod sessions;
+pub mod throttle;
 
 pub use oauth::{
     EnvSecretSource, PostgresOAuthAccountStore, PostgresOAuthConfigStore, ReqwestIdentityClient,
 };
+pub use password::Argon2PasswordHasher;
 pub use persistence::{
-    PgHealthCheck, PostgresPostRepository, PostgresPublishedPostQuery, PostgresUserRepository,
-    SystemClock, connect, migrate,
+    PgHealthCheck, PostgresPageRepository, PostgresPostRepository, PostgresPublishedPageQuery,
+    PostgresPublishedPostQuery, PostgresUserRepository, SystemClock, connect, migrate,
 };
 pub use rbac::PostgresRbacStore;
 pub use rendering::{MiniJinjaThemeRenderer, SanitizingMarkdownRenderer};
@@ -20,3 +23,4 @@ pub use sessions::{
     AttemptStoreConfig, InMemoryOAuthAttemptStore, InMemorySessionStore, SessionStoreConfig,
     SystemSecureRandom,
 };
+pub use throttle::{InMemoryLoginThrottle, ThrottleConfig};

@@ -13,9 +13,6 @@ use application::identity::{BuiltinRoleDef, OWNER_ROLE_SLUG, PermissionDescripto
 use application::ports::{RbacStore, RoleDto};
 use domain::identity::PermissionSet;
 
-/// 身份/授权变更的统一排他锁键（int, int 形式）。
-const IDENTITY_LOCK: (i64, i64) = (2048001, 1);
-
 pub struct PostgresRbacStore {
     pool: PgPool,
 }
@@ -45,8 +42,12 @@ impl PostgresRbacStore {
         Ok(row.map(|r| r.0))
     }
 
-    /// 未删除、仍持有 owner 角色、且仍有有效登录方式（oauth_accounts）的用户数。
+    /// 未删除、仍持有 owner 角色、且仍有有效登录方式的用户数。
     /// docs §3：可能减少有效 Owner 的操作在排他锁下检查至少保留一个「可登录」Owner。
+    ///
+    /// 「有效登录方式」= 至少一条 oauth_accounts **或** 已启用本地密码
+    /// （`users.password_hash IS NOT NULL`）。两者是对等登录方式，缺一不可，
+    /// 否则只用密码的 Owner 会被判成「登不进去」而被移除，站点直接失去 Owner。
     async fn active_owner_count(
         &self,
         executor: impl Executor<'_, Database = sqlx::Postgres>,
@@ -57,7 +58,8 @@ impl PostgresRbacStore {
              JOIN roles r ON r.id = ur.role_id \
              JOIN users u ON u.id = ur.user_id \
              WHERE r.slug = 'owner' AND u.deleted_at IS NULL \
-               AND EXISTS (SELECT 1 FROM oauth_accounts oa WHERE oa.user_id = u.id)",
+               AND (u.password_hash IS NOT NULL \
+                    OR EXISTS (SELECT 1 FROM oauth_accounts oa WHERE oa.user_id = u.id))",
         )
         .fetch_one(executor)
         .await
@@ -81,17 +83,26 @@ impl PostgresRbacStore {
         Ok(row.is_some())
     }
 
-    /// 用户是否仍有有效登录方式（oauth_accounts 至少一条）。
+    /// 目标用户是否仍有有效登录方式（未软删除，且 oauth_accounts 或本地密码至少其一）。
+    ///
+    /// 返回 false 会让 `remove_role` 跳过最后 Owner 保护——对，这是有意的：
+    /// 「登不进去的 Owner」不构成有效 Owner，可以被清理。因此这个谓词必须
+    /// 与 `active_owner_count` 用同一套定义，否则两处判定会互相矛盾。
     async fn user_has_login_method(
         executor: impl Executor<'_, Database = sqlx::Postgres>,
         user_id: Uuid,
     ) -> Result<bool, UseCaseError> {
-        let row: Option<(i32,)> =
-            sqlx::query_as("SELECT 1 FROM oauth_accounts WHERE user_id = $1 LIMIT 1")
-                .bind(user_id)
-                .fetch_optional(executor)
-                .await
-                .map_err(Self::map_err)?;
+        let row: Option<(i32,)> = sqlx::query_as(
+            "SELECT 1 FROM users u \
+             WHERE u.id = $1 AND u.deleted_at IS NULL \
+               AND (u.password_hash IS NOT NULL \
+                    OR EXISTS (SELECT 1 FROM oauth_accounts oa WHERE oa.user_id = u.id)) \
+             LIMIT 1",
+        )
+        .bind(user_id)
+        .fetch_optional(executor)
+        .await
+        .map_err(Self::map_err)?;
         Ok(row.is_some())
     }
 }
@@ -254,10 +265,7 @@ impl RbacStore for PostgresRbacStore {
 
     async fn assign_role(&self, user_id: Uuid, role_slug: &str) -> Result<(), UseCaseError> {
         let mut tx = self.pool.begin().await.map_err(Self::map_err)?;
-        sqlx::query("SELECT pg_advisory_xact_lock($1::int, $2::int)")
-            .bind(IDENTITY_LOCK.0 as i32)
-            .bind(IDENTITY_LOCK.1 as i32)
-            .execute(&mut *tx)
+        crate::persistence::acquire_identity_lock(&mut *tx)
             .await
             .map_err(Self::map_err)?;
 
@@ -287,10 +295,7 @@ impl RbacStore for PostgresRbacStore {
 
     async fn remove_role(&self, user_id: Uuid, role_slug: &str) -> Result<(), UseCaseError> {
         let mut tx = self.pool.begin().await.map_err(Self::map_err)?;
-        sqlx::query("SELECT pg_advisory_xact_lock($1::int, $2::int)")
-            .bind(IDENTITY_LOCK.0 as i32)
-            .bind(IDENTITY_LOCK.1 as i32)
-            .execute(&mut *tx)
+        crate::persistence::acquire_identity_lock(&mut *tx)
             .await
             .map_err(Self::map_err)?;
 

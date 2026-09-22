@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { ApiError, api, withRequestId } from "../api";
 import { useAuth } from "../auth";
 import { navigate, paths } from "../router";
-import type { PostSummary } from "../types";
+import type { PageSummary } from "../types";
 
 function messageOf(error: unknown): string {
   if (error instanceof ApiError) {
@@ -12,19 +12,19 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : "未知错误";
 }
 
-export function PostListScreen() {
+/** 独立页面列表：站点级 page.read，与文章列表（按作者）不同。 */
+export function PageListScreen() {
   const { me, logout, logoutError } = useAuth();
-  const [posts, setPosts] = useState<PostSummary[] | null>(null);
+  const [pages, setPages] = useState<PageSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const canCreate = me?.permissions.includes("post.create") ?? false;
-  const canReadPages = me?.permissions.includes("page.read") ?? false;
+  const canCreate = me?.permissions.includes("page.create") ?? false;
 
   const load = useCallback(async () => {
     setError(null);
     try {
-      setPosts(await api.listPosts());
+      setPages(await api.listPages());
     } catch (e) {
-      setPosts([]);
+      setPages([]);
       setError(messageOf(e));
     }
   }, []);
@@ -36,17 +36,14 @@ export function PostListScreen() {
   return (
     <div className="screen">
       <header className="topbar">
-        <h1>我的文章</h1>
+        <h1>独立页面</h1>
         <div className="topbar-actions">
-          <span className="muted">{me?.permissions.length ?? 0} 项权限</span>
-          {canReadPages && (
-            <button type="button" className="button ghost" onClick={() => navigate(paths.pages)}>
-              独立页面
-            </button>
-          )}
+          <button type="button" className="button ghost" onClick={() => navigate(paths.list)}>
+            我的文章
+          </button>
           {canCreate && (
-            <button type="button" className="button" onClick={() => navigate(paths.newPost)}>
-              新建草稿
+            <button type="button" className="button" onClick={() => navigate(paths.newPage)}>
+              新建页面
             </button>
           )}
           <button type="button" className="button ghost" onClick={() => void logout()}>
@@ -55,14 +52,18 @@ export function PostListScreen() {
         </div>
       </header>
 
+      <p className="muted">
+        发布后通过根路径访问（如 /about）。slug 不能占用 admin、api、auth 等系统路径。
+      </p>
+
       {error !== null && <p className="error">{error}</p>}
       {logoutError !== null && <p className="error">{logoutError}</p>}
-      {posts === null && <p className="muted">正在加载…</p>}
-      {posts !== null && posts.length === 0 && error === null && (
-        <p className="muted">还没有文章。{canCreate ? "点击「新建草稿」开始。" : ""}</p>
+      {pages === null && <p className="muted">正在加载…</p>}
+      {pages !== null && pages.length === 0 && error === null && (
+        <p className="muted">还没有页面。{canCreate ? "点击「新建页面」开始。" : ""}</p>
       )}
 
-      {posts !== null && posts.length > 0 && (
+      {pages !== null && pages.length > 0 && (
         <table className="posts">
           <thead>
             <tr>
@@ -75,16 +76,16 @@ export function PostListScreen() {
             </tr>
           </thead>
           <tbody>
-            {posts.map((post) => (
-              <tr key={post.id} onClick={() => navigate(paths.editPost(post.slug))}>
-                <td>v{post.version}</td>
-                <td>{post.status === "published" ? "已发布" : "草稿"}</td>
-                <td>{post.visibility === "public" ? "公开" : "私有"}</td>
+            {pages.map((page) => (
+              <tr key={page.id} onClick={() => navigate(paths.editPage(page.slug))}>
+                <td>v{page.version}</td>
+                <td>{page.status === "published" ? "已发布" : "草稿"}</td>
+                <td>{page.visibility === "public" ? "公开" : "私有"}</td>
                 <td>
-                  <code>{post.slug}</code>
+                  <code>/{page.slug}</code>
                 </td>
-                <td>{post.title || "（无标题）"}</td>
-                <td className="muted">{post.updated_at}</td>
+                <td>{page.title || "（无标题）"}</td>
+                <td className="muted">{page.updated_at}</td>
               </tr>
             ))}
           </tbody>

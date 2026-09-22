@@ -7,13 +7,17 @@ use std::sync::Arc;
 
 use application::content::{CreatePostCmd, PostInteractor};
 use application::identity::{Actor, CreateUserCmd, RoleInteractor, UserInteractor};
-use application::ports::{PostRepository, PublishedPostQuery, UserRepository};
+use application::page::{CreatePageCmd, PageInteractor, PageVisibility};
+use application::ports::{
+    PageRepository, PostRepository, PublishedPageQuery, PublishedPostQuery, UserRepository,
+};
 use application::public_site::{PublicSiteInteractor, SiteInfo};
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use infrastructure::{
-    MiniJinjaThemeRenderer, PostgresPostRepository, PostgresPublishedPostQuery, PostgresRbacStore,
+    MiniJinjaThemeRenderer, PostgresPageRepository, PostgresPostRepository,
+    PostgresPublishedPageQuery, PostgresPublishedPostQuery, PostgresRbacStore,
     PostgresUserRepository, SanitizingMarkdownRenderer, SystemClock,
 };
 use interfaces::http::public_router_minimal;
@@ -26,10 +30,13 @@ static SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 struct Stack {
     router: axum::Router,
     posts: Arc<PostInteractor>,
+    pages: Arc<PageInteractor>,
     #[allow(dead_code)]
     users: Arc<UserInteractor>,
     pool: PgPool,
     author: Actor,
+    /// editor 持有站点级 page.* 权限（author 没有）。
+    editor: Actor,
 }
 
 async fn actor_for(users: &Arc<UserInteractor>, username: &str) -> Actor {
@@ -42,11 +49,14 @@ async fn stack() -> Stack {
     let clock = Arc::new(SystemClock);
     let user_repo: Arc<dyn UserRepository> = Arc::new(PostgresUserRepository::new(pool.clone()));
     let post_repo: Arc<dyn PostRepository> = Arc::new(PostgresPostRepository::new(pool.clone()));
+    let page_repo: Arc<dyn PageRepository> = Arc::new(PostgresPageRepository::new(pool.clone()));
     let rbac = Arc::new(PostgresRbacStore::new(pool.clone()));
     let roles = Arc::new(RoleInteractor::new(rbac.clone(), user_repo.clone()));
     roles.sync_registry().await.expect("同步权限目录失败");
     let public_query: Arc<dyn PublishedPostQuery> =
         Arc::new(PostgresPublishedPostQuery::new(pool.clone()));
+    let public_page_query: Arc<dyn PublishedPageQuery> =
+        Arc::new(PostgresPublishedPageQuery::new(pool.clone()));
 
     let theme = Arc::new(
         MiniJinjaThemeRenderer::load(std::path::Path::new("../../themes/default"))
@@ -55,9 +65,11 @@ async fn stack() -> Stack {
     let markdown = Arc::new(SanitizingMarkdownRenderer::new());
 
     let users = Arc::new(UserInteractor::new(user_repo, rbac, clock.clone()));
-    let posts = Arc::new(PostInteractor::new(post_repo, clock));
+    let posts = Arc::new(PostInteractor::new(post_repo, clock.clone()));
+    let pages = Arc::new(PageInteractor::new(page_repo, clock));
     let public_site = Arc::new(PublicSiteInteractor::new(
         public_query,
+        public_page_query,
         markdown,
         theme,
         SiteInfo {
@@ -66,31 +78,45 @@ async fn stack() -> Stack {
         },
     ));
 
-    users
-        .create_user(
-            &Actor::bootstrap_cli(),
-            CreateUserCmd {
-                username: "author".into(),
-                email: None,
-                display_name: Some("作者甲".into()),
-            },
-        )
-        .await
-        .unwrap();
+    for username in ["author", "editor"] {
+        let display_name = if username == "author" {
+            "作者甲".to_string()
+        } else {
+            format!("{username} 的展示名")
+        };
+        users
+            .create_user(
+                &Actor::bootstrap_cli(),
+                CreateUserCmd {
+                    username: username.into(),
+                    email: None,
+                    display_name: Some(display_name),
+                },
+            )
+            .await
+            .unwrap();
+    }
     // 测试作者需要 author 角色才能创建/发布文章（RBAC 已接入用例）。
     roles
         .assign_to_username(&Actor::bootstrap_cli(), "author", "author")
         .await
         .unwrap();
+    roles
+        .assign_to_username(&Actor::bootstrap_cli(), "editor", "editor")
+        .await
+        .unwrap();
     let author = actor_for(&users, "author").await;
+    let editor = actor_for(&users, "editor").await;
 
     let router = public_router_minimal(public_site);
     Stack {
         router,
         posts,
+        pages,
         users,
         pool,
         author,
+        editor,
     }
 }
 
@@ -251,4 +277,90 @@ async fn title_and_excerpt_html_is_escaped_in_templates() {
         !index.contains("<script>alert('title')</script>"),
         "列表页同样转义"
     );
+}
+
+fn page_cmd(slug: &str, title: &str) -> CreatePageCmd {
+    CreatePageCmd {
+        slug: Some(slug.into()),
+        title: title.into(),
+        content: format!("# {title}\n\n正文，包含 **加粗**。"),
+        visibility: PageVisibility::Public,
+    }
+}
+
+#[tokio::test]
+async fn page_is_public_only_while_published_and_public() {
+    let _g = SERIAL.lock().await;
+    let s = stack().await;
+
+    s.pages
+        .create(&s.editor, page_cmd("about", "关于"))
+        .await
+        .unwrap();
+
+    // 草稿：根路径不可访问（404），且不能泄漏正文。
+    let (status, body) = get(&s.router, "/about").await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "草稿页面不可匿名读取");
+    assert!(!body.contains("关于"));
+
+    // 发布后可访问，Markdown 已渲染。
+    s.pages.publish(&s.editor, "about", None).await.unwrap();
+    let (status, body) = get(&s.router, "/about").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("关于"));
+    assert!(body.contains("<strong>加粗</strong>"), "{body}");
+
+    // 撤回后立即不可访问（无页面缓存）。
+    s.pages.withdraw(&s.editor, "about", None).await.unwrap();
+    let (status, _) = get(&s.router, "/about").await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "撤回后不可访问");
+
+    // 重新发布再改 private：退出匿名读取，但后台仍可见。
+    s.pages.publish(&s.editor, "about", None).await.unwrap();
+    s.pages
+        .edit(
+            &s.editor,
+            application::page::EditPageCmd {
+                target_slug: "about".into(),
+                visibility: Some(PageVisibility::Private),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let (status, _) = get(&s.router, "/about").await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "private 页面不公开");
+}
+
+#[tokio::test]
+async fn reserved_root_paths_are_not_shadowed_by_pages() {
+    let _g = SERIAL.lock().await;
+    let s = stack().await;
+
+    // 领域层直接拒绝保留 slug；即便绕过，路由层固定入口也必须仍然生效。
+    let err = s
+        .pages
+        .create(&s.editor, page_cmd("healthz", "伪健康检查"))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, application::error::UseCaseError::Invalid(_)),
+        "保留路径必须被拒绝：{err:?}"
+    );
+
+    // 直接写库模拟历史坏数据，公开读取仍必须 404（不顶掉 /healthz）。
+    sqlx::raw_sql(
+        "INSERT INTO pages (id, title, slug, content, status, visibility, published_at, version) \
+         VALUES (gen_random_uuid(), '伪健康检查', 'healthz', '不应出现', 'published', 'public', now(), 1)",
+    )
+    .execute(&s.pool)
+    .await
+    .unwrap();
+    let (status, body) = get(&s.router, "/healthz").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, "ok", "固定路由优先，Page 不能顶掉 /healthz");
+
+    // 多段未知路径仍走 404 fallback，不会被 Page 的根参数吞掉。
+    let (status, _) = get(&s.router, "/about/extra").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }

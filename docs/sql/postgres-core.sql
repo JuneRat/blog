@@ -3,7 +3,7 @@
 -- 保留贴文中的业务字段；version 为并发编辑补充，不创建路径/修订/会话等辅助表。
 BEGIN;
 
--- 1. 本站身份；password_hash 可空，不代表首版开放密码登录。
+-- 1. 本站身份；password_hash 可空，存 Argon2id 的 PHC 字符串（见 ADR-0009）。
 CREATE TABLE users (
     id uuid PRIMARY KEY,
     username varchar(64) COLLATE "C" NOT NULL UNIQUE CHECK (username <> ''),

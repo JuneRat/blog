@@ -14,6 +14,7 @@ use uuid::Uuid;
 use crate::error::UseCaseError;
 use crate::identity::{Actor, authorize_own_or_any};
 use crate::ports::{Clock, PostRepository, SaveOutcome};
+use crate::version::checked_version;
 use domain::content::post::{Post, PostPatch, PostSnapshot, Slug, Visibility};
 use domain::identity::UserId;
 
@@ -256,15 +257,6 @@ impl PostInteractor {
         let version = post.version();
         Ok((post, version))
     }
-}
-
-/// 即使动作无实际变化，也不能让旧客户端将最新版本号用于其旧正文。
-/// 真正写入时仓储仍会再次检查版本，覆盖读取之后发生的并发修改。
-fn checked_version(current: i64, requested: Option<i64>) -> Result<i64, UseCaseError> {
-    if requested.is_some_and(|expected| expected != current) {
-        return Err(UseCaseError::VersionConflict);
-    }
-    Ok(current)
 }
 
 fn map_domain(e: domain::content::post::PostError) -> UseCaseError {

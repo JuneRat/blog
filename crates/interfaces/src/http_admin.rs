@@ -1,17 +1,18 @@
-//! 管理 API：会话认证 + CSRF/Origin 的文章写端点。
+//! 管理 API：会话认证 + CSRF/Origin 的文章与页面写端点。
 //!
 //! - 全部响应 `Cache-Control: no-store`；请求体上限 2 MiB。
 //! - 认证/CSRF/Origin 由 `AdminAuth` 提取器统一执行（共用实现见 `http_support`）：
 //!   读方法仅需会话，写方法（POST/PATCH/PUT/DELETE）额外校验 `X-CSRF-Token`
 //!   与同源 `Origin`。
 //! - 错误契约统一为 JSON：401 带 `WWW-Authenticate: Session`，内部错误只回通用文案。
-//! - 权限由应用层用例执行（own/any）；本层不做业务判断。
+//! - 权限由应用层用例执行（文章 own/any；页面站点级）；本层不做业务判断。
 
 use uuid::Uuid;
 
 use application::content::{CreatePostCmd, EditPostCmd, PostDto, PostVisibility};
 use application::error::UseCaseError;
 use application::identity::Actor;
+use application::page::{CreatePageCmd, EditPageCmd, PageDto};
 use application::ports::SESSION_COOKIE;
 use axum::extract::{FromRef, Path, Query, State};
 use axum::http::{StatusCode, request::Parts};
@@ -342,5 +343,202 @@ fn parse_visibility(value: Option<&str>) -> Result<PostVisibility, UseCaseError>
         Some(other) => Err(UseCaseError::Invalid(format!(
             "visibility 只支持 public/private，收到 {other}"
         ))),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 页面（Page）：站点级 page.* 权限，无作者归属
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Serialize)]
+struct PageJson {
+    id: Uuid,
+    slug: String,
+    title: String,
+    status: String,
+    visibility: String,
+    version: i64,
+    published_at: Option<String>,
+    updated_at: String,
+}
+
+impl From<&PageDto> for PageJson {
+    fn from(dto: &PageDto) -> Self {
+        Self {
+            id: dto.id,
+            slug: dto.slug.clone(),
+            title: dto.title.clone(),
+            status: dto.status.to_string(),
+            visibility: dto.visibility.to_string(),
+            version: dto.version,
+            published_at: dto
+                .published_at
+                .map(application::public_site::format_datetime),
+            updated_at: application::public_site::format_datetime(dto.updated_at),
+        }
+    }
+}
+
+/// 页面详情：摘要 + Markdown 源文（后台编辑数据源）。
+#[derive(serde::Serialize)]
+struct PageDetailJson {
+    #[serde(flatten)]
+    summary: PageJson,
+    content: String,
+}
+
+impl From<PageDto> for PageDetailJson {
+    fn from(dto: PageDto) -> Self {
+        Self {
+            summary: PageJson::from(&dto),
+            content: dto.content,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+pub struct CreatePageBody {
+    pub slug: Option<String>,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub content: String,
+    pub visibility: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+pub struct EditPageBody {
+    pub new_slug: Option<String>,
+    pub title: Option<String>,
+    pub content: Option<String>,
+    pub visibility: Option<String>,
+    pub expected_version: Option<i64>,
+}
+
+pub fn pages_router(state: AdminState) -> Router {
+    Router::new()
+        .route("/api/admin/v1/pages", get(list_pages).post(create_page))
+        .route("/api/admin/v1/pages/{slug}", get(get_page).patch(edit_page))
+        .route("/api/admin/v1/pages/{slug}/publish", post(publish_page))
+        .route("/api/admin/v1/pages/{slug}/unpublish", post(unpublish_page))
+        .layer(axum::extract::DefaultBodyLimit::max(ADMIN_BODY_LIMIT))
+        .layer(middleware::from_fn(no_store))
+        .with_state(state)
+}
+
+async fn create_page(
+    AdminAuth { actor }: AdminAuth,
+    request_id: RequestId,
+    State(state): State<AdminState>,
+    Json(body): Json<CreatePageBody>,
+) -> Response {
+    let visibility = match parse_visibility(body.visibility.as_deref()) {
+        Ok(v) => v,
+        Err(e) => return admin_error(e, &request_id),
+    };
+    match state
+        .pages
+        .create(
+            &actor,
+            CreatePageCmd {
+                slug: body.slug,
+                title: body.title,
+                content: body.content,
+                visibility,
+            },
+        )
+        .await
+    {
+        Ok(dto) => (StatusCode::CREATED, Json(PageDetailJson::from(dto))).into_response(),
+        Err(e) => admin_error(e, &request_id),
+    }
+}
+
+async fn get_page(
+    AdminAuth { actor }: AdminAuth,
+    request_id: RequestId,
+    State(state): State<AdminState>,
+    Path(slug): Path<String>,
+) -> Response {
+    match state.pages.find(&actor, &slug).await {
+        Ok(dto) => (StatusCode::OK, Json(PageDetailJson::from(dto))).into_response(),
+        Err(e) => admin_error(e, &request_id),
+    }
+}
+
+async fn list_pages(
+    AdminAuth { actor }: AdminAuth,
+    request_id: RequestId,
+    State(state): State<AdminState>,
+) -> Response {
+    match state.pages.list(&actor).await {
+        Ok(list) => (
+            StatusCode::OK,
+            Json(list.iter().map(PageJson::from).collect::<Vec<_>>()),
+        )
+            .into_response(),
+        Err(e) => admin_error(e, &request_id),
+    }
+}
+
+async fn edit_page(
+    AdminAuth { actor }: AdminAuth,
+    request_id: RequestId,
+    State(state): State<AdminState>,
+    Path(slug): Path<String>,
+    Json(body): Json<EditPageBody>,
+) -> Response {
+    let visibility = match body.visibility.as_deref() {
+        Some(v) => match parse_visibility(Some(v)) {
+            Ok(parsed) => Some(parsed),
+            Err(e) => return admin_error(e, &request_id),
+        },
+        None => None,
+    };
+    match state
+        .pages
+        .edit(
+            &actor,
+            EditPageCmd {
+                target_slug: slug,
+                new_slug: body.new_slug,
+                title: body.title,
+                content: body.content,
+                visibility,
+                expected_version: body.expected_version,
+            },
+        )
+        .await
+    {
+        Ok(dto) => (StatusCode::OK, Json(PageDetailJson::from(dto))).into_response(),
+        Err(e) => admin_error(e, &request_id),
+    }
+}
+
+async fn publish_page(
+    AdminAuth { actor }: AdminAuth,
+    request_id: RequestId,
+    State(state): State<AdminState>,
+    Path(slug): Path<String>,
+    body: Option<Json<VersionBody>>,
+) -> Response {
+    let expected = body.and_then(|Json(b)| b.expected_version);
+    match state.pages.publish(&actor, &slug, expected).await {
+        Ok(dto) => (StatusCode::OK, Json(PageDetailJson::from(dto))).into_response(),
+        Err(e) => admin_error(e, &request_id),
+    }
+}
+
+async fn unpublish_page(
+    AdminAuth { actor }: AdminAuth,
+    request_id: RequestId,
+    State(state): State<AdminState>,
+    Path(slug): Path<String>,
+    body: Option<Json<VersionBody>>,
+) -> Response {
+    let expected = body.and_then(|Json(b)| b.expected_version);
+    match state.pages.withdraw(&actor, &slug, expected).await {
+        Ok(dto) => (StatusCode::OK, Json(PageDetailJson::from(dto))).into_response(),
+        Err(e) => admin_error(e, &request_id),
     }
 }

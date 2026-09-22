@@ -191,7 +191,9 @@ pub fn ensure_same_origin(headers: &HeaderMap) -> Result<(), UseCaseError> {
 /// 漏掉新变体会直接编译失败。
 pub const ADMIN_ERROR_CODES: &[&str] = &[
     "unauthenticated",
+    "invalid_credentials",
     "invalid_request",
+    "rate_limited",
     "version_conflict",
     "conflict",
     "not_found",
@@ -207,7 +209,9 @@ pub const ADMIN_ERROR_CODES: &[&str] = &[
 pub fn admin_error_code(e: &UseCaseError) -> &'static str {
     match e {
         UseCaseError::Unauthenticated => "unauthenticated",
+        UseCaseError::InvalidCredentials => "invalid_credentials",
         UseCaseError::Invalid(_) => "invalid_request",
+        UseCaseError::RateLimited { .. } => "rate_limited",
         UseCaseError::VersionConflict => "version_conflict",
         UseCaseError::Conflict(_) => "conflict",
         UseCaseError::NotFound(_) => "not_found",
@@ -217,20 +221,43 @@ pub fn admin_error_code(e: &UseCaseError) -> &'static str {
     }
 }
 
-/// 统一管理端错误响应（JSON，携带业务码与请求编号）。
-pub fn admin_error(e: UseCaseError, request_id: &RequestId) -> Response {
-    let status = match &e {
-        UseCaseError::Unauthenticated => StatusCode::UNAUTHORIZED,
+/// 错误的默认 HTTP 状态码。
+///
+/// 注意 `invalid_credentials` 默认 401：登录失败必须让客户端按「未认证」处理。
+/// 个别端点（如已登录状态下的重新认证失败）会用
+/// [`admin_error_with_status`] 覆盖为 403，避免前端把用户误判为掉线。
+pub fn admin_error_status(e: &UseCaseError) -> StatusCode {
+    match e {
+        UseCaseError::Unauthenticated | UseCaseError::InvalidCredentials => {
+            StatusCode::UNAUTHORIZED
+        }
+        UseCaseError::RateLimited { .. } => StatusCode::TOO_MANY_REQUESTS,
         UseCaseError::Invalid(_) => StatusCode::BAD_REQUEST,
         UseCaseError::Conflict(_) | UseCaseError::VersionConflict => StatusCode::CONFLICT,
         UseCaseError::NotFound(_) => StatusCode::NOT_FOUND,
         UseCaseError::Forbidden => StatusCode::FORBIDDEN,
         UseCaseError::External(_) => StatusCode::BAD_GATEWAY,
-        UseCaseError::Repository(_) | UseCaseError::Render(_) => {
-            tracing::error!(error = %e, "管理 API 内部错误");
-            StatusCode::INTERNAL_SERVER_ERROR
-        }
-    };
+        UseCaseError::Repository(_) | UseCaseError::Render(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
+/// 统一管理端错误响应（JSON，携带业务码与请求编号）。
+pub fn admin_error(e: UseCaseError, request_id: &RequestId) -> Response {
+    let status = admin_error_status(&e);
+    admin_error_with_status(e, status, request_id)
+}
+
+/// 指定状态码的错误响应（业务码仍取自错误的默认映射）。
+///
+/// 用于同一业务码在不同端点需要不同状态的场景；调用方必须是有意为之。
+pub fn admin_error_with_status(
+    e: UseCaseError,
+    status: StatusCode,
+    request_id: &RequestId,
+) -> Response {
+    if matches!(e, UseCaseError::Repository(_) | UseCaseError::Render(_)) {
+        tracing::error!(error = %e, "管理 API 内部错误");
+    }
     // 内部错误只回通用文案；其余错误按用例语义回显（不含 SQL/存储细节）。
     let message = match &e {
         UseCaseError::Repository(_) | UseCaseError::Render(_) => "服务器内部错误".to_string(),
@@ -245,11 +272,17 @@ pub fn admin_error(e: UseCaseError, request_id: &RequestId) -> Response {
         })),
     )
         .into_response();
-    if status == StatusCode::UNAUTHORIZED {
+    // 只有「会话缺失/失效」才提示认证方案；凭据错误不是会话问题。
+    if matches!(e, UseCaseError::Unauthenticated) {
         response.headers_mut().insert(
             header::WWW_AUTHENTICATE,
             axum::http::HeaderValue::from_static("Session"),
         );
+    }
+    if let UseCaseError::RateLimited { retry_after_secs } = e
+        && let Ok(value) = axum::http::HeaderValue::from_str(&retry_after_secs.max(1).to_string())
+    {
+        response.headers_mut().insert(header::RETRY_AFTER, value);
     }
     response
 }
@@ -262,7 +295,14 @@ mod tests {
     fn samples() -> Vec<(UseCaseError, &'static str)> {
         vec![
             (UseCaseError::Unauthenticated, "unauthenticated"),
+            (UseCaseError::InvalidCredentials, "invalid_credentials"),
             (UseCaseError::Invalid("x".into()), "invalid_request"),
+            (
+                UseCaseError::RateLimited {
+                    retry_after_secs: 60,
+                },
+                "rate_limited",
+            ),
             (UseCaseError::VersionConflict, "version_conflict"),
             (UseCaseError::Conflict("slug".into()), "conflict"),
             (UseCaseError::NotFound("x".into()), "not_found"),
@@ -271,6 +311,32 @@ mod tests {
             (UseCaseError::Repository("x".into()), "internal_error"),
             (UseCaseError::Render("x".into()), "internal_error"),
         ]
+    }
+
+    /// 状态码默认映射；端点覆盖状态的行为由各自测试保证。
+    fn status_samples() -> Vec<(UseCaseError, StatusCode)> {
+        vec![
+            (UseCaseError::Unauthenticated, StatusCode::UNAUTHORIZED),
+            (UseCaseError::InvalidCredentials, StatusCode::UNAUTHORIZED),
+            (
+                UseCaseError::RateLimited {
+                    retry_after_secs: 60,
+                },
+                StatusCode::TOO_MANY_REQUESTS,
+            ),
+            (UseCaseError::Forbidden, StatusCode::FORBIDDEN),
+            (
+                UseCaseError::Repository("x".into()),
+                StatusCode::INTERNAL_SERVER_ERROR,
+            ),
+        ]
+    }
+
+    #[test]
+    fn error_variants_map_to_expected_status_codes() {
+        for (error, expected) in status_samples() {
+            assert_eq!(admin_error_status(&error), expected, "{error:?}");
+        }
     }
 
     #[test]

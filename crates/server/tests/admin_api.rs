@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 use application::auth::{AuthDeps, AuthInteractor};
 use application::content::PostInteractor;
 use application::identity::{Actor, CreateUserCmd, RoleInteractor, UserInteractor};
+use application::page::PageInteractor;
 use application::ports::{
     Clock, ExternalIdentity, ExternalIdentityClient, OAuthAccountStore, OAuthConfigStore,
     ProviderConfig, ProviderKind, SecureRandom,
@@ -19,8 +20,8 @@ use axum::middleware;
 use http_body_util::BodyExt;
 use infrastructure::{
     InMemoryOAuthAttemptStore, InMemorySessionStore, PostgresOAuthAccountStore,
-    PostgresOAuthConfigStore, PostgresPostRepository, PostgresRbacStore, PostgresUserRepository,
-    SystemClock,
+    PostgresOAuthConfigStore, PostgresPageRepository, PostgresPostRepository, PostgresRbacStore,
+    PostgresUserRepository, SystemClock,
 };
 use interfaces::http_admin::posts_router;
 use interfaces::http_auth::{AdminState, AuthState, admin_router, auth_router};
@@ -152,13 +153,19 @@ async fn fresh_stack() -> Stack {
         Arc::new(PostgresPostRepository::new(pool.clone())),
         clock.clone(),
     ));
+    let pages = Arc::new(PageInteractor::new(
+        Arc::new(PostgresPageRepository::new(pool.clone())),
+        clock.clone(),
+    ));
 
+    let sessions: Arc<dyn application::ports::SessionStore> =
+        Arc::new(InMemorySessionStore::with_defaults());
     let auth = Arc::new(AuthInteractor::new(
         AuthDeps {
-            sessions: Arc::new(InMemorySessionStore::with_defaults()),
+            sessions: sessions.clone(),
             attempts: Arc::new(InMemoryOAuthAttemptStore::with_defaults()),
             configs,
-            accounts,
+            accounts: accounts.clone(),
             identity_client: idp.clone(),
             random: Arc::new(TestRandom),
         },
@@ -166,20 +173,26 @@ async fn fresh_stack() -> Stack {
         clock,
         "http://127.0.0.1:18099".into(),
     ));
+    let passwords = common::password_interactor(user_repo.clone(), sessions);
 
     let auth_state = AuthState {
         auth: auth.clone(),
+        passwords: passwords.clone(),
         secure_cookies: false,
     };
     let admin_state = AdminState {
-        auth: auth.clone(),
+        auth,
         users,
+        passwords,
         posts,
+        pages,
+        secure_cookies: false,
     };
 
     let router = auth_router(auth_state)
         .merge(admin_router(admin_state.clone()))
-        .merge(posts_router(admin_state))
+        .merge(posts_router(admin_state.clone()))
+        .merge(interfaces::http_admin::pages_router(admin_state))
         // 与生产装配一致：最外层请求编号/日志中间件。
         .layer(middleware::from_fn(request_context));
     Stack {
@@ -989,7 +1002,39 @@ async fn revoked_role_takes_effect_on_existing_session() {
         .await
         .unwrap();
 
-    // 旧 cookie 仍在服务端会话存储中，但每次请求重读权限 → 立即失效。
+    // 会话绑定签发时的 users.version；撤权递增版本，旧 cookie 立即被判为未登录。
+    // 这比「旧会话仍有效但权限变少」更强：撤权后不留可继续试探的会话。
+    let (status, body) = api(
+        &stack.router,
+        "GET",
+        "/api/admin/v1/posts/revoke-post",
+        Some(&editor_cookie),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "撤权后旧会话必须立即失效：{body}"
+    );
+
+    let (status, _, body) = request_me(&stack.router, &editor_cookie).await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "撤权后 /me 不再接受旧会话：{body}"
+    );
+
+    // 重新登录：会话有效，但权限已按新角色集合计算（不再有 any 权限）。
+    let (editor_cookie, _) = login_as(&stack.router, &stack.idp, "editor").await;
+    let (status, _, body) = request_me(&stack.router, &editor_cookie).await;
+    assert_eq!(status, StatusCode::OK, "重新登录应拿到有效会话：{body}");
+    assert!(
+        !body.contains("post.read_any"),
+        "撤权后 /me 不应再返回 any 权限：{body}"
+    );
+
     let (status, body) = api(
         &stack.router,
         "GET",
@@ -1002,14 +1047,7 @@ async fn revoked_role_takes_effect_on_existing_session() {
     assert_eq!(
         status,
         StatusCode::FORBIDDEN,
-        "撤权后旧会话必须立即失去权限：{body}"
-    );
-
-    let (status, _, body) = request_me(&stack.router, &editor_cookie).await;
-    assert_eq!(status, StatusCode::OK, "/me 仍是有效会话：{body}");
-    assert!(
-        !body.contains("post.read_any"),
-        "撤权后 /me 不应再返回 any 权限：{body}"
+        "撤权并重新登录后仍读不到他人文章：{body}"
     );
 }
 
@@ -1136,4 +1174,141 @@ async fn detail_returns_markdown_body_while_list_stays_summary() {
         !body.contains("BODYMARKER") && !body.contains("\"content\""),
         "列表不应携带正文：{body}"
     );
+}
+
+#[tokio::test]
+async fn page_full_crud_round_trip_with_site_level_permissions() {
+    let _g = SERIAL.lock().await;
+    let stack = fresh_stack().await;
+
+    // author 只有文章 own 权限：页面接口必须 403（Page 不套用文章归属规则）。
+    let (author_cookie, _) = login_as(&stack.router, &stack.idp, "author").await;
+    let (status, body) = api(
+        &stack.router,
+        "GET",
+        "/api/admin/v1/pages",
+        Some(&author_cookie),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+
+    // editor 持有站点级 page.*：完整闭环。
+    let (cookie, csrf) = login_as(&stack.router, &stack.idp, "editor").await;
+
+    let (status, body) = api(
+        &stack.router,
+        "POST",
+        "/api/admin/v1/pages",
+        Some(&cookie),
+        Some(&csrf),
+        Some(r##"{"slug":"about","title":"关于","content":"# 关于\n正文"}"##),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert!(body.contains("\"slug\":\"about\""), "{body}");
+    assert!(body.contains("\"version\":1"), "{body}");
+    assert!(body.contains("\"status\":\"draft\""), "{body}");
+
+    // 保留路径：400 且业务码是可校验的 invalid_request。
+    let (status, body) = api(
+        &stack.router,
+        "POST",
+        "/api/admin/v1/pages",
+        Some(&cookie),
+        Some(&csrf),
+        Some(r#"{"slug":"admin","title":"伪后台","content":"x"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(body.contains("\"code\":\"invalid_request\""), "{body}");
+
+    // 详情（含正文）与列表。
+    let (status, body) = api(
+        &stack.router,
+        "GET",
+        "/api/admin/v1/pages/about",
+        Some(&cookie),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body.contains("# 关于"), "详情含 Markdown 源文：{body}");
+
+    let (status, body) = api(
+        &stack.router,
+        "GET",
+        "/api/admin/v1/pages",
+        Some(&cookie),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body.contains("about"), "{body}");
+
+    // 编辑：正确版本 → 2。
+    let (status, body) = api(
+        &stack.router,
+        "PATCH",
+        "/api/admin/v1/pages/about",
+        Some(&cookie),
+        Some(&csrf),
+        Some(r#"{"title":"关于我们","expected_version":1}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body.contains("\"version\":2"), "{body}");
+
+    // 过期版本 → 409 version_conflict（可重试覆盖）。
+    let (status, body) = api(
+        &stack.router,
+        "PATCH",
+        "/api/admin/v1/pages/about",
+        Some(&cookie),
+        Some(&csrf),
+        Some(r#"{"title":"基于旧版本","expected_version":1}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert!(body.contains("\"code\":\"version_conflict\""), "{body}");
+
+    // 发布 → published；重复发布幂等。
+    let (status, body) = api(
+        &stack.router,
+        "POST",
+        "/api/admin/v1/pages/about/publish",
+        Some(&cookie),
+        Some(&csrf),
+        Some(r#"{"expected_version":2}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body.contains("\"status\":\"published\""), "{body}");
+    let (status, body) = api(
+        &stack.router,
+        "POST",
+        "/api/admin/v1/pages/about/publish",
+        Some(&cookie),
+        Some(&csrf),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body.contains("\"version\":3"), "幂等发布不递增版本：{body}");
+
+    // 撤回 → draft。
+    let (status, body) = api(
+        &stack.router,
+        "POST",
+        "/api/admin/v1/pages/about/unpublish",
+        Some(&cookie),
+        Some(&csrf),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body.contains("\"status\":\"draft\""), "{body}");
 }

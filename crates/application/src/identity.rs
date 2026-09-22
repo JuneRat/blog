@@ -69,6 +69,41 @@ pub const PERMISSION_REGISTRY: &[PermissionDescriptor] = &[
         description: "撤回所有已发布文章；覆盖 post.unpublish。",
     },
     PermissionDescriptor {
+        key: "page.read",
+        name: "读取页面",
+        description: "查看所有独立页面（含草稿与私有）；Page 无作者，按站点范围判定。",
+    },
+    PermissionDescriptor {
+        key: "page.create",
+        name: "创建页面",
+        description: "创建独立页面草稿；Page 无作者归属。",
+    },
+    PermissionDescriptor {
+        key: "page.update",
+        name: "编辑页面",
+        description: "修改任意独立页面；保存已发布页面直接更新线上。",
+    },
+    PermissionDescriptor {
+        key: "page.publish",
+        name: "发布页面",
+        description: "发布/重新发布独立页面。",
+    },
+    PermissionDescriptor {
+        key: "page.unpublish",
+        name: "撤回页面",
+        description: "将已发布页面撤回为草稿。",
+    },
+    PermissionDescriptor {
+        key: "page.archive",
+        name: "归档页面",
+        description: "将页面归档为终态。",
+    },
+    PermissionDescriptor {
+        key: "page.delete",
+        name: "删除页面",
+        description: "物理删除页面（没有回收站，不可恢复）。",
+    },
+    PermissionDescriptor {
         key: "user.manage",
         name: "账号管理",
         description: "管理普通账号（受委派与 Owner 限制约束）。",
@@ -123,6 +158,13 @@ pub const BUILTIN_ROLES: &[BuiltinRoleDef] = &[
             "post.publish_any",
             "post.unpublish",
             "post.unpublish_any",
+            "page.read",
+            "page.create",
+            "page.update",
+            "page.publish",
+            "page.unpublish",
+            "page.archive",
+            "page.delete",
             "user.manage",
             "role.manage",
             "settings.manage",
@@ -139,12 +181,19 @@ pub const BUILTIN_ROLES: &[BuiltinRoleDef] = &[
     BuiltinRoleDef {
         slug: "editor",
         name: "Editor",
-        description: "内容编辑：对所有文章执行 any 动作。",
+        description: "内容编辑：对所有文章执行 any 动作，并管理站点级页面。",
         permissions: &[
             "post.read_any",
             "post.update_any",
             "post.publish_any",
             "post.unpublish_any",
+            "page.read",
+            "page.create",
+            "page.update",
+            "page.publish",
+            "page.unpublish",
+            "page.archive",
+            "page.delete",
         ],
     },
     BuiltinRoleDef {
@@ -321,17 +370,33 @@ impl UserInteractor {
         id: Uuid,
         channel: ActorChannel,
     ) -> Result<Actor, UseCaseError> {
+        self.actor_with_revision(id, channel)
+            .await
+            .map(|(actor, _)| actor)
+    }
+
+    /// 构造 Actor 并同时返回账号的身份修订号（`users.version`）。
+    ///
+    /// 会话签发时绑定该版本，校验时比对：改密、改角色、软删除都会递增版本，
+    /// 因此**另一个进程**（CLI 改密、改角色）也能让旧会话立即失效。
+    /// 这里只读一次用户，版本是顺带得到的，不增加查询。
+    pub async fn actor_with_revision(
+        &self,
+        id: Uuid,
+        channel: ActorChannel,
+    ) -> Result<(Actor, i64), UseCaseError> {
         let snapshot = self
             .users
             .find_by_id(id)
             .await?
             .ok_or_else(|| UseCaseError::NotFound("作者用户".into()))?;
+        let version = snapshot.version;
         let user = User::reconstitute(snapshot);
         if !user.is_active() {
             return Err(UseCaseError::Forbidden);
         }
         let permissions = self.rbac.permissions_of_user(user.id().0).await?;
-        Ok(Actor::new(user.id(), channel, permissions))
+        Ok((Actor::new(user.id(), channel, permissions), version))
     }
 
     pub async fn roles_of_user(&self, id: Uuid) -> Result<Vec<String>, UseCaseError> {

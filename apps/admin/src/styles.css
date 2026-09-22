@@ -27,6 +27,31 @@ body {
   margin-top: 15vh;
 }
 
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin: 20px 0;
+}
+
+.login-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.login-form input {
+  font: inherit;
+  font-size: 14px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #fff;
+  color: inherit;
+}
+
 h1 {
   font-size: 20px;
   margin: 0 0 4px;
@@ -67,7 +92,9 @@ h1 {
   padding: 8px 12px;
 }
 
-.conflict {
+/* `.warning` 与冲突横幅同色：都是「需要用户决策、不能继续提交」的告警。 */
+.conflict,
+.warning {
   background: #fff8c5;
   border: 1px solid #d4a72c;
   border-radius: 6px;
@@ -202,7 +229,8 @@ table.posts tbody tr:hover {
   table.posts,
   .editor input,
   .editor select,
-  .editor textarea {
+  .editor textarea,
+  .login-form input {
     background: #161b22;
   }
   :root {
