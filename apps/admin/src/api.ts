@@ -9,6 +9,7 @@ import type {
   PostSummary,
   ProviderSummary,
   RoleSummary,
+  TagSummary,
   Visibility,
 } from "./types";
 
@@ -122,6 +123,8 @@ export interface CreatePostInput {
   excerpt?: string;
   content: string;
   visibility: Visibility;
+  /** 初始标签 id 集合；重复由后端去重。 */
+  tag_ids?: string[];
 }
 
 export interface EditPostInput {
@@ -130,6 +133,8 @@ export interface EditPostInput {
   excerpt?: string;
   content?: string;
   visibility?: Visibility;
+  /** 存在即整体替换标签集合（[] = 清空）；缺省不触碰。 */
+  tag_ids?: string[];
   expected_version?: number;
 }
 
@@ -159,6 +164,16 @@ export interface CreateUserInput {
   username: string;
   email?: string;
   display_name?: string;
+}
+
+export interface CreateTagInput {
+  name: string;
+  slug: string;
+}
+
+export interface RenameTagInput {
+  name: string;
+  expected_version?: number;
 }
 
 export const api = {
@@ -260,6 +275,41 @@ export const api = {
 
   /** 角色目录：内置 slug 与权限数量；需 `role.manage` 或 `user.manage`。 */
   listRoles: (): Promise<RoleSummary[]> => request<RoleSummary[]>("/api/admin/v1/roles"),
+
+  /**
+   * 标签目录：已认证会话即可读（Author 编辑文章要选标签）；
+   * 管理（创建/改名/删除）需 `tag.manage`，由后端判定。
+   */
+  listTags: (): Promise<TagSummary[]> => request<TagSummary[]>("/api/admin/v1/tags"),
+
+  /**
+   * 创建标签（需 `tag.manage`）。slug 冲突是 409 `conflict`（创建后 slug 不可改）。
+   */
+  createTag: (input: CreateTagInput): Promise<TagSummary> =>
+    request<TagSummary>("/api/admin/v1/tags", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+
+  /**
+   * 改名（需 `tag.manage`；slug 不变，影响全部引用文章）。
+   * expected_version 过期是 409 `version_conflict`。
+   */
+  renameTag: (slug: string, input: RenameTagInput): Promise<TagSummary> =>
+    request<TagSummary>(`/api/admin/v1/tags/${encodeURIComponent(slug)}`, {
+      method: "PATCH",
+      body: JSON.stringify(input),
+    }),
+
+  /**
+   * 删除（需 `tag.manage`）。仍被文章引用（含草稿/私密/回收站）时
+   * 409 `tag_in_use`——先解除关联再删除；成功返回 204。
+   */
+  deleteTag: (slug: string, expectedVersion?: number): Promise<void> =>
+    request<void>(`/api/admin/v1/tags/${encodeURIComponent(slug)}`, {
+      method: "DELETE",
+      body: JSON.stringify({ expected_version: expectedVersion }),
+    }),
 
   /**
    * 分配/移除角色（需 `role.manage`；Owner 还需 `ownership.manage`）。

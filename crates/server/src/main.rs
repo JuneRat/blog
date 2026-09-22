@@ -8,13 +8,16 @@ use application::content::PostInteractor;
 use application::identity::{RoleInteractor, UserInteractor};
 use application::page::PageInteractor;
 use application::ports::{
-    PageRepository, PostRepository, PublishedPageQuery, PublishedPostQuery, UserRepository,
+    PageRepository, PostRepository, PublishedPageQuery, PublishedPostQuery, PublishedTagQuery,
+    TagRepository, UserRepository,
 };
 use application::public_site::{PublicSiteInteractor, SiteInfo};
+use application::tag::TagInteractor;
 use infrastructure::{
     MiniJinjaThemeRenderer, PostgresPageRepository, PostgresPostRepository,
-    PostgresPublishedPageQuery, PostgresPublishedPostQuery, PostgresRbacStore,
-    PostgresUserRepository, SanitizingMarkdownRenderer, SystemClock,
+    PostgresPublishedPageQuery, PostgresPublishedPostQuery, PostgresPublishedTagQuery,
+    PostgresRbacStore, PostgresTagRepository, PostgresUserRepository, SanitizingMarkdownRenderer,
+    SystemClock,
 };
 use interfaces::cli::{CliDeps, Command, parse_args};
 
@@ -95,6 +98,10 @@ async fn main() {
                 Arc::new(PostgresPublishedPostQuery::new(pool.clone()));
             let public_page_query: Arc<dyn PublishedPageQuery> =
                 Arc::new(PostgresPublishedPageQuery::new(pool.clone()));
+            let tag_repo: Arc<dyn TagRepository> =
+                Arc::new(PostgresTagRepository::new(pool.clone()));
+            let public_tag_query: Arc<dyn PublishedTagQuery> =
+                Arc::new(PostgresPublishedTagQuery::new(pool.clone()));
 
             let renderer = Arc::new(
                 MiniJinjaThemeRenderer::load(&config.theme_dir).expect("加载主题模板失败"),
@@ -159,11 +166,17 @@ async fn main() {
                 base_url,
             ));
 
-            let posts = Arc::new(PostInteractor::new(post_repo.clone(), clock.clone()));
+            let posts = Arc::new(PostInteractor::new(
+                post_repo.clone(),
+                tag_repo.clone(),
+                clock.clone(),
+            ));
             let pages = Arc::new(PageInteractor::new(page_repo, clock.clone()));
+            let tags = Arc::new(TagInteractor::new(tag_repo, clock.clone()));
             let public_site = Arc::new(PublicSiteInteractor::new(
                 public_query,
                 public_page_query,
+                public_tag_query,
                 markdown,
                 renderer,
                 SiteInfo {
@@ -176,6 +189,7 @@ async fn main() {
                 users,
                 posts,
                 pages,
+                tags,
                 roles,
                 auth,
                 passwords,

@@ -277,6 +277,8 @@ pub struct CliDeps {
     pub users: Arc<UserInteractor>,
     pub posts: Arc<PostInteractor>,
     pub pages: Arc<application::page::PageInteractor>,
+    /// 标签目录用例（管理动作 tag.manage）。
+    pub tags: Arc<application::tag::TagInteractor>,
     pub roles: Arc<RoleInteractor>,
     pub auth: Arc<AuthInteractor>,
     /// 本地密码用例（受控设置/重置、清除与限流）。
@@ -323,6 +325,7 @@ pub async fn run(deps: CliDeps, command: Command) -> Result<(), String> {
                 passwords: deps.passwords,
                 posts: deps.posts,
                 pages: deps.pages,
+                tags: deps.tags,
                 roles: deps.roles,
                 secure_cookies: deps.secure_cookies,
             };
@@ -331,6 +334,7 @@ pub async fn run(deps: CliDeps, command: Command) -> Result<(), String> {
                 .merge(crate::http_auth::admin_router(admin_state.clone()))
                 .merge(crate::http_admin::posts_router(admin_state.clone()))
                 .merge(crate::http_admin::pages_router(admin_state.clone()))
+                .merge(crate::http_admin::tags_router(admin_state.clone()))
                 .merge(crate::http_identity::identity_router(admin_state));
             // 后台 SPA 挂在 /admin 子树；dist 不存在时保持未注册。
             let app = crate::http::mount_admin_spa(app, deps.admin_dist);
@@ -687,6 +691,7 @@ async fn run_post(deps: CliDeps, action: PostAction) -> Result<(), String> {
                         excerpt,
                         content,
                         visibility: parse_visibility(visibility.as_deref())?,
+                        tag_ids: Vec::new(),
                     },
                 )
                 .await
@@ -728,6 +733,7 @@ async fn run_post(deps: CliDeps, action: PostAction) -> Result<(), String> {
                         excerpt,
                         content,
                         visibility,
+                        tag_ids: None,
                         expected_version: if_version,
                     },
                 )

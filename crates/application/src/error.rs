@@ -69,6 +69,15 @@ pub enum UseCaseError {
     #[error("不能移除最后一个可登录的 Owner")]
     LastOwnerProtected,
 
+    /// 删除仍被内容引用的实体被拒绝（引用保护；当前用于标签）。
+    ///
+    /// 引用计数不过滤可见性：草稿/私密/回收站文章同样占用引用，
+    /// 不能靠级联静默改变这些文章（docs/content-lifecycle.md §3）。
+    /// HTTP 层映射 409 + `tag_in_use`：与「slug 已被占用」不同，
+    /// 这是先决条件失败——解除引用后重试才有意义。
+    #[error("标签仍被文章引用（{0} 篇），先解除关联再删除")]
+    TagInUse(i64),
+
     #[error("无权执行该操作")]
     Forbidden,
 

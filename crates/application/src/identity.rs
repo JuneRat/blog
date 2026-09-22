@@ -104,6 +104,11 @@ pub const PERMISSION_REGISTRY: &[PermissionDescriptor] = &[
         description: "物理删除页面（没有回收站，不可恢复）。",
     },
     PermissionDescriptor {
+        key: "tag.manage",
+        name: "标签管理",
+        description: "创建/改名/删除标签目录；文章与标签的关联仍按文章授权核验。",
+    },
+    PermissionDescriptor {
         key: "user.manage",
         name: "账号管理",
         description: "管理普通账号（受委派与 Owner 限制约束）。",
@@ -165,6 +170,7 @@ pub const BUILTIN_ROLES: &[BuiltinRoleDef] = &[
             "page.unpublish",
             "page.archive",
             "page.delete",
+            "tag.manage",
             "user.manage",
             "role.manage",
             "settings.manage",
@@ -181,7 +187,7 @@ pub const BUILTIN_ROLES: &[BuiltinRoleDef] = &[
     BuiltinRoleDef {
         slug: "editor",
         name: "Editor",
-        description: "内容编辑：对所有文章执行 any 动作，并管理站点级页面。",
+        description: "内容编辑：对所有文章执行 any 动作，并管理站点级页面与标签目录。",
         permissions: &[
             "post.read_any",
             "post.update_any",
@@ -194,6 +200,7 @@ pub const BUILTIN_ROLES: &[BuiltinRoleDef] = &[
             "page.unpublish",
             "page.archive",
             "page.delete",
+            "tag.manage",
         ],
     },
     BuiltinRoleDef {

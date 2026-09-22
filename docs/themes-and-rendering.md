@@ -1,6 +1,6 @@
 # 主题、MiniJinja 与模板数据函数
 
-状态：MiniJinja 与函数取数能力已确定；桥接、预算和缓存为待 M0 原型验证的设计方案。根据主题需要通过模板函数获取数据的需求，模板引擎由原计划 Tera 调整为 MiniJinja。当前没有模板实现，因此不涉及已有主题迁移。
+状态：MiniJinja 与函数取数能力已确定；M0 原型（`spikes/template-bridge`）已验证 §4 的同步-异步桥接、预算与请求隔离方案**可行**，结论与硬约束见原型 README 及 [ADR-0002](adr/0002-template-data-functions.md)。当前生产渲染仍是「预取上下文 + 固定模板」：base/index/post/page/tag 六个模板，无模板数据函数；正式函数 API 的冻结不再被原型阻塞，随 M3 主题函数交付落地。根据主题需要通过模板函数获取数据的需求，模板引擎由原计划 Tera 调整为 MiniJinja。
 
 ## 1. 选型与边界
 

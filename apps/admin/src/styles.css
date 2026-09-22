@@ -238,3 +238,41 @@ table.posts tbody tr:hover {
     --muted: #8b949e;
   }
 }
+
+/* 标签选择器（文章编辑器）与标签管理屏 */
+.tag-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  border: 1px solid rgba(127, 127, 127, 0.3);
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+}
+
+.tag-picker .muted,
+.tag-picker .error {
+  margin: 0;
+  width: 100%;
+}
+
+.tag-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin: 0;
+  font-weight: normal;
+}
+
+.tag-create {
+  display: flex;
+  gap: 0.75rem;
+  align-items: end;
+  margin-bottom: 1rem;
+}
+
+.tag-create label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}

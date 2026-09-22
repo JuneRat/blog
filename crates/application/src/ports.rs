@@ -34,15 +34,84 @@ pub trait PostRepository: Send + Sync {
     async fn find_by_slug(&self, slug: &str) -> Result<Option<PostSnapshot>, UseCaseError>;
     async fn find_by_id(&self, id: Uuid) -> Result<Option<PostSnapshot>, UseCaseError>;
     async fn list_by_author(&self, author_id: Uuid) -> Result<Vec<PostSnapshot>, UseCaseError>;
-    async fn insert(&self, snapshot: &PostSnapshot) -> Result<(), UseCaseError>;
+    /// 创建文章并写入初始标签关系（同一事务；`tag_ids` 已由用例去重校验存在）。
+    async fn insert(&self, snapshot: &PostSnapshot, tag_ids: &[Uuid]) -> Result<(), UseCaseError>;
 
     /// 条件保存：`expected_version` 匹配当前记录时写入并 version+1。
+    ///
+    /// `tag_ids = Some(set)` 表示同事务**整体替换**文章标签关系（无变化也按
+    /// 幂等重写处理）；`None` 表示本次不触碰标签。仅标签变化也要递增
+    /// posts.version（docs/database-design.md §1）。
     async fn save(
         &self,
         snapshot: &PostSnapshot,
         expected_version: i64,
         now: OffsetDateTime,
+        tag_ids: Option<&[Uuid]>,
     ) -> Result<SaveOutcome, UseCaseError>;
+
+    /// 文章当前关联的标签 id（按 id 排序；编辑用例据此判断标签是否有变化）。
+    async fn tags_of(&self, post_id: Uuid) -> Result<Vec<Uuid>, UseCaseError>;
+}
+
+/// 标签目录条目：含公开文章计数（与公开标签页同一可见性口径）。
+///
+/// 管理界面的删除保护提示只用「是否被引用」的结论（由删除用例给出），
+/// 因此这里不暴露非公开文章的计数，避免草稿/私密的关联规模泄漏给
+/// 无 `tag.manage` 的调用者。
+#[derive(Debug, Clone, PartialEq)]
+pub struct TagWithUsage {
+    pub snapshot: domain::content::TagSnapshot,
+    /// status=published AND visibility=public AND deleted_at IS NULL 的关联文章数。
+    pub public_post_count: i64,
+}
+
+/// 标签删除的三态结果（版本冲突与引用保护由用例翻译为不同错误）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TagDeleteOutcome {
+    Deleted,
+    /// expected_version 不匹配：可基于最新版本重试。
+    StaleVersion,
+    /// 仍被文章引用（含草稿/私密/回收站）：引用保护拒绝删除，携带引用数。
+    Referenced {
+        count: i64,
+    },
+    Gone,
+}
+
+#[async_trait]
+pub trait TagRepository: Send + Sync {
+    async fn insert(&self, snapshot: &domain::content::TagSnapshot) -> Result<(), UseCaseError>;
+    async fn find_by_slug(
+        &self,
+        slug: &str,
+    ) -> Result<Option<domain::content::TagSnapshot>, UseCaseError>;
+    /// 全量目录（数量小，不分页），含公开文章计数，按 slug 排序。
+    async fn list(&self) -> Result<Vec<TagWithUsage>, UseCaseError>;
+
+    /// 条件改名（CAS）：命中时 name 更新、version+1 并返回新快照；
+    /// 未命中返回 None（调用方区分版本冲突与不存在）。
+    async fn rename(
+        &self,
+        id: Uuid,
+        new_name: &str,
+        expected_version: i64,
+    ) -> Result<Option<domain::content::TagSnapshot>, UseCaseError>;
+
+    /// 条件删除：先在事务内检查引用（post_tags RESTRICT 之外的业务级保护），
+    /// 再按版本条件删除。
+    async fn delete(
+        &self,
+        id: Uuid,
+        expected_version: i64,
+    ) -> Result<TagDeleteOutcome, UseCaseError>;
+
+    /// 返回 `ids` 中确实存在的标签 id（去重、按 id 排序）。
+    /// 用例据此把「标签不存在」报为可定位的参数错误，而不是 FK 违规。
+    async fn existing_ids(&self, ids: &[Uuid]) -> Result<Vec<Uuid>, UseCaseError>;
+
+    /// 单个标签的公开文章计数（改名响应回填用；与 list 同一口径）。
+    async fn public_count(&self, id: Uuid) -> Result<i64, UseCaseError>;
 }
 
 /// 登录用密码凭据：只含校验所需最小信息，不携带软删除等实体状态。
@@ -248,6 +317,13 @@ pub struct PublicPostSummary {
     pub author_display: String,
 }
 
+/// 公开文章上挂的标签引用（详情页展示；名称取当前值）。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PublicTagRef {
+    pub slug: String,
+    pub name: String,
+}
+
 /// 公开详情（正文为 Markdown 源文，渲染交给出站端口）。
 #[derive(Debug, Clone)]
 pub struct PublicPostDetail {
@@ -259,6 +335,8 @@ pub struct PublicPostDetail {
     pub author_display: String,
     pub author_username: String,
     pub content: String,
+    /// 当前关联标签（仅取存在于 tags 表的行；无可见性过滤——标签目录本身公开）。
+    pub tags: Vec<PublicTagRef>,
 }
 
 #[async_trait]
@@ -273,6 +351,30 @@ pub trait PublishedPostQuery: Send + Sync {
         &self,
         slug: &str,
     ) -> Result<Option<PublicPostDetail>, UseCaseError>;
+}
+
+/// 公开标签页数据源。标签目录本身没有可见性；可见性过滤作用在文章列表上。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PublicTagSummary {
+    pub slug: String,
+    pub name: String,
+}
+
+#[async_trait]
+pub trait PublishedTagQuery: Send + Sync {
+    /// 标签是否存在（未知 slug 一律 None，与文章详情同样不泄漏差异）。
+    async fn find_public_by_slug(
+        &self,
+        slug: &str,
+    ) -> Result<Option<PublicTagSummary>, UseCaseError>;
+
+    /// 该标签下的公开文章分页（复用公开文章谓词，含总数供分页导航）。
+    async fn list_public_posts_by_tag(
+        &self,
+        tag_slug: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<(Vec<PublicPostSummary>, i64), UseCaseError>;
 }
 
 /// 公开页面详情（Page 无作者、无软删除）。

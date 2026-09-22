@@ -152,12 +152,19 @@ async fn fresh_stack() -> Stack {
     let idp = Arc::new(FakeIdpClient {
         external_id: Mutex::new("sub-author".into()),
     });
+    let tag_repo: Arc<dyn application::ports::TagRepository> =
+        Arc::new(infrastructure::PostgresTagRepository::new(pool.clone()));
     let posts = Arc::new(PostInteractor::new(
         Arc::new(PostgresPostRepository::new(pool.clone())),
+        tag_repo.clone(),
         clock.clone(),
     ));
     let pages = Arc::new(PageInteractor::new(
         Arc::new(PostgresPageRepository::new(pool.clone())),
+        clock.clone(),
+    ));
+    let tags = Arc::new(application::tag::TagInteractor::new(
+        tag_repo,
         clock.clone(),
     ));
 
@@ -189,6 +196,7 @@ async fn fresh_stack() -> Stack {
         passwords,
         posts,
         pages,
+        tags,
         roles: roles.clone(),
         secure_cookies: false,
     };
@@ -197,6 +205,7 @@ async fn fresh_stack() -> Stack {
         .merge(admin_router(admin_state.clone()))
         .merge(posts_router(admin_state.clone()))
         .merge(interfaces::http_admin::pages_router(admin_state.clone()))
+        .merge(interfaces::http_admin::tags_router(admin_state.clone()))
         .merge(interfaces::http_identity::identity_router(admin_state))
         // 与生产装配一致：最外层请求编号/日志中间件。
         .layer(middleware::from_fn(request_context));
@@ -1807,4 +1816,327 @@ async fn self_role_change_logs_the_actor_out() {
         StatusCode::UNAUTHORIZED,
         "改自己的角色也会让本人会话失效：{body}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// 标签目录管理 API：权限、CSRF、版本与引用保护
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn tag_management_requires_tag_manage_but_catalog_is_readable() {
+    let _g = SERIAL.lock().await;
+    let stack = fresh_stack().await;
+    let (editor_cookie, editor_csrf) = login_as(&stack.router, &stack.idp, "editor").await;
+    let (author_cookie, author_csrf) = login_as(&stack.router, &stack.idp, "author").await;
+
+    // editor（tag.manage）创建标签。
+    let (status, body) = api(
+        &stack.router,
+        "POST",
+        "/api/admin/v1/tags",
+        Some(&editor_cookie),
+        Some(&editor_csrf),
+        Some(r#"{"name":"Rust","slug":"rust"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+
+    // author（无 tag.manage）读取目录：200——编辑器选择器需要。
+    let (status, body) = api(
+        &stack.router,
+        "GET",
+        "/api/admin/v1/tags",
+        Some(&author_cookie),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body.contains("\"slug\":\"rust\""), "{body}");
+
+    // author 创建/改名/删除一律 403。
+    for (method, uri, body) in [
+        (
+            "POST",
+            "/api/admin/v1/tags",
+            Some(r#"{"name":"别的","slug":"other"}"#),
+        ),
+        (
+            "PATCH",
+            "/api/admin/v1/tags/rust",
+            Some(r#"{"name":"改名"}"#),
+        ),
+        ("DELETE", "/api/admin/v1/tags/rust", None),
+    ] {
+        let (status, body_out) = api(
+            &stack.router,
+            method,
+            uri,
+            Some(&author_cookie),
+            Some(&author_csrf),
+            body,
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::FORBIDDEN,
+            "{method} 应为 403：{body_out}"
+        );
+        assert!(body_out.contains("\"code\":\"forbidden\""), "{body_out}");
+    }
+
+    // 未登录读取目录：401（目录读取不设权限 ≠ 匿名可读）。
+    let (status, _) = api(&stack.router, "GET", "/api/admin/v1/tags", None, None, None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn tag_write_requires_csrf_token() {
+    let _g = SERIAL.lock().await;
+    let stack = fresh_stack().await;
+    let (editor_cookie, _csrf) = login_as(&stack.router, &stack.idp, "editor").await;
+
+    let (status, body) = api(
+        &stack.router,
+        "POST",
+        "/api/admin/v1/tags",
+        Some(&editor_cookie),
+        None,
+        Some(r#"{"name":"Rust","slug":"rust"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "缺 CSRF 不得写入：{body}");
+    assert!(body.contains("CSRF"), "{body}");
+}
+
+#[tokio::test]
+async fn tag_rename_and_delete_check_version_and_references() {
+    let _g = SERIAL.lock().await;
+    let stack = fresh_stack().await;
+    let (editor_cookie, editor_csrf) = login_as(&stack.router, &stack.idp, "editor").await;
+    let (author_cookie, author_csrf) = login_as(&stack.router, &stack.idp, "author").await;
+
+    // 建标签。
+    let (status, body) = api(
+        &stack.router,
+        "POST",
+        "/api/admin/v1/tags",
+        Some(&editor_cookie),
+        Some(&editor_csrf),
+        Some(r#"{"name":"Rust","slug":"rust"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let tag_id: Uuid = body
+        .split("\"id\":\"")
+        .nth(1)
+        .unwrap()
+        .split('"')
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
+
+    // 改名：过期 expected_version → 409 version_conflict。
+    let (status, body) = api(
+        &stack.router,
+        "PATCH",
+        "/api/admin/v1/tags/rust",
+        Some(&editor_cookie),
+        Some(&editor_csrf),
+        Some(r#"{"name":"Rust 语言","expected_version":99}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert!(body.contains("\"code\":\"version_conflict\""), "{body}");
+
+    // 改名成功：version +1。
+    let (status, body) = api(
+        &stack.router,
+        "PATCH",
+        "/api/admin/v1/tags/rust",
+        Some(&editor_cookie),
+        Some(&editor_csrf),
+        Some(r#"{"name":"Rust 语言"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body.contains("\"version\":2"), "{body}");
+
+    // 作者建文章挂上标签 → 删除标签被引用保护拒绝（409 tag_in_use，区别于通用 conflict）。
+    let (status, body) = api(
+        &stack.router,
+        "POST",
+        "/api/admin/v1/posts",
+        Some(&author_cookie),
+        Some(&author_csrf),
+        Some(&format!(
+            r#"{{"slug":"tagged","title":"带标签","content":"正文","tag_ids":["{tag_id}"]}}"#
+        )),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+
+    let (status, body) = api(
+        &stack.router,
+        "DELETE",
+        "/api/admin/v1/tags/rust",
+        Some(&editor_cookie),
+        Some(&editor_csrf),
+        Some(r#"{"expected_version":2}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert!(body.contains("\"code\":\"tag_in_use\""), "{body}");
+    assert!(body.contains("1 篇"), "文案指出引用规模：{body}");
+
+    // 解除关联（清空标签，同事务）后删除成功 → 204。
+    let (status, body) = api(
+        &stack.router,
+        "PATCH",
+        "/api/admin/v1/posts/tagged",
+        Some(&author_cookie),
+        Some(&author_csrf),
+        Some(r#"{"tag_ids":[]}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body.contains("\"tag_ids\":[]"), "{body}");
+
+    let (status, _) = api(
+        &stack.router,
+        "DELETE",
+        "/api/admin/v1/tags/rust",
+        Some(&editor_cookie),
+        Some(&editor_csrf),
+        Some(r#"{"expected_version":2}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn post_edit_saves_tags_with_content_and_validates_ids() {
+    let _g = SERIAL.lock().await;
+    let stack = fresh_stack().await;
+    let (editor_cookie, editor_csrf) = login_as(&stack.router, &stack.idp, "editor").await;
+    let (author_cookie, author_csrf) = login_as(&stack.router, &stack.idp, "author").await;
+
+    // 两个标签。
+    let mut tag_ids = Vec::new();
+    for (name, slug) in [("Rust", "rust"), ("随笔", "essay")] {
+        let (status, body) = api(
+            &stack.router,
+            "POST",
+            "/api/admin/v1/tags",
+            Some(&editor_cookie),
+            Some(&editor_csrf),
+            Some(&format!(r#"{{"name":"{name}","slug":"{slug}"}}"#)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+        tag_ids.push(
+            body.split("\"id\":\"")
+                .nth(1)
+                .unwrap()
+                .split('"')
+                .next()
+                .unwrap()
+                .to_string(),
+        );
+    }
+
+    // 创建时携带重复 tag_ids：去重后成功，详情返回去重集合。
+    let (status, body) = api(
+        &stack.router,
+        "POST",
+        "/api/admin/v1/posts",
+        Some(&author_cookie),
+        Some(&author_csrf),
+        Some(&format!(
+            r#"{{"slug":"multi-tag","title":"多标签","content":"正文","tag_ids":["{}","{}","{}"]}}"#,
+            tag_ids[0], tag_ids[1], tag_ids[0]
+        )),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(
+        body.matches(&format!("\"{}\"", tag_ids[0])).count(),
+        1,
+        "重复 id 只出现一次：{body}"
+    );
+    let version: i64 = body
+        .split("\"version\":")
+        .nth(1)
+        .unwrap()
+        .split(',')
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
+
+    // 未知标签 id：可定位的 400，不落任何写入。
+    let ghost = Uuid::now_v7();
+    let (status, body) = api(
+        &stack.router,
+        "PATCH",
+        "/api/admin/v1/posts/multi-tag",
+        Some(&author_cookie),
+        Some(&author_csrf),
+        Some(&format!(r#"{{"tag_ids":["{ghost}"]}}"#)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(body.contains("所选标签不存在"), "{body}");
+
+    // 只换标签集合：版本 +1（同事务语义在基础设施测试直证，这里验证 HTTP 契约）。
+    let (status, body) = api(
+        &stack.router,
+        "PATCH",
+        "/api/admin/v1/posts/multi-tag",
+        Some(&author_cookie),
+        Some(&author_csrf),
+        Some(&format!(
+            r#"{{"tag_ids":["{}"],"expected_version":{}}}"#,
+            tag_ids[1], version
+        )),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        body.contains(&format!("\"version\":{}", version + 1)),
+        "仅标签变化也递增版本：{body}"
+    );
+    assert!(
+        body.contains(&format!("\"tag_ids\":[\"{}\"]", tag_ids[1])),
+        "{body}"
+    );
+
+    // editor（update_any）也能改他人文章的标签；author2（author 角色）不能。
+    let (author2_cookie, author2_csrf) = login_as(&stack.router, &stack.idp, "author2").await;
+    let (status, body) = api(
+        &stack.router,
+        "PATCH",
+        "/api/admin/v1/posts/multi-tag",
+        Some(&author2_cookie),
+        Some(&author2_csrf),
+        Some(r#"{"tag_ids":[]}"#),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "他人文章标签受文章授权保护：{body}"
+    );
+    let (status, body) = api(
+        &stack.router,
+        "PATCH",
+        "/api/admin/v1/posts/multi-tag",
+        Some(&editor_cookie),
+        Some(&editor_csrf),
+        Some(r#"{"tag_ids":[]}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "editor 持 update_any 可改：{body}");
+    assert!(body.contains("\"tag_ids\":[]"), "{body}");
 }

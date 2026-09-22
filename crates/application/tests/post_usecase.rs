@@ -8,7 +8,11 @@ use application::error::{ConflictKind, UseCaseError};
 use application::identity::{
     Actor, ActorChannel, CreateUserCmd, PermissionDescriptor, RoleInteractor, UserInteractor,
 };
-use application::ports::{Clock, PostRepository, RbacStore, RoleDto, SaveOutcome, UserRepository};
+use application::ports::{
+    Clock, PostRepository, RbacStore, RoleDto, SaveOutcome, TagDeleteOutcome, TagRepository,
+    TagWithUsage, UserRepository,
+};
+use domain::content::TagSnapshot;
 use domain::content::post::{PostSnapshot, Visibility};
 use domain::identity::{PermissionSet, UserSnapshot};
 use time::OffsetDateTime;
@@ -28,12 +32,15 @@ impl Clock for FixedClock {
 
 struct FakePostRepo {
     posts: Mutex<HashMap<String, PostSnapshot>>, // key: slug
+    /// post_id → 标签 id 集合（已排序），模拟 post_tags。
+    tags: Mutex<HashMap<Uuid, Vec<Uuid>>>,
 }
 
 impl FakePostRepo {
     fn new() -> Self {
         Self {
             posts: Mutex::new(HashMap::new()),
+            tags: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -68,12 +75,19 @@ impl PostRepository for FakePostRepo {
             .collect())
     }
 
-    async fn insert(&self, snapshot: &PostSnapshot) -> Result<(), UseCaseError> {
+    async fn insert(&self, snapshot: &PostSnapshot, tag_ids: &[Uuid]) -> Result<(), UseCaseError> {
         let mut posts = self.posts.lock().unwrap();
         if posts.contains_key(&snapshot.slug) {
             return Err(UseCaseError::Conflict(ConflictKind::Slug));
         }
         posts.insert(snapshot.slug.clone(), snapshot.clone());
+        drop(posts);
+        if !tag_ids.is_empty() {
+            self.tags
+                .lock()
+                .unwrap()
+                .insert(snapshot.id, tag_ids.to_vec());
+        }
         Ok(())
     }
 
@@ -82,6 +96,7 @@ impl PostRepository for FakePostRepo {
         snapshot: &PostSnapshot,
         expected_version: i64,
         now: OffsetDateTime,
+        tag_ids: Option<&[Uuid]>,
     ) -> Result<SaveOutcome, UseCaseError> {
         let mut posts = self.posts.lock().unwrap();
         let current = match posts.get_mut(&snapshot.slug) {
@@ -102,9 +117,24 @@ impl PostRepository for FakePostRepo {
         current.published_at = snapshot.published_at;
         current.updated_at = now;
         current.version += 1;
-        Ok(SaveOutcome::Saved {
-            new_version: current.version,
-        })
+        let new_version = current.version;
+        let post_id = current.id;
+        drop(posts);
+        // 标签替换与“正文保存”在同一逻辑事务：先判定再统一写入。
+        if let Some(tag_ids) = tag_ids {
+            self.tags.lock().unwrap().insert(post_id, tag_ids.to_vec());
+        }
+        Ok(SaveOutcome::Saved { new_version })
+    }
+
+    async fn tags_of(&self, post_id: uuid::Uuid) -> Result<Vec<Uuid>, UseCaseError> {
+        Ok(self
+            .tags
+            .lock()
+            .unwrap()
+            .get(&post_id)
+            .cloned()
+            .unwrap_or_default())
     }
 }
 
@@ -208,6 +238,114 @@ impl UserRepository for FakeUserRepo {
 // ---------------------------------------------------------------------------
 // 测试装配
 // ---------------------------------------------------------------------------
+
+/// 标签目录 fake：文章用例只依赖 existing_ids（存在性校验）。
+struct FakeTagRepo {
+    tags: Mutex<Vec<TagSnapshot>>,
+}
+
+impl FakeTagRepo {
+    fn new() -> Self {
+        Self {
+            tags: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn add(&self, name: &str, slug: &str) -> Uuid {
+        let snapshot = TagSnapshot {
+            id: Uuid::now_v7(),
+            name: name.into(),
+            slug: slug.into(),
+            version: 1,
+            created_at: OffsetDateTime::now_utc(),
+        };
+        let id = snapshot.id;
+        self.tags.lock().unwrap().push(snapshot);
+        id
+    }
+}
+
+#[async_trait::async_trait]
+impl TagRepository for FakeTagRepo {
+    async fn insert(&self, snapshot: &TagSnapshot) -> Result<(), UseCaseError> {
+        self.tags.lock().unwrap().push(snapshot.clone());
+        Ok(())
+    }
+
+    async fn find_by_slug(&self, slug: &str) -> Result<Option<TagSnapshot>, UseCaseError> {
+        Ok(self
+            .tags
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|t| t.slug == slug)
+            .cloned())
+    }
+
+    async fn list(&self) -> Result<Vec<TagWithUsage>, UseCaseError> {
+        let mut rows: Vec<TagWithUsage> = self
+            .tags
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|snapshot| TagWithUsage {
+                snapshot: snapshot.clone(),
+                public_post_count: 0,
+            })
+            .collect();
+        rows.sort_by(|a, b| a.snapshot.slug.cmp(&b.snapshot.slug));
+        Ok(rows)
+    }
+
+    async fn rename(
+        &self,
+        id: Uuid,
+        new_name: &str,
+        expected_version: i64,
+    ) -> Result<Option<TagSnapshot>, UseCaseError> {
+        let mut tags = self.tags.lock().unwrap();
+        let Some(tag) = tags.iter_mut().find(|t| t.id == id) else {
+            return Ok(None);
+        };
+        if tag.version != expected_version {
+            return Ok(None);
+        }
+        tag.name = new_name.into();
+        tag.version += 1;
+        Ok(Some(tag.clone()))
+    }
+
+    async fn delete(
+        &self,
+        id: Uuid,
+        expected_version: i64,
+    ) -> Result<TagDeleteOutcome, UseCaseError> {
+        let mut tags = self.tags.lock().unwrap();
+        let Some(tag) = tags.iter().find(|t| t.id == id) else {
+            return Ok(TagDeleteOutcome::Gone);
+        };
+        if tag.version != expected_version {
+            return Ok(TagDeleteOutcome::StaleVersion);
+        }
+        tags.retain(|t| t.id != id);
+        Ok(TagDeleteOutcome::Deleted)
+    }
+
+    async fn existing_ids(&self, ids: &[Uuid]) -> Result<Vec<Uuid>, UseCaseError> {
+        let tags = self.tags.lock().unwrap();
+        let mut found: Vec<Uuid> = tags
+            .iter()
+            .map(|t| t.id)
+            .filter(|id| ids.contains(id))
+            .collect();
+        found.sort();
+        Ok(found)
+    }
+
+    async fn public_count(&self, _id: Uuid) -> Result<i64, UseCaseError> {
+        Ok(0)
+    }
+}
 
 struct FakeRbacStore {
     roles: std::sync::Mutex<HashMap<String, Vec<&'static str>>>,
@@ -346,6 +484,8 @@ impl RbacStore for FakeRbacStore {
 
 struct Fixture {
     posts: Arc<PostInteractor>,
+    /// 供测试预置标签目录（文章-标签关联用例）。
+    tags: Arc<FakeTagRepo>,
     users: Arc<UserInteractor>,
     roles: Arc<RoleInteractor>,
     author: Actor,
@@ -356,6 +496,7 @@ struct Fixture {
 
 async fn fixture() -> Fixture {
     let post_repo = Arc::new(FakePostRepo::new());
+    let tag_repo = Arc::new(FakeTagRepo::new());
     let user_repo = Arc::new(FakeUserRepo::new());
     let rbac = Arc::new(FakeRbacStore::new());
     let clock = Arc::new(FixedClock);
@@ -366,7 +507,7 @@ async fn fixture() -> Fixture {
         clock.clone(),
     ));
     let roles = Arc::new(RoleInteractor::new(rbac.clone(), user_repo));
-    let posts = Arc::new(PostInteractor::new(post_repo, clock));
+    let posts = Arc::new(PostInteractor::new(post_repo, tag_repo.clone(), clock));
 
     roles.sync_registry().await.unwrap();
 
@@ -405,6 +546,7 @@ async fn fixture() -> Fixture {
 
     Fixture {
         posts,
+        tags: tag_repo,
         users,
         roles,
         author,
@@ -421,6 +563,7 @@ fn draft_cmd(slug: &str) -> CreatePostCmd {
         excerpt: Some("摘要".into()),
         content: "# Hello\n\n正文内容".into(),
         visibility: Visibility::Public,
+        tag_ids: Vec::new(),
     }
 }
 
@@ -667,6 +810,7 @@ async fn publish_requires_content() {
                 excerpt: None,
                 content: String::new(),
                 visibility: Visibility::Public,
+                tag_ids: Vec::new(),
             },
         )
         .await
@@ -704,6 +848,7 @@ async fn generated_slug_occupied_at_creation() {
                 excerpt: None,
                 content: "内容".into(),
                 visibility: Visibility::Public,
+                tag_ids: Vec::new(),
             },
         )
         .await
@@ -1085,4 +1230,206 @@ async fn delegation_ceiling_blocks_granting_unheld_permissions() {
             .await
             .is_ok()
     );
+}
+
+// ---------------------------------------------------------------------------
+// 文章-标签关联：同事务语义、去重、存在性校验与授权
+// ---------------------------------------------------------------------------
+
+async fn tag_fixture() -> Fixture {
+    let f = fixture().await;
+    f.tags.add("Rust", "rust");
+    f.tags.add("随笔", "essay");
+    f
+}
+
+#[tokio::test]
+async fn create_post_writes_initial_tags() {
+    let f = tag_fixture().await;
+    let rust_id = f.tags.find_by_slug("rust").await.unwrap().unwrap().id;
+    let essay_id = f.tags.find_by_slug("essay").await.unwrap().unwrap().id;
+
+    let dto = f
+        .posts
+        .create(
+            &f.author,
+            CreatePostCmd {
+                tag_ids: vec![rust_id, essay_id],
+                ..draft_cmd("with-tags")
+            },
+        )
+        .await
+        .unwrap();
+    let mut got = dto.tag_ids.clone();
+    got.sort();
+    let mut want = vec![rust_id, essay_id];
+    want.sort();
+    assert_eq!(got, want, "返回全部初始标签");
+}
+
+#[tokio::test]
+async fn editing_tags_only_still_bumps_version() {
+    let f = tag_fixture().await;
+    let created = f
+        .posts
+        .create(&f.author, draft_cmd("tags-only"))
+        .await
+        .unwrap();
+    let rust_id = f.tags.find_by_slug("rust").await.unwrap().unwrap().id;
+    let base_version = created.version;
+
+    // 只改标签（正文不动）：posts.version 也必须 +1（同事务，docs §1）。
+    let dto = f
+        .posts
+        .edit(
+            &f.author,
+            EditPostCmd {
+                target_slug: "tags-only".into(),
+                tag_ids: Some(vec![rust_id]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(dto.tag_ids, vec![rust_id]);
+    assert_eq!(dto.version, base_version + 1, "仅标签变化也递增版本");
+
+    // 再次提交相同集合：幂等无操作，不递增版本。
+    let again = f
+        .posts
+        .edit(
+            &f.author,
+            EditPostCmd {
+                target_slug: "tags-only".into(),
+                tag_ids: Some(vec![rust_id]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(again.version, base_version + 1);
+
+    // 清空标签同样是有效变化。
+    let cleared = f
+        .posts
+        .edit(
+            &f.author,
+            EditPostCmd {
+                target_slug: "tags-only".into(),
+                tag_ids: Some(vec![]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(cleared.tag_ids.is_empty());
+    assert_eq!(cleared.version, base_version + 2);
+}
+
+#[tokio::test]
+async fn duplicate_tag_ids_are_idempotent_not_errors() {
+    let f = tag_fixture().await;
+    let rust_id = f.tags.find_by_slug("rust").await.unwrap().unwrap().id;
+
+    let dto = f
+        .posts
+        .create(
+            &f.author,
+            CreatePostCmd {
+                tag_ids: vec![rust_id, rust_id, rust_id],
+                ..draft_cmd("dup-tags")
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(dto.tag_ids, vec![rust_id], "重复 id 去重为一条关系");
+}
+
+#[tokio::test]
+async fn unknown_tag_id_is_a_validation_error() {
+    let f = tag_fixture().await;
+    let ghost = Uuid::now_v7();
+    let err = f
+        .posts
+        .create(
+            &f.author,
+            CreatePostCmd {
+                tag_ids: vec![ghost],
+                ..draft_cmd("ghost-tag")
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, UseCaseError::Invalid(ref m) if m.contains("所选标签不存在")),
+        "得到 {err:?}"
+    );
+}
+
+#[tokio::test]
+async fn tag_association_follows_post_authorization() {
+    let f = tag_fixture().await;
+    f.posts
+        .create(&f.author, draft_cmd("auth-tags"))
+        .await
+        .unwrap();
+    let rust_id = f.tags.find_by_slug("rust").await.unwrap().unwrap().id;
+
+    // other 无 post.update/update_any：连“只挂标签”也不行（标签挂在文章上）。
+    let err = f
+        .posts
+        .edit(
+            &f.other,
+            EditPostCmd {
+                target_slug: "auth-tags".into(),
+                tag_ids: Some(vec![rust_id]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, UseCaseError::Forbidden), "得到 {err:?}");
+
+    // editor 持 update_any：可以给他人文章换标签。
+    let dto = f
+        .posts
+        .edit(
+            &f.editor,
+            EditPostCmd {
+                target_slug: "auth-tags".into(),
+                tag_ids: Some(vec![rust_id]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(dto.tag_ids, vec![rust_id]);
+}
+
+#[tokio::test]
+async fn tag_change_requires_fresh_version() {
+    let f = tag_fixture().await;
+    let created = f
+        .posts
+        .create(&f.author, draft_cmd("stale-tags"))
+        .await
+        .unwrap();
+    let rust_id = f.tags.find_by_slug("rust").await.unwrap().unwrap().id;
+
+    // 显式携带过期 expected_version：即使本次“只改标签”也必须报冲突，
+    // 不能假装成功（幂等不等于忽略版本前提）。
+    let err = f
+        .posts
+        .edit(
+            &f.author,
+            EditPostCmd {
+                target_slug: "stale-tags".into(),
+                tag_ids: Some(vec![rust_id]),
+                expected_version: Some(created.version - 1),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, UseCaseError::VersionConflict), "得到 {err:?}");
 }

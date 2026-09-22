@@ -23,7 +23,8 @@ use http_body_util::BodyExt;
 use infrastructure::{
     InMemoryLoginThrottle, InMemoryOAuthAttemptStore, InMemorySessionStore,
     PostgresOAuthAccountStore, PostgresOAuthConfigStore, PostgresPageRepository,
-    PostgresPostRepository, PostgresRbacStore, PostgresUserRepository, SystemClock, ThrottleConfig,
+    PostgresPostRepository, PostgresRbacStore, PostgresTagRepository, PostgresUserRepository,
+    SystemClock, ThrottleConfig,
 };
 use interfaces::http_auth::{AdminState, AuthState, admin_router, auth_router};
 use interfaces::http_support::request_context;
@@ -163,8 +164,11 @@ async fn fresh_stack_with(throttle_config: ThrottleConfig) -> Stack {
         "http://127.0.0.1:18099".into(),
     ));
 
+    let tag_repo: Arc<dyn application::ports::TagRepository> =
+        Arc::new(PostgresTagRepository::new(pool.clone()));
     let posts = Arc::new(application::content::PostInteractor::new(
         Arc::new(PostgresPostRepository::new(pool.clone())),
+        tag_repo.clone(),
         Arc::new(SystemClock),
     ));
     let pages = Arc::new(PageInteractor::new(
@@ -183,6 +187,10 @@ async fn fresh_stack_with(throttle_config: ThrottleConfig) -> Stack {
         passwords,
         posts,
         pages,
+        tags: Arc::new(application::tag::TagInteractor::new(
+            tag_repo,
+            Arc::new(SystemClock),
+        )),
         roles: roles.clone(),
         secure_cookies: false,
     };

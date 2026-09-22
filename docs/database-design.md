@@ -98,6 +98,8 @@ posts.series_id 与 series_order 必须同时为空或同时非空；序号为�
 
 重排同系列时锁定 series 行，校验 series.version，在同一事务更新涉及文章的顺序与版本，并递增系列版本。跨系列移动按 ID 顺序锁两个系列。DDL 将位置唯一约束设为可延后检查，交换位置时执行 `SET CONSTRAINTS posts_series_position_unique DEFERRED`，提交时必须恢复唯一。[PostgreSQL SET CONSTRAINTS](https://www.postgresql.org/docs/current/sql-set-constraints.html)
 
+标签部分已随 M3 第一段交付：`tags`（name ≤100 字符、trim 后非空、slug 创建后不可修改、version 支持改名 CAS）与 `post_tags`（复合主键去重、post_id CASCADE、tag_id RESTRICT）经迁移建表并有仓储实现；文章与标签关系在保存文章的同一事务整体替换，仅标签变化也递增 posts.version；被引用标签（含草稿/私密/回收站引用）的删除在业务层与 FK RESTRICT 双重拒绝。
+
 分类 parent_id 的 CHECK 只防自身引用；所有创建、移动和删除分类的入口都取得统一树结构事务锁，再检查完整祖先链，防止并发形成多节点环。被文章或子分类引用的分类、被文章引用的系列/标签默认拒绝删除；先显式调整关系，不靠 CASCADE 静默改变文章。
 
 分类、标签、系列名称读取当前值，没有历史关联快照。公开列表、系列顺序与标签计数只统计当前公开文章，不泄漏草稿或私有文章。

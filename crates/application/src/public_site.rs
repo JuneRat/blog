@@ -6,7 +6,7 @@ use std::sync::Arc;
 use time::OffsetDateTime;
 
 use crate::error::UseCaseError;
-use crate::ports::{ContentRenderer, PublishedPageQuery, PublishedPostQuery};
+use crate::ports::{ContentRenderer, PublishedPageQuery, PublishedPostQuery, PublishedTagQuery};
 use domain::content::is_reserved_root_slug;
 
 /// 模板展示用的时间格式（应用层渲染契约的一部分）。
@@ -33,6 +33,13 @@ pub struct PostCard {
     pub author_display: String,
 }
 
+/// 详情页上的标签链接（目录公开；名称取当前值）。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TagCard {
+    pub slug: String,
+    pub name: String,
+}
+
 /// 详情页模板数据契约；content_html 已经过清洗。
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct PostView {
@@ -43,6 +50,8 @@ pub struct PostView {
     pub updated_at: String,
     pub author_display: String,
     pub content_html: String,
+    /// 当前标签（链接到 /tags/{slug}）。
+    pub tags: Vec<TagCard>,
 }
 
 /// 页面详情页模板数据契约；content_html 已经过清洗。
@@ -55,16 +64,34 @@ pub struct PageView {
     pub content_html: String,
 }
 
+/// 公开标签页模板数据契约：标签头 + 分页文章列表。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TagView {
+    pub tag_slug: String,
+    pub tag_name: String,
+    /// 当前页码（1 起）。
+    pub page: i64,
+    /// 总页数（至少 1，空目录也渲染第 1 页）。
+    pub total_pages: i64,
+    /// 本页公开文章。
+    pub posts: Vec<PostCard>,
+}
+
 /// 主题渲染端口：入站层不得绕过此端口直接使用模板引擎。
 pub trait ThemeRenderer: Send + Sync {
     fn render_index(&self, site: &SiteInfo, posts: &[PostCard]) -> Result<String, UseCaseError>;
     fn render_post(&self, site: &SiteInfo, post: &PostView) -> Result<String, UseCaseError>;
     fn render_page(&self, site: &SiteInfo, page: &PageView) -> Result<String, UseCaseError>;
+    fn render_tag(&self, site: &SiteInfo, tag: &TagView) -> Result<String, UseCaseError>;
 }
+
+/// 公开标签页分页大小。
+pub const TAG_PAGE_SIZE: i64 = 20;
 
 pub struct PublicSiteInteractor {
     posts: Arc<dyn PublishedPostQuery>,
     pages: Arc<dyn PublishedPageQuery>,
+    tags: Arc<dyn PublishedTagQuery>,
     markdown: Arc<dyn ContentRenderer>,
     theme: Arc<dyn ThemeRenderer>,
     site: SiteInfo,
@@ -74,6 +101,7 @@ impl PublicSiteInteractor {
     pub fn new(
         posts: Arc<dyn PublishedPostQuery>,
         pages: Arc<dyn PublishedPageQuery>,
+        tags: Arc<dyn PublishedTagQuery>,
         markdown: Arc<dyn ContentRenderer>,
         theme: Arc<dyn ThemeRenderer>,
         site: SiteInfo,
@@ -81,6 +109,7 @@ impl PublicSiteInteractor {
         Self {
             posts,
             pages,
+            tags,
             markdown,
             theme,
             site,
@@ -119,6 +148,14 @@ impl PublicSiteInteractor {
             updated_at: format_datetime(detail.updated_at),
             author_display: detail.author_display.clone(),
             content_html: self.markdown.render_markdown(&detail.content),
+            tags: detail
+                .tags
+                .iter()
+                .map(|t| TagCard {
+                    slug: t.slug.clone(),
+                    name: t.name.clone(),
+                })
+                .collect(),
         };
         self.theme.render_post(&self.site, &view)
     }
@@ -144,5 +181,42 @@ impl PublicSiteInteractor {
             content_html: self.markdown.render_markdown(&detail.content),
         };
         self.theme.render_page(&self.site, &view)
+    }
+
+    /// 渲染公开标签页 /tags/{slug}?page=N。
+    ///
+    /// 标签本身没有可见性；未知 slug 一律 NotFound。文章列表复用公开谓词：
+    /// 草稿/私密/回收站文章即使挂着该标签也不出现。页码越界渲染空页
+    /// （不报错——分页导航按总数链接，越界通常是并发撤文，属正常状态）。
+    pub async fn render_tag(&self, slug: &str, page: i64) -> Result<String, UseCaseError> {
+        let tag = self
+            .tags
+            .find_public_by_slug(slug)
+            .await?
+            .ok_or_else(|| UseCaseError::NotFound(format!("标签 {slug}")))?;
+        let page = page.max(1);
+        let offset = (page - 1) * TAG_PAGE_SIZE;
+        let (posts, total) = self
+            .tags
+            .list_public_posts_by_tag(slug, TAG_PAGE_SIZE, offset)
+            .await?;
+        let total_pages = ((total + TAG_PAGE_SIZE - 1) / TAG_PAGE_SIZE).max(1);
+        let view = TagView {
+            tag_slug: tag.slug,
+            tag_name: tag.name,
+            page,
+            total_pages,
+            posts: posts
+                .into_iter()
+                .map(|s| PostCard {
+                    title: s.title,
+                    slug: s.slug,
+                    excerpt: s.excerpt,
+                    published_at: s.published_at.map(format_datetime),
+                    author_display: s.author_display,
+                })
+                .collect(),
+        };
+        self.theme.render_tag(&self.site, &view)
     }
 }

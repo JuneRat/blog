@@ -136,8 +136,11 @@ async fn fresh_stack_with(secure_cookies: bool) -> Stack {
     });
     let random: Arc<dyn SecureRandom> = Arc::new(TestRandom);
 
+    let tag_repo: Arc<dyn application::ports::TagRepository> =
+        Arc::new(infrastructure::PostgresTagRepository::new(pool.clone()));
     let posts = Arc::new(application::content::PostInteractor::new(
         Arc::new(infrastructure::PostgresPostRepository::new(pool.clone())),
+        tag_repo.clone(),
         std::sync::Arc::new(infrastructure::SystemClock),
     ));
     let pages = Arc::new(application::page::PageInteractor::new(
@@ -171,6 +174,10 @@ async fn fresh_stack_with(secure_cookies: bool) -> Stack {
         passwords,
         posts,
         pages,
+        tags: Arc::new(application::tag::TagInteractor::new(
+            tag_repo,
+            std::sync::Arc::new(infrastructure::SystemClock),
+        )),
         roles,
         secure_cookies,
     };

@@ -3,7 +3,7 @@ import { ApiError, api, withRequestId } from "../api";
 import { useAuth } from "../auth";
 import { navigate, paths } from "../router";
 import type { EditPostInput } from "../api";
-import type { PostDetail, Visibility } from "../types";
+import type { PostDetail, TagSummary, Visibility } from "../types";
 
 interface FormState {
   slug: string;
@@ -11,6 +11,8 @@ interface FormState {
   excerpt: string;
   content: string;
   visibility: Visibility;
+  /** 选中的标签 id 集合（顺序无关；与服务器往返按集合比较）。 */
+  tagIds: string[];
 }
 
 const EMPTY_FORM: FormState = {
@@ -19,6 +21,7 @@ const EMPTY_FORM: FormState = {
   excerpt: "",
   content: "",
   visibility: "public",
+  tagIds: [],
 };
 
 function toForm(post: PostDetail): FormState {
@@ -28,7 +31,15 @@ function toForm(post: PostDetail): FormState {
     excerpt: post.excerpt ?? "",
     content: post.content,
     visibility: post.visibility,
+    tagIds: [...post.tag_ids],
   };
+}
+
+/** 集合相等（标签选择顺序无关）。 */
+function sameTags(left: string[], right: string[]): boolean {
+  if (left.length !== right.length) return false;
+  const set = new Set(left);
+  return right.every((id) => set.has(id));
 }
 
 function messageOf(error: unknown): string {
@@ -45,7 +56,8 @@ function formEquals(left: FormState, right: FormState): boolean {
     left.title === right.title &&
     left.excerpt === right.excerpt &&
     left.content === right.content &&
-    left.visibility === right.visibility
+    left.visibility === right.visibility &&
+    sameTags(left.tagIds, right.tagIds)
   );
 }
 
@@ -67,12 +79,15 @@ function pickServer<K extends keyof FormState>(
  * 只有用户没动过的字段才接受服务器值，动过的字段保留本地编辑。
  */
 function mergeServer(current: FormState, sent: FormState, server: FormState): FormState {
+  // 标签是集合字段：用户没动过勾选才接受服务器值，动过则保留本地选择。
+  const tags = sameTags(current.tagIds, sent.tagIds) ? server.tagIds : current.tagIds;
   return {
     slug: pickServer("slug", current, sent, server),
     title: pickServer("title", current, sent, server),
     excerpt: pickServer("excerpt", current, sent, server),
     content: pickServer("content", current, sent, server),
     visibility: pickServer("visibility", current, sent, server),
+    tagIds: tags,
   };
 }
 
@@ -103,6 +118,9 @@ export function PostEditScreen({ slug }: { slug: string | null }) {
   const [postStatus, setPostStatus] = useState<string>("draft");
   const [loading, setLoading] = useState(slug !== null);
   const [busy, setBusy] = useState(false);
+  /** 标签目录（编辑器选择器）：已登录会话即可读。 */
+  const [catalog, setCatalog] = useState<TagSummary[] | null>(null);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [conflict, setConflict] = useState(false);
@@ -161,6 +179,22 @@ export function PostEditScreen({ slug }: { slug: string | null }) {
   const dirty = !formEquals(form, baseline);
 
   useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const tags = await api.listTags();
+        if (!cancelled) setCatalog(tags);
+      } catch (e) {
+        // 目录加载失败不阻塞正文编辑：只是暂时无法勾选标签。
+        if (!cancelled) setCatalogError(messageOf(e));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
     if (slug === null) {
       // 编辑页后退到新建页时组件会复用；清空全部编辑状态。
       // 创建成功的 null → slug 跳转仍由 loadedSlugRef 保留已合并的新输入。
@@ -205,7 +239,8 @@ export function PostEditScreen({ slug }: { slug: string | null }) {
     commitForm({ ...formRef.current, [key]: value });
   }
 
-  /** 只在 slug 变化时提交 new_slug，避免把未改动值当作改名；读 ref 取最新编辑。 */
+  /** 只在 slug 变化时提交 new_slug，避免把未改动值当作改名；读 ref 取最新编辑。
+   *  标签集合总是提交：后端按「整体替换」处理，未变化的集合是幂等重写。 */
   function editPayload(): EditPostInput {
     const current = formRef.current;
     const trimmed = current.slug.trim();
@@ -215,7 +250,17 @@ export function PostEditScreen({ slug }: { slug: string | null }) {
       excerpt: current.excerpt,
       content: current.content,
       visibility: current.visibility,
+      tag_ids: current.tagIds,
     };
+  }
+
+  /** 勾选/取消一个标签（集合操作）。 */
+  function toggleTag(tagId: string): void {
+    const current = formRef.current;
+    const next = current.tagIds.includes(tagId)
+      ? current.tagIds.filter((id) => id !== tagId)
+      : [...current.tagIds, tagId];
+    commitForm({ ...current, tagIds: next });
   }
 
   async function save(): Promise<void> {
@@ -231,6 +276,7 @@ export function PostEditScreen({ slug }: { slug: string | null }) {
           excerpt: sent.excerpt.trim().length > 0 ? sent.excerpt : undefined,
           content: sent.content,
           visibility: sent.visibility,
+          tag_ids: sent.tagIds,
         });
         // 先本地同步（含创建期间的新输入），再更新地址；效果钩子会跳过重载。
         applyServer(created, sent);
@@ -446,6 +492,27 @@ export function PostEditScreen({ slug }: { slug: string | null }) {
             <option value="private">私有</option>
           </select>
         </label>
+        <fieldset className="tag-picker">
+          <legend>标签</legend>
+          {catalogError !== null && <p className="error">{catalogError}</p>}
+          {catalog === null && catalogError === null && <p className="muted">正在加载标签目录…</p>}
+          {catalog !== null && catalog.length === 0 && (
+            <p className="muted">
+              还没有可用标签；先在<a href={paths.tags} onClick={(event) => { event.preventDefault(); navigate(paths.tags); }}>标签目录</a>创建。
+            </p>
+          )}
+          {catalog !== null &&
+            catalog.map((tag) => (
+              <label key={tag.id} className="tag-option">
+                <input
+                  type="checkbox"
+                  checked={form.tagIds.includes(tag.id)}
+                  onChange={() => toggleTag(tag.id)}
+                />
+                {tag.name}
+              </label>
+            ))}
+        </fieldset>
         <label>
           正文（Markdown）
           <textarea

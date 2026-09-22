@@ -9,7 +9,8 @@ use std::sync::Arc;
 use application::error::{ConflictKind, UseCaseError};
 use application::ports::{
     ClearPasswordOutcome, ContentRenderer, OAuthAccountStore, PageRepository, PostRepository,
-    PublishedPageQuery, PublishedPostQuery, RbacStore, SaveOutcome, UserRepository,
+    PublishedPageQuery, PublishedPostQuery, PublishedTagQuery, RbacStore, SaveOutcome,
+    TagRepository, UserRepository,
 };
 use domain::content::page::Page;
 use domain::content::post::{Post, PostSnapshot, PostStatus, Slug, Visibility};
@@ -179,11 +180,11 @@ async fn duplicate_slug_is_rejected_as_conflict() {
     let author = seed_user(&pool, "author").await;
     let repo = PostgresPostRepository::new(pool.clone());
 
-    repo.insert(&draft_snapshot(author, "same-slug"))
+    repo.insert(&draft_snapshot(author, "same-slug"), &[])
         .await
         .unwrap();
     let err = repo
-        .insert(&draft_snapshot(author, "same-slug"))
+        .insert(&draft_snapshot(author, "same-slug"), &[])
         .await
         .unwrap_err();
     match err {
@@ -200,7 +201,7 @@ async fn foreign_key_protects_author_reference() {
 
     let ghost = uuid::Uuid::now_v7();
     let err = repo
-        .insert(&draft_snapshot(ghost, "orphan"))
+        .insert(&draft_snapshot(ghost, "orphan"), &[])
         .await
         .unwrap_err();
     assert!(
@@ -226,13 +227,13 @@ async fn series_position_rules_enforced_by_constraints() {
     let mut a = draft_snapshot(author, "series-a");
     a.series_id = Some(series_id);
     a.series_order = Some(2);
-    repo.insert(&a).await.unwrap();
+    repo.insert(&a, &[]).await.unwrap();
 
     // 同系列同位置：唯一约束拒绝。
     let mut b = draft_snapshot(author, "series-b");
     b.series_id = Some(series_id);
     b.series_order = Some(2);
-    let err = repo.insert(&b).await.unwrap_err();
+    let err = repo.insert(&b, &[]).await.unwrap_err();
     match err {
         UseCaseError::Conflict(ConflictKind::SeriesPosition) => {}
         other => panic!("期望 Conflict(SeriesPosition)，得到 {other:?}"),
@@ -240,13 +241,13 @@ async fn series_position_rules_enforced_by_constraints() {
 
     // 不同位置可以插入；留空档合法。
     b.series_order = Some(5);
-    repo.insert(&b).await.unwrap();
+    repo.insert(&b, &[]).await.unwrap();
 
     // series_order 无 series_id：CHECK 拒绝。
     let mut c = draft_snapshot(author, "series-c");
     c.series_id = None;
     c.series_order = Some(1);
-    let err = repo.insert(&c).await.unwrap_err();
+    let err = repo.insert(&c, &[]).await.unwrap_err();
     assert!(
         matches!(err, UseCaseError::Repository(_)),
         "series_id 与 series_order 必须同空同非空"
@@ -301,13 +302,13 @@ async fn save_returns_three_states_and_new_version() {
     let repo = PostgresPostRepository::new(pool.clone());
 
     let mut snapshot = draft_snapshot(author, "versioned");
-    repo.insert(&snapshot).await.unwrap();
+    repo.insert(&snapshot, &[]).await.unwrap();
     assert_eq!(snapshot.version, 1);
 
     // 正确版本：Saved 且携带新版本号，无需回读。
     snapshot.title = "第一次修改".into();
     let outcome = repo
-        .save(&snapshot, 1, OffsetDateTime::now_utc())
+        .save(&snapshot, 1, OffsetDateTime::now_utc(), None)
         .await
         .unwrap();
     assert_eq!(outcome, SaveOutcome::Saved { new_version: 2 });
@@ -317,7 +318,7 @@ async fn save_returns_three_states_and_new_version() {
     stale_edit.title = "基于旧版本的并发修改".into();
     stale_edit.version = 1;
     let outcome = repo
-        .save(&stale_edit, 1, OffsetDateTime::now_utc())
+        .save(&stale_edit, 1, OffsetDateTime::now_utc(), None)
         .await
         .unwrap();
     assert_eq!(outcome, SaveOutcome::StaleConflict);
@@ -334,7 +335,7 @@ async fn save_returns_three_states_and_new_version() {
     let mut gone_edit = snapshot.clone();
     gone_edit.title = "写给已删除文章".into();
     let outcome = repo
-        .save(&gone_edit, 2, OffsetDateTime::now_utc())
+        .save(&gone_edit, 2, OffsetDateTime::now_utc(), None)
         .await
         .unwrap();
     assert_eq!(
@@ -355,7 +356,7 @@ async fn truly_concurrent_saves_exactly_one_wins() {
     let repo_b = PostgresPostRepository::new(pool_b);
 
     let snapshot = draft_snapshot(author, "race-real");
-    repo_a.insert(&snapshot).await.unwrap();
+    repo_a.insert(&snapshot, &[]).await.unwrap();
 
     let mut edit_a = snapshot.clone();
     edit_a.title = "并发A".into();
@@ -364,8 +365,10 @@ async fn truly_concurrent_saves_exactly_one_wins() {
     let now = OffsetDateTime::now_utc();
 
     // 两条真实连接同时 UPDATE 同一行，都带 expected_version=1。
-    let (outcome_a, outcome_b) =
-        tokio::join!(repo_a.save(&edit_a, 1, now), repo_b.save(&edit_b, 1, now));
+    let (outcome_a, outcome_b) = tokio::join!(
+        repo_a.save(&edit_a, 1, now, None),
+        repo_b.save(&edit_b, 1, now, None)
+    );
     let outcomes = [outcome_a.unwrap(), outcome_b.unwrap()];
     let saved = outcomes
         .iter()
@@ -401,10 +404,10 @@ async fn public_query_filters_draft_private_and_deleted() {
         post.publish(OffsetDateTime::now_utc()).unwrap();
         published = post.snapshot();
     }
-    repo.insert(&published).await.unwrap();
+    repo.insert(&published, &[]).await.unwrap();
 
     // 2. 草稿
-    repo.insert(&draft_snapshot(author, "draft-one"))
+    repo.insert(&draft_snapshot(author, "draft-one"), &[])
         .await
         .unwrap();
 
@@ -416,7 +419,7 @@ async fn public_query_filters_draft_private_and_deleted() {
         post.publish(OffsetDateTime::now_utc()).unwrap();
         private = post.snapshot();
     }
-    repo.insert(&private).await.unwrap();
+    repo.insert(&private, &[]).await.unwrap();
 
     // 4. 软删除的已发布文章
     let mut deleted = draft_snapshot(author, "deleted-one");
@@ -425,7 +428,7 @@ async fn public_query_filters_draft_private_and_deleted() {
         post.publish(OffsetDateTime::now_utc()).unwrap();
         deleted = post.snapshot();
     }
-    repo.insert(&deleted).await.unwrap();
+    repo.insert(&deleted, &[]).await.unwrap();
     sqlx::raw_sql("UPDATE posts SET deleted_at = now() WHERE slug = 'deleted-one'")
         .execute(&pool)
         .await
@@ -454,11 +457,11 @@ async fn status_transitions_persisted_correctly() {
     let repo = PostgresPostRepository::new(pool.clone());
 
     let snapshot = draft_snapshot(author, "lifecycle");
-    repo.insert(&snapshot).await.unwrap();
+    repo.insert(&snapshot, &[]).await.unwrap();
 
     let mut post = Post::reconstitute(repo.find_by_slug("lifecycle").await.unwrap().unwrap());
     post.publish(OffsetDateTime::now_utc()).unwrap();
-    repo.save(&post.snapshot(), 1, OffsetDateTime::now_utc())
+    repo.save(&post.snapshot(), 1, OffsetDateTime::now_utc(), None)
         .await
         .unwrap();
 
@@ -467,7 +470,7 @@ async fn status_transitions_persisted_correctly() {
     let first_published_at = post.snapshot().published_at;
 
     post.withdraw();
-    repo.save(&post.snapshot(), 2, OffsetDateTime::now_utc())
+    repo.save(&post.snapshot(), 2, OffsetDateTime::now_utc(), None)
         .await
         .unwrap();
 
@@ -1368,4 +1371,298 @@ async fn admin_listing_paginates_in_stable_username_order() {
         .map(|r| r.username.as_str())
         .collect();
     assert_eq!(names, ["alice", "bob", "carol"]);
+}
+
+// ---------------------------------------------------------------------------
+// 标签目录与文章关联
+// ---------------------------------------------------------------------------
+
+/// 预置一个标签，返回快照。
+async fn seed_tag(pool: &sqlx::PgPool, name: &str, slug: &str) -> domain::content::TagSnapshot {
+    let tags = infrastructure::PostgresTagRepository::new(pool.clone());
+    let tag = domain::content::Tag::new(
+        name.into(),
+        domain::content::post::Slug::new(slug).unwrap(),
+        OffsetDateTime::now_utc(),
+    )
+    .unwrap();
+    let snapshot = tag.snapshot();
+    tags.insert(&snapshot).await.unwrap();
+    snapshot
+}
+
+#[tokio::test]
+async fn tag_slug_unique_conflict_maps_to_slug_conflict() {
+    let _g = SERIAL.lock().await;
+    let pool = fresh_database().await;
+    let repo = infrastructure::PostgresTagRepository::new(pool.clone());
+    seed_tag(&pool, "Rust", "rust").await;
+
+    let dup = domain::content::Tag::new(
+        "另一个".into(),
+        domain::content::post::Slug::new("rust").unwrap(),
+        OffsetDateTime::now_utc(),
+    )
+    .unwrap();
+    match repo.insert(&dup.snapshot()).await.unwrap_err() {
+        UseCaseError::Conflict(ConflictKind::Slug) => {}
+        other => panic!("期望 slug 冲突，得到 {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn tag_rename_is_versioned_and_slug_immutable() {
+    let _g = SERIAL.lock().await;
+    let pool = fresh_database().await;
+    let repo = infrastructure::PostgresTagRepository::new(pool.clone());
+    let tag = seed_tag(&pool, "Rust", "rust").await;
+
+    // 版本不匹配：CAS 未命中。
+    assert!(
+        repo.rename(tag.id, "新名", tag.version + 1)
+            .await
+            .unwrap()
+            .is_none(),
+        "过期版本不得写入"
+    );
+    // 版本匹配：改名成功并递增版本。
+    let renamed = repo
+        .rename(tag.id, "Rust 语言", tag.version)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(renamed.name, "Rust 语言");
+    assert_eq!(renamed.version, tag.version + 1);
+    assert_eq!(renamed.slug, "rust", "slug 不随改名变化");
+}
+
+#[tokio::test]
+async fn tag_delete_refuses_references_including_drafts() {
+    let _g = SERIAL.lock().await;
+    let pool = fresh_database().await;
+    let author = seed_user(&pool, "author").await;
+    let repo = infrastructure::PostgresTagRepository::new(pool.clone());
+    let posts = PostgresPostRepository::new(pool.clone());
+    let tag = seed_tag(&pool, "Rust", "rust").await;
+
+    // 草稿文章（不可公开）也占用引用：引用保护不过滤可见性。
+    let draft = draft_snapshot(author, "draft-tagged");
+    posts.insert(&draft, &[tag.id]).await.unwrap();
+
+    match repo.delete(tag.id, tag.version).await.unwrap() {
+        application::ports::TagDeleteOutcome::Referenced { count } => assert_eq!(count, 1),
+        other => panic!("期望引用保护，得到 {other:?}"),
+    }
+    // 数据库 RESTRICT 是兜底：即便绕过业务检查也删不掉。
+    let result = sqlx::query("DELETE FROM tags WHERE id = $1")
+        .bind(tag.id)
+        .execute(&pool)
+        .await;
+    assert!(result.is_err(), "FK RESTRICT 必须兜底拒绝");
+
+    // 解除引用后删除成功。
+    sqlx::query("DELETE FROM post_tags WHERE post_id = $1")
+        .bind(draft.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    match repo.delete(tag.id, tag.version).await.unwrap() {
+        application::ports::TagDeleteOutcome::Deleted => {}
+        other => panic!("期望删除成功，得到 {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn post_tags_saved_in_same_transaction_as_content() {
+    let _g = SERIAL.lock().await;
+    let pool = fresh_database().await;
+    let author = seed_user(&pool, "author").await;
+    let posts = PostgresPostRepository::new(pool.clone());
+    let rust = seed_tag(&pool, "Rust", "rust").await;
+    let essay = seed_tag(&pool, "随笔", "essay").await;
+
+    // 创建即带标签（重复 id 去重）。
+    let snapshot = draft_snapshot(author, "tagged-post");
+    posts
+        .insert(&snapshot, &[rust.id, rust.id, essay.id])
+        .await
+        .unwrap();
+    let mut got = posts.tags_of(snapshot.id).await.unwrap();
+    got.sort();
+    let mut want = vec![essay.id, rust.id];
+    want.sort();
+    assert_eq!(got, want, "重复关联去重为两条关系");
+
+    // 仅替换标签（正文不变）：version 也递增。
+    let edit = {
+        let mut post = domain::content::Post::reconstitute(snapshot.clone());
+        post.edit(domain::content::post::PostPatch::default())
+            .unwrap();
+        post.snapshot()
+    };
+    match posts
+        .save(
+            &edit,
+            snapshot.version,
+            OffsetDateTime::now_utc(),
+            Some(&[essay.id]),
+        )
+        .await
+        .unwrap()
+    {
+        SaveOutcome::Saved { new_version } => {
+            assert_eq!(new_version, snapshot.version + 1, "仅标签变化也 +1");
+        }
+        other => panic!("期望保存成功，得到 {other:?}"),
+    }
+    assert_eq!(posts.tags_of(snapshot.id).await.unwrap(), vec![essay.id]);
+
+    // 清空标签。
+    let edit2 = {
+        let mut post = domain::content::Post::reconstitute(edit.clone());
+        post.edit(domain::content::post::PostPatch::default())
+            .unwrap();
+        post.snapshot()
+    };
+    posts
+        .save(
+            &edit2,
+            edit.version + 1,
+            OffsetDateTime::now_utc(),
+            Some(&[]),
+        )
+        .await
+        .unwrap();
+    assert!(posts.tags_of(snapshot.id).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn post_tag_association_rejects_unknown_tag_via_fk() {
+    let _g = SERIAL.lock().await;
+    let pool = fresh_database().await;
+    let author = seed_user(&pool, "author").await;
+    let posts = PostgresPostRepository::new(pool.clone());
+    let ghost = uuid::Uuid::now_v7();
+
+    let snapshot = draft_snapshot(author, "ghost-tagged");
+    match posts.insert(&snapshot, &[ghost]).await.unwrap_err() {
+        UseCaseError::Invalid(ref m) if m.contains("所选标签不存在") => {}
+        other => panic!("期望可定位的标签不存在错误，得到 {other:?}"),
+    }
+    // 事务回滚：文章本身也不得残留。
+    assert!(
+        posts.find_by_slug("ghost-tagged").await.unwrap().is_none(),
+        "半套写入不得对外可见"
+    );
+}
+
+#[tokio::test]
+async fn tag_directory_listing_counts_only_public_posts() {
+    let _g = SERIAL.lock().await;
+    let pool = fresh_database().await;
+    let author = seed_user(&pool, "author").await;
+    let repo = infrastructure::PostgresTagRepository::new(pool.clone());
+    let posts = PostgresPostRepository::new(pool.clone());
+    let tag = seed_tag(&pool, "Rust", "rust").await;
+
+    // 三篇挂同一标签：公开已发布、草稿、发布但 private。
+    let mut public = draft_snapshot(author, "tag-public");
+    {
+        let mut post = domain::content::Post::reconstitute(public.clone());
+        post.publish(OffsetDateTime::now_utc()).unwrap();
+        public = post.snapshot();
+    }
+    posts.insert(&public, &[tag.id]).await.unwrap();
+    posts
+        .insert(&draft_snapshot(author, "tag-draft"), &[tag.id])
+        .await
+        .unwrap();
+    let mut private = draft_snapshot(author, "tag-private");
+    private.visibility = Visibility::Private;
+    {
+        let mut post = domain::content::Post::reconstitute(private.clone());
+        post.publish(OffsetDateTime::now_utc()).unwrap();
+        private = post.snapshot();
+    }
+    posts.insert(&private, &[tag.id]).await.unwrap();
+
+    let list = repo.list().await.unwrap();
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].public_post_count, 1, "公开计数不含草稿与私密");
+    assert_eq!(repo.public_count(tag.id).await.unwrap(), 1);
+
+    // existing_ids：存在性校验。
+    let ghost = uuid::Uuid::now_v7();
+    let existing = repo.existing_ids(&[tag.id, ghost]).await.unwrap();
+    assert_eq!(existing, vec![tag.id]);
+}
+
+#[tokio::test]
+async fn public_tag_page_lists_only_public_posts_and_paginates() {
+    let _g = SERIAL.lock().await;
+    let pool = fresh_database().await;
+    let author = seed_user(&pool, "author").await;
+    let posts = PostgresPostRepository::new(pool.clone());
+    let tag_query = infrastructure::PostgresPublishedTagQuery::new(pool.clone());
+    let post_query = PostgresPublishedPostQuery::new(pool.clone());
+    let tag = seed_tag(&pool, "Rust", "rust").await;
+
+    // 3 篇公开 + 1 草稿（挂同标签）。
+    for i in 1..=3 {
+        let mut public = draft_snapshot(author, &format!("tag-page-{i}"));
+        let mut post = domain::content::Post::reconstitute(public.clone());
+        post.publish(OffsetDateTime::now_utc()).unwrap();
+        public = post.snapshot();
+        posts.insert(&public, &[tag.id]).await.unwrap();
+    }
+    posts
+        .insert(&draft_snapshot(author, "tag-page-draft"), &[tag.id])
+        .await
+        .unwrap();
+
+    // 标签可见性查询。
+    let found = tag_query
+        .find_public_by_slug("rust")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(found.name, "Rust");
+    assert!(
+        tag_query
+            .find_public_by_slug("ghost")
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    // 分页：每页 2 条 → 第 1 页 2 篇、总数 3。
+    let (page1, total) = tag_query
+        .list_public_posts_by_tag("rust", 2, 0)
+        .await
+        .unwrap();
+    assert_eq!(total, 3);
+    assert_eq!(page1.len(), 2);
+    let (page2, total2) = tag_query
+        .list_public_posts_by_tag("rust", 2, 2)
+        .await
+        .unwrap();
+    assert_eq!(total2, 3, "总数来自同一快照");
+    assert_eq!(page2.len(), 1);
+    assert!(
+        page1
+            .iter()
+            .chain(page2.iter())
+            .all(|p| p.slug != "tag-page-draft"),
+        "草稿不出现在公开标签页"
+    );
+
+    // 文章详情带标签引用。
+    let detail = post_query
+        .find_public_by_slug("tag-page-1")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(detail.tags.len(), 1);
+    assert_eq!(detail.tags[0].slug, "rust");
+    assert_eq!(detail.tags[0].name, "Rust");
 }

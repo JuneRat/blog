@@ -153,7 +153,8 @@ cargo test --workspace
 - `crates/application`：用例 + 内存 fake（权限、委派上限、Owner 保护、版本冲突、真并发 join!；密码登录的统一失败语义、等价开销校验、限流、设置/清除与自助改密轮换）。
 - `crates/infrastructure/tests`：真实 PostgreSQL（迁移、约束、三态保存、两连接真并发、公开过滤、RBAC 幂等与 Owner 并发、密码凭据的软删除作用域）；单元测试覆盖 Argon2id 哈希/校验/参数升级与内存限流。
 - `crates/server/tests`：完整装配 + HTTP（会话/CSRF/Origin、own/any 越权、浏览器绑定、撤权与软删除后旧会话、`/auth/providers`、密码登录全链路与限流/Retry-After、改密轮换、SPA 挂载与缓存头、草稿/private 不可公开访问）。
-- `apps/admin`：`pnpm test`（Vitest + React Testing Library）覆盖登录表单、编辑器交互与路由解析；`pnpm build`（`tsc --noEmit` + Vite 构建）检查前端类型与产物。
+- `apps/admin`：`pnpm test`（Vitest + React Testing Library）覆盖登录表单、编辑器交互（含标签选择）、标签管理屏、用户与角色屏幕与路由解析；`pnpm build`（`tsc --noEmit` + Vite 构建）检查前端类型与产物。
+- `spikes/template-bridge`：M0 原型（独立 workspace，不在根清单），`cargo test` 跑桥接/预算/隔离集成测试；生产 crate 不依赖它。
 
 集成测试需要可写的 PostgreSQL，且**只允许 loopback 主机**：默认 `postgres://blog:blog@127.0.0.1:5432`，可用 `BLOG_TEST_ADMIN_URL` 覆盖（infrastructure 与 server 的测试库 DSN 都自动从它推导），会重建 `blog_test` / `blog_server_test` / `blog_admin_test` / `blog_auth_test` 数据库。CI 见 `.github/workflows/ci.yml`。
 
@@ -182,10 +183,12 @@ docs/               # 设计文档与 ADR
 - slug 草稿创建即唯一、首次发布后锁定（撤回也不可改名）、重新发布保留首次 `published_at`。
 - 匿名可见条件唯一：`status='published' AND visibility='public' AND deleted_at IS NULL`。
 - 系列位置唯一约束（可延后）交换、外键 RESTRICT、用户名/slug 冲突映射。
+- 标签闭环（M3 第一段）：目录管理（创建/改名/删除，`tag.manage`，slug 创建后不可改，被引用标签删除受保护，业务码 `tag_in_use`）；文章编辑器多标签选择，正文与标签关系同一事务保存（仅标签变化也递增 version，重复 id 幂等去重）；公开标签页 `/tags/{slug}` 分页（每页 20，只列公开已发布文章，页码越界渲染空页）；文章详情展示标签链接。
+- M0 主题桥接原型（`spikes/template-bridge`）：同步模板函数 ↔ 异步 SQL 查询桥接验证可行，预算/隔离/失败场景 17 项集成测试；结论见原型 README 与 ADR-0002。
 
 ## 下一步
 
-M2（身份与后台）已交付：RBAC/委派、OAuth 登录闭环、本地密码登录（Argon2id + 限流 + 受控重置）、管理写 API、后台 SPA（文章与页面屏幕）。M3 按 [roadmap](docs/product-roadmap.md) 推进：分类树、标签、Series 排序、settings、RSS/sitemap、Post 回收站、备份恢复。
+M2（身份与后台）已交付：RBAC/委派、OAuth 登录闭环、本地密码登录（Argon2id + 限流 + 受控重置）、管理写 API、后台 SPA（文章/页面/用户与角色屏幕）；其后用户与角色管理界面也已交付（见 [身份与后台 §8](docs/identity-and-admin.md)）。M0 主题桥接原型已完成（结论可行）。M3 按 [roadmap](docs/product-roadmap.md) 推进：标签闭环**已交付**，接下来是分类树、Series 排序、settings、RSS/sitemap、Post 回收站、备份恢复与正式主题函数。
 
 M2 遗留（已知、未做）：
 

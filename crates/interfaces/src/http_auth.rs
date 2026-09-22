@@ -80,6 +80,8 @@ pub struct AdminState {
     pub posts: Arc<PostInteractor>,
     /// 管理写 API 的页面用例（站点级 page.* 权限）。
     pub pages: Arc<application::page::PageInteractor>,
+    /// 标签目录用例（管理动作 tag.manage；目录读取对已认证会话开放）。
+    pub tags: Arc<application::tag::TagInteractor>,
     /// 角色与分配用例（http_identity 模块使用）。
     pub roles: Arc<application::identity::RoleInteractor>,
     /// 与 AuthState 保持一致：改密后重签会话 cookie 需要 Secure 属性。
@@ -424,7 +426,9 @@ fn auth_error(e: UseCaseError) -> Response {
         UseCaseError::Unauthenticated => StatusCode::UNAUTHORIZED,
         UseCaseError::InvalidCredentials => StatusCode::UNAUTHORIZED,
         UseCaseError::RateLimited { .. } => StatusCode::TOO_MANY_REQUESTS,
-        UseCaseError::Invalid(_) | UseCaseError::Conflict(_) => StatusCode::BAD_REQUEST,
+        UseCaseError::Invalid(_) | UseCaseError::Conflict(_) | UseCaseError::TagInUse(_) => {
+            StatusCode::BAD_REQUEST
+        }
         UseCaseError::NotFound(_) => StatusCode::NOT_FOUND,
         UseCaseError::Forbidden | UseCaseError::LastOwnerProtected => StatusCode::FORBIDDEN,
         UseCaseError::External(_) => StatusCode::BAD_GATEWAY,

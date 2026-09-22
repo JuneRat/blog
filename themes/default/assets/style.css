@@ -72,3 +72,34 @@ a {
 .post .content img {
   max-width: 100%;
 }
+
+/* 标签链接（文章详情）与标签页分页 */
+.tags {
+  margin: 0.25rem 0 0.5rem;
+}
+
+.tag {
+  display: inline-block;
+  margin-right: 0.5rem;
+  padding: 0.1rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.85em;
+  text-decoration: none;
+  background: rgba(127, 127, 127, 0.12);
+}
+
+.tag:hover {
+  background: rgba(127, 127, 127, 0.22);
+}
+
+.pagination {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin: 1.5rem 0 0;
+}
+
+.pagination-state {
+  color: var(--muted, inherit);
+  font-size: 0.9em;
+}

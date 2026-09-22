@@ -14,6 +14,7 @@ use application::error::UseCaseError;
 use application::identity::Actor;
 use application::page::{CreatePageCmd, EditPageCmd, PageDto};
 use application::ports::SESSION_COOKIE;
+use application::tag::{CreateTagCmd, TagDto};
 use axum::extract::{FromRef, Path, Query, State};
 use axum::http::{StatusCode, request::Parts};
 use axum::middleware;
@@ -43,6 +44,8 @@ struct PostJson {
     published_at: Option<String>,
     updated_at: String,
     author_id: Uuid,
+    /// 当前关联标签 id（按 id 升序）；名称由前端结合标签目录解析。
+    tag_ids: Vec<Uuid>,
 }
 
 impl From<&PostDto> for PostJson {
@@ -59,6 +62,7 @@ impl From<&PostDto> for PostJson {
                 .map(application::public_site::format_datetime),
             updated_at: application::public_site::format_datetime(dto.updated_at),
             author_id: dto.author_id,
+            tag_ids: dto.tag_ids.clone(),
         }
     }
 }
@@ -157,6 +161,9 @@ pub struct CreatePostBody {
     #[serde(default)]
     pub content: String,
     pub visibility: Option<String>,
+    /// 初始标签 id 集合（去重与存在性由用例处理）。
+    #[serde(default)]
+    pub tag_ids: Vec<Uuid>,
 }
 
 #[derive(Deserialize, Default)]
@@ -166,6 +173,8 @@ pub struct EditPostBody {
     pub excerpt: Option<String>,
     pub content: Option<String>,
     pub visibility: Option<String>,
+    /// Some 表示整体替换标签集合（[] = 清空）；缺省不触碰。
+    pub tag_ids: Option<Vec<Uuid>>,
     pub expected_version: Option<i64>,
 }
 
@@ -218,6 +227,7 @@ async fn create_post(
                 excerpt: body.excerpt,
                 content: body.content,
                 visibility,
+                tag_ids: body.tag_ids,
             },
         )
         .await
@@ -293,6 +303,7 @@ async fn edit_post(
                 excerpt: body.excerpt,
                 content: body.content,
                 visibility,
+                tag_ids: body.tag_ids,
                 expected_version: body.expected_version,
             },
         )
@@ -539,6 +550,126 @@ async fn unpublish_page(
     let expected = body.and_then(|Json(b)| b.expected_version);
     match state.pages.withdraw(&actor, &slug, expected).await {
         Ok(dto) => (StatusCode::OK, Json(PageDetailJson::from(dto))).into_response(),
+        Err(e) => admin_error(e, &request_id),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 标签目录：管理（tag.manage）+ 目录读取（编辑器选择器共用）
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Serialize)]
+struct TagJson {
+    id: Uuid,
+    slug: String,
+    name: String,
+    version: i64,
+    /// 公开文章计数（与公开标签页同口径）。
+    public_post_count: i64,
+}
+
+impl From<&TagDto> for TagJson {
+    fn from(dto: &TagDto) -> Self {
+        Self {
+            id: dto.id,
+            slug: dto.slug.clone(),
+            name: dto.name.clone(),
+            version: dto.version,
+            public_post_count: dto.public_post_count,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+pub struct CreateTagBody {
+    pub name: String,
+    pub slug: String,
+}
+
+#[derive(Deserialize, Default)]
+pub struct RenameTagBody {
+    pub name: String,
+    pub expected_version: Option<i64>,
+}
+
+pub fn tags_router(state: AdminState) -> Router {
+    Router::new()
+        .route("/api/admin/v1/tags", get(list_tags).post(create_tag))
+        .route(
+            "/api/admin/v1/tags/{slug}",
+            axum::routing::patch(rename_tag).delete(delete_tag),
+        )
+        .layer(axum::extract::DefaultBodyLimit::max(ADMIN_BODY_LIMIT))
+        .layer(middleware::from_fn(no_store))
+        .with_state(state)
+}
+
+/// 目录读取：任何已认证会话可读（Author 编辑文章要选标签），
+/// 权限边界在写动作上；目录本身是公开数据。
+async fn list_tags(
+    AdminAuth { actor }: AdminAuth,
+    request_id: RequestId,
+    State(state): State<AdminState>,
+) -> Response {
+    match state.tags.list(&actor).await {
+        Ok(list) => (
+            StatusCode::OK,
+            Json(list.iter().map(TagJson::from).collect::<Vec<_>>()),
+        )
+            .into_response(),
+        Err(e) => admin_error(e, &request_id),
+    }
+}
+
+async fn create_tag(
+    AdminAuth { actor }: AdminAuth,
+    request_id: RequestId,
+    State(state): State<AdminState>,
+    Json(body): Json<CreateTagBody>,
+) -> Response {
+    match state
+        .tags
+        .create(
+            &actor,
+            CreateTagCmd {
+                name: body.name,
+                slug: body.slug,
+            },
+        )
+        .await
+    {
+        Ok(dto) => (StatusCode::CREATED, Json(TagJson::from(&dto))).into_response(),
+        Err(e) => admin_error(e, &request_id),
+    }
+}
+
+async fn rename_tag(
+    AdminAuth { actor }: AdminAuth,
+    request_id: RequestId,
+    State(state): State<AdminState>,
+    Path(slug): Path<String>,
+    Json(body): Json<RenameTagBody>,
+) -> Response {
+    match state
+        .tags
+        .rename(&actor, &slug, body.name, body.expected_version)
+        .await
+    {
+        Ok(dto) => (StatusCode::OK, Json(TagJson::from(&dto))).into_response(),
+        Err(e) => admin_error(e, &request_id),
+    }
+}
+
+async fn delete_tag(
+    AdminAuth { actor }: AdminAuth,
+    request_id: RequestId,
+    State(state): State<AdminState>,
+    Path(slug): Path<String>,
+    body: Option<Json<VersionBody>>,
+) -> Response {
+    let expected = body.and_then(|Json(b)| b.expected_version);
+    match state.tags.delete(&actor, &slug, expected).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => admin_error(e, &request_id),
     }
 }

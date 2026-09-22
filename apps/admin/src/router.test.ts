@@ -26,6 +26,7 @@ describe("parseRoute", () => {
       slug: "new",
     });
 
+    expect(parseRoute("/admin/tags")).toEqual({ name: "tagList" });
     expect(parseRoute("/admin/users")).toEqual({ name: "userList" });
     expect(parseRoute("/admin/roles")).toEqual({ name: "roleList" });
   });
@@ -35,7 +36,8 @@ describe("parseRoute", () => {
     expect(parseRoute("/admin/pages/about/edit/x")).toEqual({ name: "invalid" });
     expect(parseRoute("/admin/pages/%")).toEqual({ name: "invalid" });
     expect(parseRoute("/admin/unknown")).toEqual({ name: "invalid" });
-    // 用户与角色是固定单段：多余段不静默忽略。
+    // 标签/用户/角色是固定单段：多余段不静默忽略。
+    expect(parseRoute("/admin/tags/rust")).toEqual({ name: "invalid" });
     expect(parseRoute("/admin/users/author")).toEqual({ name: "invalid" });
     expect(parseRoute("/admin/roles/owner")).toEqual({ name: "invalid" });
   });

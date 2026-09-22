@@ -13,8 +13,9 @@ use uuid::Uuid;
 use application::error::{ConflictKind, UseCaseError};
 use application::ports::{
     AdminUserRow, ClearPasswordOutcome, Clock, HealthCheck, PageRepository, PasswordCredential,
-    PostRepository, PublicPageDetail, PublicPostDetail, PublicPostSummary, PublishedPageQuery,
-    PublishedPostQuery, SaveOutcome, UserRepository,
+    PostRepository, PublicPageDetail, PublicPostDetail, PublicPostSummary, PublicTagSummary,
+    PublishedPageQuery, PublishedPostQuery, PublishedTagQuery, SaveOutcome, TagDeleteOutcome,
+    TagRepository, TagWithUsage, UserRepository,
 };
 use domain::content::page::{PageSnapshot, PageStatus};
 use domain::content::post::{PostSnapshot, PostStatus, Visibility};
@@ -118,12 +119,17 @@ fn unique_conflict_target(error: &PgDatabaseError) -> Option<ConflictKind> {
 fn map_sqlx_error(error: sqlx::Error) -> UseCaseError {
     if let sqlx::Error::Database(db) = &error {
         let pg = db.try_downcast_ref::<PgDatabaseError>();
-        if let Some(pg) = pg
-            && pg.code() == "23505"
-        {
-            return UseCaseError::Conflict(
-                unique_conflict_target(pg).unwrap_or(ConflictKind::Unknown),
-            );
+        if let Some(pg) = pg {
+            if pg.code() == "23505" {
+                return UseCaseError::Conflict(
+                    unique_conflict_target(pg).unwrap_or(ConflictKind::Unknown),
+                );
+            }
+            // 文章关联不存在的标签：用例层已前置校验，这里是并发删除标签的兜底，
+            // 翻译成可定位的参数错误而不是裸存储错误。
+            if pg.code() == "23503" && pg.constraint() == Some("post_tags_tag_id_fkey") {
+                return UseCaseError::Invalid("所选标签不存在或刚被删除".into());
+            }
         }
     }
     UseCaseError::Repository(error.to_string())
@@ -453,7 +459,9 @@ impl PostRepository for PostgresPostRepository {
         rows.iter().map(post_from_row).collect()
     }
 
-    async fn insert(&self, snapshot: &PostSnapshot) -> Result<(), UseCaseError> {
+    async fn insert(&self, snapshot: &PostSnapshot, tag_ids: &[Uuid]) -> Result<(), UseCaseError> {
+        // 正文与初始标签关系同一事务：半套写入不应对外可见。
+        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
         sqlx::query(
             r#"
             INSERT INTO posts (
@@ -481,9 +489,15 @@ impl PostRepository for PostgresPostRepository {
         .bind(snapshot.version)
         .bind(snapshot.created_at)
         .bind(snapshot.updated_at)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(map_sqlx_error)?;
+        if !tag_ids.is_empty() {
+            insert_post_tags(&mut tx, snapshot.id, tag_ids)
+                .await
+                .map_err(map_sqlx_error)?;
+        }
+        tx.commit().await.map_err(map_sqlx_error)?;
         Ok(())
     }
 
@@ -492,7 +506,11 @@ impl PostRepository for PostgresPostRepository {
         snapshot: &PostSnapshot,
         expected_version: i64,
         now: OffsetDateTime,
+        tag_ids: Option<&[Uuid]>,
     ) -> Result<SaveOutcome, UseCaseError> {
+        // 正文（或仅标签关系）与 version 递增在同一事务：
+        // 观察者不会看到新正文配旧标签（或反之）的混合状态。
+        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
         let updated = sqlx::query(
             r#"
             UPDATE posts SET
@@ -516,30 +534,76 @@ impl PostRepository for PostgresPostRepository {
         .bind(snapshot.visibility.as_str())
         .bind(snapshot.published_at)
         .bind(now)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *tx)
         .await
         .map_err(map_sqlx_error)?;
 
-        if let Some(row) = updated {
-            return Ok(SaveOutcome::Saved {
-                new_version: row.try_get::<i64, _>(0).map_err(map_row_error)?,
-            });
-        }
+        let Some(row) = updated else {
+            // 写入未命中：区分「版本过期」（可重试）与「记录已消失」（不可重试）。
+            // 无写入发生，直接放弃事务。
+            let current =
+                sqlx::query("SELECT version, deleted_at IS NULL AS alive FROM posts WHERE id = $1")
+                    .bind(snapshot.id)
+                    .fetch_optional(&mut *tx)
+                    .await
+                    .map_err(map_sqlx_error)?;
+            let outcome = match current {
+                Some(row) if row.try_get::<bool, _>("alive").map_err(map_row_error)? => {
+                    SaveOutcome::StaleConflict
+                }
+                _ => SaveOutcome::Gone,
+            };
+            tx.rollback().await.map_err(map_sqlx_error)?;
+            return Ok(outcome);
+        };
 
-        // 写入未命中：区分「版本过期」（可重试）与「记录已消失」（不可重试）。
-        let current =
-            sqlx::query("SELECT version, deleted_at IS NULL AS alive FROM posts WHERE id = $1")
+        if let Some(tag_ids) = tag_ids {
+            // 整体替换：先清空再写入（幂等；空集合 = 解除全部关联）。
+            sqlx::query("DELETE FROM post_tags WHERE post_id = $1")
                 .bind(snapshot.id)
-                .fetch_optional(&self.pool)
+                .execute(&mut *tx)
                 .await
                 .map_err(map_sqlx_error)?;
-        match current {
-            Some(row) if row.try_get::<bool, _>("alive").map_err(map_row_error)? => {
-                Ok(SaveOutcome::StaleConflict)
+            if !tag_ids.is_empty() {
+                insert_post_tags(&mut tx, snapshot.id, tag_ids)
+                    .await
+                    .map_err(map_sqlx_error)?;
             }
-            _ => Ok(SaveOutcome::Gone),
         }
+        tx.commit().await.map_err(map_sqlx_error)?;
+        Ok(SaveOutcome::Saved {
+            new_version: row.try_get::<i64, _>(0).map_err(map_row_error)?,
+        })
     }
+
+    async fn tags_of(&self, post_id: Uuid) -> Result<Vec<Uuid>, UseCaseError> {
+        let rows: Vec<(Uuid,)> =
+            sqlx::query_as("SELECT tag_id FROM post_tags WHERE post_id = $1 ORDER BY tag_id")
+                .bind(post_id)
+                .fetch_all(&self.pool)
+                .await
+                .map_err(map_sqlx_error)?;
+        Ok(rows.into_iter().map(|(id,)| id).collect())
+    }
+}
+
+/// 批量写入文章标签关系。`unnest` 展开保证一条语句完成；
+/// DISTINCT 兜住调用方重复 id——post_tags 复合主键本身就是去重语义，
+/// 重复提交同一标签不应让整次保存失败。
+async fn insert_post_tags(
+    tx: &mut sqlx::PgConnection,
+    post_id: Uuid,
+    tag_ids: &[Uuid],
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO post_tags (post_id, tag_id) \
+         SELECT $1, tid FROM (SELECT DISTINCT tid FROM unnest($2::uuid[]) AS tid)",
+    )
+    .bind(post_id)
+    .bind(tag_ids)
+    .execute(&mut *tx)
+    .await?;
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -600,11 +664,18 @@ impl PublishedPostQuery for PostgresPublishedPostQuery {
         &self,
         slug: &str,
     ) -> Result<Option<PublicPostDetail>, UseCaseError> {
+        // 单条语句读正文与标签：同一快照，不会出现新旧混合
+        // （docs/content-lifecycle.md §3 的一致性要求）。
         let row = sqlx::query(&format!(
             r#"
             SELECT p.title, p.slug, p.excerpt, p.published_at, p.updated_at, p.content,
                    COALESCE(NULLIF(u.display_name, ''), u.username) AS author_display,
-                   u.username AS author_username
+                   u.username AS author_username,
+                   (
+                       SELECT json_agg(json_build_object('slug', t.slug, 'name', t.name) ORDER BY t.slug)
+                       FROM post_tags pt JOIN tags t ON t.id = pt.tag_id
+                       WHERE pt.post_id = p.id
+                   ) AS tags
             FROM posts p
             JOIN users u ON u.id = p.author_id
             WHERE p.slug = $1 AND {POST_PUBLIC_PREDICATE}
@@ -616,6 +687,8 @@ impl PublishedPostQuery for PostgresPublishedPostQuery {
         .map_err(map_sqlx_error)?;
 
         row.map(|row| {
+            let tags_json: Option<serde_json::Value> =
+                row.try_get("tags").map_err(map_row_error)?;
             Ok(PublicPostDetail {
                 title: row.try_get("title").map_err(map_row_error)?,
                 slug: row.try_get("slug").map_err(map_row_error)?,
@@ -625,6 +698,8 @@ impl PublishedPostQuery for PostgresPublishedPostQuery {
                 author_display: row.try_get("author_display").map_err(map_row_error)?,
                 author_username: row.try_get("author_username").map_err(map_row_error)?,
                 content: row.try_get("content").map_err(map_row_error)?,
+                tags: serde_json::from_value(tags_json.unwrap_or(serde_json::Value::Null))
+                    .unwrap_or_default(),
             })
         })
         .transpose()
@@ -806,5 +881,256 @@ impl PublishedPageQuery for PostgresPublishedPageQuery {
             })
         })
         .transpose()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 标签目录与文章关联
+// ---------------------------------------------------------------------------
+
+pub struct PostgresTagRepository {
+    pool: PgPool,
+}
+
+impl PostgresTagRepository {
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+const TAG_COLUMNS: &str = "id, name, slug, version, created_at";
+
+fn tag_from_row(row: &sqlx::postgres::PgRow) -> Result<domain::content::TagSnapshot, UseCaseError> {
+    Ok(domain::content::TagSnapshot {
+        id: row.try_get("id").map_err(map_row_error)?,
+        name: row.try_get("name").map_err(map_row_error)?,
+        slug: row.try_get("slug").map_err(map_row_error)?,
+        version: row.try_get("version").map_err(map_row_error)?,
+        created_at: row.try_get("created_at").map_err(map_row_error)?,
+    })
+}
+
+/// 公开计数子查询：与公开文章谓词同口径（草稿/私密/回收站不计入）。
+const TAG_PUBLIC_COUNT: &str = "(SELECT count(*) FROM post_tags pt JOIN posts p ON p.id = pt.post_id \
+      WHERE pt.tag_id = t.id AND p.status = 'published' AND p.visibility = 'public' \
+        AND p.deleted_at IS NULL)";
+
+#[async_trait]
+impl TagRepository for PostgresTagRepository {
+    async fn insert(&self, snapshot: &domain::content::TagSnapshot) -> Result<(), UseCaseError> {
+        sqlx::query(
+            "INSERT INTO tags (id, name, slug, version, created_at) \
+             VALUES ($1, $2, $3, $4, $5)",
+        )
+        .bind(snapshot.id)
+        .bind(&snapshot.name)
+        .bind(&snapshot.slug)
+        .bind(snapshot.version)
+        .bind(snapshot.created_at)
+        .execute(&self.pool)
+        .await
+        .map_err(map_sqlx_error)?;
+        Ok(())
+    }
+
+    async fn find_by_slug(
+        &self,
+        slug: &str,
+    ) -> Result<Option<domain::content::TagSnapshot>, UseCaseError> {
+        let row = sqlx::query(&format!("SELECT {TAG_COLUMNS} FROM tags WHERE slug = $1"))
+            .bind(slug)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(map_sqlx_error)?;
+        row.as_ref().map(tag_from_row).transpose()
+    }
+
+    async fn list(&self) -> Result<Vec<TagWithUsage>, UseCaseError> {
+        let rows = sqlx::query(&format!(
+            "SELECT {TAG_COLUMNS}, {TAG_PUBLIC_COUNT} AS public_post_count \
+             FROM tags t ORDER BY t.slug"
+        ))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_sqlx_error)?;
+
+        rows.iter()
+            .map(|row| {
+                Ok(TagWithUsage {
+                    snapshot: tag_from_row(row)?,
+                    public_post_count: row.try_get("public_post_count").map_err(map_row_error)?,
+                })
+            })
+            .collect()
+    }
+
+    async fn rename(
+        &self,
+        id: Uuid,
+        new_name: &str,
+        expected_version: i64,
+    ) -> Result<Option<domain::content::TagSnapshot>, UseCaseError> {
+        let row = sqlx::query(
+            "UPDATE tags SET name = $3, version = version + 1 \
+             WHERE id = $1 AND version = $2 \
+             RETURNING id, name, slug, version, created_at",
+        )
+        .bind(id)
+        .bind(expected_version)
+        .bind(new_name)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(map_sqlx_error)?;
+        row.as_ref().map(tag_from_row).transpose()
+    }
+
+    async fn delete(
+        &self,
+        id: Uuid,
+        expected_version: i64,
+    ) -> Result<TagDeleteOutcome, UseCaseError> {
+        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        // 锁住标签行再数引用：并发「把该标签挂到文章」的写入会经
+        // post_tags.tag_id 的 FK KEY SHARE 锁与本事务互斥，引用检查因此不被写穿。
+        let locked: Option<(i64,)> =
+            sqlx::query_as("SELECT version FROM tags WHERE id = $1 FOR UPDATE")
+                .bind(id)
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(map_sqlx_error)?;
+        let Some((current_version,)) = locked else {
+            tx.commit().await.map_err(map_sqlx_error)?;
+            return Ok(TagDeleteOutcome::Gone);
+        };
+        if current_version != expected_version {
+            tx.commit().await.map_err(map_sqlx_error)?;
+            return Ok(TagDeleteOutcome::StaleVersion);
+        }
+        let (count,): (i64,) = sqlx::query_as("SELECT count(*) FROM post_tags WHERE tag_id = $1")
+            .bind(id)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(map_sqlx_error)?;
+        if count > 0 {
+            tx.commit().await.map_err(map_sqlx_error)?;
+            return Ok(TagDeleteOutcome::Referenced { count });
+        }
+        sqlx::query("DELETE FROM tags WHERE id = $1")
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .map_err(map_sqlx_error)?;
+        tx.commit().await.map_err(map_sqlx_error)?;
+        Ok(TagDeleteOutcome::Deleted)
+    }
+
+    async fn existing_ids(&self, ids: &[Uuid]) -> Result<Vec<Uuid>, UseCaseError> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let rows: Vec<(Uuid,)> =
+            sqlx::query_as("SELECT id FROM tags WHERE id = ANY($1::uuid[]) ORDER BY id")
+                .bind(ids)
+                .fetch_all(&self.pool)
+                .await
+                .map_err(map_sqlx_error)?;
+        Ok(rows.into_iter().map(|(id,)| id).collect())
+    }
+
+    async fn public_count(&self, id: Uuid) -> Result<i64, UseCaseError> {
+        // count(*) 恒有一行（可能为 0）。
+        let (count,): (i64,) = sqlx::query_as(
+            "SELECT count(*) FROM post_tags pt JOIN posts p ON p.id = pt.post_id \
+             WHERE pt.tag_id = $1 AND p.status = 'published' AND p.visibility = 'public' \
+               AND p.deleted_at IS NULL",
+        )
+        .bind(id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(map_sqlx_error)?;
+        Ok(count)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 公开标签页查询
+// ---------------------------------------------------------------------------
+
+pub struct PostgresPublishedTagQuery {
+    pool: PgPool,
+}
+
+impl PostgresPublishedTagQuery {
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl PublishedTagQuery for PostgresPublishedTagQuery {
+    async fn find_public_by_slug(
+        &self,
+        slug: &str,
+    ) -> Result<Option<PublicTagSummary>, UseCaseError> {
+        // 标签目录本身无可见性；未知 slug 与存在与否不区分差异。
+        let row: Option<(String, String)> =
+            sqlx::query_as("SELECT slug, name FROM tags WHERE slug = $1")
+                .bind(slug)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(map_sqlx_error)?;
+        Ok(row.map(|(slug, name)| PublicTagSummary { slug, name }))
+    }
+
+    async fn list_public_posts_by_tag(
+        &self,
+        tag_slug: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<(Vec<PublicPostSummary>, i64), UseCaseError> {
+        let limit = limit.clamp(1, 100);
+        let offset = offset.max(0);
+        // count(*) OVER() 让总数与页面来自同一快照：分页导航不会显示
+        // 「共 N 篇」却翻出第 N+1 篇（或反之）。
+        let rows = sqlx::query(&format!(
+            r#"
+            SELECT p.title, p.slug, p.excerpt, p.published_at,
+                   COALESCE(NULLIF(u.display_name, ''), u.username) AS author_display,
+                   count(*) OVER() AS total
+            FROM tags t
+            JOIN post_tags pt ON pt.tag_id = t.id
+            JOIN posts p ON p.id = pt.post_id
+            JOIN users u ON u.id = p.author_id
+            WHERE t.slug = $1 AND {POST_PUBLIC_PREDICATE}
+            ORDER BY p.published_at DESC, p.id DESC
+            LIMIT $2 OFFSET $3
+            "#
+        ))
+        .bind(tag_slug)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_sqlx_error)?;
+
+        // 空页时窗口函数无行可聚合，总数即 0。
+        let total = rows
+            .first()
+            .map(|row| row.try_get::<i64, _>("total").map_err(map_row_error))
+            .transpose()?
+            .unwrap_or(0);
+        let posts = rows
+            .iter()
+            .map(|row| {
+                Ok(PublicPostSummary {
+                    title: row.try_get("title").map_err(map_row_error)?,
+                    slug: row.try_get("slug").map_err(map_row_error)?,
+                    excerpt: row.try_get("excerpt").map_err(map_row_error)?,
+                    published_at: row.try_get("published_at").map_err(map_row_error)?,
+                    author_display: row.try_get("author_display").map_err(map_row_error)?,
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok((posts, total))
     }
 }

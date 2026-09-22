@@ -2,9 +2,11 @@
 
 pub mod page;
 pub mod post;
+pub mod tag;
 
 pub use page::{
     Page, PageError, PageId, PagePatch, PageSnapshot, PageStatus, RESERVED_ROOT_SLUGS,
     is_reserved_root_slug,
 };
 pub use post::{Post, PostError, PostId, PostPatch, PostSnapshot, PostStatus, Slug, Visibility};
+pub use tag::{TAG_NAME_MAX_CHARS, Tag, TagError, TagSnapshot};

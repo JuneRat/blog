@@ -15,7 +15,8 @@ pub use oauth::{
 pub use password::Argon2PasswordHasher;
 pub use persistence::{
     PgHealthCheck, PostgresPageRepository, PostgresPostRepository, PostgresPublishedPageQuery,
-    PostgresPublishedPostQuery, PostgresUserRepository, SystemClock, connect, migrate,
+    PostgresPublishedPostQuery, PostgresPublishedTagQuery, PostgresTagRepository,
+    PostgresUserRepository, SystemClock, connect, migrate,
 };
 pub use rbac::PostgresRbacStore;
 pub use rendering::{MiniJinjaThemeRenderer, SanitizingMarkdownRenderer};

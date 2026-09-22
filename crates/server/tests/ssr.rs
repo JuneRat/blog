@@ -11,14 +11,16 @@ use application::page::{CreatePageCmd, PageInteractor, PageVisibility};
 use application::ports::{
     PageRepository, PostRepository, PublishedPageQuery, PublishedPostQuery, UserRepository,
 };
+use application::ports::{PublishedTagQuery, TagRepository};
 use application::public_site::{PublicSiteInteractor, SiteInfo};
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use infrastructure::{
     MiniJinjaThemeRenderer, PostgresPageRepository, PostgresPostRepository,
-    PostgresPublishedPageQuery, PostgresPublishedPostQuery, PostgresRbacStore,
-    PostgresUserRepository, SanitizingMarkdownRenderer, SystemClock,
+    PostgresPublishedPageQuery, PostgresPublishedPostQuery, PostgresPublishedTagQuery,
+    PostgresRbacStore, PostgresTagRepository, PostgresUserRepository, SanitizingMarkdownRenderer,
+    SystemClock,
 };
 use interfaces::http::public_router_minimal;
 use sqlx::PgPool;
@@ -31,6 +33,8 @@ struct Stack {
     router: axum::Router,
     posts: Arc<PostInteractor>,
     pages: Arc<PageInteractor>,
+    /// 标签目录（测试直接预置标签关系）。
+    tags: Arc<dyn TagRepository>,
     #[allow(dead_code)]
     users: Arc<UserInteractor>,
     pool: PgPool,
@@ -65,11 +69,19 @@ async fn stack() -> Stack {
     let markdown = Arc::new(SanitizingMarkdownRenderer::new());
 
     let users = Arc::new(UserInteractor::new(user_repo, rbac, clock.clone()));
-    let posts = Arc::new(PostInteractor::new(post_repo, clock.clone()));
+    let tag_repo: Arc<dyn TagRepository> = Arc::new(PostgresTagRepository::new(pool.clone()));
+    let public_tag_query: Arc<dyn PublishedTagQuery> =
+        Arc::new(PostgresPublishedTagQuery::new(pool.clone()));
+    let posts = Arc::new(PostInteractor::new(
+        post_repo,
+        tag_repo.clone(),
+        clock.clone(),
+    ));
     let pages = Arc::new(PageInteractor::new(page_repo, clock));
     let public_site = Arc::new(PublicSiteInteractor::new(
         public_query,
         public_page_query,
+        public_tag_query,
         markdown,
         theme,
         SiteInfo {
@@ -113,6 +125,7 @@ async fn stack() -> Stack {
         router,
         posts,
         pages,
+        tags: tag_repo,
         users,
         pool,
         author,
@@ -139,6 +152,7 @@ fn cmd(slug: &str, title: &str) -> CreatePostCmd {
         excerpt: Some(format!("{title} 的摘要")),
         content: format!("# {title}\n\n正文，包含 **加粗** 与 `code`。"),
         visibility: domain_visibility_public(),
+        tag_ids: Vec::new(),
     }
 }
 
@@ -363,4 +377,164 @@ async fn reserved_root_paths_are_not_shadowed_by_pages() {
     // 多段未知路径仍走 404 fallback，不会被 Page 的根参数吞掉。
     let (status, _) = get(&s.router, "/about/extra").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+// ---------------------------------------------------------------------------
+// 公开标签页：/tags/{slug} 分页与可见性
+// ---------------------------------------------------------------------------
+
+/// 预置标签并返回 id。
+async fn seed_tag(stack: &Stack, name: &str, slug: &str) -> uuid::Uuid {
+    let tag = domain::content::Tag::new(
+        name.into(),
+        domain::content::post::Slug::new(slug).unwrap(),
+        time::OffsetDateTime::now_utc(),
+    )
+    .unwrap();
+    let snapshot = tag.snapshot();
+    stack.tags.insert(&snapshot).await.unwrap();
+    snapshot.id
+}
+
+#[tokio::test]
+async fn tag_page_lists_public_posts_and_hides_drafts_and_private() {
+    let _g = SERIAL.lock().await;
+    let stack = stack().await;
+    let rust = seed_tag(&stack, "Rust", "rust").await;
+
+    // 公开发布、草稿、发布但 private 各一篇挂同一标签。
+    stack
+        .posts
+        .create(
+            &stack.author,
+            CreatePostCmd {
+                slug: Some("tag-visible".into()),
+                title: "公开的标签文章".into(),
+                excerpt: None,
+                content: "# 公开\n正文".into(),
+                visibility: application::content::PostVisibility::Public,
+                tag_ids: vec![rust],
+            },
+        )
+        .await
+        .unwrap();
+    stack
+        .posts
+        .publish(&stack.author, "tag-visible", None)
+        .await
+        .unwrap();
+
+    stack
+        .posts
+        .create(
+            &stack.author,
+            CreatePostCmd {
+                slug: Some("tag-draft".into()),
+                title: "草稿不外泄".into(),
+                excerpt: None,
+                content: "草稿".into(),
+                visibility: application::content::PostVisibility::Public,
+                tag_ids: vec![rust],
+            },
+        )
+        .await
+        .unwrap();
+
+    stack
+        .posts
+        .create(
+            &stack.author,
+            CreatePostCmd {
+                slug: Some("tag-private".into()),
+                title: "私密不外泄".into(),
+                excerpt: None,
+                content: "私密".into(),
+                visibility: application::content::PostVisibility::Private,
+                tag_ids: vec![rust],
+            },
+        )
+        .await
+        .unwrap();
+    stack
+        .posts
+        .publish(&stack.author, "tag-private", None)
+        .await
+        .unwrap();
+
+    let (status, body) = get(&stack.router, "/tags/rust").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body.contains("Rust"), "标签页显示标签名：{body}");
+    assert!(body.contains("公开的标签文章"), "{body}");
+    assert!(!body.contains("草稿不外泄"), "草稿不得出现在标签页：{body}");
+    assert!(!body.contains("私密不外泄"), "私密不得出现在标签页：{body}");
+
+    // 未知标签 404。
+    let (status, _) = get(&stack.router, "/tags/ghost").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    // 文章详情页展示标签链接。
+    let (status, body) = get(&stack.router, "/posts/tag-visible").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        body.contains(r#"href="/tags/rust""#),
+        "详情页有标签链接：{body}"
+    );
+}
+
+#[tokio::test]
+async fn tag_page_paginates_public_posts() {
+    let _g = SERIAL.lock().await;
+    let stack = stack().await;
+    let rust = seed_tag(&stack, "Rust", "rust").await;
+
+    // 21 篇公开文章：每页 20 → 第 1 页 20 条，第 2 页 1 条。
+    for i in 1..=21 {
+        let slug = format!("page-{i:02}");
+        stack
+            .posts
+            .create(
+                &stack.author,
+                CreatePostCmd {
+                    slug: Some(slug.clone()),
+                    title: format!("第 {i} 篇"),
+                    excerpt: None,
+                    content: "正文".into(),
+                    visibility: application::content::PostVisibility::Public,
+                    tag_ids: vec![rust],
+                },
+            )
+            .await
+            .unwrap();
+        stack
+            .posts
+            .publish(&stack.author, &slug, None)
+            .await
+            .unwrap();
+    }
+
+    let (status, body) = get(&stack.router, "/tags/rust").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body.contains("第 1 / 2 页"), "分页状态可见：{body}");
+    assert!(
+        body.contains(r#"href="/tags/rust?page=2""#),
+        "下一页链接：{body}"
+    );
+    assert!(body.contains("第 21 篇"), "第 1 页含最新文章：{body}");
+
+    let (status, body2) = get(&stack.router, "/tags/rust?page=2").await;
+    assert_eq!(status, StatusCode::OK, "{body2}");
+    assert!(body2.contains("第 2 / 2 页"), "第 2 页状态：{body2}");
+    assert!(body2.contains("第 1 篇"), "第 2 页是最旧文章：{body2}");
+    assert!(!body2.contains("第 21 篇"), "第 2 页不含最新文章：{body2}");
+
+    // 页码 0/负数按第 1 页处理；远超总页数渲染空页而非报错。
+    let (status, body_zero) = get(&stack.router, "/tags/rust?page=0").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body_zero.contains("第 21 篇"));
+    let (status, body_far) = get(&stack.router, "/tags/rust?page=99").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body_far.contains("还没有公开文章"),
+        "越界页为空页：{body_far}"
+    );
 }

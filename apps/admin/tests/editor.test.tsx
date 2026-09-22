@@ -19,7 +19,7 @@ vi.mock("../src/api", async (importOriginal) => {
     ...original,
     api: {
       getPost: vi.fn(), createPost: vi.fn(), updatePost: vi.fn(),
-      publishPost: vi.fn(), unpublishPost: vi.fn(),
+      publishPost: vi.fn(), unpublishPost: vi.fn(), listTags: vi.fn(),
     },
   };
 });
@@ -28,6 +28,7 @@ const post: PostDetail = {
   id: "post-id", slug: "first", title: "原始标题", content: "原始正文",
   excerpt: null, status: "draft", visibility: "public", version: 1,
   published_at: null, updated_at: "2026-09-22T00:00:00Z", author_id: "author-id",
+  tag_ids: [],
 };
 
 function deferred<T>() {
@@ -44,6 +45,8 @@ beforeEach(() => {
   vi.resetAllMocks();
   window.history.replaceState(null, "", paths.editPost(post.slug));
   vi.mocked(api.getPost).mockResolvedValue(post);
+  // 标签目录：空目录即可（编辑器只渲染选择区）。
+  vi.mocked(api.listTags).mockResolvedValue([]);
 });
 afterEach(cleanup);
 
@@ -76,6 +79,7 @@ describe("文章编辑器回归", () => {
     fireEvent.click(screen.getByRole("button", { name: "保存并更新线上" }));
     expect(api.createPost).toHaveBeenLastCalledWith({
       slug: undefined, title: "第二篇", excerpt: undefined, content: "", visibility: "public",
+      tag_ids: [],
     });
     await act(async () => {});
   });

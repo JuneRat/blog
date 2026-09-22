@@ -8,6 +8,11 @@
     <span class="author">{{ post.author_display }}</span>
   </p>
   {% if post.excerpt %}<p class="excerpt">{{ post.excerpt }}</p>{% endif %}
+  {% if post.tags %}
+  <p class="tags">
+    {% for tag in post.tags %}<a class="tag" href="/tags/{{ tag.slug }}"># {{ tag.name }}</a>{% endfor %}
+  </p>
+  {% endif %}
   <div class="content">{{ post.content_html | safe }}</div>
 </article>
 {% endblock %}

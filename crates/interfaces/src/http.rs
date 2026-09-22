@@ -9,11 +9,12 @@ use application::error::UseCaseError;
 use application::ports::HealthCheck;
 use application::public_site::PublicSiteInteractor;
 use axum::Router;
-use axum::extract::{Path, Request, State};
+use axum::extract::{Path, Query, Request, State};
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
+use serde::Deserialize;
 use tower_http::services::{ServeDir, ServeFile};
 
 #[derive(Clone)]
@@ -27,12 +28,13 @@ pub struct PublicSiteState {
 /// 构建公开路由；assets_dir 提供时挂载 /assets/ 静态资源（主题 assets 目录）。
 ///
 /// 根路径 `/{slug}` 是 Page 的公开地址（如 /about）。固定路由优先、Page 最后匹配：
-/// matchit 让静态段（/healthz、/posts、/admin、/assets）胜过参数段，
+/// matchit 让静态段（/healthz、/posts、/tags、/admin、/assets）胜过参数段，
 /// 保留路径在领域校验与应用层 `render_page` 各拒绝一次，Page 不可能顶掉系统入口。
 pub fn public_router(state: PublicSiteState, assets_dir: Option<PathBuf>) -> Router {
     let mut router = Router::new()
         .route("/", get(index))
         .route("/posts/{slug}", get(post_detail))
+        .route("/tags/{slug}", get(tag_detail))
         .route("/healthz", get(healthz))
         .route("/{slug}", get(page_detail))
         .fallback(not_found)
@@ -107,6 +109,28 @@ async fn post_detail(State(state): State<PublicSiteState>, Path(slug): Path<Stri
             "<h1>404</h1><p>页面不存在或未公开。</p>",
         )
             .into_response(),
+        Err(e) => server_error(e),
+    }
+}
+
+/// 标签页查询参数：page 为 1 起的页码，缺省第 1 页；非数字由提取器回 400。
+#[derive(Deserialize, Default)]
+struct TagPageQuery {
+    page: Option<i64>,
+}
+
+/// 公开标签页 /tags/{slug}?page=N：未知标签 404；
+/// 文章列表只含 published+public+未删除（应用层过滤）。
+async fn tag_detail(
+    State(state): State<PublicSiteState>,
+    Path(slug): Path<String>,
+    Query(query): Query<TagPageQuery>,
+) -> Response {
+    match state.site.render_tag(&slug, query.page.unwrap_or(1)).await {
+        Ok(html) => Html(html).into_response(),
+        Err(UseCaseError::NotFound(_)) => {
+            (StatusCode::NOT_FOUND, "<h1>404</h1><p>标签不存在。</p>").into_response()
+        }
         Err(e) => server_error(e),
     }
 }

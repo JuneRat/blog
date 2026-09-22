@@ -29,7 +29,7 @@ permissions.key 使用 resource.action。application 各模块声明可信权限
 | settings.manage | 普通站点设置，不能修改受保护 OAuth 配置 |
 | oauth.manage / ownership.manage | 提供商配置、所有权操作，要求受保护身份及重新认证 |
 
-这些是建议种子权限，仅随用例注册。Author 默认获得文章 own 动作，Editor 获得内容 any 及所需 Page 管理权限；Administrator 管理普通身份和设置，Owner 另有所有权和恢复能力，Analyst 的 analytics.read 随统计功能加入。角色名称不替代动作检查，any 覆盖 own 的关系在注册表明确声明。
+这些是建议种子权限，仅随用例注册。Author 默认获得文章 own 动作，Editor 获得内容 any 及所需 Page 管理权限；Administrator 管理普通身份和设置，Owner 另有所有权和恢复能力，Analyst 的 analytics.read 随统计功能加入。角色名称不替代动作检查，any 覆盖 own 的关系在注册表明确声明。已注册并交付：`tag.manage`（Owner 与 Editor 内置持有；标签**目录读取**对全部已认证会话开放——Author 编辑文章要选标签，但无目录管理权；文章与标签的关联仍按 post.update/post.update_any 核验归属）。
 
 公开阅读不要求后台角色，但只返回 public、published、未软删除内容。私有文章和草稿必须校验用户及 post.read/post.read_any；页面按 page.read。接口只能传递可信 Actor，不能相信前端提交的 author_id 或权限列表。
 

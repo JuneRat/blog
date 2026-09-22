@@ -1,6 +1,6 @@
 # 功能范围与实施路线
 
-状态：M1 内容闭环（Post + Page）与 M2 身份/后台**已交付**；M3 及以后待交付。M0 主题原型尚未开始（无 `spikes/template-bridge`），其结论仍阻塞正式主题函数冻结。当前数据库基线为用户确认的 [13 表设计](database-design.md)，最新范围由 [ADR-0008](adr/0008-thirteen-table-blog-core.md) 记录，覆盖此前有冲突的持久化建议。
+状态：M1 内容闭环（Post + Page）与 M2 身份/后台**已交付**；M0 主题桥接原型**已完成**（结论可行，见 `spikes/template-bridge/README.md`，正式主题函数冻结不再被阻塞）；M3 进行中：标签管理 → 文章关联 → 公开标签页的完整闭环**已交付**，分类树、Series 排序、settings、RSS/sitemap、回收站、备份恢复待交付。当前数据库基线为用户确认的 [13 表设计](database-design.md)，最新范围由 [ADR-0008](adr/0008-thirteen-table-blog-core.md) 记录，覆盖此前有冲突的持久化建议。
 
 ## 1. 已确认基线
 
@@ -13,7 +13,8 @@
 - 一篇文章最多一个分类、一个系列，多个标签；分类可有父节点，系列有文章顺序；Page 独立且无文章组织关系。
 - 不预建修订、路径、媒体、会话、令牌、通知或任务等辅助表；这些能力需要时再扩展。
 - 当前已实现：M1 的 Post 内容闭环与公开 SSR、Page 的创建/编辑/发布/撤回与根路径 `/{slug}` 公开访问（含系统保留路径校验）；M2 的 RBAC、OAuth 登录、单实例会话、管理写 API 与 React 后台；M2 之后的本地密码认证（Argon2id + 登录限流 + 受控重置，见 [ADR-0009](adr/0009-local-password-authentication.md)），以及后台用户与角色管理（账号列表/创建、角色目录、角色分配与移除，含授权边界、最后可登录 Owner 保护与撤权会话失效；角色目录只读，自定义角色的创建/授权编辑仍属后续，见 [身份与后台 §8](identity-and-admin.md)）。Post 的受控 CLI 写通道已交付；Page 目前只经后台管理 API，尚未提供 CLI 子命令。
-- 尚未开始：M0 主题原型（`spikes/template-bridge` 不存在）、M3 的分类/标签/Series/settings/回收站/备份恢复、M4 的邀请/审计/媒体等扩展、M5 上线验收。
+- M3 已交付第一段：标签目录管理（创建/改名/删除，`tag.manage`，slug 创建后不可改，引用保护拒绝删除）、文章编辑器多标签选择与正文同事务保存（仅标签变化也递增 posts.version）、公开标签页 `/tags/{slug}` 分页（每页 20，只列公开已发布文章）、文章详情展示标签；管理 API `GET/POST /api/admin/v1/tags`、`PATCH/DELETE /api/admin/v1/tags/{slug}`，业务码 `tag_in_use`（409，与 slug 占用区分）。
+- 尚未开始：M3 的分类树/Series 排序/settings/回收站/备份恢复、正式主题数据函数（M0 已验证可行，契约冻结随 M3 主题函数交付）、M4 的邀请/审计/媒体等扩展、M5 上线验收。
 
 ## 2. 决策与范围变化
 
@@ -44,10 +45,10 @@
 | 阶段 | 交付范围 | 验收边界 |
 |---|---|---|
 | 开工前置 | 冻结字段/状态/权限 key、路由保留与事务规则，建立项目依赖检查 | 核心 DDL 在目标 PostgreSQL 建表验证 |
-| M0：主题原型 | MiniJinja 桥接、预算、请求隔离、查询依赖 | **未开始**；可与 M1 并行，只阻塞依赖它的正式主题函数 |
+| M0：主题原型（已完成） | MiniJinja 桥接、预算、请求隔离、查询依赖 | 原型位于 `spikes/template-bridge`，17 项真实库测试全绿，结论**可行**：spawn_blocking 内 `Handle::block_on(timeout(剩余截止时间))` 桥接开销 µs 级；预算组合（deadline/查询/调用/fuel/递归/许可）实测校准；fuel 不限宿主 I/O、输出无引擎上限需宿主实现。结论与措辞见原型 README 与 [ADR-0002](adr/0002-template-data-functions.md) |
 | M1：内容闭环（已交付） | users、posts/pages、草稿→发布→SSR；Post 受控 CLI 驱动（Page 经后台 API） | 单份正文更新语义、version、公开/private 隔离、slug 唯一和根 Page 保留路由；无 React/OAuth 依赖 |
 | M2：身份与后台（已交付） | 核心角色/权限、OIDC/GitHub、CLI 账号开通、单实例内存会话、React 文章与页面编辑 | own/any、角色编辑防提权、Owner 保护、OAuth 防重放、CSRF、重启后会话失效 |
-| M3：核心运营 | 分类树、标签、Series 排序、settings、主题函数/第二主题、RSS/sitemap、SEO、Post 回收站、备份恢复 | 13 表核心完整；分类防环、系列并发重排、设置隔离、维护备份与隔离恢复 |
+| M3：核心运营 | 分类树、标签（**已交付**：管理/文章关联同事务/公开标签页）、Series 排序、settings、主题函数/第二主题、RSS/sitemap、SEO、Post 回收站、备份恢复 | 13 表核心完整；分类防环、系列并发重排、设置隔离、维护备份与隔离恢复 |
 | M4：按需扩展 | 邀请、持久审计、媒体；Webhook、外部搜索/统计与可靠 outbox/任务 | 每项补齐自己的存储、权限、失败与恢复规则后才开放；不为维持 13 表省略必要可靠性 |
 | M5：上线验收 | 对拟上线范围做端到端、压测、迁移与完整恢复演练 | 无未实现能力的支持承诺；达到已确定的 RPO/RTO 和部署指标 |
 
@@ -71,8 +72,8 @@ M4 不是一次性补回旧版全部辅助表。某项功能确有使用场景�
 
 默认主题仍应具备响应式布局、键盘导航、深浅色、代码高亮和阅读排版；这些无需先做成插件。
 
-## 5. M0 原型
+## 5. M0 原型（已完成）
 
-原型位于后续创建的 spikes/template-bridge/，与生产 workspace 隔离；生产 crate 不依赖原型。记录环境、预算、延迟、失败场景和结论，验证后更新 ADR-0002/0004，才冻结正式主题 API。
+原型位于 spikes/template-bridge/，与生产 workspace 隔离（空 `[workspace]` 脱离根清单）；生产 crate 不依赖原型。已记录环境、预算、延迟、失败场景和结论（`spikes/template-bridge/README.md`），并更新 ADR-0002/0004。**结论：桥接方案可行**，正式主题函数 API 冻结不再被阻塞；硬约束（多线程 runtime、fuel 特性、宿主 I/O 用剩余 deadline 包裹、输出上限宿主实现、许可持有到退出、per-request env 副本）见原型报告 §7。
 
-M0 可以形成失败结论，但不能未经验证静默取消模板数据函数或更换技术栈。文档和目录规划不表示原型已经存在。
+M0 可以形成失败结论，但不能未经验证静默取消模板数据函数或更换技术栈。本次原型形成的是**通过**结论。
