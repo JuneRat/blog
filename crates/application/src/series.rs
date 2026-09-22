@@ -250,7 +250,22 @@ impl SeriesInteractor {
             return Err(UseCaseError::Forbidden);
         }
         let series = self.load(target_slug).await?;
-        self.series.members_of(series.id()).await
+        let members = self.series.members_of(series.id()).await?;
+        // 逐篇核验读取权限：成员目录携带他人草稿/私密的标题、slug 与状态——
+        // 这些正是 post.read/post.read_any 的保护对象。内置角色（Owner/Editor）
+        // 恰好同时持有 series.manage 与读取权限，但自定义角色可能只有前者；
+        // 权限按动作核验，不以内置角色的同时持有为依据。
+        // 任一成员不可读即**整次拒绝**：残缺目录会让重排（完整排列契约）
+        // 必然失败，也会误导界面以为系列缺员。
+        for member in &members {
+            authorize_own_or_any(
+                actor,
+                "post.read",
+                "post.read_any",
+                domain::identity::UserId(member.author_id),
+            )?;
+        }
+        Ok(members)
     }
 
     async fn load(&self, slug: &str) -> Result<Series, UseCaseError> {

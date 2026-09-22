@@ -1003,8 +1003,9 @@ async fn delete_series(
     }
 }
 
-/// 管理目录：系列全部成员（含他人草稿/私密——重排会改动它们的位置）；
-/// 需 series.manage（持有者 Owner/Editor 均具备 post.read_any）。
+/// 管理目录：系列全部成员（含他人草稿/私密——重排会改动它们的位置）。
+/// 需 series.manage，且**逐篇核验读取权限**（post.read own / post.read_any）：
+/// 目录携带他人草稿的标题与状态；任一成员不可读即整次 403，不回残缺目录。
 #[derive(serde::Serialize)]
 struct SeriesMemberJson {
     id: Uuid,

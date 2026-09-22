@@ -2661,3 +2661,199 @@ async fn series_members_endpoint_lists_other_authors_posts() {
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
 }
+
+#[tokio::test]
+async fn series_members_requires_read_permission_for_every_member() {
+    let _g = SERIAL.lock().await;
+    let stack = fresh_stack().await;
+    let (editor_cookie, editor_csrf) = login_as(&stack.router, &stack.idp, "editor").await;
+    let (author_cookie, author_csrf) = login_as(&stack.router, &stack.idp, "author").await;
+    let (author2_cookie, author2_csrf) = login_as(&stack.router, &stack.idp, "author2").await;
+
+    // P1 复现场景：给 Author 追加**只有 series.manage** 的自定义角色
+    // （无 post.read_any——内置角色恰好两个都有，不能作为授权依据）。
+    sqlx::query(
+        "INSERT INTO roles (id, name, slug, description, version, created_at, updated_at) \
+         SELECT gen_random_uuid(), '仅系列管理', 'series-manage-only', NULL, 1, now(), now() \
+         WHERE NOT EXISTS (SELECT 1 FROM roles WHERE slug = 'series-manage-only')",
+    )
+    .execute(&stack.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO role_permissions (role_id, permission_id) \
+         SELECT r.id, p.id FROM roles r JOIN permissions p ON p.key = 'series.manage' \
+         WHERE r.slug = 'series-manage-only' \
+           AND NOT EXISTS (SELECT 1 FROM role_permissions rp WHERE rp.role_id = r.id AND rp.permission_id = p.id)",
+    )
+    .execute(&stack.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO user_roles (user_id, role_id) \
+         SELECT u.id, r.id FROM users u JOIN roles r ON r.slug = 'series-manage-only' \
+         WHERE u.username = 'author' \
+           AND NOT EXISTS (SELECT 1 FROM user_roles ur WHERE ur.user_id = u.id AND ur.role_id = r.id)",
+    )
+    .execute(&stack.pool)
+    .await
+    .unwrap();
+
+    // editor 建系列；author 与 author2 各挂一篇。
+    let (status, body) = api(
+        &stack.router,
+        "POST",
+        "/api/admin/v1/series",
+        Some(&editor_cookie),
+        Some(&editor_csrf),
+        Some(r#"{"name":"混合","slug":"mixed"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let mixed_id: Uuid = body
+        .split("\"id\":\"")
+        .nth(1)
+        .unwrap()
+        .split('"')
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
+
+    for (cookie, csrf, slug, order) in [
+        (&author_cookie, &author_csrf, "mix-1", 1),
+        (&author2_cookie, &author2_csrf, "mix-2", 2),
+    ] {
+        let (status, body) = api(
+            &stack.router,
+            "POST",
+            "/api/admin/v1/posts",
+            Some(cookie),
+            Some(csrf),
+            Some(&format!(
+                r#"{{"slug":"{slug}","title":"{slug}","content":"正文"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+        let version: i64 = body
+            .split("\"version\":")
+            .nth(1)
+            .unwrap()
+            .split(',')
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap();
+        let (status, body) = api(
+            &stack.router,
+            "PATCH",
+            &format!("/api/admin/v1/posts/{slug}"),
+            Some(cookie),
+            Some(csrf),
+            Some(&format!(
+                r#"{{"series":{{"id":"{mixed_id}","order":{order}}},"expected_version":{version}}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+    }
+
+    // author（series.manage + post.read own，无 read_any）：
+    // 系列含他人文章 → 整次 403，不回含他人草稿标题的（残缺）目录。
+    let (status, body) = api(
+        &stack.router,
+        "GET",
+        "/api/admin/v1/series/mixed/members",
+        Some(&author_cookie),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "任一成员不可读即整次拒绝：{body}"
+    );
+    assert!(!body.contains("mix-2"), "不得泄漏他人文章条目：{body}");
+
+    // editor（read_any）：完整目录。
+    let (status, body) = api(
+        &stack.router,
+        "GET",
+        "/api/admin/v1/series/mixed/members",
+        Some(&editor_cookie),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body.contains("mix-1") && body.contains("mix-2"), "{body}");
+
+    // 全部成员可读时放行：author 建只含本人文章的系列。
+    let (status, body) = api(
+        &stack.router,
+        "POST",
+        "/api/admin/v1/posts",
+        Some(&author_cookie),
+        Some(&author_csrf),
+        Some(r#"{"slug":"solo-1","title":"solo-1","content":"正文"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let version: i64 = body
+        .split("\"version\":")
+        .nth(1)
+        .unwrap()
+        .split(',')
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let (status, body) = api(
+        &stack.router,
+        "POST",
+        "/api/admin/v1/series",
+        Some(&author_cookie),
+        Some(&author_csrf),
+        Some(r#"{"name":"独著","slug":"solo"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "series.manage 已授予：{body}");
+    let solo_id: Uuid = body
+        .split("\"id\":\"")
+        .nth(1)
+        .unwrap()
+        .split('"')
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let (status, body) = api(
+        &stack.router,
+        "PATCH",
+        "/api/admin/v1/posts/solo-1",
+        Some(&author_cookie),
+        Some(&author_csrf),
+        Some(&format!(
+            r#"{{"series":{{"id":"{solo_id}","order":1}},"expected_version":{version}}}"#
+        )),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, body) = api(
+        &stack.router,
+        "GET",
+        "/api/admin/v1/series/solo/members",
+        Some(&author_cookie),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "全部成员本人可读（post.read own）：{body}"
+    );
+    assert!(body.contains("solo-1"), "{body}");
+}
