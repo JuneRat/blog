@@ -5,6 +5,7 @@ import { PageEditScreen } from "./screens/PageEditScreen";
 import { PageListScreen } from "./screens/PageListScreen";
 import { PostEditScreen } from "./screens/PostEditScreen";
 import { PostListScreen } from "./screens/PostListScreen";
+import { CategoryListScreen } from "./screens/CategoryListScreen";
 import { TagListScreen } from "./screens/TagListScreen";
 import { RoleListScreen } from "./screens/RoleListScreen";
 import { UserListScreen } from "./screens/UserListScreen";
@@ -56,6 +57,9 @@ export function App() {
   // 路由守卫只改善体验：真正的权限判断在用例与接口层，无权限时后端返回 403。
   if (route.name === "tagList") {
     return <TagListScreen />;
+  }
+  if (route.name === "categoryList") {
+    return <CategoryListScreen />;
   }
   if (route.name === "userList") {
     return <UserListScreen />;

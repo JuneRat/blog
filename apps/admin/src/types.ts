@@ -36,6 +36,7 @@ export interface PostSummary {
   updated_at: string;
   author_id: string;
   tag_ids: string[];
+  category_id: string | null;
 }
 
 /** 单篇详情：摘要 + Markdown 源文（编辑器数据源）。 */
@@ -106,4 +107,16 @@ export interface TagSummary {
   version: number;
   /** 公开文章计数（与公开标签页同口径；草稿/私密/回收站不计入）。 */
   public_post_count: number;
+}
+
+/** GET /api/admin/v1/categories 列表条目（分类目录）。 */
+export interface CategorySummary {
+  id: string;
+  slug: string;
+  name: string;
+  parent_id: string | null;
+  description: string | null;
+  version: number;
+  /** 直接归属的公开文章计数。 */
+  pub_post_count: number;
 }

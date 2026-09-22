@@ -17,9 +17,11 @@ vi.mock("../src/api", async (importOriginal) => {
   const original = await importOriginal<typeof import("../src/api")>();
   return {
     ...original,
+    categoryApi: { list: vi.fn() },
     api: {
       listTags: vi.fn(),
       createTag: vi.fn(),
+      categoryApi: { list: vi.fn() },
       renameTag: vi.fn(),
       deleteTag: vi.fn(),
     },
@@ -130,11 +132,13 @@ describe("文章编辑器标签选择", () => {
     updated_at: "2026-09-22T00:00:00Z",
     author_id: "author-id",
     tag_ids: ["tag-rust"],
+    category_id: null,
   };
 
   beforeEach(() => {
     window.history.replaceState(null, "", paths.editPost(post.slug));
     vi.mocked(api.listTags).mockResolvedValue([essay, rust]);
+    vi.mocked(api.categoryApi.list).mockResolvedValue([]);
     const apiAny = api as unknown as Record<string, ReturnType<typeof vi.fn>>;
     apiAny.getPost = vi.fn().mockResolvedValue(post);
     apiAny.updatePost = vi.fn();

@@ -199,6 +199,7 @@ pub const ADMIN_ERROR_CODES: &[&str] = &[
     "username_taken",
     "email_taken",
     "tag_in_use",
+    "category_in_use",
     "last_owner",
     "not_found",
     "forbidden",
@@ -234,6 +235,7 @@ pub fn admin_error_code(e: &UseCaseError) -> &'static str {
         UseCaseError::VersionConflict => "version_conflict",
         UseCaseError::Conflict(kind) => conflict_error_code(*kind),
         UseCaseError::TagInUse(_) => "tag_in_use",
+        UseCaseError::CategoryInUse { .. } => "category_in_use",
         UseCaseError::LastOwnerProtected => "last_owner",
         UseCaseError::NotFound(_) => "not_found",
         UseCaseError::Forbidden => "forbidden",
@@ -254,9 +256,10 @@ pub fn admin_error_status(e: &UseCaseError) -> StatusCode {
         }
         UseCaseError::RateLimited { .. } => StatusCode::TOO_MANY_REQUESTS,
         UseCaseError::Invalid(_) => StatusCode::BAD_REQUEST,
-        UseCaseError::Conflict(_) | UseCaseError::VersionConflict | UseCaseError::TagInUse(_) => {
-            StatusCode::CONFLICT
-        }
+        UseCaseError::Conflict(_)
+        | UseCaseError::VersionConflict
+        | UseCaseError::TagInUse(_)
+        | UseCaseError::CategoryInUse { .. } => StatusCode::CONFLICT,
         UseCaseError::LastOwnerProtected => StatusCode::FORBIDDEN,
         UseCaseError::NotFound(_) => StatusCode::NOT_FOUND,
         UseCaseError::Forbidden => StatusCode::FORBIDDEN,
@@ -336,6 +339,13 @@ mod tests {
             (UseCaseError::Conflict(ConflictKind::Email), "email_taken"),
             (UseCaseError::Conflict(ConflictKind::Unknown), "conflict"),
             (UseCaseError::TagInUse(3), "tag_in_use"),
+            (
+                UseCaseError::CategoryInUse {
+                    posts: 2,
+                    children: 1,
+                },
+                "category_in_use",
+            ),
             (UseCaseError::LastOwnerProtected, "last_owner"),
             (UseCaseError::NotFound("x".into()), "not_found"),
             (UseCaseError::Forbidden, "forbidden"),

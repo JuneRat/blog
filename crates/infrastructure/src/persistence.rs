@@ -12,10 +12,12 @@ use uuid::Uuid;
 
 use application::error::{ConflictKind, UseCaseError};
 use application::ports::{
-    AdminUserRow, ClearPasswordOutcome, Clock, HealthCheck, PageRepository, PasswordCredential,
-    PostRepository, PublicPageDetail, PublicPostDetail, PublicPostSummary, PublicTagSummary,
-    PublishedPageQuery, PublishedPostQuery, PublishedTagQuery, SaveOutcome, TagDeleteOutcome,
-    TagRepository, TagWithUsage, UserRepository,
+    AdminUserRow, CategoryDeleteOutcome, CategoryRepository, CategoryWithUsage,
+    ClearPasswordOutcome, Clock, HealthCheck, PageRepository, PasswordCredential, PostRepository,
+    PublicCategoryRef, PublicCategorySummary, PublicPageDetail, PublicPostDetail,
+    PublicPostSummary, PublicTagSummary, PublishedCategoryQuery, PublishedPageQuery,
+    PublishedPostQuery, PublishedTagQuery, SaveOutcome, TagDeleteOutcome, TagRepository,
+    TagWithUsage, UserRepository,
 };
 use domain::content::page::{PageSnapshot, PageStatus};
 use domain::content::post::{PostSnapshot, PostStatus, Visibility};
@@ -129,6 +131,10 @@ fn map_sqlx_error(error: sqlx::Error) -> UseCaseError {
             // 翻译成可定位的参数错误而不是裸存储错误。
             if pg.code() == "23503" && pg.constraint() == Some("post_tags_tag_id_fkey") {
                 return UseCaseError::Invalid("所选标签不存在或刚被删除".into());
+            }
+            // 同理：并发删除分类时的 FK 兜底。
+            if pg.code() == "23503" && pg.constraint() == Some("posts_category_id_fkey") {
+                return UseCaseError::Invalid("所选分类不存在或刚被删除".into());
             }
         }
     }
@@ -516,7 +522,8 @@ impl PostRepository for PostgresPostRepository {
             UPDATE posts SET
                 title = $3, slug = $4, excerpt = $5, content = $6, cover = $7,
                 series_id = $8, series_order = $9, status = $10, visibility = $11,
-                published_at = $12, updated_at = $13, version = version + 1
+                published_at = $12, updated_at = $13, category_id = $14,
+                version = version + 1
             WHERE id = $1 AND version = $2 AND deleted_at IS NULL
             RETURNING version
             "#,
@@ -534,6 +541,7 @@ impl PostRepository for PostgresPostRepository {
         .bind(snapshot.visibility.as_str())
         .bind(snapshot.published_at)
         .bind(now)
+        .bind(snapshot.category_id)
         .fetch_optional(&mut *tx)
         .await
         .map_err(map_sqlx_error)?;
@@ -675,9 +683,11 @@ impl PublishedPostQuery for PostgresPublishedPostQuery {
                        SELECT json_agg(json_build_object('slug', t.slug, 'name', t.name) ORDER BY t.slug)
                        FROM post_tags pt JOIN tags t ON t.id = pt.tag_id
                        WHERE pt.post_id = p.id
-                   ) AS tags
+                   ) AS tags,
+                   c.slug AS category_slug, c.name AS category_name
             FROM posts p
             JOIN users u ON u.id = p.author_id
+            LEFT JOIN categories c ON c.id = p.category_id
             WHERE p.slug = $1 AND {POST_PUBLIC_PREDICATE}
             "#
         ))
@@ -700,6 +710,14 @@ impl PublishedPostQuery for PostgresPublishedPostQuery {
                 content: row.try_get("content").map_err(map_row_error)?,
                 tags: serde_json::from_value(tags_json.unwrap_or(serde_json::Value::Null))
                     .unwrap_or_default(),
+                category: row
+                    .try_get::<Option<String>, _>("category_slug")
+                    .map_err(map_row_error)?
+                    .zip(
+                        row.try_get::<Option<String>, _>("category_name")
+                            .map_err(map_row_error)?,
+                    )
+                    .map(|(slug, name)| PublicCategoryRef { slug, name }),
             })
         })
         .transpose()
@@ -1114,6 +1132,377 @@ impl PublishedTagQuery for PostgresPublishedTagQuery {
         .map_err(map_sqlx_error)?;
 
         // 空页时窗口函数无行可聚合，总数即 0。
+        let total = rows
+            .first()
+            .map(|row| row.try_get::<i64, _>("total").map_err(map_row_error))
+            .transpose()?
+            .unwrap_or(0);
+        let posts = rows
+            .iter()
+            .map(|row| {
+                Ok(PublicPostSummary {
+                    title: row.try_get("title").map_err(map_row_error)?,
+                    slug: row.try_get("slug").map_err(map_row_error)?,
+                    excerpt: row.try_get("excerpt").map_err(map_row_error)?,
+                    published_at: row.try_get("published_at").map_err(map_row_error)?,
+                    author_display: row.try_get("author_display").map_err(map_row_error)?,
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok((posts, total))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 分类目录：树锁、防环与引用保护
+// ---------------------------------------------------------------------------
+
+/// 分类树事务锁：创建/移动/删除统一取得，串行化祖先链检查与写入。
+///
+/// 不锁读路径（目录读取无锁）；只约束写写并发——两条并发移动若各自
+/// 通过了环检查再先后提交，可能拼出环（检查结果在锁外失效）。
+pub(crate) const CATEGORY_TREE_LOCK: (i32, i32) = (2048002, 1);
+
+pub struct PostgresCategoryRepository {
+    pool: PgPool,
+}
+
+impl PostgresCategoryRepository {
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+const CATEGORY_COLUMNS: &str =
+    "id, name, slug, parent_id, description, version, created_at, updated_at";
+
+fn category_from_row(
+    row: &sqlx::postgres::PgRow,
+) -> Result<domain::content::CategorySnapshot, UseCaseError> {
+    Ok(domain::content::CategorySnapshot {
+        id: row.try_get("id").map_err(map_row_error)?,
+        name: row.try_get("name").map_err(map_row_error)?,
+        slug: row.try_get("slug").map_err(map_row_error)?,
+        parent_id: row.try_get("parent_id").map_err(map_row_error)?,
+        description: row.try_get("description").map_err(map_row_error)?,
+        version: row.try_get("version").map_err(map_row_error)?,
+        created_at: row.try_get("created_at").map_err(map_row_error)?,
+        updated_at: row.try_get("updated_at").map_err(map_row_error)?,
+    })
+}
+
+/// 公开文章计数子查询（直接归属；与公开分类页同口径）。
+const CATEGORY_PUBLIC_COUNT: &str = "(SELECT count(*) FROM posts p WHERE p.category_id = t.id AND p.status = 'published' \
+      AND p.visibility = 'public' AND p.deleted_at IS NULL)";
+
+/// 深度受限的祖先链检查：自 parent 向上走，链上出现 self 即成环。
+///
+/// depth 上限防的是**已损坏数据**（自引用 CHECK 只排除直接自父，历史环会让
+/// 无界递归 CTE 永不终止）；正常数据下树锁保证环不会并发产生，链长天然有限。
+async fn parent_chain_contains(
+    tx: &mut sqlx::PgConnection,
+    parent_id: Uuid,
+    self_id: Uuid,
+) -> Result<bool, UseCaseError> {
+    let hit: Option<(i32,)> = sqlx::query_as(
+        r#"
+        WITH RECURSIVE up(id, parent_id, depth) AS (
+            SELECT c.id, c.parent_id, 0 FROM categories c WHERE c.id = $1
+            UNION ALL
+            -- 向上走祖先链：c 是当前节点的父（up.parent_id = c.id）。
+            SELECT c.id, c.parent_id, up.depth + 1
+            FROM categories c JOIN up ON up.parent_id = c.id
+            WHERE up.depth < 100
+        )
+        SELECT 1 FROM up WHERE id = $2 LIMIT 1
+        "#,
+    )
+    .bind(parent_id)
+    .bind(self_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(map_sqlx_error)?;
+    Ok(hit.is_some())
+}
+
+#[async_trait]
+impl CategoryRepository for PostgresCategoryRepository {
+    async fn insert(
+        &self,
+        snapshot: &domain::content::CategorySnapshot,
+    ) -> Result<(), UseCaseError> {
+        // 新节点不可能是自己的祖先，创建本身无环；树锁仍统一取得，
+        // 与并发删除父分类互斥（否则插入成功后父已消失，靠 FK 报裸错误）。
+        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        sqlx::query("SELECT pg_advisory_xact_lock($1::int, $2::int)")
+            .bind(CATEGORY_TREE_LOCK.0)
+            .bind(CATEGORY_TREE_LOCK.1)
+            .execute(&mut *tx)
+            .await
+            .map_err(map_sqlx_error)?;
+        sqlx::query(
+            "INSERT INTO categories (id, name, slug, parent_id, description, version, \
+             created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+        )
+        .bind(snapshot.id)
+        .bind(&snapshot.name)
+        .bind(&snapshot.slug)
+        .bind(snapshot.parent_id)
+        .bind(&snapshot.description)
+        .bind(snapshot.version)
+        .bind(snapshot.created_at)
+        .bind(snapshot.updated_at)
+        .execute(&mut *tx)
+        .await
+        .map_err(map_sqlx_error)?;
+        tx.commit().await.map_err(map_sqlx_error)?;
+        Ok(())
+    }
+
+    async fn find_by_slug(
+        &self,
+        slug: &str,
+    ) -> Result<Option<domain::content::CategorySnapshot>, UseCaseError> {
+        let row = sqlx::query(&format!(
+            "SELECT {CATEGORY_COLUMNS} FROM categories WHERE slug = $1"
+        ))
+        .bind(slug)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(map_sqlx_error)?;
+        row.as_ref().map(category_from_row).transpose()
+    }
+
+    async fn list(&self) -> Result<Vec<CategoryWithUsage>, UseCaseError> {
+        let rows = sqlx::query(&format!(
+            "SELECT {CATEGORY_COLUMNS}, {CATEGORY_PUBLIC_COUNT} AS public_post_count \
+             FROM categories t ORDER BY t.slug"
+        ))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_sqlx_error)?;
+        rows.iter()
+            .map(|row| {
+                Ok(CategoryWithUsage {
+                    snapshot: category_from_row(row)?,
+                    public_post_count: row.try_get("public_post_count").map_err(map_row_error)?,
+                })
+            })
+            .collect()
+    }
+
+    async fn update(
+        &self,
+        id: Uuid,
+        name: &str,
+        description: Option<&str>,
+        parent_id: Option<Uuid>,
+        expected_version: i64,
+    ) -> Result<Option<domain::content::CategorySnapshot>, UseCaseError> {
+        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        // 树锁内完成「环检查 + 写入」：锁外的检查结果可能被并发移动作废。
+        sqlx::query("SELECT pg_advisory_xact_lock($1::int, $2::int)")
+            .bind(CATEGORY_TREE_LOCK.0)
+            .bind(CATEGORY_TREE_LOCK.1)
+            .execute(&mut *tx)
+            .await
+            .map_err(map_sqlx_error)?;
+
+        let current: Option<(Option<Uuid>, i64)> =
+            sqlx::query_as("SELECT parent_id, version FROM categories WHERE id = $1")
+                .bind(id)
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(map_sqlx_error)?;
+        let Some((current_parent, current_version)) = current else {
+            tx.commit().await.map_err(map_sqlx_error)?;
+            return Ok(None);
+        };
+        if current_version != expected_version {
+            tx.commit().await.map_err(map_sqlx_error)?;
+            return Ok(None);
+        }
+
+        if parent_id != current_parent
+            && let Some(new_parent) = parent_id
+        {
+            {
+                if new_parent == id {
+                    tx.commit().await.map_err(map_sqlx_error)?;
+                    return Err(UseCaseError::Invalid("父分类不能是自身".into()));
+                }
+                // 新父必须存在（给出可定位错误，而非 FK 裸错误）。
+                let exists: Option<(Uuid,)> =
+                    sqlx::query_as("SELECT id FROM categories WHERE id = $1")
+                        .bind(new_parent)
+                        .fetch_optional(&mut *tx)
+                        .await
+                        .map_err(map_sqlx_error)?;
+                if exists.is_none() {
+                    tx.commit().await.map_err(map_sqlx_error)?;
+                    return Err(UseCaseError::Invalid("父分类不存在".into()));
+                }
+                if parent_chain_contains(&mut tx, new_parent, id).await? {
+                    tx.commit().await.map_err(map_sqlx_error)?;
+                    return Err(UseCaseError::Invalid(
+                        "目标父分类的祖先链包含自身，会形成环".into(),
+                    ));
+                }
+            }
+        }
+
+        let row = sqlx::query(
+            "UPDATE categories SET name = $3, description = $4, parent_id = $5, \
+             version = version + 1, updated_at = now() \
+             WHERE id = $1 AND version = $2 \
+             RETURNING id, name, slug, parent_id, description, version, created_at, updated_at",
+        )
+        .bind(id)
+        .bind(expected_version)
+        .bind(name)
+        .bind(description)
+        .bind(parent_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(map_sqlx_error)?;
+        tx.commit().await.map_err(map_sqlx_error)?;
+        row.as_ref().map(category_from_row).transpose()
+    }
+
+    async fn delete(
+        &self,
+        id: Uuid,
+        expected_version: i64,
+    ) -> Result<CategoryDeleteOutcome, UseCaseError> {
+        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        sqlx::query("SELECT pg_advisory_xact_lock($1::int, $2::int)")
+            .bind(CATEGORY_TREE_LOCK.0)
+            .bind(CATEGORY_TREE_LOCK.1)
+            .execute(&mut *tx)
+            .await
+            .map_err(map_sqlx_error)?;
+
+        let current: Option<(i64,)> =
+            sqlx::query_as("SELECT version FROM categories WHERE id = $1")
+                .bind(id)
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(map_sqlx_error)?;
+        let Some((current_version,)) = current else {
+            tx.commit().await.map_err(map_sqlx_error)?;
+            return Ok(CategoryDeleteOutcome::Gone);
+        };
+        if current_version != expected_version {
+            tx.commit().await.map_err(map_sqlx_error)?;
+            return Ok(CategoryDeleteOutcome::StaleVersion);
+        }
+
+        // 引用计数不过滤可见性：草稿/私密/回收站同样占用。
+        let (posts,): (i64,) = sqlx::query_as("SELECT count(*) FROM posts WHERE category_id = $1")
+            .bind(id)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(map_sqlx_error)?;
+        let (children,): (i64,) =
+            sqlx::query_as("SELECT count(*) FROM categories WHERE parent_id = $1")
+                .bind(id)
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(map_sqlx_error)?;
+        if posts > 0 || children > 0 {
+            tx.commit().await.map_err(map_sqlx_error)?;
+            return Ok(CategoryDeleteOutcome::Referenced { posts, children });
+        }
+
+        sqlx::query("DELETE FROM categories WHERE id = $1")
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .map_err(map_sqlx_error)?;
+        tx.commit().await.map_err(map_sqlx_error)?;
+        Ok(CategoryDeleteOutcome::Deleted)
+    }
+
+    async fn existing_id(&self, id: Uuid) -> Result<bool, UseCaseError> {
+        let hit: Option<(Uuid,)> = sqlx::query_as("SELECT id FROM categories WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(map_sqlx_error)?;
+        Ok(hit.is_some())
+    }
+
+    async fn public_count(&self, id: Uuid) -> Result<i64, UseCaseError> {
+        let (count,): (i64,) = sqlx::query_as(
+            "SELECT count(*) FROM posts WHERE category_id = $1 AND status = 'published' \
+             AND visibility = 'public' AND deleted_at IS NULL",
+        )
+        .bind(id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(map_sqlx_error)?;
+        Ok(count)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 公开分类页查询
+// ---------------------------------------------------------------------------
+
+pub struct PostgresPublishedCategoryQuery {
+    pool: PgPool,
+}
+
+impl PostgresPublishedCategoryQuery {
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl PublishedCategoryQuery for PostgresPublishedCategoryQuery {
+    async fn find_public_by_slug(
+        &self,
+        slug: &str,
+    ) -> Result<Option<PublicCategorySummary>, UseCaseError> {
+        let row: Option<(String, String)> =
+            sqlx::query_as("SELECT slug, name FROM categories WHERE slug = $1")
+                .bind(slug)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(map_sqlx_error)?;
+        Ok(row.map(|(slug, name)| PublicCategorySummary { slug, name }))
+    }
+
+    async fn list_public_posts_by_category(
+        &self,
+        category_slug: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<(Vec<PublicPostSummary>, i64), UseCaseError> {
+        let limit = limit.clamp(1, 100);
+        let offset = offset.max(0);
+        // 直接归属（不含子树）：父分类不自动成为文章的另一条直接分类关系。
+        let rows = sqlx::query(&format!(
+            r#"
+            SELECT p.title, p.slug, p.excerpt, p.published_at,
+                   COALESCE(NULLIF(u.display_name, ''), u.username) AS author_display,
+                   count(*) OVER() AS total
+            FROM categories c
+            JOIN posts p ON p.category_id = c.id
+            JOIN users u ON u.id = p.author_id
+            WHERE c.slug = $1 AND {POST_PUBLIC_PREDICATE}
+            ORDER BY p.published_at DESC, p.id DESC
+            LIMIT $2 OFFSET $3
+            "#
+        ))
+        .bind(category_slug)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_sqlx_error)?;
+
         let total = rows
             .first()
             .map(|row| row.try_get::<i64, _>("total").map_err(map_row_error))

@@ -4,20 +4,21 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use application::category::CategoryInteractor;
 use application::content::PostInteractor;
 use application::identity::{RoleInteractor, UserInteractor};
 use application::page::PageInteractor;
 use application::ports::{
-    PageRepository, PostRepository, PublishedPageQuery, PublishedPostQuery, PublishedTagQuery,
-    TagRepository, UserRepository,
+    CategoryRepository, PageRepository, PostRepository, PublishedCategoryQuery, PublishedPageQuery,
+    PublishedPostQuery, PublishedTagQuery, TagRepository, UserRepository,
 };
 use application::public_site::{PublicSiteInteractor, SiteInfo};
 use application::tag::TagInteractor;
 use infrastructure::{
-    MiniJinjaThemeRenderer, PostgresPageRepository, PostgresPostRepository,
-    PostgresPublishedPageQuery, PostgresPublishedPostQuery, PostgresPublishedTagQuery,
-    PostgresRbacStore, PostgresTagRepository, PostgresUserRepository, SanitizingMarkdownRenderer,
-    SystemClock,
+    MiniJinjaThemeRenderer, PostgresCategoryRepository, PostgresPageRepository,
+    PostgresPostRepository, PostgresPublishedCategoryQuery, PostgresPublishedPageQuery,
+    PostgresPublishedPostQuery, PostgresPublishedTagQuery, PostgresRbacStore,
+    PostgresTagRepository, PostgresUserRepository, SanitizingMarkdownRenderer, SystemClock,
 };
 use interfaces::cli::{CliDeps, Command, parse_args};
 
@@ -102,6 +103,10 @@ async fn main() {
                 Arc::new(PostgresTagRepository::new(pool.clone()));
             let public_tag_query: Arc<dyn PublishedTagQuery> =
                 Arc::new(PostgresPublishedTagQuery::new(pool.clone()));
+            let category_repo: Arc<dyn CategoryRepository> =
+                Arc::new(PostgresCategoryRepository::new(pool.clone()));
+            let public_category_query: Arc<dyn PublishedCategoryQuery> =
+                Arc::new(PostgresPublishedCategoryQuery::new(pool.clone()));
 
             let renderer = Arc::new(
                 MiniJinjaThemeRenderer::load(&config.theme_dir).expect("加载主题模板失败"),
@@ -169,14 +174,17 @@ async fn main() {
             let posts = Arc::new(PostInteractor::new(
                 post_repo.clone(),
                 tag_repo.clone(),
+                category_repo.clone(),
                 clock.clone(),
             ));
             let pages = Arc::new(PageInteractor::new(page_repo, clock.clone()));
             let tags = Arc::new(TagInteractor::new(tag_repo, clock.clone()));
+            let categories = Arc::new(CategoryInteractor::new(category_repo, clock.clone()));
             let public_site = Arc::new(PublicSiteInteractor::new(
                 public_query,
                 public_page_query,
                 public_tag_query,
+                public_category_query,
                 markdown,
                 renderer,
                 SiteInfo {
@@ -190,6 +198,7 @@ async fn main() {
                 posts,
                 pages,
                 tags,
+                categories,
                 roles,
                 auth,
                 passwords,

@@ -4,7 +4,9 @@
 use std::path::Path;
 
 use application::error::UseCaseError;
-use application::public_site::{PageView, PostCard, PostView, SiteInfo, TagView, ThemeRenderer};
+use application::public_site::{
+    CategoryView, PageView, PostCard, PostView, SiteInfo, TagView, ThemeRenderer,
+};
 use minijinja::Environment;
 use pulldown_cmark::{Options, Parser, html::push_html};
 
@@ -61,6 +63,12 @@ struct TagContext<'a> {
     tag: &'a TagView,
 }
 
+#[derive(serde::Serialize)]
+struct CategoryContext<'a> {
+    site: &'a SiteInfo,
+    category: &'a CategoryView,
+}
+
 /// MiniJinja 主题渲染器：启动时加载并解析主题模板，请求期复用。
 pub struct MiniJinjaThemeRenderer {
     env: Environment<'static>,
@@ -77,6 +85,7 @@ impl MiniJinjaThemeRenderer {
             "post.html",
             "page.html",
             "tag.html",
+            "category.html",
         ] {
             let path = theme_dir.join("templates").join(name);
             let source = std::fs::read_to_string(&path)
@@ -118,6 +127,18 @@ impl ThemeRenderer for MiniJinjaThemeRenderer {
         let ctx = TagContext { site, tag };
         self.env
             .get_template("tag.html")
+            .and_then(|t| t.render(ctx))
+            .map_err(|e| UseCaseError::Render(e.to_string()))
+    }
+
+    fn render_category(
+        &self,
+        site: &SiteInfo,
+        category: &CategoryView,
+    ) -> Result<String, UseCaseError> {
+        let ctx = CategoryContext { site, category };
+        self.env
+            .get_template("category.html")
             .and_then(|t| t.render(ctx))
             .map_err(|e| UseCaseError::Render(e.to_string()))
     }

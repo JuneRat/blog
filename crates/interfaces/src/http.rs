@@ -35,6 +35,7 @@ pub fn public_router(state: PublicSiteState, assets_dir: Option<PathBuf>) -> Rou
         .route("/", get(index))
         .route("/posts/{slug}", get(post_detail))
         .route("/tags/{slug}", get(tag_detail))
+        .route("/categories/{slug}", get(category_detail))
         .route("/healthz", get(healthz))
         .route("/{slug}", get(page_detail))
         .fallback(not_found)
@@ -130,6 +131,25 @@ async fn tag_detail(
         Ok(html) => Html(html).into_response(),
         Err(UseCaseError::NotFound(_)) => {
             (StatusCode::NOT_FOUND, "<h1>404</h1><p>标签不存在。</p>").into_response()
+        }
+        Err(e) => server_error(e),
+    }
+}
+
+/// 公开分类页 /categories/{slug}?page=N：未知分类 404；直接归属的公开文章分页。
+async fn category_detail(
+    State(state): State<PublicSiteState>,
+    Path(slug): Path<String>,
+    Query(query): Query<TagPageQuery>,
+) -> Response {
+    match state
+        .site
+        .render_category(&slug, query.page.unwrap_or(1))
+        .await
+    {
+        Ok(html) => Html(html).into_response(),
+        Err(UseCaseError::NotFound(_)) => {
+            (StatusCode::NOT_FOUND, "<h1>404</h1><p>分类不存在。</p>").into_response()
         }
         Err(e) => server_error(e),
     }

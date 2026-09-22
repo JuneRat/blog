@@ -279,6 +279,8 @@ pub struct CliDeps {
     pub pages: Arc<application::page::PageInteractor>,
     /// 标签目录用例（管理动作 tag.manage）。
     pub tags: Arc<application::tag::TagInteractor>,
+    /// 分类目录用例（管理动作 category.manage）。
+    pub categories: Arc<application::category::CategoryInteractor>,
     pub roles: Arc<RoleInteractor>,
     pub auth: Arc<AuthInteractor>,
     /// 本地密码用例（受控设置/重置、清除与限流）。
@@ -326,6 +328,7 @@ pub async fn run(deps: CliDeps, command: Command) -> Result<(), String> {
                 posts: deps.posts,
                 pages: deps.pages,
                 tags: deps.tags,
+                categories: deps.categories,
                 roles: deps.roles,
                 secure_cookies: deps.secure_cookies,
             };
@@ -335,6 +338,7 @@ pub async fn run(deps: CliDeps, command: Command) -> Result<(), String> {
                 .merge(crate::http_admin::posts_router(admin_state.clone()))
                 .merge(crate::http_admin::pages_router(admin_state.clone()))
                 .merge(crate::http_admin::tags_router(admin_state.clone()))
+                .merge(crate::http_admin::categories_router(admin_state.clone()))
                 .merge(crate::http_identity::identity_router(admin_state));
             // 后台 SPA 挂在 /admin 子树；dist 不存在时保持未注册。
             let app = crate::http::mount_admin_spa(app, deps.admin_dist);
@@ -692,6 +696,7 @@ async fn run_post(deps: CliDeps, action: PostAction) -> Result<(), String> {
                         content,
                         visibility: parse_visibility(visibility.as_deref())?,
                         tag_ids: Vec::new(),
+                        category_id: None,
                     },
                 )
                 .await
@@ -734,6 +739,7 @@ async fn run_post(deps: CliDeps, action: PostAction) -> Result<(), String> {
                         content,
                         visibility,
                         tag_ids: None,
+                        category_id: None,
                         expected_version: if_version,
                     },
                 )

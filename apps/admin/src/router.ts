@@ -19,6 +19,7 @@ export type Route =
   | { name: "pageNew" }
   | { name: "pageEdit"; slug: string }
   | { name: "tagList" }
+  | { name: "categoryList" }
   | { name: "userList" }
   | { name: "roleList" }
   /** 畸形或多余的路径段：显示提示而不是白屏/静默进入别的页面。 */
@@ -62,6 +63,9 @@ export function parseRoute(pathname: string): Route {
   if (segments[0] === "tags") {
     return segments.length === 1 ? { name: "tagList" } : { name: "invalid" };
   }
+  if (segments[0] === "categories") {
+    return segments.length === 1 ? { name: "categoryList" } : { name: "invalid" };
+  }
   if (segments[0] === "users") {
     return segments.length === 1 ? { name: "userList" } : { name: "invalid" };
   }
@@ -90,6 +94,7 @@ export const paths = {
   newPage: `${BASE}/pages/new`,
   editPage: (slug: string): string => `${BASE}/pages/${encodeURIComponent(slug)}/edit`,
   tags: `${BASE}/tags`,
+  categories: `${BASE}/categories`,
   users: `${BASE}/users`,
   roles: `${BASE}/roles`,
 };

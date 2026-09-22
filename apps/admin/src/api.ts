@@ -9,6 +9,7 @@ import type {
   PostSummary,
   ProviderSummary,
   RoleSummary,
+  CategorySummary,
   TagSummary,
   Visibility,
 } from "./types";
@@ -125,6 +126,8 @@ export interface CreatePostInput {
   visibility: Visibility;
   /** 初始标签 id 集合；重复由后端去重。 */
   tag_ids?: string[];
+  /** 初始分类 id。 */
+  category_id?: string;
 }
 
 export interface EditPostInput {
@@ -135,6 +138,8 @@ export interface EditPostInput {
   visibility?: Visibility;
   /** 存在即整体替换标签集合（[] = 清空）；缺省不触碰。 */
   tag_ids?: string[];
+  /** null = 清空分类；id = 设置；缺省不触碰。 */
+  category_id?: string | null;
   expected_version?: number;
 }
 
@@ -344,3 +349,45 @@ export async function loginUrl(next: string): Promise<string | null> {
     return null;
   }
 }
+
+export interface CreateCategoryInput {
+  name: string;
+  slug: string;
+  parent?: string;
+  description?: string;
+}
+
+export interface UpdateCategoryInput {
+  name: string;
+  description?: string;
+  /** null = 移到根；slug = 移到指定父；缺省保持现状。 */
+  parent?: string | null;
+  expected_version?: number;
+}
+
+/** 分类目录：读取对已登录会话开放；管理需 category.manage。 */
+export const categoryApi = {
+  list: (): Promise<CategorySummary[]> =>
+    request<CategorySummary[]>("/api/admin/v1/categories"),
+
+  /** 创建。slug 冲突是 409 conflict；slug 创建后不可改。 */
+  create: (input: CreateCategoryInput): Promise<CategorySummary> =>
+    request<CategorySummary>("/api/admin/v1/categories", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+
+  /** 更新（改名/描述/移动父节点）。移动成环是 400 invalid_request。 */
+  update: (slug: string, input: UpdateCategoryInput): Promise<CategorySummary> =>
+    request<CategorySummary>(`/api/admin/v1/categories/${encodeURIComponent(slug)}`, {
+      method: "PATCH",
+      body: JSON.stringify(input),
+    }),
+
+  /** 删除：被文章引用或仍有子分类时 409 category_in_use。 */
+  remove: (slug: string, expectedVersion?: number): Promise<void> =>
+    request<void>(`/api/admin/v1/categories/${encodeURIComponent(slug)}`, {
+      method: "DELETE",
+      body: JSON.stringify({ expected_version: expectedVersion }),
+    }),
+};

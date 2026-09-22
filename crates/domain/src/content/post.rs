@@ -157,6 +157,9 @@ pub struct PostSnapshot {
 }
 
 /// 编辑补丁：None 表示不修改该字段。
+///
+/// `category_id` 是三态：`None` 不修改；`Some(None)` 清空分类；
+/// `Some(Some(id))` 设置分类（存在性由用例校验）。
 #[derive(Debug, Clone, Default)]
 pub struct PostPatch {
     pub slug: Option<String>,
@@ -164,6 +167,7 @@ pub struct PostPatch {
     pub excerpt: Option<String>,
     pub content: Option<String>,
     pub visibility: Option<Visibility>,
+    pub category_id: Option<Option<Uuid>>,
 }
 
 /// Post 聚合。字段私有，状态转换只经由行为方法。
@@ -283,6 +287,7 @@ impl Post {
             .content
             .unwrap_or_else(|| self.snapshot.content.clone());
         let new_visibility = patch.visibility.unwrap_or(self.snapshot.visibility);
+        let new_category_id = patch.category_id.unwrap_or(self.snapshot.category_id);
         let slug_changed = match patch.slug.as_deref() {
             Some(new_slug) => new_slug != self.snapshot.slug,
             None => false,
@@ -327,6 +332,10 @@ impl Post {
         }
         if new_visibility != self.snapshot.visibility {
             self.snapshot.visibility = new_visibility;
+            changed = true;
+        }
+        if new_category_id != self.snapshot.category_id {
+            self.snapshot.category_id = new_category_id;
             changed = true;
         }
         if slug_changed {

@@ -50,6 +50,9 @@ export function PostListScreen() {
           <button type="button" className="button ghost" onClick={() => navigate(paths.tags)}>
             标签
           </button>
+          <button type="button" className="button ghost" onClick={() => navigate(paths.categories)}>
+            分类
+          </button>
           {canAdminister && (
             <button type="button" className="button ghost" onClick={() => navigate(paths.users)}>
               用户与角色

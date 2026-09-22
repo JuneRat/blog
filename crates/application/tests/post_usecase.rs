@@ -347,6 +347,51 @@ impl TagRepository for FakeTagRepo {
     }
 }
 
+/// 分类目录 fake：文章用例只依赖 existing_id（存在性校验），恒报存在。
+struct FakeCategoryRepo;
+
+#[async_trait::async_trait]
+impl application::ports::CategoryRepository for FakeCategoryRepo {
+    async fn insert(
+        &self,
+        _snapshot: &domain::content::CategorySnapshot,
+    ) -> Result<(), UseCaseError> {
+        Ok(())
+    }
+    async fn find_by_slug(
+        &self,
+        _slug: &str,
+    ) -> Result<Option<domain::content::CategorySnapshot>, UseCaseError> {
+        Ok(None)
+    }
+    async fn list(&self) -> Result<Vec<application::ports::CategoryWithUsage>, UseCaseError> {
+        Ok(Vec::new())
+    }
+    async fn update(
+        &self,
+        _id: uuid::Uuid,
+        _name: &str,
+        _description: Option<&str>,
+        _parent_id: Option<uuid::Uuid>,
+        _expected_version: i64,
+    ) -> Result<Option<domain::content::CategorySnapshot>, UseCaseError> {
+        Ok(None)
+    }
+    async fn delete(
+        &self,
+        _id: uuid::Uuid,
+        _expected_version: i64,
+    ) -> Result<application::ports::CategoryDeleteOutcome, UseCaseError> {
+        Ok(application::ports::CategoryDeleteOutcome::Gone)
+    }
+    async fn existing_id(&self, _id: uuid::Uuid) -> Result<bool, UseCaseError> {
+        Ok(true)
+    }
+    async fn public_count(&self, _id: uuid::Uuid) -> Result<i64, UseCaseError> {
+        Ok(0)
+    }
+}
+
 struct FakeRbacStore {
     roles: std::sync::Mutex<HashMap<String, Vec<&'static str>>>,
     assignments: std::sync::Mutex<HashSet<(Uuid, String)>>,
@@ -507,7 +552,12 @@ async fn fixture() -> Fixture {
         clock.clone(),
     ));
     let roles = Arc::new(RoleInteractor::new(rbac.clone(), user_repo));
-    let posts = Arc::new(PostInteractor::new(post_repo, tag_repo.clone(), clock));
+    let posts = Arc::new(PostInteractor::new(
+        post_repo,
+        tag_repo.clone(),
+        Arc::new(FakeCategoryRepo),
+        clock,
+    ));
 
     roles.sync_registry().await.unwrap();
 
@@ -564,6 +614,7 @@ fn draft_cmd(slug: &str) -> CreatePostCmd {
         content: "# Hello\n\n正文内容".into(),
         visibility: Visibility::Public,
         tag_ids: Vec::new(),
+        category_id: None,
     }
 }
 
@@ -811,6 +862,7 @@ async fn publish_requires_content() {
                 content: String::new(),
                 visibility: Visibility::Public,
                 tag_ids: Vec::new(),
+                category_id: None,
             },
         )
         .await
@@ -849,6 +901,7 @@ async fn generated_slug_occupied_at_creation() {
                 content: "内容".into(),
                 visibility: Visibility::Public,
                 tag_ids: Vec::new(),
+                category_id: None,
             },
         )
         .await

@@ -6,7 +6,10 @@ use std::sync::Arc;
 use time::OffsetDateTime;
 
 use crate::error::UseCaseError;
-use crate::ports::{ContentRenderer, PublishedPageQuery, PublishedPostQuery, PublishedTagQuery};
+use crate::ports::{
+    ContentRenderer, PublishedCategoryQuery, PublishedPageQuery, PublishedPostQuery,
+    PublishedTagQuery,
+};
 use domain::content::is_reserved_root_slug;
 
 /// 模板展示用的时间格式（应用层渲染契约的一部分）。
@@ -40,6 +43,13 @@ pub struct TagCard {
     pub name: String,
 }
 
+/// 详情页上的分类链接（至多一个）。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CategoryCard {
+    pub slug: String,
+    pub name: String,
+}
+
 /// 详情页模板数据契约；content_html 已经过清洗。
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct PostView {
@@ -52,6 +62,8 @@ pub struct PostView {
     pub content_html: String,
     /// 当前标签（链接到 /tags/{slug}）。
     pub tags: Vec<TagCard>,
+    /// 所属分类（链接到 /categories/{slug}）。
+    pub category: Option<CategoryCard>,
 }
 
 /// 页面详情页模板数据契约；content_html 已经过清洗。
@@ -62,6 +74,16 @@ pub struct PageView {
     pub published_at: Option<String>,
     pub updated_at: String,
     pub content_html: String,
+}
+
+/// 公开分类页模板数据契约：与标签页同构（分类头 + 分页文章列表）。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CategoryView {
+    pub category_slug: String,
+    pub category_name: String,
+    pub page: i64,
+    pub total_pages: i64,
+    pub posts: Vec<PostCard>,
 }
 
 /// 公开标签页模板数据契约：标签头 + 分页文章列表。
@@ -83,15 +105,22 @@ pub trait ThemeRenderer: Send + Sync {
     fn render_post(&self, site: &SiteInfo, post: &PostView) -> Result<String, UseCaseError>;
     fn render_page(&self, site: &SiteInfo, page: &PageView) -> Result<String, UseCaseError>;
     fn render_tag(&self, site: &SiteInfo, tag: &TagView) -> Result<String, UseCaseError>;
+    fn render_category(
+        &self,
+        site: &SiteInfo,
+        category: &CategoryView,
+    ) -> Result<String, UseCaseError>;
 }
 
-/// 公开标签页分页大小。
+/// 公开列表页（标签页/分类页）分页大小。
 pub const TAG_PAGE_SIZE: i64 = 20;
+pub const CATEGORY_PAGE_SIZE: i64 = 20;
 
 pub struct PublicSiteInteractor {
     posts: Arc<dyn PublishedPostQuery>,
     pages: Arc<dyn PublishedPageQuery>,
     tags: Arc<dyn PublishedTagQuery>,
+    categories: Arc<dyn PublishedCategoryQuery>,
     markdown: Arc<dyn ContentRenderer>,
     theme: Arc<dyn ThemeRenderer>,
     site: SiteInfo,
@@ -102,6 +131,7 @@ impl PublicSiteInteractor {
         posts: Arc<dyn PublishedPostQuery>,
         pages: Arc<dyn PublishedPageQuery>,
         tags: Arc<dyn PublishedTagQuery>,
+        categories: Arc<dyn PublishedCategoryQuery>,
         markdown: Arc<dyn ContentRenderer>,
         theme: Arc<dyn ThemeRenderer>,
         site: SiteInfo,
@@ -110,6 +140,7 @@ impl PublicSiteInteractor {
             posts,
             pages,
             tags,
+            categories,
             markdown,
             theme,
             site,
@@ -156,6 +187,10 @@ impl PublicSiteInteractor {
                     name: t.name.clone(),
                 })
                 .collect(),
+            category: detail.category.as_ref().map(|c| CategoryCard {
+                slug: c.slug.clone(),
+                name: c.name.clone(),
+            }),
         };
         self.theme.render_post(&self.site, &view)
     }
@@ -218,5 +253,39 @@ impl PublicSiteInteractor {
                 .collect(),
         };
         self.theme.render_tag(&self.site, &view)
+    }
+
+    /// 渲染公开分类页 /categories/{slug}?page=N（直接归属，不含子树）。
+    /// 语义与标签页一致：未知 slug 404；只列公开已发布文章；越界页为空页。
+    pub async fn render_category(&self, slug: &str, page: i64) -> Result<String, UseCaseError> {
+        let category = self
+            .categories
+            .find_public_by_slug(slug)
+            .await?
+            .ok_or_else(|| UseCaseError::NotFound(format!("分类 {slug}")))?;
+        let page = page.max(1);
+        let offset = (page - 1) * CATEGORY_PAGE_SIZE;
+        let (posts, total) = self
+            .categories
+            .list_public_posts_by_category(slug, CATEGORY_PAGE_SIZE, offset)
+            .await?;
+        let total_pages = ((total + CATEGORY_PAGE_SIZE - 1) / CATEGORY_PAGE_SIZE).max(1);
+        let view = CategoryView {
+            category_slug: category.slug,
+            category_name: category.name,
+            page,
+            total_pages,
+            posts: posts
+                .into_iter()
+                .map(|s| PostCard {
+                    title: s.title,
+                    slug: s.slug,
+                    excerpt: s.excerpt,
+                    published_at: s.published_at.map(format_datetime),
+                    author_display: s.author_display,
+                })
+                .collect(),
+        };
+        self.theme.render_category(&self.site, &view)
     }
 }

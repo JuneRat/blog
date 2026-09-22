@@ -17,9 +17,11 @@ vi.mock("../src/api", async (importOriginal) => {
   const original = await importOriginal<typeof import("../src/api")>();
   return {
     ...original,
+    categoryApi: { list: vi.fn() },
     api: {
       getPost: vi.fn(), createPost: vi.fn(), updatePost: vi.fn(),
       publishPost: vi.fn(), unpublishPost: vi.fn(), listTags: vi.fn(),
+      categoryApi: { list: vi.fn() },
     },
   };
 });
@@ -28,7 +30,7 @@ const post: PostDetail = {
   id: "post-id", slug: "first", title: "原始标题", content: "原始正文",
   excerpt: null, status: "draft", visibility: "public", version: 1,
   published_at: null, updated_at: "2026-09-22T00:00:00Z", author_id: "author-id",
-  tag_ids: [],
+  tag_ids: [], category_id: null,
 };
 
 function deferred<T>() {
@@ -47,6 +49,7 @@ beforeEach(() => {
   vi.mocked(api.getPost).mockResolvedValue(post);
   // 标签目录：空目录即可（编辑器只渲染选择区）。
   vi.mocked(api.listTags).mockResolvedValue([]);
+  vi.mocked(api.categoryApi.list).mockResolvedValue([]);
 });
 afterEach(cleanup);
 

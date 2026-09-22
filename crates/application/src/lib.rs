@@ -2,6 +2,7 @@
 //! 不绑定数据库或 HTTP 框架类型。
 
 pub mod auth;
+pub mod category;
 pub mod content;
 pub mod error;
 pub mod identity;

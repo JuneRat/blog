@@ -8,9 +8,9 @@ use std::sync::Arc;
 
 use application::error::{ConflictKind, UseCaseError};
 use application::ports::{
-    ClearPasswordOutcome, ContentRenderer, OAuthAccountStore, PageRepository, PostRepository,
-    PublishedPageQuery, PublishedPostQuery, PublishedTagQuery, RbacStore, SaveOutcome,
-    TagRepository, UserRepository,
+    CategoryRepository, ClearPasswordOutcome, ContentRenderer, OAuthAccountStore, PageRepository,
+    PostRepository, PublishedCategoryQuery, PublishedPageQuery, PublishedPostQuery,
+    PublishedTagQuery, RbacStore, SaveOutcome, TagRepository, UserRepository,
 };
 use domain::content::page::Page;
 use domain::content::post::{Post, PostSnapshot, PostStatus, Slug, Visibility};
@@ -1665,4 +1665,230 @@ async fn public_tag_page_lists_only_public_posts_and_paginates() {
     assert_eq!(detail.tags.len(), 1);
     assert_eq!(detail.tags[0].slug, "rust");
     assert_eq!(detail.tags[0].name, "Rust");
+}
+
+// ---------------------------------------------------------------------------
+// 分类树：防环、事务锁与引用保护
+// ---------------------------------------------------------------------------
+
+async fn seed_category(
+    pool: &sqlx::PgPool,
+    name: &str,
+    slug: &str,
+    parent: Option<uuid::Uuid>,
+) -> domain::content::CategorySnapshot {
+    let repo = infrastructure::PostgresCategoryRepository::new(pool.clone());
+    let category = domain::content::Category::new(
+        name.into(),
+        domain::content::post::Slug::new(slug).unwrap(),
+        parent,
+        None,
+        OffsetDateTime::now_utc(),
+    )
+    .unwrap();
+    let snapshot = category.snapshot();
+    repo.insert(&snapshot).await.unwrap();
+    snapshot
+}
+
+#[tokio::test]
+async fn category_move_rejects_cycles_even_indirect() {
+    let _g = SERIAL.lock().await;
+    let pool = fresh_database().await;
+    let repo = infrastructure::PostgresCategoryRepository::new(pool.clone());
+    let a = seed_category(&pool, "A", "a", None).await;
+    let b = seed_category(&pool, "B", "b", Some(a.id)).await;
+
+    // 直接自父。
+    let err = repo
+        .update(a.id, "A", None, Some(a.id), a.version)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, UseCaseError::Invalid(_)), "得到 {err:?}");
+
+    // 一级环：A 的父设为子 B。
+    let err = repo
+        .update(a.id, "A", None, Some(b.id), a.version)
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("环"), "得到 {err:?}");
+
+    // 二级环：A→C→B→A。
+    let c = seed_category(&pool, "C", "c", Some(b.id)).await;
+    let err = repo
+        .update(a.id, "A", None, Some(c.id), a.version)
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("环"), "得到 {err:?}");
+
+    // 合法移动（叶子互换父）不受影响；父设为根也合法。
+    let moved = repo
+        .update(c.id, "C", None, Some(a.id), c.version)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(moved.parent_id, Some(a.id));
+    let rooted = repo
+        .update(c.id, "C", None, None, moved.version)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(rooted.parent_id, None);
+}
+
+#[tokio::test]
+async fn category_move_rejects_missing_parent_and_checks_version() {
+    let _g = SERIAL.lock().await;
+    let pool = fresh_database().await;
+    let repo = infrastructure::PostgresCategoryRepository::new(pool.clone());
+    let a = seed_category(&pool, "A", "a", None).await;
+
+    let ghost = uuid::Uuid::now_v7();
+    let err = repo
+        .update(a.id, "A", None, Some(ghost), a.version)
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("父分类不存在"), "得到 {err:?}");
+
+    assert!(
+        repo.update(a.id, "新名", None, None, a.version + 5)
+            .await
+            .unwrap()
+            .is_none(),
+        "过期版本不得写入"
+    );
+}
+
+#[tokio::test]
+async fn category_delete_protects_posts_and_children() {
+    let _g = SERIAL.lock().await;
+    let pool = fresh_database().await;
+    let author = seed_user(&pool, "author").await;
+    let posts = PostgresPostRepository::new(pool.clone());
+    let repo = infrastructure::PostgresCategoryRepository::new(pool.clone());
+    let parent = seed_category(&pool, "父", "parent", None).await;
+    let child = seed_category(&pool, "子", "child", Some(parent.id)).await;
+
+    // 子分类存在：父分类删除被拒。
+    match repo.delete(parent.id, parent.version).await.unwrap() {
+        application::ports::CategoryDeleteOutcome::Referenced {
+            posts: 0,
+            children: 1,
+        } => {}
+        other => panic!("期望子分类保护，得到 {other:?}"),
+    }
+
+    // 文章引用（含草稿）同样占用。
+    let draft = draft_snapshot(author, "categorized-draft");
+    posts.insert(&draft, &[]).await.unwrap();
+    sqlx::query("UPDATE posts SET category_id = $1 WHERE slug = 'categorized-draft'")
+        .bind(child.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    match repo.delete(child.id, child.version).await.unwrap() {
+        application::ports::CategoryDeleteOutcome::Referenced {
+            posts: 1,
+            children: 0,
+        } => {}
+        other => panic!("期望文章引用保护，得到 {other:?}"),
+    }
+    // FK RESTRICT 兜底。
+    let result = sqlx::query("DELETE FROM categories WHERE id = $1")
+        .bind(child.id)
+        .execute(&pool)
+        .await;
+    assert!(result.is_err());
+
+    // 解除引用后：先删子，再删父，成功。
+    sqlx::query("UPDATE posts SET category_id = NULL WHERE slug = 'categorized-draft'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    repo.delete(child.id, child.version).await.unwrap();
+    repo.delete(parent.id, parent.version).await.unwrap();
+}
+
+#[tokio::test]
+async fn post_category_saved_in_same_transaction_and_public_page_filters() {
+    let _g = SERIAL.lock().await;
+    let pool = fresh_database().await;
+    let author = seed_user(&pool, "author").await;
+    let posts = PostgresPostRepository::new(pool.clone());
+    let query = PostgresPublishedPostQuery::new(pool.clone());
+    let cat_query = infrastructure::PostgresPublishedCategoryQuery::new(pool.clone());
+    let cat = seed_category(&pool, "技术", "tech", None).await;
+
+    // 创建即带分类；仅改分类也递增 version。
+    let snapshot = draft_snapshot(author, "cat-post");
+    posts.insert(&snapshot, &[]).await.unwrap();
+    let edit = {
+        let mut s = snapshot.clone();
+        s.category_id = Some(cat.id);
+        s
+    };
+    match posts
+        .save(&edit, snapshot.version, OffsetDateTime::now_utc(), None)
+        .await
+        .unwrap()
+    {
+        SaveOutcome::Saved { new_version } => assert_eq!(new_version, snapshot.version + 1),
+        other => panic!("得到 {other:?}"),
+    }
+
+    // 公开分类页：草稿不可见；发布后可见；未知分类 404 语义（空）。
+    let (page0, total0) = cat_query
+        .list_public_posts_by_category("tech", 20, 0)
+        .await
+        .unwrap();
+    assert_eq!((page0.len(), total0), (0, 0), "草稿不出现在分类页");
+    let mut published = edit.clone();
+    {
+        let mut post = domain::content::Post::reconstitute(published.clone());
+        post.publish(OffsetDateTime::now_utc()).unwrap();
+        published = post.snapshot();
+    }
+    posts
+        .save(
+            &published,
+            snapshot.version + 1,
+            OffsetDateTime::now_utc(),
+            None,
+        )
+        .await
+        .unwrap();
+    let (page1, total1) = cat_query
+        .list_public_posts_by_category("tech", 20, 0)
+        .await
+        .unwrap();
+    assert_eq!((page1.len(), total1), (1, 1));
+    assert_eq!(page1[0].slug, "cat-post");
+
+    // 详情带分类引用。
+    let detail = query
+        .find_public_by_slug("cat-post")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(detail.category.as_ref().unwrap().slug, "tech");
+
+    // FK 兜底：并发删除分类后保存文章报可定位错误。
+    sqlx::query("DELETE FROM posts WHERE slug = 'cat-post'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM categories WHERE id = $1")
+        .bind(cat.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let ghost_edit = {
+        let mut s = draft_snapshot(author, "ghost-cat");
+        s.category_id = Some(cat.id);
+        s
+    };
+    match posts.insert(&ghost_edit, &[]).await.unwrap_err() {
+        UseCaseError::Invalid(ref m) if m.contains("分类") => {}
+        other => panic!("期望分类不存在错误，得到 {other:?}"),
+    }
 }

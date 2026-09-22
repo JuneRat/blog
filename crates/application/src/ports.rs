@@ -223,6 +223,71 @@ pub enum ClearPasswordOutcome {
     LastLoginMethod,
 }
 
+/// 分类目录条目：含公开文章计数（直接归属；子树聚合计数需显式查询，首版不提供）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct CategoryWithUsage {
+    pub snapshot: domain::content::CategorySnapshot,
+    /// status=published AND visibility=public AND deleted_at IS NULL 且直接归属的文章数。
+    pub public_post_count: i64,
+}
+
+/// 分类删除的受控结果（引用与子分类保护由用例翻译）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CategoryDeleteOutcome {
+    Deleted,
+    StaleVersion,
+    /// 仍被文章引用或仍有子分类：引用保护拒绝删除。
+    Referenced {
+        posts: i64,
+        children: i64,
+    },
+    Gone,
+}
+
+/// 分类目录写侧端口。
+///
+/// 防环约定：自引用 CHECK 只排除直接自父；移动（改 parent）的祖先链校验
+/// 在 [`CategoryRepository::update`] 的分类树事务锁内完成（docs/content-lifecycle.md §3）。
+#[async_trait]
+pub trait CategoryRepository: Send + Sync {
+    async fn insert(
+        &self,
+        snapshot: &domain::content::CategorySnapshot,
+    ) -> Result<(), UseCaseError>;
+    async fn find_by_slug(
+        &self,
+        slug: &str,
+    ) -> Result<Option<domain::content::CategorySnapshot>, UseCaseError>;
+    /// 全量目录（含公开文章计数），按 slug 排序。
+    async fn list(&self) -> Result<Vec<CategoryWithUsage>, UseCaseError>;
+
+    /// 条件更新（CAS）：name/描述/父节点一次提交；命中返回新快照，未命中 None。
+    ///
+    /// 父节点变化时在分类树锁内重走祖先链：链上出现自身即 `Err(Invalid)`（成环），
+    /// 新父不存在同样 `Err(Invalid)`。树锁保证检查与写入之间无并发移动。
+    async fn update(
+        &self,
+        id: Uuid,
+        name: &str,
+        description: Option<&str>,
+        parent_id: Option<Uuid>,
+        expected_version: i64,
+    ) -> Result<Option<domain::content::CategorySnapshot>, UseCaseError>;
+
+    /// 条件删除：树锁内先检查文章引用与子分类，再按版本条件删除。
+    async fn delete(
+        &self,
+        id: Uuid,
+        expected_version: i64,
+    ) -> Result<CategoryDeleteOutcome, UseCaseError>;
+
+    /// 文章设置分类前的存在性校验。
+    async fn existing_id(&self, id: Uuid) -> Result<bool, UseCaseError>;
+
+    /// 单个分类的公开文章计数（更新响应回填用）。
+    async fn public_count(&self, id: Uuid) -> Result<i64, UseCaseError>;
+}
+
 // ---------------------------------------------------------------------------
 // Page（站点级内容，无作者归属）
 // ---------------------------------------------------------------------------
@@ -324,6 +389,13 @@ pub struct PublicTagRef {
     pub name: String,
 }
 
+/// 公开文章上的分类引用（详情页展示；至多一个）。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PublicCategoryRef {
+    pub slug: String,
+    pub name: String,
+}
+
 /// 公开详情（正文为 Markdown 源文，渲染交给出站端口）。
 #[derive(Debug, Clone)]
 pub struct PublicPostDetail {
@@ -337,6 +409,8 @@ pub struct PublicPostDetail {
     pub content: String,
     /// 当前关联标签（仅取存在于 tags 表的行；无可见性过滤——标签目录本身公开）。
     pub tags: Vec<PublicTagRef>,
+    /// 所属分类（至多一个；分类目录本身公开）。
+    pub category: Option<PublicCategoryRef>,
 }
 
 #[async_trait]
@@ -358,6 +432,29 @@ pub trait PublishedPostQuery: Send + Sync {
 pub struct PublicTagSummary {
     pub slug: String,
     pub name: String,
+}
+
+/// 公开分类页数据源（与标签页同构：目录无可见性，过滤作用在文章列表）。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PublicCategorySummary {
+    pub slug: String,
+    pub name: String,
+}
+
+#[async_trait]
+pub trait PublishedCategoryQuery: Send + Sync {
+    async fn find_public_by_slug(
+        &self,
+        slug: &str,
+    ) -> Result<Option<PublicCategorySummary>, UseCaseError>;
+
+    /// 该分类**直接归属**的公开文章分页（不含子树；docs/content-lifecycle.md §3）。
+    async fn list_public_posts_by_category(
+        &self,
+        category_slug: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<(Vec<PublicPostSummary>, i64), UseCaseError>;
 }
 
 #[async_trait]

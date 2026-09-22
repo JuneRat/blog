@@ -31,6 +31,8 @@ pub struct CreatePostCmd {
     pub visibility: Visibility,
     /// 初始标签集合（整体写入；用例内去重并校验存在）。
     pub tag_ids: Vec<Uuid>,
+    /// 初始分类（存在性由用例校验）。
+    pub category_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -44,6 +46,8 @@ pub struct EditPostCmd {
     /// Some(set) 表示同事务整体替换标签关系（含清空：Some(vec![])）；
     /// None 表示本次不触碰标签。
     pub tag_ids: Option<Vec<Uuid>>,
+    /// 三态：None 不修改；Some(None) 清空分类；Some(Some(id)) 设置分类。
+    pub category_id: Option<Option<Uuid>>,
     /// None 表示使用读取到的当前版本（仍可检测读后并发修改）。
     pub expected_version: Option<i64>,
 }
@@ -66,6 +70,8 @@ pub struct PostDto {
     pub author_id: Uuid,
     /// 当前关联标签 id（按 id 升序）；名称由前端结合标签目录解析。
     pub tag_ids: Vec<Uuid>,
+    /// 所属分类 id（至多一个；None = 未分类）。
+    pub category_id: Option<Uuid>,
 }
 
 impl PostDto {
@@ -84,6 +90,7 @@ impl PostDto {
             deleted: s.deleted_at.is_some(),
             author_id: s.author_id,
             tag_ids,
+            category_id: s.category_id,
         }
     }
 }
@@ -92,6 +99,8 @@ pub struct PostInteractor {
     posts: Arc<dyn PostRepository>,
     /// 标签存在性校验（文章-标签关联的前置检查；写关系仍在 PostRepository 事务内）。
     tags: Arc<dyn TagRepository>,
+    /// 分类存在性校验（文章设置分类的前置检查；写关系仍在 PostRepository 事务内）。
+    categories: Arc<dyn crate::ports::CategoryRepository>,
     clock: Arc<dyn Clock>,
 }
 
@@ -99,9 +108,15 @@ impl PostInteractor {
     pub fn new(
         posts: Arc<dyn PostRepository>,
         tags: Arc<dyn TagRepository>,
+        categories: Arc<dyn crate::ports::CategoryRepository>,
         clock: Arc<dyn Clock>,
     ) -> Self {
-        Self { posts, tags, clock }
+        Self {
+            posts,
+            tags,
+            categories,
+            clock,
+        }
     }
 
     /// 创建草稿。作者即 Actor 本人（post.create 语义：创建本人文章）。
@@ -115,6 +130,9 @@ impl PostInteractor {
             .unwrap_or_else(|| format!("draft-{}", Uuid::now_v7().simple()));
         let slug = Slug::new(&slug_raw).map_err(|e| UseCaseError::Invalid(e.to_string()))?;
         let tag_ids = self.validate_tags(cmd.tag_ids).await?;
+        if let Some(category_id) = cmd.category_id {
+            self.validate_category(category_id).await?;
+        }
         let post = Post::create_draft(
             actor.user_id,
             slug,
@@ -125,8 +143,9 @@ impl PostInteractor {
             self.clock.now(),
         )
         .map_err(|e| UseCaseError::Invalid(e.to_string()))?;
-        let snapshot = post.snapshot();
-        // 正文与初始标签关系同一事务写入。
+        let mut snapshot = post.snapshot();
+        snapshot.category_id = cmd.category_id;
+        // 正文与初始标签/分类关系同一事务写入。
         self.posts.insert(&snapshot, &tag_ids).await?;
         Ok(PostDto::from_snapshot(&snapshot, tag_ids))
     }
@@ -140,6 +159,9 @@ impl PostInteractor {
             .await?;
         let expected = checked_version(expected, cmd.expected_version)?;
 
+        if let Some(Some(category_id)) = cmd.category_id {
+            self.validate_category(category_id).await?;
+        }
         let new_tags = match cmd.tag_ids {
             Some(ids) => Some(self.validate_tags(ids).await?),
             None => None,
@@ -153,6 +175,7 @@ impl PostInteractor {
             None => false,
         };
 
+        // 聚合的 edit() 报告分类变化（仅分类变化也 changed=true → version+1）。
         let changed = post
             .edit(PostPatch {
                 slug: cmd.new_slug,
@@ -160,6 +183,7 @@ impl PostInteractor {
                 excerpt: cmd.excerpt,
                 content: cmd.content,
                 visibility: cmd.visibility,
+                category_id: cmd.category_id,
             })
             .map_err(|e| UseCaseError::Invalid(e.to_string()))?;
 
@@ -288,6 +312,16 @@ impl PostInteractor {
             SaveOutcome::StaleConflict => Err(UseCaseError::VersionConflict),
             SaveOutcome::Gone => Err(UseCaseError::NotFound("文章（已被删除）".into())),
         }
+    }
+
+    /// 分类存在性校验：未知 id 报为可定位的参数错误。
+    async fn validate_category(&self, category_id: Uuid) -> Result<(), UseCaseError> {
+        if !self.categories.existing_id(category_id).await? {
+            return Err(UseCaseError::Invalid(format!(
+                "所选分类不存在：{category_id}"
+            )));
+        }
+        Ok(())
     }
 
     /// 标签集合规范化与存在性校验：去重、按 id 排序（与 tags_of 读取顺序一致），

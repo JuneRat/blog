@@ -9,18 +9,20 @@ use application::content::{CreatePostCmd, PostInteractor};
 use application::identity::{Actor, CreateUserCmd, RoleInteractor, UserInteractor};
 use application::page::{CreatePageCmd, PageInteractor, PageVisibility};
 use application::ports::{
+    CategoryRepository, PublishedCategoryQuery, PublishedTagQuery, TagRepository,
+};
+use application::ports::{
     PageRepository, PostRepository, PublishedPageQuery, PublishedPostQuery, UserRepository,
 };
-use application::ports::{PublishedTagQuery, TagRepository};
 use application::public_site::{PublicSiteInteractor, SiteInfo};
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use infrastructure::{
-    MiniJinjaThemeRenderer, PostgresPageRepository, PostgresPostRepository,
-    PostgresPublishedPageQuery, PostgresPublishedPostQuery, PostgresPublishedTagQuery,
-    PostgresRbacStore, PostgresTagRepository, PostgresUserRepository, SanitizingMarkdownRenderer,
-    SystemClock,
+    MiniJinjaThemeRenderer, PostgresCategoryRepository, PostgresPageRepository,
+    PostgresPostRepository, PostgresPublishedCategoryQuery, PostgresPublishedPageQuery,
+    PostgresPublishedPostQuery, PostgresPublishedTagQuery, PostgresRbacStore,
+    PostgresTagRepository, PostgresUserRepository, SanitizingMarkdownRenderer, SystemClock,
 };
 use interfaces::http::public_router_minimal;
 use sqlx::PgPool;
@@ -35,6 +37,8 @@ struct Stack {
     pages: Arc<PageInteractor>,
     /// 标签目录（测试直接预置标签关系）。
     tags: Arc<dyn TagRepository>,
+    /// 分类目录（测试直接预置分类）。
+    categories: Arc<dyn CategoryRepository>,
     #[allow(dead_code)]
     users: Arc<UserInteractor>,
     pool: PgPool,
@@ -72,9 +76,14 @@ async fn stack() -> Stack {
     let tag_repo: Arc<dyn TagRepository> = Arc::new(PostgresTagRepository::new(pool.clone()));
     let public_tag_query: Arc<dyn PublishedTagQuery> =
         Arc::new(PostgresPublishedTagQuery::new(pool.clone()));
+    let category_repo: Arc<dyn CategoryRepository> =
+        Arc::new(PostgresCategoryRepository::new(pool.clone()));
+    let public_category_query: Arc<dyn PublishedCategoryQuery> =
+        Arc::new(PostgresPublishedCategoryQuery::new(pool.clone()));
     let posts = Arc::new(PostInteractor::new(
         post_repo,
         tag_repo.clone(),
+        category_repo.clone(),
         clock.clone(),
     ));
     let pages = Arc::new(PageInteractor::new(page_repo, clock));
@@ -82,6 +91,7 @@ async fn stack() -> Stack {
         public_query,
         public_page_query,
         public_tag_query,
+        public_category_query,
         markdown,
         theme,
         SiteInfo {
@@ -126,6 +136,7 @@ async fn stack() -> Stack {
         posts,
         pages,
         tags: tag_repo,
+        categories: category_repo,
         users,
         pool,
         author,
@@ -153,6 +164,7 @@ fn cmd(slug: &str, title: &str) -> CreatePostCmd {
         content: format!("# {title}\n\n正文，包含 **加粗** 与 `code`。"),
         visibility: domain_visibility_public(),
         tag_ids: Vec::new(),
+        category_id: None,
     }
 }
 
@@ -414,6 +426,7 @@ async fn tag_page_lists_public_posts_and_hides_drafts_and_private() {
                 content: "# 公开\n正文".into(),
                 visibility: application::content::PostVisibility::Public,
                 tag_ids: vec![rust],
+                category_id: None,
             },
         )
         .await
@@ -435,6 +448,7 @@ async fn tag_page_lists_public_posts_and_hides_drafts_and_private() {
                 content: "草稿".into(),
                 visibility: application::content::PostVisibility::Public,
                 tag_ids: vec![rust],
+                category_id: None,
             },
         )
         .await
@@ -451,6 +465,7 @@ async fn tag_page_lists_public_posts_and_hides_drafts_and_private() {
                 content: "私密".into(),
                 visibility: application::content::PostVisibility::Private,
                 tag_ids: vec![rust],
+                category_id: None,
             },
         )
         .await
@@ -501,6 +516,7 @@ async fn tag_page_paginates_public_posts() {
                     content: "正文".into(),
                     visibility: application::content::PostVisibility::Public,
                     tag_ids: vec![rust],
+                    category_id: None,
                 },
             )
             .await
@@ -537,4 +553,63 @@ async fn tag_page_paginates_public_posts() {
         body_far.contains("还没有公开文章"),
         "越界页为空页：{body_far}"
     );
+}
+
+#[tokio::test]
+async fn category_page_lists_public_posts_and_hides_drafts() {
+    let _g = SERIAL.lock().await;
+    let stack = stack().await;
+    // 直接经目录仓储预置分类（绕过权限装配）。
+    let cat = domain::content::Category::new(
+        "技术".into(),
+        domain::content::post::Slug::new("tech").unwrap(),
+        None,
+        None,
+        time::OffsetDateTime::now_utc(),
+    )
+    .unwrap();
+    let cat_snapshot = cat.snapshot();
+    stack.categories.insert(&cat_snapshot).await.unwrap();
+
+    for (slug, title, publish) in [
+        ("cat-visible", "公开的分类文章", true),
+        ("cat-draft", "草稿不外泄", false),
+    ] {
+        stack
+            .posts
+            .create(
+                &stack.author,
+                CreatePostCmd {
+                    slug: Some(slug.into()),
+                    title: title.into(),
+                    excerpt: None,
+                    content: "正文".into(),
+                    visibility: application::content::PostVisibility::Public,
+                    tag_ids: Vec::new(),
+                    category_id: Some(cat_snapshot.id),
+                },
+            )
+            .await
+            .unwrap();
+        if publish {
+            stack
+                .posts
+                .publish(&stack.author, slug, None)
+                .await
+                .unwrap();
+        }
+    }
+
+    let (status, body) = get(&stack.router, "/categories/tech").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body.contains("技术"), "{body}");
+    assert!(body.contains("公开的分类文章"), "{body}");
+    assert!(!body.contains("草稿不外泄"), "{body}");
+    let (status, _) = get(&stack.router, "/categories/ghost").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    // 详情页展示分类链接。
+    let (status, body) = get(&stack.router, "/posts/cat-visible").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body.contains(r#"href="/categories/tech""#), "{body}");
 }

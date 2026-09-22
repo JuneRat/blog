@@ -78,6 +78,13 @@ pub enum UseCaseError {
     #[error("标签仍被文章引用（{0} 篇），先解除关联再删除")]
     TagInUse(i64),
 
+    /// 删除仍被引用或仍含子分类的分类被拒绝（引用保护）。
+    ///
+    /// 文章引用不过滤可见性（草稿/私密/回收站同样占用）；子分类须先移动或删除。
+    /// HTTP 层映射 409 + `category_in_use`，与 slug 占用的 `conflict` 区分。
+    #[error("分类仍被 {posts} 篇文章引用、仍有 {children} 个子分类；先解除引用并移走子分类")]
+    CategoryInUse { posts: i64, children: i64 },
+
     #[error("无权执行该操作")]
     Forbidden,
 

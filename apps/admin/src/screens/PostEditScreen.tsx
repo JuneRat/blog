@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ApiError, api, withRequestId } from "../api";
+import { ApiError, api, categoryApi, withRequestId } from "../api";
 import { useAuth } from "../auth";
 import { navigate, paths } from "../router";
 import type { EditPostInput } from "../api";
-import type { PostDetail, TagSummary, Visibility } from "../types";
+import type { CategorySummary, PostDetail, TagSummary, Visibility } from "../types";
 
 interface FormState {
   slug: string;
@@ -13,6 +13,8 @@ interface FormState {
   visibility: Visibility;
   /** 选中的标签 id 集合（顺序无关；与服务器往返按集合比较）。 */
   tagIds: string[];
+  /** 分类 id（null = 未分类）。 */
+  categoryId: string | null;
 }
 
 const EMPTY_FORM: FormState = {
@@ -22,6 +24,7 @@ const EMPTY_FORM: FormState = {
   content: "",
   visibility: "public",
   tagIds: [],
+  categoryId: null,
 };
 
 function toForm(post: PostDetail): FormState {
@@ -32,6 +35,7 @@ function toForm(post: PostDetail): FormState {
     content: post.content,
     visibility: post.visibility,
     tagIds: [...post.tag_ids],
+    categoryId: post.category_id,
   };
 }
 
@@ -57,7 +61,8 @@ function formEquals(left: FormState, right: FormState): boolean {
     left.excerpt === right.excerpt &&
     left.content === right.content &&
     left.visibility === right.visibility &&
-    sameTags(left.tagIds, right.tagIds)
+    sameTags(left.tagIds, right.tagIds) &&
+    left.categoryId === right.categoryId
   );
 }
 
@@ -81,6 +86,7 @@ function pickServer<K extends keyof FormState>(
 function mergeServer(current: FormState, sent: FormState, server: FormState): FormState {
   // 标签是集合字段：用户没动过勾选才接受服务器值，动过则保留本地选择。
   const tags = sameTags(current.tagIds, sent.tagIds) ? server.tagIds : current.tagIds;
+  const categoryId = current.categoryId === sent.categoryId ? server.categoryId : current.categoryId;
   return {
     slug: pickServer("slug", current, sent, server),
     title: pickServer("title", current, sent, server),
@@ -88,6 +94,7 @@ function mergeServer(current: FormState, sent: FormState, server: FormState): Fo
     content: pickServer("content", current, sent, server),
     visibility: pickServer("visibility", current, sent, server),
     tagIds: tags,
+    categoryId,
   };
 }
 
@@ -120,6 +127,8 @@ export function PostEditScreen({ slug }: { slug: string | null }) {
   const [busy, setBusy] = useState(false);
   /** 标签目录（编辑器选择器）：已登录会话即可读。 */
   const [catalog, setCatalog] = useState<TagSummary[] | null>(null);
+  /** 分类目录（编辑器选择器）。 */
+  const [categoryCatalog, setCategoryCatalog] = useState<CategorySummary[] | null>(null);
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -182,8 +191,11 @@ export function PostEditScreen({ slug }: { slug: string | null }) {
     let cancelled = false;
     void (async () => {
       try {
-        const tags = await api.listTags();
-        if (!cancelled) setCatalog(tags);
+        const [tags, categories] = await Promise.all([api.listTags(), categoryApi.list()]);
+        if (!cancelled) {
+          setCatalog(tags);
+          setCategoryCatalog(categories);
+        }
       } catch (e) {
         // 目录加载失败不阻塞正文编辑：只是暂时无法勾选标签。
         if (!cancelled) setCatalogError(messageOf(e));
@@ -251,6 +263,7 @@ export function PostEditScreen({ slug }: { slug: string | null }) {
       content: current.content,
       visibility: current.visibility,
       tag_ids: current.tagIds,
+      category_id: current.categoryId,
     };
   }
 
@@ -277,6 +290,7 @@ export function PostEditScreen({ slug }: { slug: string | null }) {
           content: sent.content,
           visibility: sent.visibility,
           tag_ids: sent.tagIds,
+          category_id: sent.categoryId ?? undefined,
         });
         // 先本地同步（含创建期间的新输入），再更新地址；效果钩子会跳过重载。
         applyServer(created, sent);
@@ -490,6 +504,25 @@ export function PostEditScreen({ slug }: { slug: string | null }) {
           >
             <option value="public">公开</option>
             <option value="private">私有</option>
+          </select>
+        </label>
+        <label>
+          分类
+          <select
+            value={form.categoryId ?? ""}
+            onChange={(event) =>
+              commitForm({
+                ...formRef.current,
+                categoryId: event.target.value.length > 0 ? event.target.value : null,
+              })
+            }
+          >
+            <option value="">（未分类）</option>
+            {(categoryCatalog ?? []).map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
           </select>
         </label>
         <fieldset className="tag-picker">

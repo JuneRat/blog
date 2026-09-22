@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}{{ category.category_name }} - {{ site.title }}{% endblock %}
+{% block content %}
+<section class="category-page">
+  <h1># {{ category.category_name }}</h1>
+  {% if category.posts %}
+  <ul class="post-list">
+    {% for post in category.posts %}
+    <li class="post-item">
+      <h2><a href="/posts/{{ post.slug }}">{{ post.title }}</a></h2>
+      {% if post.excerpt %}<p class="excerpt">{{ post.excerpt }}</p>{% endif %}
+      <p class="meta">
+        <time>{{ post.published_at }}</time>
+        <span class="author">{{ post.author_display }}</span>
+      </p>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="empty">这个分类下还没有公开文章。</p>
+  {% endif %}
+  {% if category.total_pages > 1 %}
+  <nav class="pagination">
+    {% if category.page > 1 %}<a class="pagination-prev" href="/categories/{{ category.category_slug }}?page={{ category.page - 1 }}">上一页</a>{% endif %}
+    <span class="pagination-state">第 {{ category.page }} / {{ category.total_pages }} 页</span>
+    {% if category.page < category.total_pages %}<a class="pagination-next" href="/categories/{{ category.category_slug }}?page={{ category.page + 1 }}">下一页</a>{% endif %}
+  </nav>
+  {% endif %}
+</section>
+{% endblock %}

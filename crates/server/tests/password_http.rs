@@ -22,9 +22,9 @@ use axum::middleware;
 use http_body_util::BodyExt;
 use infrastructure::{
     InMemoryLoginThrottle, InMemoryOAuthAttemptStore, InMemorySessionStore,
-    PostgresOAuthAccountStore, PostgresOAuthConfigStore, PostgresPageRepository,
-    PostgresPostRepository, PostgresRbacStore, PostgresTagRepository, PostgresUserRepository,
-    SystemClock, ThrottleConfig,
+    PostgresCategoryRepository, PostgresOAuthAccountStore, PostgresOAuthConfigStore,
+    PostgresPageRepository, PostgresPostRepository, PostgresRbacStore, PostgresTagRepository,
+    PostgresUserRepository, SystemClock, ThrottleConfig,
 };
 use interfaces::http_auth::{AdminState, AuthState, admin_router, auth_router};
 use interfaces::http_support::request_context;
@@ -169,6 +169,7 @@ async fn fresh_stack_with(throttle_config: ThrottleConfig) -> Stack {
     let posts = Arc::new(application::content::PostInteractor::new(
         Arc::new(PostgresPostRepository::new(pool.clone())),
         tag_repo.clone(),
+        Arc::new(PostgresCategoryRepository::new(pool.clone())),
         Arc::new(SystemClock),
     ));
     let pages = Arc::new(PageInteractor::new(
@@ -189,6 +190,10 @@ async fn fresh_stack_with(throttle_config: ThrottleConfig) -> Stack {
         pages,
         tags: Arc::new(application::tag::TagInteractor::new(
             tag_repo,
+            Arc::new(SystemClock),
+        )),
+        categories: Arc::new(application::category::CategoryInteractor::new(
+            Arc::new(PostgresCategoryRepository::new(pool.clone())),
             Arc::new(SystemClock),
         )),
         roles: roles.clone(),

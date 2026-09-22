@@ -19,9 +19,9 @@ use axum::http::{Request, StatusCode};
 use axum::middleware;
 use http_body_util::BodyExt;
 use infrastructure::{
-    InMemoryOAuthAttemptStore, InMemorySessionStore, PostgresOAuthAccountStore,
-    PostgresOAuthConfigStore, PostgresPageRepository, PostgresPostRepository, PostgresRbacStore,
-    PostgresUserRepository, SystemClock,
+    InMemoryOAuthAttemptStore, InMemorySessionStore, PostgresCategoryRepository,
+    PostgresOAuthAccountStore, PostgresOAuthConfigStore, PostgresPageRepository,
+    PostgresPostRepository, PostgresRbacStore, PostgresUserRepository, SystemClock,
 };
 use interfaces::http_admin::posts_router;
 use interfaces::http_auth::{AdminState, AuthState, admin_router, auth_router};
@@ -154,9 +154,12 @@ async fn fresh_stack() -> Stack {
     });
     let tag_repo: Arc<dyn application::ports::TagRepository> =
         Arc::new(infrastructure::PostgresTagRepository::new(pool.clone()));
+    let category_repo: Arc<dyn application::ports::CategoryRepository> =
+        Arc::new(PostgresCategoryRepository::new(pool.clone()));
     let posts = Arc::new(PostInteractor::new(
         Arc::new(PostgresPostRepository::new(pool.clone())),
         tag_repo.clone(),
+        category_repo.clone(),
         clock.clone(),
     ));
     let pages = Arc::new(PageInteractor::new(
@@ -165,6 +168,10 @@ async fn fresh_stack() -> Stack {
     ));
     let tags = Arc::new(application::tag::TagInteractor::new(
         tag_repo,
+        clock.clone(),
+    ));
+    let categories = Arc::new(application::category::CategoryInteractor::new(
+        category_repo,
         clock.clone(),
     ));
 
@@ -197,6 +204,7 @@ async fn fresh_stack() -> Stack {
         posts,
         pages,
         tags,
+        categories,
         roles: roles.clone(),
         secure_cookies: false,
     };
@@ -206,6 +214,9 @@ async fn fresh_stack() -> Stack {
         .merge(posts_router(admin_state.clone()))
         .merge(interfaces::http_admin::pages_router(admin_state.clone()))
         .merge(interfaces::http_admin::tags_router(admin_state.clone()))
+        .merge(interfaces::http_admin::categories_router(
+            admin_state.clone(),
+        ))
         .merge(interfaces::http_identity::identity_router(admin_state))
         // 与生产装配一致：最外层请求编号/日志中间件。
         .layer(middleware::from_fn(request_context));
@@ -2139,4 +2150,192 @@ async fn post_edit_saves_tags_with_content_and_validates_ids() {
     .await;
     assert_eq!(status, StatusCode::OK, "editor 持 update_any 可改：{body}");
     assert!(body.contains("\"tag_ids\":[]"), "{body}");
+}
+
+// ---------------------------------------------------------------------------
+// 分类管理 API：权限、防环、删除保护与文章关联
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn category_management_and_post_association() {
+    let _g = SERIAL.lock().await;
+    let stack = fresh_stack().await;
+    let (editor_cookie, editor_csrf) = login_as(&stack.router, &stack.idp, "editor").await;
+    let (author_cookie, author_csrf) = login_as(&stack.router, &stack.idp, "author").await;
+
+    // author 无 category.manage：创建被拒，但目录可读。
+    let (status, body) = api(
+        &stack.router,
+        "POST",
+        "/api/admin/v1/categories",
+        Some(&author_cookie),
+        Some(&author_csrf),
+        Some(r#"{"name":"技术","slug":"tech"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    let (status, _) = api(
+        &stack.router,
+        "GET",
+        "/api/admin/v1/categories",
+        Some(&author_cookie),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // editor 创建父子两级。
+    let (status, body) = api(
+        &stack.router,
+        "POST",
+        "/api/admin/v1/categories",
+        Some(&editor_cookie),
+        Some(&editor_csrf),
+        Some(r#"{"name":"技术","slug":"tech"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let tech_id: Uuid = body
+        .split("\"id\":\"")
+        .nth(1)
+        .unwrap()
+        .split('"')
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let (status, body) = api(
+        &stack.router,
+        "POST",
+        "/api/admin/v1/categories",
+        Some(&editor_cookie),
+        Some(&editor_csrf),
+        Some(r#"{"name":"Rust","slug":"rust","parent":"tech"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let rust_id: Uuid = body
+        .split("\"id\":\"")
+        .nth(1)
+        .unwrap()
+        .split('"')
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
+
+    // 防环：把 tech 移到 rust（其子）之下 → 400，文案含「环」。
+    let (status, body) = api(
+        &stack.router,
+        "PATCH",
+        "/api/admin/v1/categories/tech",
+        Some(&editor_cookie),
+        Some(&editor_csrf),
+        Some(r#"{"name":"技术","parent":"rust","expected_version":1}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(body.contains("环"), "{body}");
+
+    // 文章设置分类（三态：id 设置 / null 清空）；仅分类变化也递增版本。
+    let (status, body) = api(
+        &stack.router,
+        "POST",
+        "/api/admin/v1/posts",
+        Some(&author_cookie),
+        Some(&author_csrf),
+        Some(r#"{"slug":"cat-post","title":"分类文章","content":"正文"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let version: i64 = body
+        .split("\"version\":")
+        .nth(1)
+        .unwrap()
+        .split(',')
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let (status, body) = api(
+        &stack.router,
+        "PATCH",
+        "/api/admin/v1/posts/cat-post",
+        Some(&author_cookie),
+        Some(&author_csrf),
+        Some(&format!(
+            r#"{{"category_id":"{tech_id}","expected_version":{version}}}"#
+        )),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        body.contains(&format!("\"category_id\":\"{tech_id}\"")),
+        "{body}"
+    );
+    assert!(
+        body.contains(&format!("\"version\":{}", version + 1)),
+        "仅分类变化也递增版本：{body}"
+    );
+
+    // 未知分类 id：400。
+    let ghost = Uuid::now_v7();
+    let (status, body) = api(
+        &stack.router,
+        "PATCH",
+        "/api/admin/v1/posts/cat-post",
+        Some(&author_cookie),
+        Some(&author_csrf),
+        Some(&format!(r#"{{"category_id":"{ghost}"}}"#)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+
+    // 删除保护：tech 被 1 篇文章引用、有 1 个子分类 → 409 category_in_use。
+    let (status, body) = api(
+        &stack.router,
+        "DELETE",
+        "/api/admin/v1/categories/tech",
+        Some(&editor_cookie),
+        Some(&editor_csrf),
+        Some(r#"{"expected_version":1}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert!(body.contains("\"code\":\"category_in_use\""), "{body}");
+
+    // 清空文章分类并删除子分类后可删。
+    let (status, body) = api(
+        &stack.router,
+        "PATCH",
+        "/api/admin/v1/posts/cat-post",
+        Some(&author_cookie),
+        Some(&author_csrf),
+        Some(r#"{"category_id":null}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body.contains("\"category_id\":null"), "{body}");
+    let (status, _) = api(
+        &stack.router,
+        "DELETE",
+        "/api/admin/v1/categories/rust",
+        Some(&editor_cookie),
+        Some(&editor_csrf),
+        Some(r#"{"expected_version":1}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _) = api(
+        &stack.router,
+        "DELETE",
+        "/api/admin/v1/categories/tech",
+        Some(&editor_cookie),
+        Some(&editor_csrf),
+        Some(r#"{"expected_version":1}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let _ = rust_id;
 }
