@@ -10,8 +10,10 @@ pub mod page;
 pub mod password;
 pub mod ports;
 pub mod public_site;
+pub mod seo;
 pub mod series;
 pub mod settings;
+pub mod syndication;
 pub mod tag;
 pub mod version;
 

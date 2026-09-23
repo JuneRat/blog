@@ -34,6 +34,25 @@ pub trait PostRepository: Send + Sync {
     async fn find_by_slug(&self, slug: &str) -> Result<Option<PostSnapshot>, UseCaseError>;
     async fn find_by_id(&self, id: Uuid) -> Result<Option<PostSnapshot>, UseCaseError>;
     async fn list_by_author(&self, author_id: Uuid) -> Result<Vec<PostSnapshot>, UseCaseError>;
+    async fn list_trash_by_author(
+        &self,
+        author_id: Uuid,
+        limit: i64,
+        offset: i64,
+    ) -> Result<(Vec<PostSnapshot>, i64), UseCaseError>;
+    async fn trash(
+        &self,
+        id: Uuid,
+        expected_version: i64,
+        now: OffsetDateTime,
+    ) -> Result<SaveOutcome, UseCaseError>;
+    async fn restore(
+        &self,
+        id: Uuid,
+        expected_version: i64,
+        now: OffsetDateTime,
+    ) -> Result<SaveOutcome, UseCaseError>;
+    async fn purge(&self, id: Uuid, expected_version: i64) -> Result<SaveOutcome, UseCaseError>;
     /// 创建文章并写入初始标签关系（同一事务；`tag_ids` 已由用例去重校验存在）。
     async fn insert(&self, snapshot: &PostSnapshot, tag_ids: &[Uuid]) -> Result<(), UseCaseError>;
 
@@ -332,6 +351,7 @@ pub struct SeriesMember {
     pub title: String,
     /// draft/published/archived（成员含草稿/私密——它们保留位置）。
     pub status: String,
+    pub deleted: bool,
     pub visibility: String,
     pub series_order: i32,
 }
@@ -520,6 +540,16 @@ pub struct PublicPostSummary {
     pub author_display: String,
 }
 
+/// sitemap 用条目：路径片段 + 最近修改时间。
+///
+/// 与页面渲染用的列表条目分开：sitemap 需要**全部**公开 URL 且只关心
+/// `slug`/`updated_at`，不必为它把正文摘要素材拉进内存。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublicUrlEntry {
+    pub slug: String,
+    pub updated_at: OffsetDateTime,
+}
+
 /// 公开文章上挂的标签引用（详情页展示；名称取当前值）。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PublicTagRef {
@@ -573,6 +603,11 @@ pub trait PublishedPostQuery: Send + Sync {
         &self,
         slug: &str,
     ) -> Result<Option<PublicPostDetail>, UseCaseError>;
+    /// sitemap 用：同一公开谓词下按最近更新倒序枚举，`limit` 由调用方给上限。
+    async fn list_public_for_sitemap(
+        &self,
+        limit: i64,
+    ) -> Result<Vec<PublicUrlEntry>, UseCaseError>;
 }
 
 /// 公开标签页数据源。标签目录本身没有可见性；可见性过滤作用在文章列表上。
@@ -610,6 +645,11 @@ pub trait PublishedSeriesQuery: Send + Sync {
         limit: i64,
         offset: i64,
     ) -> Result<(Vec<PublicPostSummary>, i64), UseCaseError>;
+
+    /// sitemap 用：**至少有一篇公开文章**的系列，含该系列公开文章的最近更新时间。
+    ///
+    /// 空目录天然被过滤掉——列表页没有公开内容，收录它只会制造薄内容。
+    async fn list_public_directories(&self) -> Result<Vec<PublicUrlEntry>, UseCaseError>;
 }
 
 #[async_trait]
@@ -626,6 +666,9 @@ pub trait PublishedCategoryQuery: Send + Sync {
         limit: i64,
         offset: i64,
     ) -> Result<(Vec<PublicPostSummary>, i64), UseCaseError>;
+
+    /// sitemap 用：至少有一篇直接归属公开文章的分类（规则同系列）。
+    async fn list_public_directories(&self) -> Result<Vec<PublicUrlEntry>, UseCaseError>;
 }
 
 #[async_trait]
@@ -643,6 +686,9 @@ pub trait PublishedTagQuery: Send + Sync {
         limit: i64,
         offset: i64,
     ) -> Result<(Vec<PublicPostSummary>, i64), UseCaseError>;
+
+    /// sitemap 用：至少挂有一篇公开文章的标签（规则同系列）。
+    async fn list_public_directories(&self) -> Result<Vec<PublicUrlEntry>, UseCaseError>;
 }
 
 /// 公开页面详情（Page 无作者、无软删除）。
@@ -662,6 +708,12 @@ pub trait PublishedPageQuery: Send + Sync {
         &self,
         slug: &str,
     ) -> Result<Option<PublicPageDetail>, UseCaseError>;
+
+    /// sitemap 用：枚举全部公开页面（Page 无软删除，谓词只有状态与可见性）。
+    async fn list_public_for_sitemap(
+        &self,
+        limit: i64,
+    ) -> Result<Vec<PublicUrlEntry>, UseCaseError>;
 }
 
 // ---------------------------------------------------------------------------

@@ -75,6 +75,101 @@ impl PostRepository for FakePostRepo {
             .collect())
     }
 
+    async fn list_trash_by_author(
+        &self,
+        author_id: Uuid,
+        limit: i64,
+        offset: i64,
+    ) -> Result<(Vec<PostSnapshot>, i64), UseCaseError> {
+        let posts: Vec<_> = self
+            .posts
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|p| p.author_id == author_id && p.deleted_at.is_some())
+            .cloned()
+            .collect();
+        let total = posts.len() as i64;
+        Ok((
+            posts
+                .into_iter()
+                .skip(offset as usize)
+                .take(limit as usize)
+                .collect(),
+            total,
+        ))
+    }
+
+    async fn trash(
+        &self,
+        id: Uuid,
+        expected_version: i64,
+        now: OffsetDateTime,
+    ) -> Result<SaveOutcome, UseCaseError> {
+        let mut posts = self.posts.lock().unwrap();
+        let Some(post) = posts
+            .values_mut()
+            .find(|p| p.id == id && p.deleted_at.is_none())
+        else {
+            return Ok(SaveOutcome::Gone);
+        };
+        if post.version != expected_version {
+            return Ok(SaveOutcome::StaleConflict);
+        }
+        post.deleted_at = Some(now);
+        post.updated_at = now;
+        post.version += 1;
+        Ok(SaveOutcome::Saved {
+            new_version: post.version,
+        })
+    }
+
+    async fn restore(
+        &self,
+        id: Uuid,
+        expected_version: i64,
+        now: OffsetDateTime,
+    ) -> Result<SaveOutcome, UseCaseError> {
+        let mut posts = self.posts.lock().unwrap();
+        let Some(post) = posts
+            .values_mut()
+            .find(|p| p.id == id && p.deleted_at.is_some())
+        else {
+            return Ok(SaveOutcome::Gone);
+        };
+        if post.version != expected_version {
+            return Ok(SaveOutcome::StaleConflict);
+        }
+        post.deleted_at = None;
+        post.updated_at = now;
+        post.version += 1;
+        if post.status != domain::content::post::PostStatus::Archived {
+            post.status = domain::content::post::PostStatus::Draft;
+        }
+        Ok(SaveOutcome::Saved {
+            new_version: post.version,
+        })
+    }
+
+    async fn purge(&self, id: Uuid, expected_version: i64) -> Result<SaveOutcome, UseCaseError> {
+        let mut posts = self.posts.lock().unwrap();
+        let Some(post) = posts
+            .values()
+            .find(|p| p.id == id && p.deleted_at.is_some())
+        else {
+            return Ok(SaveOutcome::Gone);
+        };
+        if post.version != expected_version {
+            return Ok(SaveOutcome::StaleConflict);
+        }
+        let key = post.slug.clone();
+        posts.remove(&key);
+        self.tags.lock().unwrap().remove(&id);
+        Ok(SaveOutcome::Saved {
+            new_version: expected_version + 1,
+        })
+    }
+
     async fn insert(&self, snapshot: &PostSnapshot, tag_ids: &[Uuid]) -> Result<(), UseCaseError> {
         let mut posts = self.posts.lock().unwrap();
         if posts.contains_key(&snapshot.slug) {
@@ -1544,4 +1639,83 @@ async fn tag_change_requires_fresh_version() {
         .await
         .unwrap_err();
     assert!(matches!(err, UseCaseError::VersionConflict), "得到 {err:?}");
+}
+
+#[tokio::test]
+async fn trash_scope_versions_restore_and_purge_permissions() {
+    let f = fixture().await;
+    let created = f
+        .posts
+        .create(&f.author, draft_cmd("trash-cycle"))
+        .await
+        .unwrap();
+    let published = f
+        .posts
+        .publish(&f.author, "trash-cycle", Some(created.version))
+        .await
+        .unwrap();
+    assert!(matches!(
+        f.posts
+            .trash(&f.author2, "trash-cycle", Some(published.version))
+            .await,
+        Err(UseCaseError::Forbidden)
+    ));
+    let deleted = f
+        .posts
+        .trash(&f.author, "trash-cycle", Some(published.version))
+        .await
+        .unwrap();
+    assert!(deleted.deleted);
+    assert!(
+        f.posts
+            .list_by_author(&f.author, f.author.user_id)
+            .await
+            .unwrap()
+            .iter()
+            .all(|p| p.slug != "trash-cycle")
+    );
+    assert_eq!(
+        f.posts
+            .list_trash(&f.author, f.author.user_id, 1)
+            .await
+            .unwrap()
+            .total,
+        1
+    );
+    assert!(matches!(
+        f.posts.list_trash(&f.author, f.author2.user_id, 1).await,
+        Err(UseCaseError::Forbidden)
+    ));
+    assert!(matches!(
+        f.posts
+            .restore(&f.author2, "trash-cycle", Some(deleted.version))
+            .await,
+        Err(UseCaseError::Forbidden)
+    ));
+    assert!(matches!(
+        f.posts
+            .restore(&f.author, "trash-cycle", Some(published.version))
+            .await,
+        Err(UseCaseError::VersionConflict)
+    ));
+    assert!(matches!(
+        f.posts
+            .purge(&f.author, "trash-cycle", Some(deleted.version))
+            .await,
+        Err(UseCaseError::Forbidden)
+    ));
+    let restored = f
+        .posts
+        .restore(&f.author, "trash-cycle", Some(deleted.version))
+        .await
+        .unwrap();
+    assert_eq!(restored.status, "draft");
+    assert!(!restored.deleted);
+    assert!(restored.published_at.is_some());
+    assert!(matches!(
+        f.posts
+            .purge(&f.author, "trash-cycle", Some(restored.version))
+            .await,
+        Err(UseCaseError::Forbidden)
+    ));
 }

@@ -14,6 +14,7 @@ use application::ports::{
     TagRepository, UserRepository,
 };
 use application::public_site::{PublicSiteInteractor, SiteInfo};
+use application::seo::PublicBaseUrl;
 use application::series::SeriesInteractor;
 use application::settings::SettingsInteractor;
 use application::tag::TagInteractor;
@@ -33,10 +34,15 @@ struct Config {
     site_description: String,
     /// 后台 SPA 构建产物（/admin/）；默认 apps/admin/dist，不存在时不注册。
     admin_dist: PathBuf,
+    /// 对外可达基础 URL：OAuth 回调、canonical、RSS 与 sitemap 共用。
+    /// 装配期校验一次并失败即退出——错误地址会污染搜索索引，不能静默使用。
+    public_base_url: PublicBaseUrl,
 }
 
 impl Config {
     fn from_env() -> Self {
+        let public_base_url = std::env::var("BLOG_PUBLIC_BASE_URL")
+            .unwrap_or_else(|_| "http://127.0.0.1:8080".into());
         Self {
             database_url: std::env::var("DATABASE_URL")
                 .unwrap_or_else(|_| "postgres://blog:blog@127.0.0.1:5432/blog".into()),
@@ -49,6 +55,8 @@ impl Config {
             admin_dist: std::env::var("BLOG_ADMIN_DIST")
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| PathBuf::from("apps/admin/dist")),
+            public_base_url: PublicBaseUrl::parse(&public_base_url)
+                .unwrap_or_else(|e| panic!("BLOG_PUBLIC_BASE_URL 无效：{e}")),
         }
     }
 }
@@ -157,8 +165,7 @@ async fn main() {
                 },
             ));
 
-            let base_url = std::env::var("BLOG_PUBLIC_BASE_URL")
-                .unwrap_or_else(|_| "http://127.0.0.1:8080".into());
+            let base_url = config.public_base_url.as_str().to_string();
             // Secure cookie 默认跟随公开基础 URL 的 scheme，避免 HTTPS 部署漏设；
             // BLOG_SECURE_COOKIES 仅作显式覆盖（如 TLS 终止代理场景）。
             let secure_cookies = match std::env::var("BLOG_SECURE_COOKIES") {
@@ -213,6 +220,7 @@ async fn main() {
                 renderer,
                 settings_store,
                 site_fallback,
+                config.public_base_url.clone(),
             ));
 
             let deps = CliDeps {

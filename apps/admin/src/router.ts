@@ -14,6 +14,7 @@ import { useEffect, useState } from "react";
  */
 export type Route =
   | { name: "list" }
+  | { name: "postTrash" }
   | { name: "postNew" }
   | { name: "postEdit"; slug: string }
   | { name: "pageList" }
@@ -61,6 +62,7 @@ export function parseRoute(pathname: string): Route {
   const segments = rest.split("/").filter((segment) => segment.length > 0);
 
   if (segments.length === 0) return { name: "list" };
+  if (segments[0] === "trash") return segments.length === 1 ? { name: "postTrash" } : { name: "invalid" };
 
   // 标签/用户/角色是固定单段路由：多余路径段不静默忽略。
   if (segments[0] === "tags") {
@@ -98,6 +100,7 @@ export function parseRoute(pathname: string): Route {
 export const paths = {
   list: `${BASE}/`,
   newPost: `${BASE}/posts/new`,
+  postTrash: `${BASE}/trash`,
   editPost: (slug: string): string => `${BASE}/posts/${encodeURIComponent(slug)}/edit`,
   pages: `${BASE}/pages`,
   newPage: `${BASE}/pages/new`,

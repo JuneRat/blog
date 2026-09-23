@@ -209,6 +209,18 @@ export const api = {
       `/api/admin/v1/posts${author ? `?author=${encodeURIComponent(author)}` : ""}`,
     ),
 
+  listTrash: (page = 1, author?: string): Promise<{ items: PostSummary[]; total: number; page: number; per_page: number }> =>
+    request(`/api/admin/v1/post-trash?page=${page}${author ? `&author=${encodeURIComponent(author)}` : ""}`),
+
+  trashPost: (slug: string, expectedVersion: number): Promise<PostDetail> =>
+    request(`/api/admin/v1/posts/${encodeURIComponent(slug)}/trash`, { method: "POST", body: JSON.stringify({ expected_version: expectedVersion }) }),
+
+  restorePost: (slug: string, expectedVersion: number): Promise<PostDetail> =>
+    request(`/api/admin/v1/posts/${encodeURIComponent(slug)}/restore`, { method: "POST", body: JSON.stringify({ expected_version: expectedVersion }) }),
+
+  purgePost: (slug: string, expectedVersion: number): Promise<void> =>
+    request(`/api/admin/v1/posts/${encodeURIComponent(slug)}/purge`, { method: "POST", body: JSON.stringify({ expected_version: expectedVersion }) }),
+
   getPost: (slug: string): Promise<PostDetail> =>
     request<PostDetail>(`/api/admin/v1/posts/${encodeURIComponent(slug)}`),
 

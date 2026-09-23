@@ -110,6 +110,7 @@ async fn stack() -> Stack {
         // 公开渲染的站点信息经 settings 解析：site 行未配置时回退装配值。
         Arc::new(infrastructure::PostgresSettingsStore::new(pool.clone())),
         fallback,
+        application::seo::PublicBaseUrl::parse("https://blog.test").unwrap(),
     ));
 
     for username in ["author", "editor"] {

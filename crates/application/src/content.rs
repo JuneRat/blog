@@ -15,7 +15,7 @@ use crate::error::UseCaseError;
 use crate::identity::{Actor, authorize_own_or_any};
 use crate::ports::{Clock, PostRepository, SaveOutcome, TagRepository};
 use crate::version::checked_version;
-use domain::content::post::{Post, PostPatch, PostSnapshot, Slug, Visibility};
+use domain::content::post::{Post, PostPatch, PostSnapshot, PostStatus, Slug, Visibility};
 use domain::identity::UserId;
 
 /// 向接口层转出的值对象（interfaces 不直接依赖 domain crate）。
@@ -79,6 +79,14 @@ pub struct PostDto {
     /// 所属系列与序号（同空或同非空）。
     pub series_id: Option<Uuid>,
     pub series_order: Option<i32>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TrashPage {
+    pub items: Vec<PostDto>,
+    pub total: i64,
+    pub page: i64,
+    pub per_page: i64,
 }
 
 impl PostDto {
@@ -301,8 +309,144 @@ impl PostInteractor {
         // 列表是摘要形态：不逐篇补标签（编辑器打开详情时才读取）。
         Ok(snapshots
             .iter()
+            .filter(|s| s.deleted_at.is_none())
             .map(|s| PostDto::from_snapshot(s, Vec::new()))
             .collect())
+    }
+
+    pub async fn list_trash(
+        &self,
+        actor: &Actor,
+        author: UserId,
+        page: i64,
+    ) -> Result<TrashPage, UseCaseError> {
+        authorize_own_or_any(actor, "post.read", "post.read_any", author)?;
+        if page < 1 || page > i64::MAX / 20 {
+            return Err(UseCaseError::Invalid("页码超出范围".into()));
+        }
+        let (snapshots, total) = self
+            .posts
+            .list_trash_by_author(author.0, 20, (page - 1) * 20)
+            .await?;
+        Ok(TrashPage {
+            items: snapshots
+                .iter()
+                .map(|s| PostDto::from_snapshot(s, Vec::new()))
+                .collect(),
+            total,
+            page,
+            per_page: 20,
+        })
+    }
+
+    pub async fn trash(
+        &self,
+        actor: &Actor,
+        slug: &str,
+        version: Option<i64>,
+    ) -> Result<PostDto, UseCaseError> {
+        actor.ensure_write_channel()?;
+        let (post, current) = self
+            .load_authorized(slug, actor, "post.delete", "post.delete_any")
+            .await?;
+        let expected = checked_version(current, version)?;
+        let now = self.clock.now();
+        self.map_lifecycle_result(
+            self.posts.trash(post.snapshot().id, expected, now).await?,
+            post.snapshot(),
+            now,
+            true,
+        )
+        .await
+    }
+
+    pub async fn restore(
+        &self,
+        actor: &Actor,
+        slug: &str,
+        version: Option<i64>,
+    ) -> Result<PostDto, UseCaseError> {
+        actor.ensure_write_channel()?;
+        let snapshot = self
+            .load_trash_authorized(slug, actor, "post.delete", "post.delete_any")
+            .await?;
+        let expected = checked_version(snapshot.version, version)?;
+        let now = self.clock.now();
+        self.map_lifecycle_result(
+            self.posts.restore(snapshot.id, expected, now).await?,
+            snapshot,
+            now,
+            false,
+        )
+        .await
+    }
+
+    pub async fn purge(
+        &self,
+        actor: &Actor,
+        slug: &str,
+        version: Option<i64>,
+    ) -> Result<(), UseCaseError> {
+        actor.ensure_write_channel()?;
+        if !actor.has_permission("post.purge") {
+            return Err(UseCaseError::Forbidden);
+        }
+        let snapshot = self
+            .posts
+            .find_by_slug(slug)
+            .await?
+            .ok_or_else(|| UseCaseError::NotFound(format!("文章 {slug}")))?;
+        if snapshot.deleted_at.is_none() {
+            return Err(UseCaseError::Invalid("只能永久删除回收站文章".into()));
+        }
+        let expected = checked_version(snapshot.version, version)?;
+        match self.posts.purge(snapshot.id, expected).await? {
+            SaveOutcome::Saved { .. } => Ok(()),
+            SaveOutcome::StaleConflict => Err(UseCaseError::VersionConflict),
+            SaveOutcome::Gone => Err(UseCaseError::NotFound(format!("文章 {slug}"))),
+        }
+    }
+
+    async fn load_trash_authorized(
+        &self,
+        slug: &str,
+        actor: &Actor,
+        own: &str,
+        any: &str,
+    ) -> Result<PostSnapshot, UseCaseError> {
+        let snapshot = self
+            .posts
+            .find_by_slug(slug)
+            .await?
+            .ok_or_else(|| UseCaseError::NotFound(format!("文章 {slug}")))?;
+        authorize_own_or_any(actor, own, any, UserId(snapshot.author_id))?;
+        if snapshot.deleted_at.is_none() {
+            return Err(UseCaseError::NotFound(format!("回收站文章 {slug}")));
+        }
+        Ok(snapshot)
+    }
+
+    async fn map_lifecycle_result(
+        &self,
+        result: SaveOutcome,
+        mut snapshot: PostSnapshot,
+        now: time::OffsetDateTime,
+        deleted: bool,
+    ) -> Result<PostDto, UseCaseError> {
+        match result {
+            SaveOutcome::Saved { new_version } => {
+                snapshot.version = new_version;
+                snapshot.updated_at = now;
+                snapshot.deleted_at = deleted.then_some(now);
+                if !deleted && snapshot.status != PostStatus::Archived {
+                    snapshot.status = PostStatus::Draft;
+                }
+                let tags = self.posts.tags_of(snapshot.id).await?;
+                Ok(PostDto::from_snapshot(&snapshot, tags))
+            }
+            SaveOutcome::StaleConflict => Err(UseCaseError::VersionConflict),
+            SaveOutcome::Gone => Err(UseCaseError::NotFound("文章".into())),
+        }
     }
 
     /// 提交聚合变更：三态结果映射为用例错误；

@@ -69,6 +69,21 @@ pub const PERMISSION_REGISTRY: &[PermissionDescriptor] = &[
         description: "撤回所有已发布文章；覆盖 post.unpublish。",
     },
     PermissionDescriptor {
+        key: "post.delete",
+        name: "移入本人文章回收站",
+        description: "移入或恢复本人回收站文章。",
+    },
+    PermissionDescriptor {
+        key: "post.delete_any",
+        name: "移入任意文章回收站",
+        description: "移入或恢复任意回收站文章。",
+    },
+    PermissionDescriptor {
+        key: "post.purge",
+        name: "永久删除文章",
+        description: "仅永久删除回收站文章。",
+    },
+    PermissionDescriptor {
         key: "page.read",
         name: "读取页面",
         description: "查看所有独立页面（含草稿与私有）；Page 无作者，按站点范围判定。",
@@ -173,6 +188,9 @@ pub const BUILTIN_ROLES: &[BuiltinRoleDef] = &[
             "post.publish_any",
             "post.unpublish",
             "post.unpublish_any",
+            "post.delete",
+            "post.delete_any",
+            "post.purge",
             "page.read",
             "page.create",
             "page.update",
@@ -205,6 +223,7 @@ pub const BUILTIN_ROLES: &[BuiltinRoleDef] = &[
             "post.update_any",
             "post.publish_any",
             "post.unpublish_any",
+            "post.delete_any",
             "page.read",
             "page.create",
             "page.update",
@@ -227,6 +246,7 @@ pub const BUILTIN_ROLES: &[BuiltinRoleDef] = &[
             "post.update",
             "post.publish",
             "post.unpublish",
+            "post.delete",
         ],
     },
 ];

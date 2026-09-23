@@ -227,8 +227,9 @@ export function SeriesListScreen() {
                 {(members[s.id] ?? []).map((post, index) => (
                   <li key={post.id} value={index + 1} className="post-item">
                     <div className="post-item-main">
-                      <a href={`/admin/posts/${encodeURIComponent(post.slug)}/edit`}>{post.title || post.slug}</a>{" "}
+                      {post.deleted ? <span>{post.title || post.slug}</span> : <a href={`/admin/posts/${encodeURIComponent(post.slug)}/edit`}>{post.title || post.slug}</a>}{" "}
                       <span className="muted">
+                        {post.deleted ? "回收站 · " : ""}
                         {post.status === "published" ? "已发布" : post.status === "archived" ? "已归档" : "草稿"}
                         {post.author_id !== me?.user_id ? " · 他人文章" : ""}
                       </span>

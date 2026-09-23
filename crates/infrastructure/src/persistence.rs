@@ -15,7 +15,7 @@ use application::ports::{
     AdminUserRow, CategoryDeleteOutcome, CategoryRepository, CategoryWithUsage,
     ClearPasswordOutcome, Clock, HealthCheck, PageRepository, PasswordCredential, PostRepository,
     PublicCategoryRef, PublicCategorySummary, PublicPageDetail, PublicPostDetail,
-    PublicPostSummary, PublicSeriesRef, PublicSeriesSummary, PublicTagSummary,
+    PublicPostSummary, PublicSeriesRef, PublicSeriesSummary, PublicTagSummary, PublicUrlEntry,
     PublishedCategoryQuery, PublishedPageQuery, PublishedPostQuery, PublishedSeriesQuery,
     PublishedTagQuery, ReorderOutcome, SaveOutcome, SeriesDeleteOutcome, SeriesMember,
     SeriesRepository, SeriesWithUsage, TagDeleteOutcome, TagRepository, TagWithUsage,
@@ -436,6 +436,23 @@ fn post_from_row(row: &sqlx::postgres::PgRow) -> Result<PostSnapshot, UseCaseErr
     })
 }
 
+async fn post_lifecycle_miss(
+    pool: &PgPool,
+    id: Uuid,
+    expected_deleted: bool,
+) -> Result<SaveOutcome, UseCaseError> {
+    let current: Option<(bool,)> =
+        sqlx::query_as("SELECT deleted_at IS NOT NULL FROM posts WHERE id = $1")
+            .bind(id)
+            .fetch_optional(pool)
+            .await
+            .map_err(map_sqlx_error)?;
+    Ok(match current {
+        Some((deleted,)) if deleted == expected_deleted => SaveOutcome::StaleConflict,
+        _ => SaveOutcome::Gone,
+    })
+}
+
 #[async_trait]
 impl PostRepository for PostgresPostRepository {
     async fn find_by_slug(&self, slug: &str) -> Result<Option<PostSnapshot>, UseCaseError> {
@@ -458,13 +475,122 @@ impl PostRepository for PostgresPostRepository {
 
     async fn list_by_author(&self, author_id: Uuid) -> Result<Vec<PostSnapshot>, UseCaseError> {
         let rows = sqlx::query(&format!(
-            "SELECT {POST_COLUMNS} FROM posts WHERE author_id = $1 ORDER BY updated_at DESC, id DESC"
+            "SELECT {POST_COLUMNS} FROM posts WHERE author_id = $1 AND deleted_at IS NULL ORDER BY updated_at DESC, id DESC"
         ))
         .bind(author_id)
         .fetch_all(&self.pool)
         .await
         .map_err(map_sqlx_error)?;
         rows.iter().map(post_from_row).collect()
+    }
+
+    async fn list_trash_by_author(
+        &self,
+        author_id: Uuid,
+        limit: i64,
+        offset: i64,
+    ) -> Result<(Vec<PostSnapshot>, i64), UseCaseError> {
+        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        let (total,): (i64,) = sqlx::query_as(
+            "SELECT count(*) FROM posts WHERE author_id = $1 AND deleted_at IS NOT NULL",
+        )
+        .bind(author_id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(map_sqlx_error)?;
+        let rows = sqlx::query(&format!("SELECT {POST_COLUMNS} FROM posts WHERE author_id = $1 AND deleted_at IS NOT NULL ORDER BY deleted_at DESC, id DESC LIMIT $2 OFFSET $3"))
+            .bind(author_id).bind(limit).bind(offset).fetch_all(&mut *tx).await.map_err(map_sqlx_error)?;
+        tx.commit().await.map_err(map_sqlx_error)?;
+        Ok((
+            rows.iter().map(post_from_row).collect::<Result<_, _>>()?,
+            total,
+        ))
+    }
+
+    async fn trash(
+        &self,
+        id: Uuid,
+        expected_version: i64,
+        now: OffsetDateTime,
+    ) -> Result<SaveOutcome, UseCaseError> {
+        let row: Option<(i64,)> = sqlx::query_as("UPDATE posts SET deleted_at = $3, updated_at = $3, version = version + 1 WHERE id = $1 AND version = $2 AND deleted_at IS NULL RETURNING version")
+            .bind(id).bind(expected_version).bind(now).fetch_optional(&self.pool).await.map_err(map_sqlx_error)?;
+        match row {
+            Some((new_version,)) => Ok(SaveOutcome::Saved { new_version }),
+            None => post_lifecycle_miss(&self.pool, id, false).await,
+        }
+    }
+
+    async fn restore(
+        &self,
+        id: Uuid,
+        expected_version: i64,
+        now: OffsetDateTime,
+    ) -> Result<SaveOutcome, UseCaseError> {
+        let row: Option<(i64,)> = sqlx::query_as("UPDATE posts SET deleted_at = NULL, status = CASE WHEN status = 'archived' THEN 'archived' ELSE 'draft' END, updated_at = $3, version = version + 1 WHERE id = $1 AND version = $2 AND deleted_at IS NOT NULL RETURNING version")
+            .bind(id).bind(expected_version).bind(now).fetch_optional(&self.pool).await.map_err(map_sqlx_error)?;
+        match row {
+            Some((new_version,)) => Ok(SaveOutcome::Saved { new_version }),
+            None => post_lifecycle_miss(&self.pool, id, true).await,
+        }
+    }
+
+    async fn purge(&self, id: Uuid, expected_version: i64) -> Result<SaveOutcome, UseCaseError> {
+        // 与加入、退出、重排同一锁序：先 series 行，后 post 行。
+        // 无锁预读仅用于确定锁目标；锁后再次核对，迁移过的成员重新尝试。
+        for _ in 0..5 {
+            let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+            let prior: Option<(Option<Uuid>,)> =
+                sqlx::query_as("SELECT series_id FROM posts WHERE id = $1")
+                    .bind(id)
+                    .fetch_optional(&mut *tx)
+                    .await
+                    .map_err(map_sqlx_error)?;
+            let Some((series_id,)) = prior else {
+                return Ok(SaveOutcome::Gone);
+            };
+            if let Some(series_id) = series_id {
+                sqlx::query("SELECT id FROM series WHERE id = $1 FOR UPDATE")
+                    .bind(series_id)
+                    .fetch_optional(&mut *tx)
+                    .await
+                    .map_err(map_sqlx_error)?;
+            }
+            let locked: Option<(Option<Uuid>, i64, bool)> = sqlx::query_as("SELECT series_id, version, deleted_at IS NOT NULL FROM posts WHERE id = $1 FOR UPDATE")
+                .bind(id).fetch_optional(&mut *tx).await.map_err(map_sqlx_error)?;
+            let Some((actual_series, version, deleted)) = locked else {
+                return Ok(SaveOutcome::Gone);
+            };
+            if actual_series != series_id {
+                tx.rollback().await.map_err(map_sqlx_error)?;
+                continue;
+            }
+            if !deleted {
+                return Ok(SaveOutcome::Gone);
+            }
+            if version != expected_version {
+                return Ok(SaveOutcome::StaleConflict);
+            }
+            sqlx::query("DELETE FROM posts WHERE id = $1")
+                .bind(id)
+                .execute(&mut *tx)
+                .await
+                .map_err(map_sqlx_error)?;
+            if let Some(series_id) = series_id {
+                sqlx::query(
+                    "UPDATE series SET version = version + 1, updated_at = now() WHERE id = $1",
+                )
+                .bind(series_id)
+                .execute(&mut *tx)
+                .await
+                .map_err(map_sqlx_error)?;
+            }
+            tx.commit().await.map_err(map_sqlx_error)?;
+            return Ok(SaveOutcome::Saved {
+                new_version: version + 1,
+            });
+        }
+        Ok(SaveOutcome::StaleConflict)
     }
 
     async fn insert(&self, snapshot: &PostSnapshot, tag_ids: &[Uuid]) -> Result<(), UseCaseError> {
@@ -793,6 +919,35 @@ impl PublishedPostQuery for PostgresPublishedPostQuery {
         })
         .transpose()
     }
+
+    async fn list_public_for_sitemap(
+        &self,
+        limit: i64,
+    ) -> Result<Vec<PublicUrlEntry>, UseCaseError> {
+        // 上限取 sitemap 协议的 50,000 条/文件；调用方传更大值也不放大查询。
+        let limit = limit.clamp(1, 50_000);
+        let rows = sqlx::query(&format!(
+            r#"
+            SELECT p.slug, p.updated_at
+            FROM posts p
+            WHERE {POST_PUBLIC_PREDICATE}
+            ORDER BY p.updated_at DESC, p.id DESC
+            LIMIT $1
+            "#
+        ))
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_sqlx_error)?;
+        rows.iter()
+            .map(|row| {
+                Ok(PublicUrlEntry {
+                    slug: row.try_get("slug").map_err(map_row_error)?,
+                    updated_at: row.try_get("updated_at").map_err(map_row_error)?,
+                })
+            })
+            .collect()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -970,6 +1125,34 @@ impl PublishedPageQuery for PostgresPublishedPageQuery {
             })
         })
         .transpose()
+    }
+
+    async fn list_public_for_sitemap(
+        &self,
+        limit: i64,
+    ) -> Result<Vec<PublicUrlEntry>, UseCaseError> {
+        let limit = limit.clamp(1, 50_000);
+        let rows = sqlx::query(&format!(
+            r#"
+            SELECT p.slug, p.updated_at
+            FROM pages p
+            WHERE {PAGE_PUBLIC_PREDICATE}
+            ORDER BY p.updated_at DESC, p.id DESC
+            LIMIT $1
+            "#
+        ))
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_sqlx_error)?;
+        rows.iter()
+            .map(|row| {
+                Ok(PublicUrlEntry {
+                    slug: row.try_get("slug").map_err(map_row_error)?,
+                    updated_at: row.try_get("updated_at").map_err(map_row_error)?,
+                })
+            })
+            .collect()
     }
 }
 
@@ -1221,6 +1404,33 @@ impl PublishedTagQuery for PostgresPublishedTagQuery {
             })
             .collect::<Result<Vec<_>, _>>()?;
         Ok((posts, total))
+    }
+
+    async fn list_public_directories(&self) -> Result<Vec<PublicUrlEntry>, UseCaseError> {
+        // INNER JOIN 直接实现「非空才收录」：没有公开文章的标签根本不出现在结果里。
+        // lastmod 取该标签下公开文章的最近更新时间（tags 表没有 updated_at）。
+        let rows = sqlx::query(&format!(
+            r#"
+            SELECT t.slug, max(p.updated_at) AS updated_at
+            FROM tags t
+            JOIN post_tags pt ON pt.tag_id = t.id
+            JOIN posts p ON p.id = pt.post_id
+            WHERE {POST_PUBLIC_PREDICATE}
+            GROUP BY t.slug
+            ORDER BY t.slug
+            "#
+        ))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_sqlx_error)?;
+        rows.iter()
+            .map(|row| {
+                Ok(PublicUrlEntry {
+                    slug: row.try_get("slug").map_err(map_row_error)?,
+                    updated_at: row.try_get("updated_at").map_err(map_row_error)?,
+                })
+            })
+            .collect()
     }
 }
 
@@ -1593,6 +1803,33 @@ impl PublishedCategoryQuery for PostgresPublishedCategoryQuery {
             .collect::<Result<Vec<_>, _>>()?;
         Ok((posts, total))
     }
+
+    async fn list_public_directories(&self) -> Result<Vec<PublicUrlEntry>, UseCaseError> {
+        // 与标签页同口径：INNER JOIN 只保留有直接归属公开文章的分类，空分类不收。
+        // lastmod 取「分类自身改名时间」与「成员文章最近更新时间」的较晚者：
+        // 改分类名也会改变公开页展示内容。
+        let rows = sqlx::query(&format!(
+            r#"
+            SELECT c.slug, GREATEST(c.updated_at, max(p.updated_at)) AS updated_at
+            FROM categories c
+            JOIN posts p ON p.category_id = c.id
+            WHERE {POST_PUBLIC_PREDICATE}
+            GROUP BY c.id, c.slug, c.updated_at
+            ORDER BY c.slug
+            "#
+        ))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_sqlx_error)?;
+        rows.iter()
+            .map(|row| {
+                Ok(PublicUrlEntry {
+                    slug: row.try_get("slug").map_err(map_row_error)?,
+                    updated_at: row.try_get("updated_at").map_err(map_row_error)?,
+                })
+            })
+            .collect()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1758,8 +1995,8 @@ impl SeriesRepository for PostgresSeriesRepository {
 
     async fn members_of(&self, series_id: Uuid) -> Result<Vec<SeriesMember>, UseCaseError> {
         let rows = sqlx::query(
-            "SELECT id, author_id, slug, title, status, visibility, series_order \
-             FROM posts WHERE series_id = $1 AND deleted_at IS NULL \
+            "SELECT id, author_id, slug, title, status, visibility, series_order, deleted_at \
+             FROM posts WHERE series_id = $1 \
              ORDER BY series_order, id",
         )
         .bind(series_id)
@@ -1774,6 +2011,10 @@ impl SeriesRepository for PostgresSeriesRepository {
                     slug: row.try_get("slug").map_err(map_row_error)?,
                     title: row.try_get("title").map_err(map_row_error)?,
                     status: row.try_get::<String, _>("status").map_err(map_row_error)?,
+                    deleted: row
+                        .try_get::<Option<OffsetDateTime>, _>("deleted_at")
+                        .map_err(map_row_error)?
+                        .is_some(),
                     visibility: row
                         .try_get::<String, _>("visibility")
                         .map_err(map_row_error)?,
@@ -1813,13 +2054,12 @@ impl SeriesRepository for PostgresSeriesRepository {
         }
 
         // 固定 id 序锁定成员行，并读取当前成员集合。
-        let members: Vec<(Uuid,)> = sqlx::query_as(
-            "SELECT id FROM posts WHERE series_id = $1 AND deleted_at IS NULL ORDER BY id",
-        )
-        .bind(series_id)
-        .fetch_all(&mut *tx)
-        .await
-        .map_err(map_sqlx_error)?;
+        let members: Vec<(Uuid,)> =
+            sqlx::query_as("SELECT id FROM posts WHERE series_id = $1 ORDER BY id")
+                .bind(series_id)
+                .fetch_all(&mut *tx)
+                .await
+                .map_err(map_sqlx_error)?;
         let mut current: Vec<Uuid> = members.into_iter().map(|(id,)| id).collect();
         let mut given: Vec<Uuid> = ordered_post_ids.to_vec();
         current.sort_unstable();
@@ -1831,7 +2071,7 @@ impl SeriesRepository for PostgresSeriesRepository {
 
         // 锁成员行（id 序）。VALUES 列表带序号参数在 sqlx 里用 unnest 更稳。
         let locked_posts: Vec<(Uuid,)> = sqlx::query_as(
-            "SELECT id FROM posts WHERE id = ANY($1::uuid[]) AND deleted_at IS NULL ORDER BY id \
+            "SELECT id FROM posts WHERE id = ANY($1::uuid[]) ORDER BY id \
              FOR UPDATE",
         )
         .bind(&given)
@@ -1854,7 +2094,7 @@ impl SeriesRepository for PostgresSeriesRepository {
             let order: i32 = (index + 1) as i32;
             sqlx::query(
                 "UPDATE posts SET series_order = $2, version = version + 1, updated_at = now() \
-                 WHERE id = $1 AND series_id = $3 AND deleted_at IS NULL",
+                 WHERE id = $1 AND series_id = $3",
             )
             .bind(post_id)
             .bind(order)
@@ -1956,5 +2196,30 @@ impl PublishedSeriesQuery for PostgresPublishedSeriesQuery {
             })
             .collect::<Result<Vec<_>, _>>()?;
         Ok((posts, total))
+    }
+
+    async fn list_public_directories(&self) -> Result<Vec<PublicUrlEntry>, UseCaseError> {
+        // 与分类页同口径：只收录有公开文章的系列；lastmod 取系列改名与成员更新的较晚者。
+        let rows = sqlx::query(&format!(
+            r#"
+            SELECT s.slug, GREATEST(s.updated_at, max(p.updated_at)) AS updated_at
+            FROM series s
+            JOIN posts p ON p.series_id = s.id
+            WHERE {POST_PUBLIC_PREDICATE}
+            GROUP BY s.id, s.slug, s.updated_at
+            ORDER BY s.slug
+            "#
+        ))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_sqlx_error)?;
+        rows.iter()
+            .map(|row| {
+                Ok(PublicUrlEntry {
+                    slug: row.try_get("slug").map_err(map_row_error)?,
+                    updated_at: row.try_get("updated_at").map_err(map_row_error)?,
+                })
+            })
+            .collect()
     }
 }

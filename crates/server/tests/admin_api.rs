@@ -2866,3 +2866,136 @@ async fn series_members_requires_read_permission_for_every_member() {
     );
     assert!(body.contains("solo-1"), "{body}");
 }
+
+#[tokio::test]
+async fn post_trash_http_scope_restore_and_owner_purge() {
+    let _g = SERIAL.lock().await;
+    let stack = fresh_stack().await;
+    let (author_cookie, author_csrf) = login_as(&stack.router, &stack.idp, "author").await;
+    let (other_cookie, other_csrf) = login_as(&stack.router, &stack.idp, "author2").await;
+    let (owner_cookie, owner_csrf) = login_as(&stack.router, &stack.idp, "owner").await;
+    let (status, _) = api(
+        &stack.router,
+        "POST",
+        "/api/admin/v1/posts",
+        Some(&author_cookie),
+        Some(&author_csrf),
+        Some(r#"{"slug":"http-trash","title":"标题","content":"正文"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, body) = api(
+        &stack.router,
+        "POST",
+        "/api/admin/v1/posts/http-trash/publish",
+        Some(&author_cookie),
+        Some(&author_csrf),
+        Some(r#"{"expected_version":1}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, _) = api(
+        &stack.router,
+        "POST",
+        "/api/admin/v1/posts/http-trash/trash",
+        Some(&other_cookie),
+        Some(&other_csrf),
+        Some(r#"{"expected_version":2}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, body) = api(
+        &stack.router,
+        "POST",
+        "/api/admin/v1/posts/http-trash/trash",
+        Some(&author_cookie),
+        Some(&author_csrf),
+        Some(r#"{"expected_version":2}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body.contains("\"version\":3"));
+    let (status, body) = api(
+        &stack.router,
+        "GET",
+        "/api/admin/v1/posts",
+        Some(&author_cookie),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(!body.contains("http-trash"));
+    let (status, body) = api(
+        &stack.router,
+        "GET",
+        "/api/admin/v1/post-trash?page=1",
+        Some(&author_cookie),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("http-trash"));
+    let (status, _) = api(
+        &stack.router,
+        "GET",
+        "/api/admin/v1/post-trash?author=author",
+        Some(&other_cookie),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _) = api(
+        &stack.router,
+        "POST",
+        "/api/admin/v1/posts/http-trash/restore",
+        Some(&author_cookie),
+        Some(&author_csrf),
+        Some(r#"{"expected_version":2}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let (status, body) = api(
+        &stack.router,
+        "POST",
+        "/api/admin/v1/posts/http-trash/restore",
+        Some(&author_cookie),
+        Some(&author_csrf),
+        Some(r#"{"expected_version":3}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body.contains("\"status\":\"draft\""));
+    let (status, _) = api(
+        &stack.router,
+        "POST",
+        "/api/admin/v1/posts/http-trash/trash",
+        Some(&author_cookie),
+        Some(&author_csrf),
+        Some(r#"{"expected_version":4}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = api(
+        &stack.router,
+        "POST",
+        "/api/admin/v1/posts/http-trash/purge",
+        Some(&author_cookie),
+        Some(&author_csrf),
+        Some(r#"{"expected_version":5}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, body) = api(
+        &stack.router,
+        "POST",
+        "/api/admin/v1/posts/http-trash/purge",
+        Some(&owner_cookie),
+        Some(&owner_csrf),
+        Some(r#"{"expected_version":5}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+}

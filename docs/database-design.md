@@ -119,7 +119,7 @@ content_type 首期仅允许 markdown；不接受未经处理的 HTML 作为另�
 
 草稿标题和正文可暂空，但 slug 创建时就必须非空且表内唯一；由用户提供或应用生成临时唯一 slug。首次发布校验内容与路径，之后锁定 slug，即使撤回也不允许改名。无路径历史、自动重定向或删除墓碑。
 
-建议路由：文章 `/posts/{slug}`，页面 `/{slug}`，分类/标签/系列分别为 `/categories/{slug}`、`/tags/{slug}`、`/series/{slug}`。Page slug 仅为一个片段，应用拒绝 admin、api、auth、posts、categories、tags、series、assets、media 及 RSS/sitemap 等实际系统路由；路由优先匹配系统入口，最后才进入 Page。数据库的 pages.slug 唯一无法单独保护系统命名空间。
+建议路由：文章 `/posts/{slug}`，页面 `/{slug}`，分类/标签/系列分别为 `/categories/{slug}`、`/tags/{slug}`、`/series/{slug}`；机器可读入口 `/feed.xml`、`/sitemap.xml`、`/robots.txt`。Page slug 仅为一个片段，应用拒绝 admin、api、auth、posts、categories、tags、series、assets、media 及 RSS/sitemap 等实际系统路由；路由优先匹配系统入口，最后才进入 Page。数据库的 pages.slug 唯一无法单独保护系统命名空间。
 
 posts 软删除保留 slug、系列位置及标签关系；恢复后为 draft，原 archived 仍保持 archived。默认不自动清空回收站，永久删除需专门授权，级联清除 post_tags 并释放 slug/系列位置。pages 按贴文无 deleted_at：删除为物理删除，需 page.delete 权限，无法从回收站恢复。永久删除后的旧地址可被新内容使用；如需永久占位必须另行扩展。
 

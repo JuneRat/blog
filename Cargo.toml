@@ -36,3 +36,6 @@ base64 = "0.22"
 argon2 = { version = "0.5", features = ["std"] }
 # 受控 CLI 的隐藏口令输入（不回显、不进入 argv 与 shell 历史）。
 rpassword = "7"
+# 站点公开地址解析（application::seo）：URL 语法自己手写迟早出错，
+# 交给成熟解析器，业务限制（scheme/无凭据/无路径前缀）在解析结果上再检查。
+url = "2"

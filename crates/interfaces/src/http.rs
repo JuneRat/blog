@@ -28,8 +28,9 @@ pub struct PublicSiteState {
 /// 构建公开路由；assets_dir 提供时挂载 /assets/ 静态资源（主题 assets 目录）。
 ///
 /// 根路径 `/{slug}` 是 Page 的公开地址（如 /about）。固定路由优先、Page 最后匹配：
-/// matchit 让静态段（/healthz、/posts、/tags、/admin、/assets）胜过参数段，
-/// 保留路径在领域校验与应用层 `render_page` 各拒绝一次，Page 不可能顶掉系统入口。
+/// matchit 让静态段（/healthz、/feed.xml、/sitemap.xml、/robots.txt、/posts、/tags、
+/// /admin、/assets）胜过参数段，保留路径在领域校验与应用层 `render_page` 各拒绝
+/// 一次，Page 不可能顶掉系统入口。
 pub fn public_router(state: PublicSiteState, assets_dir: Option<PathBuf>) -> Router {
     let mut router = Router::new()
         .route("/", get(index))
@@ -37,6 +38,9 @@ pub fn public_router(state: PublicSiteState, assets_dir: Option<PathBuf>) -> Rou
         .route("/tags/{slug}", get(tag_detail))
         .route("/categories/{slug}", get(category_detail))
         .route("/series/{slug}", get(series_detail))
+        .route("/feed.xml", get(feed))
+        .route("/sitemap.xml", get(sitemap))
+        .route("/robots.txt", get(robots))
         .route("/healthz", get(healthz))
         .route("/{slug}", get(page_detail))
         .fallback(not_found)
@@ -186,6 +190,54 @@ async fn page_detail(State(state): State<PublicSiteState>, Path(slug): Path<Stri
             .into_response(),
         Err(e) => server_error(e),
     }
+}
+
+/// 机器可读响应的缓存策略：内容随内容库/设置变化而变化，必须每次回源校验。
+///
+/// 加长缓存会让「发布文章 / 改站点设置后 feed 与 sitemap 立即反映」不成立；
+/// 这里没有 ETag（响应很小，直接重算），`no-cache` 只禁止复用而不禁止存储。
+const NO_CACHE: &str = "no-cache";
+
+/// `/feed.xml`：最新公开文章的 RSS 2.0。
+async fn feed(State(state): State<PublicSiteState>) -> Response {
+    match state.site.render_feed().await {
+        Ok(xml) => (
+            [
+                (header::CONTENT_TYPE, "application/rss+xml; charset=utf-8"),
+                (header::CACHE_CONTROL, NO_CACHE),
+            ],
+            xml,
+        )
+            .into_response(),
+        Err(e) => server_error(e),
+    }
+}
+
+/// `/sitemap.xml`：首页、公开文章与 Page，以及非空的标签/分类/系列页。
+async fn sitemap(State(state): State<PublicSiteState>) -> Response {
+    match state.site.render_sitemap().await {
+        Ok(xml) => (
+            [
+                (header::CONTENT_TYPE, "application/xml; charset=utf-8"),
+                (header::CACHE_CONTROL, NO_CACHE),
+            ],
+            xml,
+        )
+            .into_response(),
+        Err(e) => server_error(e),
+    }
+}
+
+/// `/robots.txt`：放行公开内容，屏蔽后台/接口/认证前缀并声明 sitemap。
+async fn robots(State(state): State<PublicSiteState>) -> Response {
+    (
+        [
+            (header::CONTENT_TYPE, "text/plain; charset=utf-8"),
+            (header::CACHE_CONTROL, NO_CACHE),
+        ],
+        state.site.render_robots(),
+    )
+        .into_response()
 }
 
 async fn healthz(State(state): State<PublicSiteState>) -> Response {

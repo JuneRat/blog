@@ -5,6 +5,7 @@ import { PageEditScreen } from "./screens/PageEditScreen";
 import { PageListScreen } from "./screens/PageListScreen";
 import { PostEditScreen } from "./screens/PostEditScreen";
 import { PostListScreen } from "./screens/PostListScreen";
+import { PostTrashScreen } from "./screens/PostTrashScreen";
 import { CategoryListScreen } from "./screens/CategoryListScreen";
 import { SeriesListScreen } from "./screens/SeriesListScreen";
 import { TagListScreen } from "./screens/TagListScreen";
@@ -47,6 +48,7 @@ export function App() {
   if (route.name === "postNew") {
     return <PostEditScreen slug={null} />;
   }
+  if (route.name === "postTrash") return <PostTrashScreen />;
   if (route.name === "pageList") {
     return <PageListScreen />;
   }

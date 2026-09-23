@@ -141,6 +141,7 @@ export interface SeriesMemberRow {
   slug: string;
   title: string;
   status: string;
+  deleted: boolean;
   author_id: string;
   series_order: number | null;
 }

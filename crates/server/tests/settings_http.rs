@@ -95,6 +95,11 @@ fn site_fallback() -> SiteInfo {
     }
 }
 
+/// 测试用可信站点地址：SEO/canonical/feed 链接都基于它拼接。
+fn test_base_url() -> application::seo::PublicBaseUrl {
+    application::seo::PublicBaseUrl::parse("https://blog.test").unwrap()
+}
+
 /// 与生产装配同构的测试栈；返回完整 router、登录依赖与连接池。
 struct Stack {
     router: axum::Router,
@@ -233,6 +238,7 @@ async fn build(pool: PgPool) -> Stack {
         theme,
         settings_store,
         site_fallback(),
+        test_base_url(),
     ));
 
     let auth_state = AuthState {
@@ -289,6 +295,7 @@ async fn revived_public_router(pool: &PgPool) -> axum::Router {
         theme,
         Arc::new(PostgresSettingsStore::new(pool.clone())),
         site_fallback(),
+        test_base_url(),
     ));
     public_router(
         PublicSiteState {

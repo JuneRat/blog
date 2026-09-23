@@ -229,6 +229,7 @@ pub struct VersionBody {
 #[derive(Deserialize, Default)]
 pub struct ListQuery {
     pub author: Option<String>,
+    pub page: Option<i64>,
 }
 
 // ---------------------------------------------------------------------------
@@ -238,7 +239,11 @@ pub struct ListQuery {
 pub fn posts_router(state: AdminState) -> Router {
     Router::new()
         .route("/api/admin/v1/posts", get(list_posts).post(create_post))
+        .route("/api/admin/v1/post-trash", get(list_trash))
         .route("/api/admin/v1/posts/{slug}", get(get_post).patch(edit_post))
+        .route("/api/admin/v1/posts/{slug}/trash", post(trash_post))
+        .route("/api/admin/v1/posts/{slug}/restore", post(restore_post))
+        .route("/api/admin/v1/posts/{slug}/purge", post(purge_post))
         .route("/api/admin/v1/posts/{slug}/publish", post(publish_post))
         .route("/api/admin/v1/posts/{slug}/unpublish", post(unpublish_post))
         .layer(axum::extract::DefaultBodyLimit::max(ADMIN_BODY_LIMIT))
@@ -319,6 +324,92 @@ async fn list_posts(
             Json(list.iter().map(PostJson::from).collect::<Vec<_>>()),
         )
             .into_response(),
+        Err(e) => admin_error(e, &request_id),
+    }
+}
+
+async fn list_trash(
+    AdminAuth { actor }: AdminAuth,
+    request_id: RequestId,
+    State(state): State<AdminState>,
+    Query(query): Query<ListQuery>,
+) -> Response {
+    let author_id = match query.author.as_deref() {
+        Some(username) if !username.is_empty() => {
+            if !actor.has_permission("post.read_any") {
+                return admin_error(UseCaseError::Forbidden, &request_id);
+            }
+            match state.users.actor_for_username(username).await {
+                Ok(who) => who.user_id,
+                Err(e) => return admin_error(e, &request_id),
+            }
+        }
+        _ => actor.user_id,
+    };
+    match state
+        .posts
+        .list_trash(&actor, author_id, query.page.unwrap_or(1))
+        .await
+    {
+        Ok(page) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "items": page.items.iter().map(PostJson::from).collect::<Vec<_>>(),
+                "total": page.total, "page": page.page, "per_page": page.per_page
+            })),
+        )
+            .into_response(),
+        Err(e) => admin_error(e, &request_id),
+    }
+}
+
+async fn trash_post(
+    AdminAuth { actor }: AdminAuth,
+    request_id: RequestId,
+    State(state): State<AdminState>,
+    Path(slug): Path<String>,
+    body: Option<Json<VersionBody>>,
+) -> Response {
+    match state
+        .posts
+        .trash(&actor, &slug, body.and_then(|Json(b)| b.expected_version))
+        .await
+    {
+        Ok(dto) => (StatusCode::OK, Json(PostDetailJson::from(dto))).into_response(),
+        Err(e) => admin_error(e, &request_id),
+    }
+}
+
+async fn restore_post(
+    AdminAuth { actor }: AdminAuth,
+    request_id: RequestId,
+    State(state): State<AdminState>,
+    Path(slug): Path<String>,
+    body: Option<Json<VersionBody>>,
+) -> Response {
+    match state
+        .posts
+        .restore(&actor, &slug, body.and_then(|Json(b)| b.expected_version))
+        .await
+    {
+        Ok(dto) => (StatusCode::OK, Json(PostDetailJson::from(dto))).into_response(),
+        Err(e) => admin_error(e, &request_id),
+    }
+}
+
+async fn purge_post(
+    AdminAuth { actor }: AdminAuth,
+    request_id: RequestId,
+    State(state): State<AdminState>,
+    Path(slug): Path<String>,
+    body: Option<Json<VersionBody>>,
+) -> Response {
+    match state
+        .posts
+        .purge(&actor, &slug, body.and_then(|Json(b)| b.expected_version))
+        .await
+    {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => admin_error(e, &request_id),
     }
 }
@@ -1016,6 +1107,7 @@ struct SeriesMemberJson {
     slug: String,
     title: String,
     status: String,
+    deleted: bool,
     visibility: String,
     author_id: Uuid,
     series_order: i32,
@@ -1038,6 +1130,7 @@ async fn series_members(
                         slug: m.slug.clone(),
                         title: m.title.clone(),
                         status: m.status.clone(),
+                        deleted: m.deleted,
                         visibility: m.visibility.clone(),
                         author_id: m.author_id,
                         series_order: m.series_order,

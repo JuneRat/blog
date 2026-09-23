@@ -55,7 +55,7 @@ blog oauth bindings --user sun
 - `GET /auth/providers` 是公开只读端点（`no-store`），只返回 `[{id, name, kind}]`，供登录页渲染按钮，不含 client_id/issuer/secret_ref 等配置细节；展示名由 `oauth add-* --name` 设置，缺省回退到 id。
 - 会话为单实例内存存储（HttpOnly/SameSite=Lax cookie，服务端只存 SHA-256 摘要）；空闲/绝对过期、容量淘汰、重启全部失效。
 - `GET /api/admin/v1/me` 返回当前用户与权限并集（每次重新读取，撤权即时生效）；`POST /auth/logout` 需会话 + `X-CSRF-Token` 头 + 同源 Origin。
-- 相关环境变量：`BLOG_PUBLIC_BASE_URL`（回调 redirect_uri 基址）、`BLOG_SECURE_COOKIES`（不设时按 `BLOG_PUBLIC_BASE_URL` 的 scheme 推断，HTTPS 部署自动加 Secure）。
+- 相关环境变量：`BLOG_PUBLIC_BASE_URL`（回调 redirect_uri 基址；同时是 canonical、RSS 与 sitemap 绝对链接的唯一来源）、`BLOG_SECURE_COOKIES`（不设时按 `BLOG_PUBLIC_BASE_URL` 的 scheme 推断，HTTPS 部署自动加 Secure）。
 
 ### 本地密码登录（已交付）
 
@@ -107,6 +107,24 @@ blog user show sun                             # 显示「密码登录：已启�
 - **分组隔离**：settings API 面上只有 `/settings/site` 一个地址；oauth 等受保护分组走专用权限（`oauth.manage`）与受控 CLI 入口，未知分组（含 `/settings/oauth`）一律 404，`settings.manage` 借不到道。
 - 响应含 `source: "database" | "fallback"` 与 `version`，后台设置屏据此展示当前来源；SPA 地址 `/admin/settings`，409 冲突流程与编辑器一致（重新加载 / 仍然覆盖）。
 
+### 公开订阅与 SEO（RSS / sitemap / robots，已交付）
+
+三个匿名只读的机器可读端点，均 `Cache-Control: no-cache`——内容或设置变化后，下一次请求立即反映（无页面缓存）：
+
+| 端点 | 内容 |
+|---|---|
+| `GET /feed.xml` | RSS 2.0，最新 20 篇公开已发布文章；`application/rss+xml; charset=utf-8` |
+| `GET /sitemap.xml` | 首页 + 公开文章 + 公开 Page + 非空目录页；`application/xml; charset=utf-8` |
+| `GET /robots.txt` | `Allow: /`、`Disallow: /admin`、`/api`、`/auth`，并声明 sitemap 地址；`text/plain; charset=utf-8` |
+
+- **可见性**：三者都复用公开页面的同一条谓词（`status=published AND visibility=public AND deleted_at IS NULL`，Page 只有前两项）。草稿、私密、已撤回与软删除内容不出现在 feed、sitemap 或站点地图的任何入口，也不出现在 HTML 列表页。
+- **稳定标识与时间**：feed 条目的 `<guid isPermaLink="true">` 就是文章 canonical URL（slug 首次发布后锁定，故 URL 即稳定标识，改标题不会重复推送），并带 RFC 822 `<pubDate>`、绝对 `<link>` 与 `atom:link` 自指；`lastBuildDate` 取最新条目时间而不是「当前时间」，避免每次请求都产生不同字节。
+- **sitemap 收录规则**：首页恒定收录；公开文章与 Page 带 `<lastmod>`（取 `updated_at`）；**标签/分类/系列页只在至少有一篇公开文章时收录**（空目录是薄内容，在 SQL 里用内连接直接过滤），每条只收录第 1 页地址，分页变体不单独收录。50,000 条上限是**整个文件**的预算（首页 → 文章 → Page → 目录依次占用）：文章与 Page 按剩余名额限制查询；标签、分类、系列在还有名额时仍全量读取，预算耗尽后跳过后续来源，最终由渲染层截断到总上限——超限 sitemap 会被抓取器整体拒绝。内容超过 50,000 条需要 sitemap index（多文件），属后续范围。
+- **SEO 元数据**：每个 HTML 页面输出 `<title>`、`<meta name="description">`、`<link rel="canonical">`、RSS 自动发现与 `og:*`。标题统一为「页面标题 - 站点标题」（首页只有站点标题）；描述取文章摘要、缺失时回退站点描述，折叠为单行并截断到 160 字符；canonical 是绝对 URL，列表页第 2 页起自指 `?page=N`。规则由应用层 `seo` 上下文统一计算，主题模板不再各自拼 `<title>`（`base.html` 已无 `{% block title %}`）。
+- **站点公开地址**：绝对 URL 一律由可信配置 `BLOG_PUBLIC_BASE_URL` 拼接，**不使用请求的 Host 头**（Host 由客户端控制，写进 canonical/feed 会污染搜索索引）。该值在装配期校验（绝对 http/https、主机非空、无用户名/密码、无查询与片段、**无路径前缀**）并失败即退出，与 OAuth 回调共用同一个值。语法交给 `url` crate 解析（host 转小写、Unicode 域名转 Punycode、非法端口如 `https://example.com:abc` 直接拒绝），不再手写字节切片——那既会放过非法地址，又会在 `http://例子.测试` 上 panic。Unicode slug 在 canonical、feed 与 sitemap 中按百分号编码（如 `/posts/关于` → `/posts/%E5%85%B3%E4%BA%8E`）。
+- **子路径部署暂不支持**：站点路由（`/posts/{slug}`、`/assets/…`、`/admin`）与主题里的链接都是域名根相对路径，`https://example.com/blog` 这类配置会被**拒绝**而不是半支持（否则样式、文章导航与页脚 RSS 链接会跳出博客）。建议使用独立域名，并在对外域名根路径部署，例如 `https://blog.example.com`。仅由反向代理改写入站路径无法解决根相对链接问题，不代表支持对外部署在 `/blog`。
+- **XML 正确性**：feed/sitemap 不经过主题模板（协议输出不应随主题变化），由应用层纯函数渲染并统一转义 `&`、`<`、`>`、`"`、`'`，同时丢弃 XML 1.0 不允许的控制字符——否则一条含控制字符的标题就能让整个 feed 无法解析。
+
 页面与文章共用同一套错误契约、乐观并发与首次发布后锁定 slug 的规则；区别是 `page.*` 为站点级权限，且公开地址是根路径 `/{slug}`（`admin`、`api`、`auth`、`posts`、`assets`、`healthz` 等系统路径在创建、改名与发布时都会拒绝，固定路由优先）。幂等操作（重复发布/撤回、无变化的编辑）同样校验显式传入的 `expected_version`：版本不一致一律 `version_conflict`，不会因为「本来就不写库」而假装成功。
 
 错误语义：JSON `{"error": ..., "code": ..., "request_id": ...}`，401 未登录（带 `WWW-Authenticate: Session`）、403 越权/CSRF/跨源、404 不存在、409 slug 占用（`code=conflict`）或版本冲突（`code=version_conflict`）、400 校验失败、429 登录限流（`code=rate_limited`，带 `Retry-After`）；内部错误只回通用文案（`code=internal_error`）。同一状态码可能对应不同业务原因，客户端按 `code` 分支而不是只看状态码。登录失败统一 `401` + `code=invalid_credentials`；自助改密时「当前密码不正确」用 `403` + 同一 code，避免前端把用户误判为掉线。
@@ -125,6 +143,8 @@ blog user show sun                             # 显示「密码登录：已启�
 | `BLOG_MIGRATIONS_DIR` | `migrations/postgres` | 迁移目录 |
 | `BLOG_ADMIN_DIST` | `apps/admin/dist` | 后台 SPA 构建产物；目录不存在时不注册 `/admin` |
 | `BLOG_SITE_TITLE` / `BLOG_SITE_DESCRIPTION` | Sun's Blog / 一个 Rust 博客 | **回退值**：数据库 `settings.site` 未配置时才生效（见「站点设置」） |
+| `BLOG_PUBLIC_BASE_URL` | `http://127.0.0.1:8080` | 对外可达基础 URL：OAuth 回调、canonical、RSS 与 sitemap 的绝对链接都取自它；装配期校验，非法值直接启动失败 |
+| `BLOG_SECURE_COOKIES` | 按 `BLOG_PUBLIC_BASE_URL` 的 scheme 推断 | 会话 cookie 的 `Secure` 属性显式覆盖（TLS 终止代理等场景） |
 
 ## 后台 SPA（apps/admin）
 
@@ -199,11 +219,12 @@ docs/               # 设计文档与 ADR
 - 分类树（M3 第二段）：创建/更新/移动/删除（category.manage，slug 创建后不可改）；移动在分类树事务锁内做深度受限祖先链校验防环；被文章引用或含子分类时删除受 category_in_use 保护；文章编辑器分类选择与正文/标签同事务保存；公开分类页 /categories/（slug） 分页（直接归属），详情页展示分类链接。
 - Series（M3 第三段）：目录管理（series.manage，被文章引用时删除受 series_in_use 保护）；文章设置系列与序号（同事务，位置唯一冲突为可定位 409）；整体重排在系列行锁 + series.version 前提下进行，成员按 id 序加锁、位置唯一约束 DEFERRED 到提交检查，同时递增涉及 posts.version 与 series.version；重排逐篇核验文章授权；公开系列页 /series/（slug） 按阅读顺序分页（草稿占位不外泄）。
 - 站点设置（M3 第四段）：`settings.site` 分组（标题/描述）的后台读写闭环（settings.manage，读写同权）；生效优先级数据库 > 环境变量 > 默认值，公开页面每次渲染解析、保存即生效、重启后配置保留；expected_version 条件写入（0 = 未配置的插入前提）与内容一致的幂等保存；越权/非法值/并发覆盖/未知分组（含 oauth，404）均有回归测试。
+- RSS/sitemap 与基础 SEO（M3 第五段）：`/feed.xml`（RSS 2.0，`guid` = canonical URL）、`/sitemap.xml`（首页/公开文章/公开 Page + 非空目录页，带 lastmod）、`/robots.txt`（声明 sitemap）；HTML 统一输出 title/description/canonical/og 与 RSS 自动发现；绝对链接取自 `BLOG_PUBLIC_BASE_URL`（装配期校验）；Unicode slug 百分号编码；XML 转义与控制字符、可见性边界（草稿/私密/撤回/软删除）与「更新后立即变化」均有单元与真实库集成测试。
 - M0 主题桥接原型（`spikes/template-bridge`）：同步模板函数 ↔ 异步 SQL 查询桥接验证可行，预算/隔离/失败场景 17 项集成测试；结论见原型 README 与 ADR-0002。
 
 ## 下一步
 
-M2（身份与后台）已交付：RBAC/委派、OAuth 登录闭环、本地密码登录（Argon2id + 限流 + 受控重置）、管理写 API、后台 SPA（文章/页面/用户与角色屏幕）；其后用户与角色管理界面也已交付（见 [身份与后台 §8](docs/identity-and-admin.md)）。M0 主题桥接原型已完成（结论可行）。M3 按 [roadmap](docs/product-roadmap.md) 推进：标签闭环、分类树（防环树锁 + 引用保护）、Series（并发重排锁协议 + 公开系列页）与**站点设置第一段（site 分组：标题/描述）已交付**，接下来是 RSS/sitemap、Post 回收站、备份恢复、settings 后续分组与正式主题函数。
+M2（身份与后台）已交付：RBAC/委派、OAuth 登录闭环、本地密码登录（Argon2id + 限流 + 受控重置）、管理写 API、后台 SPA（文章/页面/用户与角色屏幕）；其后用户与角色管理界面也已交付（见 [身份与后台 §8](docs/identity-and-admin.md)）。M0 主题桥接原型已完成（结论可行）。M3 按 [roadmap](docs/product-roadmap.md) 推进：标签闭环、分类树（防环树锁 + 引用保护）、Series（并发重排锁协议 + 公开系列页）、**站点设置第一段（site 分组：标题/描述）**与 **RSS/sitemap 与基础 SEO** 已交付，接下来是 Post 回收站、备份恢复、settings 后续分组与正式主题函数。
 
 M2 遗留（已知、未做）：
 

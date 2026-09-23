@@ -65,6 +65,7 @@ Tag 为多对多，post_tags 的复合主键去重。名称读取当前值，改
 - 不提供旧链接跳转、别名或任意嵌套路径。以后若允许改名并保留旧链接，另行加入路径/重定向存储。
 - Slug 只允许单个合法路径片段，固定 Unicode、大小写及编码规范，禁止分隔符、点路径和二次解码绕过。
 - Page 禁止占用系统路由及前缀，例如 admin、api、auth、posts、categories、tags、series、assets、media、RSS、sitemap、robots 和图标路由。注册表以实际路由为准，在创建、修改和发布时复核；固定路由优先，Page 最后匹配。
+- 机器可读入口已交付：`/feed.xml`（RSS 2.0，最新 20 篇公开文章）、`/sitemap.xml`（首页 + 公开文章 + 公开 Page；标签/分类/系列页只在至少有一篇公开文章时收录，分页变体不单独收录）、`/robots.txt`（声明 sitemap）。三者都复用上面的公开谓词，且不经过主题模板，因此撤回后下一次请求即不再出现（另见 [主题与渲染 §2.1](themes-and-rendering.md)）。
 - 分类、标签、系列使用 /categories/{slug}、/tags/{slug}、/series/{slug}；不同类型可使用相同 slug。
 
 数据库只保护各表唯一，系统路由保留由应用校验。无需为当前固定前缀和根页面再建立全站路径表。

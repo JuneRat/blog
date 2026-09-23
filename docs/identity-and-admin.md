@@ -21,7 +21,8 @@ permissions.key 使用 resource.action。application 各模块声明可信权限
 | post.create | 创建本人文章 |
 | post.read / post.update / post.publish / post.delete | 本人文章；delete 为回收站，不是永久删除 |
 | post.read_any / post.update_any / post.publish_any / post.delete_any | 对应所有文章动作 |
-| post.unpublish / post.archive / post.restore | 本人文章；各自 _any 版本覆盖其他文章 |
+| post.unpublish | 本人文章；_any 版本覆盖其他文章 |
+| post.restore | 回收站恢复沿用 post.delete / post.delete_any 授权，尚无独立 key |
 | post.purge / post.transfer_author | 独立敏感权限，默认只授予管理者 |
 | page.read / page.create / page.update / page.publish / page.unpublish / page.archive / page.delete | 站点范围，Page 无 author_id；delete 是物理删除 |
 | category.manage / tag.manage / series.manage | 分类树、标签与系列管理；跨文章修改仍核验文章授权 |

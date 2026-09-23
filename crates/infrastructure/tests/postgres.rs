@@ -2429,3 +2429,157 @@ async fn settings_concurrent_saves_on_two_connections_exactly_one_wins() {
     let record = a.find_site().await.unwrap().unwrap();
     assert_eq!(record.version, 2, "只递增一次");
 }
+
+#[tokio::test]
+async fn trash_restore_purge_and_series_reorder_obey_versions() {
+    let _g = SERIAL.lock().await;
+    let pool = fresh_database().await;
+    let author = seed_user(&pool, "trash_author").await;
+    let posts = PostgresPostRepository::new(pool.clone());
+    let series = infrastructure::PostgresSeriesRepository::new(pool.clone());
+    let series_id = uuid::Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO series (id, name, slug, version) VALUES ($1, '回收测试', 'trash-series', 1)",
+    )
+    .bind(series_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let mut a = draft_snapshot(author, "trash-a");
+    a.series_id = Some(series_id);
+    a.series_order = Some(1);
+    a.status = PostStatus::Published;
+    a.published_at = Some(OffsetDateTime::now_utc());
+    let mut b = draft_snapshot(author, "trash-b");
+    b.series_id = Some(series_id);
+    b.series_order = Some(2);
+    posts.insert(&a, &[]).await.unwrap();
+    posts.insert(&b, &[]).await.unwrap();
+    let now = OffsetDateTime::now_utc();
+    assert!(matches!(
+        posts.trash(a.id, a.version, now).await.unwrap(),
+        SaveOutcome::Saved { new_version: 2 }
+    ));
+    assert!(
+        posts
+            .list_by_author(author)
+            .await
+            .unwrap()
+            .iter()
+            .all(|p| p.id != a.id)
+    );
+    assert_eq!(
+        posts.list_trash_by_author(author, 20, 0).await.unwrap().1,
+        1
+    );
+    assert!(
+        PostgresPublishedPostQuery::new(pool.clone())
+            .find_public_by_slug("trash-a")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let public = PostgresPublishedPostQuery::new(pool.clone());
+    assert!(
+        public
+            .list_public(20, 0)
+            .await
+            .unwrap()
+            .iter()
+            .all(|p| p.slug != "trash-a")
+    );
+    assert!(
+        public
+            .list_public_for_sitemap(20)
+            .await
+            .unwrap()
+            .iter()
+            .all(|p| p.slug != "trash-a")
+    );
+    assert_eq!(
+        posts.restore(a.id, 1, now).await.unwrap(),
+        SaveOutcome::StaleConflict
+    );
+    assert!(matches!(
+        posts.restore(a.id, 2, now).await.unwrap(),
+        SaveOutcome::Saved { new_version: 3 }
+    ));
+    let restored = posts.find_by_id(a.id).await.unwrap().unwrap();
+    assert_eq!(restored.status, PostStatus::Draft);
+    assert!(restored.published_at.is_some());
+    assert!(matches!(
+        posts.trash(a.id, 3, now).await.unwrap(),
+        SaveOutcome::Saved { new_version: 4 }
+    ));
+    let (series_version,): (i64,) = sqlx::query_as("SELECT version FROM series WHERE id = $1")
+        .bind(series_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let order = [b.id, a.id];
+    let (purge, reorder) = tokio::join!(
+        posts.purge(a.id, 4),
+        series.reorder(series_id, series_version, &order)
+    );
+    let purge = purge.unwrap();
+    let reorder = reorder.unwrap();
+    match (purge, reorder) {
+        (SaveOutcome::Saved { .. }, application::ports::ReorderOutcome::StaleSeriesVersion) => {
+            assert!(posts.find_by_id(a.id).await.unwrap().is_none());
+            assert_eq!(series.members_of(series_id).await.unwrap().len(), 1);
+        }
+        (SaveOutcome::StaleConflict, application::ports::ReorderOutcome::Reordered { .. }) => {
+            assert!(posts.find_by_id(a.id).await.unwrap().is_some());
+            assert_eq!(series.members_of(series_id).await.unwrap().len(), 2);
+        }
+        other => panic!("并发结果不符合系列版本协议：{other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn purge_releases_slug_and_cascades_tags_only_after_trash() {
+    let _g = SERIAL.lock().await;
+    let pool = fresh_database().await;
+    let author = seed_user(&pool, "purge_author").await;
+    let posts = PostgresPostRepository::new(pool.clone());
+    let tag_id = uuid::Uuid::now_v7();
+    sqlx::query("INSERT INTO tags (id, name, slug, version) VALUES ($1, '标签', 'purge-tag', 1)")
+        .bind(tag_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let post = draft_snapshot(author, "purge-slug");
+    posts.insert(&post, &[tag_id]).await.unwrap();
+    assert_eq!(posts.purge(post.id, 1).await.unwrap(), SaveOutcome::Gone);
+    assert_eq!(posts.tags_of(post.id).await.unwrap(), vec![tag_id]);
+    assert!(matches!(
+        posts
+            .trash(post.id, 1, OffsetDateTime::now_utc())
+            .await
+            .unwrap(),
+        SaveOutcome::Saved { new_version: 2 }
+    ));
+    assert_eq!(
+        posts.purge(post.id, 1).await.unwrap(),
+        SaveOutcome::StaleConflict
+    );
+    assert!(matches!(
+        posts.purge(post.id, 2).await.unwrap(),
+        SaveOutcome::Saved { .. }
+    ));
+    assert!(posts.tags_of(post.id).await.unwrap().is_empty());
+    posts
+        .insert(&draft_snapshot(author, "purge-slug"), &[])
+        .await
+        .unwrap();
+    let mut archived = draft_snapshot(author, "archived-trash");
+    archived.status = PostStatus::Archived;
+    posts.insert(&archived, &[]).await.unwrap();
+    let now = OffsetDateTime::now_utc();
+    posts.trash(archived.id, 1, now).await.unwrap();
+    posts.restore(archived.id, 2, now).await.unwrap();
+    assert_eq!(
+        posts.find_by_id(archived.id).await.unwrap().unwrap().status,
+        PostStatus::Archived
+    );
+}

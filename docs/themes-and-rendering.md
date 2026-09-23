@@ -1,6 +1,6 @@
 # 主题、MiniJinja 与模板数据函数
 
-状态：MiniJinja 与函数取数能力已确定；M0 原型（`spikes/template-bridge`）已验证 §4 的同步-异步桥接、预算与请求隔离方案**可行**，结论与硬约束见原型 README 及 [ADR-0002](adr/0002-template-data-functions.md)。当前生产渲染仍是「预取上下文 + 固定模板」：base/index/post/page/tag 六个模板，无模板数据函数；正式函数 API 的冻结不再被原型阻塞，随 M3 主题函数交付落地。根据主题需要通过模板函数获取数据的需求，模板引擎由原计划 Tera 调整为 MiniJinja。
+状态：MiniJinja 与函数取数能力已确定；M0 原型（`spikes/template-bridge`）已验证 §4 的同步-异步桥接、预算与请求隔离方案**可行**，结论与硬约束见原型 README 及 [ADR-0002](adr/0002-template-data-functions.md)。当前生产渲染仍是「预取上下文 + 固定模板」：base/index/post/page/tag/category/series 七个模板与一个 `url` 转义过滤器（见 §2.1），无模板数据函数；正式函数 API 的冻结不再被原型阻塞，随 M3 主题函数交付落地。根据主题需要通过模板函数获取数据的需求，模板引擎由原计划 Tera 调整为 MiniJinja。
 
 ## 1. 选型与边界
 
@@ -41,6 +41,22 @@ MiniJinja 类型只出现在 infrastructure，application 定义引擎无关的�
 未知参数、非法排序和超限请求返回受控模板错误，不接受原始 SQL、任意字段选择或任意条件表达式。分页默认不计算昂贵的 total；以 next_cursor 等明确契约表达后续页面。批量查询与列表预关联公开作者/标签数据用于避免逐条补查。
 
 基础上下文仍提供 `site`、`navigation`、`page`、`theme` 等常用数据。路由可预加载文章主体，模板函数补充侧栏、分类和相关文章，不强迫全部内容通过函数获取。
+
+### 2.1 当前已交付的固定上下文与 SEO 元数据
+
+RSS/sitemap/SEO 与 settings 交付后，模板拿到的仍是**预取上下文**（尚无模板数据函数），共 7 个模板：base、index、post、page、tag、category、series。
+
+| 变量 | 内容 | 可用模板 |
+|---|---|---|
+| `site` | `title`、`description`（数据库 site 行 > 环境变量 > 内置默认值，每次渲染解析） | 全部 |
+| `seo` | `title`、`description`、`canonical_url`、`feed_url`、`og_type` | 全部（`base.html` 依赖） |
+| `posts` | 首页文章卡片列表 | index |
+| `post` / `page` / `tag` / `category` / `series` | 各自页面主体 | 对应模板 |
+
+- **标题、描述、canonical 只有一处规则**（application 的 `seo` 模块）：详情页标题是「页面标题 - 站点标题」，首页只有站点标题；描述折叠为单行并截断到 160 字符，文章优先取摘要、缺失时回退站点描述；canonical 是绝对 URL，列表页第 2 页起自指 `?page=N`。模板不再各自拼 `<title>`，`base.html` 已无 `{% block title %}`。
+- **站点公开地址**取可信配置 `BLOG_PUBLIC_BASE_URL`（装配期用 `url` crate 解析并校验绝对 http/https、无凭据、无查询与片段、**无路径前缀**），不从请求 Host 头推导。子路径部署当前不支持：模板中的 `/assets/...`、`/posts/...`、`/feed.xml` 等都是域名根相对路径，接受前缀只会产出半套带前缀的链接，因此配置阶段直接拒绝。建议使用独立域名，并在对外域名根路径部署；仅由反向代理改写入站路径无法解决根相对链接问题。Unicode slug 在 URL 中按百分号编码，因此 canonical/feed/sitemap 对同一内容给出一致的地址。
+- URL 值用 `url` 过滤器输出：`{{ seo.canonical_url | url }}`。MiniJinja 的 HTML 自动转义会把 `/` 写成 `&#x2f;`（合法但让地址不可读、外部工具比对失配），该过滤器保留 `/` 并兜底转义 `&`、`<`、`>`、`"`、`'` 后标记为安全字符串。标题、描述等普通文本继续走自动转义。
+- **机器可读输出不经过模板**：`/feed.xml`、`/sitemap.xml`、`/robots.txt` 由 application 层纯函数渲染。RSS/sitemap 是协议契约，不应随主题变化，也不该让主题作者有机会产出不合规范的 XML；XML 转义与控制字符处理在该层单独测试。
 
 ## 3. 调用链与层次
 

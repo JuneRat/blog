@@ -10,7 +10,9 @@ use crate::ports::{
     ContentRenderer, PublishedCategoryQuery, PublishedPageQuery, PublishedPostQuery,
     PublishedSeriesQuery, PublishedTagQuery, SettingsStore,
 };
+use crate::seo::{self, PublicBaseUrl, SeoMeta};
 use crate::settings::effective_site;
+use crate::syndication::{self, FeedChannel, FeedItem, SitemapEntry};
 use domain::content::is_reserved_root_slug;
 
 /// 模板展示用的时间格式（应用层渲染契约的一部分）。
@@ -134,17 +136,46 @@ pub struct TagView {
 }
 
 /// 主题渲染端口：入站层不得绕过此端口直接使用模板引擎。
+///
+/// 每个方法都接收本次渲染的 [`SeoMeta`]：canonical/title/description 由应用层
+/// 按可信站点地址计算，模板只负责输出，避免同一规则在多个模板里各写一遍。
 pub trait ThemeRenderer: Send + Sync {
-    fn render_index(&self, site: &SiteInfo, posts: &[PostCard]) -> Result<String, UseCaseError>;
-    fn render_post(&self, site: &SiteInfo, post: &PostView) -> Result<String, UseCaseError>;
-    fn render_page(&self, site: &SiteInfo, page: &PageView) -> Result<String, UseCaseError>;
-    fn render_tag(&self, site: &SiteInfo, tag: &TagView) -> Result<String, UseCaseError>;
+    fn render_index(
+        &self,
+        site: &SiteInfo,
+        seo: &SeoMeta,
+        posts: &[PostCard],
+    ) -> Result<String, UseCaseError>;
+    fn render_post(
+        &self,
+        site: &SiteInfo,
+        seo: &SeoMeta,
+        post: &PostView,
+    ) -> Result<String, UseCaseError>;
+    fn render_page(
+        &self,
+        site: &SiteInfo,
+        seo: &SeoMeta,
+        page: &PageView,
+    ) -> Result<String, UseCaseError>;
+    fn render_tag(
+        &self,
+        site: &SiteInfo,
+        seo: &SeoMeta,
+        tag: &TagView,
+    ) -> Result<String, UseCaseError>;
     fn render_category(
         &self,
         site: &SiteInfo,
+        seo: &SeoMeta,
         category: &CategoryView,
     ) -> Result<String, UseCaseError>;
-    fn render_series(&self, site: &SiteInfo, series: &SeriesView) -> Result<String, UseCaseError>;
+    fn render_series(
+        &self,
+        site: &SiteInfo,
+        seo: &SeoMeta,
+        series: &SeriesView,
+    ) -> Result<String, UseCaseError>;
 }
 
 /// 公开列表页（标签页/分类页/系列页）分页大小。
@@ -164,6 +195,8 @@ pub struct PublicSiteInteractor {
     settings: Arc<dyn SettingsStore>,
     /// 装配回退值：环境变量/内置默认值（进程内不变）。
     fallback: SiteInfo,
+    /// 可信站点公开地址：canonical、RSS 链接与 sitemap 一律由它拼绝对 URL。
+    base_url: PublicBaseUrl,
 }
 
 impl PublicSiteInteractor {
@@ -178,6 +211,7 @@ impl PublicSiteInteractor {
         theme: Arc<dyn ThemeRenderer>,
         settings: Arc<dyn SettingsStore>,
         fallback: SiteInfo,
+        base_url: PublicBaseUrl,
     ) -> Self {
         Self {
             posts,
@@ -189,6 +223,7 @@ impl PublicSiteInteractor {
             theme,
             settings,
             fallback,
+            base_url,
         }
     }
 
@@ -219,7 +254,8 @@ impl PublicSiteInteractor {
             })
             .collect();
         let site = self.site_info().await;
-        self.theme.render_index(&site, &summaries)
+        let seo = SeoMeta::home(&site, &self.base_url);
+        self.theme.render_index(&site, &seo, &summaries)
     }
 
     /// 渲染公开文章详情；不满足公开条件一律 NotFound（知道 slug 不等于有权读取）。
@@ -256,7 +292,14 @@ impl PublicSiteInteractor {
             }),
         };
         let site = self.site_info().await;
-        self.theme.render_post(&site, &view)
+        let seo = SeoMeta::post(
+            &site,
+            &self.base_url,
+            &view.title,
+            &view.slug,
+            view.excerpt.as_deref(),
+        );
+        self.theme.render_post(&site, &seo, &view)
     }
 
     /// 渲染公开页面详情（根路径 `/{slug}`）。
@@ -280,7 +323,8 @@ impl PublicSiteInteractor {
             content_html: self.markdown.render_markdown(&detail.content),
         };
         let site = self.site_info().await;
-        self.theme.render_page(&site, &view)
+        let seo = SeoMeta::page(&site, &self.base_url, &view.title, &view.slug);
+        self.theme.render_page(&site, &seo, &view)
     }
 
     /// 渲染公开标签页 /tags/{slug}?page=N。
@@ -318,7 +362,14 @@ impl PublicSiteInteractor {
                 .collect(),
         };
         let site = self.site_info().await;
-        self.theme.render_tag(&site, &view)
+        let seo = SeoMeta::tag(
+            &site,
+            &self.base_url,
+            &view.tag_name,
+            &view.tag_slug,
+            view.page,
+        );
+        self.theme.render_tag(&site, &seo, &view)
     }
 
     /// 渲染公开分类页 /categories/{slug}?page=N（直接归属，不含子树）。
@@ -353,7 +404,14 @@ impl PublicSiteInteractor {
                 .collect(),
         };
         let site = self.site_info().await;
-        self.theme.render_category(&site, &view)
+        let seo = SeoMeta::category(
+            &site,
+            &self.base_url,
+            &view.category_name,
+            &view.category_slug,
+            view.page,
+        );
+        self.theme.render_category(&site, &seo, &view)
     }
 
     /// 渲染公开系列页 /series/{slug}?page=N：按阅读顺序（series_order 升序）。
@@ -393,6 +451,128 @@ impl PublicSiteInteractor {
                 .collect(),
         };
         let site = self.site_info().await;
-        self.theme.render_series(&site, &view)
+        let seo = SeoMeta::series(
+            &site,
+            &self.base_url,
+            &view.series_name,
+            &view.series_slug,
+            view.page,
+        );
+        self.theme.render_series(&site, &seo, &view)
+    }
+
+    /// 渲染 `/feed.xml`：最新公开已发布文章的 RSS 2.0。
+    ///
+    /// 复用 `list_public`——草稿、私密、已撤回与软删除在查询谓词里就被排除，
+    /// 这里不做第二次可见性判断（两处判断迟早会漂移）。
+    pub async fn render_feed(&self) -> Result<String, UseCaseError> {
+        let site = self.site_info().await;
+        let summaries = self
+            .posts
+            .list_public(syndication::FEED_ITEM_LIMIT, 0)
+            .await?;
+        let items: Vec<FeedItem> = summaries
+            .into_iter()
+            .map(|s| FeedItem {
+                url: seo::post_url(&self.base_url, &s.slug),
+                title: s.title,
+                description: s.excerpt,
+                published_at: s.published_at,
+            })
+            .collect();
+        Ok(syndication::render_feed(&FeedChannel {
+            title: site.title.clone(),
+            description: site.description.clone(),
+            link: self.base_url.root(),
+            self_url: seo::feed_url(&self.base_url),
+            items,
+        }))
+    }
+
+    /// 渲染 `/sitemap.xml`。
+    ///
+    /// 收录规则（docs/content-lifecycle.md §4 与 SEO 约定一致）：
+    /// - 首页恒定收录；
+    /// - 公开已发布文章与公开 Page，各自带 `lastmod`（取 `updated_at`）；
+    /// - 标签/分类/系列页**只在至少有一篇公开文章时**收录（空目录是薄内容），
+    ///   每条只收录第 1 页地址，分页变体不单独收录；
+    /// - 草稿、私密、已撤回、软删除内容一律不出现在任何入口。
+    ///
+    /// 50,000 条上限是**整个文件**的预算（首页 + 文章 + Page + 目录共享）。
+    /// 文章与 Page 按剩余名额限制查询；标签、分类、系列在还有名额时仍全量读取，
+    /// 预算耗尽后跳过后续来源，最终由渲染层截断到总上限。
+    /// 各来源各自取 50,000 再相加会拼出超限文件，而超限 sitemap 会被抓取器
+    /// 整体拒绝。内容超过 50,000 条需要 sitemap index（多文件），属后续范围。
+    pub async fn render_sitemap(&self) -> Result<String, UseCaseError> {
+        let mut entries = vec![SitemapEntry {
+            loc: self.base_url.root(),
+            lastmod: None,
+        }];
+
+        let slots = syndication::remaining_slots(entries.len());
+        if slots > 0 {
+            for post in self.posts.list_public_for_sitemap(slots).await? {
+                entries.push(SitemapEntry {
+                    loc: seo::post_url(&self.base_url, &post.slug),
+                    lastmod: Some(post.updated_at),
+                });
+            }
+        }
+        let slots = syndication::remaining_slots(entries.len());
+        if slots > 0 {
+            for page in self.pages.list_public_for_sitemap(slots).await? {
+                entries.push(SitemapEntry {
+                    loc: seo::page_url(&self.base_url, &page.slug),
+                    lastmod: Some(page.updated_at),
+                });
+            }
+        }
+        // 目录枚举端口不接受 limit，因此目录可能把 entries 推过上限；
+        // render_sitemap 的兜底截断保证输出仍然合法（目录排在最后，先被截掉）。
+        let slots = syndication::remaining_slots(entries.len());
+        if slots > 0 {
+            for tag in self.tags.list_public_directories().await? {
+                entries.push(SitemapEntry {
+                    loc: seo::tag_url(&self.base_url, &tag.slug, 1),
+                    lastmod: Some(tag.updated_at),
+                });
+            }
+        }
+        let slots = syndication::remaining_slots(entries.len());
+        if slots > 0 {
+            for category in self.categories.list_public_directories().await? {
+                entries.push(SitemapEntry {
+                    loc: seo::category_url(&self.base_url, &category.slug, 1),
+                    lastmod: Some(category.updated_at),
+                });
+            }
+        }
+        let slots = syndication::remaining_slots(entries.len());
+        if slots > 0 {
+            for series in self.series.list_public_directories().await? {
+                entries.push(SitemapEntry {
+                    loc: seo::series_url(&self.base_url, &series.slug, 1),
+                    lastmod: Some(series.updated_at),
+                });
+            }
+        }
+        Ok(syndication::render_sitemap(&entries))
+    }
+
+    /// 渲染 `/robots.txt`：允许抓取公开内容，屏蔽后台/接口/认证前缀，
+    /// 并声明 sitemap 地址（否则抓取器无从发现 sitemap）。
+    ///
+    /// 纯字符串，不读数据库——robots 是站点级约定，不随内容变化。
+    pub fn render_robots(&self) -> String {
+        format!(
+            "User-agent: *\n\
+             Allow: /\n\
+             Disallow: /admin\n\
+             Disallow: /api\n\
+             Disallow: /auth\n\
+             \n\
+             Sitemap: {}\n",
+            seo::sitemap_url(&self.base_url)
+        )
     }
 }

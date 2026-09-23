@@ -17,6 +17,7 @@ export function PostListScreen() {
   const [posts, setPosts] = useState<PostSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const canCreate = me?.permissions.includes("post.create") ?? false;
+  const canTrash = me?.permissions.some((p) => p === "post.delete" || p === "post.delete_any") ?? false;
   const canReadPages = me?.permissions.includes("page.read") ?? false;
   const canManageSettings = me?.permissions.includes("settings.manage") ?? false;
   const canAdminister =
@@ -36,6 +37,15 @@ export function PostListScreen() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  async function trash(post: PostSummary) {
+    if (!window.confirm(`将「${post.title || post.slug}」移入回收站？公开入口会立即隐藏。`)) return;
+    setError(null);
+    try {
+      await api.trashPost(post.slug, post.version);
+      await load();
+    } catch (e) { setError(messageOf(e)); }
+  }
 
   return (
     <div className="screen">
@@ -72,6 +82,7 @@ export function PostListScreen() {
               新建草稿
             </button>
           )}
+          <button type="button" className="button ghost" onClick={() => navigate(paths.postTrash)}>回收站</button>
           <button type="button" className="button ghost" onClick={() => void logout()}>
             退出
           </button>
@@ -95,6 +106,7 @@ export function PostListScreen() {
               <th>slug</th>
               <th>标题</th>
               <th>更新时间</th>
+              {canTrash && <th>操作</th>}
             </tr>
           </thead>
           <tbody>
@@ -108,6 +120,7 @@ export function PostListScreen() {
                 </td>
                 <td>{post.title || "（无标题）"}</td>
                 <td className="muted">{post.updated_at}</td>
+                {canTrash && <td><button type="button" onClick={(event) => { event.stopPropagation(); void trash(post); }}>移入回收站</button></td>}
               </tr>
             ))}
           </tbody>
