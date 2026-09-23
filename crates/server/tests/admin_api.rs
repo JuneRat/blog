@@ -223,6 +223,7 @@ async fn fresh_stack() -> Stack {
         series,
         settings,
         roles: roles.clone(),
+        media: common::media_interactor(pool.clone(), common::media_dir("admin")),
         secure_cookies: false,
     };
 

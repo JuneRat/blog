@@ -210,6 +210,7 @@ async fn fresh_stack_with(throttle_config: ThrottleConfig) -> Stack {
             },
         )),
         roles: roles.clone(),
+        media: common::media_interactor(pool.clone(), common::media_dir("password")),
         secure_cookies: false,
     };
     let router = auth_router(auth_state)

@@ -64,7 +64,7 @@ crates/domain/
 | identity | User、UserId、Role、Permission、RoleAssignment、ExternalIdentity、Invitation | 账号状态、角色授权、身份绑定与邀请规则 |
 | site | SiteSettings、Navigation | 站点信息和导航约束 |
 
-当前采用 [13 表设计](database-design.md)：Post/Page 各存一份当前内容，无独立工作副本与修订。版本变化、状态、分类树、系列顺序、删除与 Slug 规则由 [内容生命周期](content-lifecycle.md) 统一定义；媒体模型为后续扩展。
+当前采用 [13 表设计 + 媒体 2 表](database-design.md)：Post/Page 各存一份当前内容，无独立工作副本与修订。版本变化、状态、分类树、系列顺序、删除与 Slug 规则由 [内容生命周期](content-lifecycle.md) 统一定义；媒体库第一版（Post/Page 正文图片）已交付，模型在 `domain::media`（单文件，含资产身份、状态机与图片内容校验）。
 
 ### 聚合设计
 
@@ -90,7 +90,7 @@ crates/domain/
 | appearance | 无业务模块依赖 | 读取 site 或用户聚合执行授权 |
 | site | 默认无跨模块依赖 | 把主题激活实现放进设置聚合 |
 
-站点启用主题、公开作者资料拼接由 application 协调用例，不靠聚合互相持有完成。媒体管理交付后也由 application 协调保留/公开引用，MediaAsset 的 Ready 状态不自动表示公开。不能因某页面同时显示两个模块的数据就添加领域依赖。
+站点启用主题、公开作者资料拼接由 application 协调用例，不靠聚合互相持有完成。媒体引用同样由 application 协调：`MediaAsset` 的 `Ready` 状态不自动表示公开——公开与否取决于引用它的内容是否公开发布，该判定在每次读取时实时查询，不由聚合持有。不能因某页面同时显示两个模块的数据就添加领域依赖。
 
 Cargo metadata 只能检查 crate 依赖，不能验证此表。模块依赖先通过私有可见性和审查约束，可增加基于语法的架构 lint；简单 use 文本扫描仅作提示，不能声称覆盖重导出、别名、宏与完整路径。需要编译器严格隔离时再拆上下文 crate。
 

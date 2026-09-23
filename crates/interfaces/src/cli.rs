@@ -61,6 +61,12 @@ pub enum Command {
         action: OauthAction,
     },
 
+    /// 媒体库维护（受控 CLI；回收流程需要 media.delete_any）
+    Media {
+        #[command(subcommand)]
+        action: MediaAction,
+    },
+
     /// 启动公开 SSR 服务
     Serve {
         /// 监听地址，如 127.0.0.1:8080
@@ -187,6 +193,12 @@ pub enum OauthAction {
 }
 
 #[derive(Debug, Subcommand)]
+pub enum MediaAction {
+    /// 重试回收：丢弃中断的上传、完成待删除文件的删除（幂等，可反复执行）
+    Reclaim,
+}
+
+#[derive(Debug, Subcommand)]
 pub enum PostAction {
     /// 创建文章草稿
     Create {
@@ -289,6 +301,8 @@ pub struct CliDeps {
     pub auth: Arc<AuthInteractor>,
     /// 本地密码用例（受控设置/重置、清除与限流）。
     pub passwords: Arc<PasswordInteractor>,
+    /// 媒体库用例（上传/浏览/删除与可重试回收）。
+    pub media: Arc<application::media::MediaInteractor>,
     pub secure_cookies: bool,
     pub public_site: Arc<PublicSiteInteractor>,
     pub user_repo: Arc<dyn UserRepository>,
@@ -312,6 +326,8 @@ pub async fn run(deps: CliDeps, command: Command) -> Result<(), String> {
         Command::Role { action } => run_role(deps, action).await,
 
         Command::Oauth { action } => run_oauth(deps, action).await,
+
+        Command::Media { action } => run_media(deps, action).await,
 
         Command::Serve { addr } => {
             let bind = addr
@@ -337,7 +353,12 @@ pub async fn run(deps: CliDeps, command: Command) -> Result<(), String> {
                 series: deps.series,
                 settings: deps.settings,
                 roles: deps.roles,
+                media: deps.media.clone(),
                 secure_cookies: deps.secure_cookies,
+            };
+            let media_read_state = crate::http_media::MediaReadState {
+                media: deps.media,
+                auth: admin_state.auth.clone(),
             };
             let app = crate::http::mount_theme_assets(
                 public_router(public_state, deps.assets_dir),
@@ -351,7 +372,10 @@ pub async fn run(deps: CliDeps, command: Command) -> Result<(), String> {
             .merge(crate::http_admin::categories_router(admin_state.clone()))
             .merge(crate::http_admin::series_router(admin_state.clone()))
             .merge(crate::http_admin::settings_router(admin_state.clone()))
-            .merge(crate::http_identity::identity_router(admin_state));
+            .merge(crate::http_media::media_admin_router(admin_state.clone()))
+            .merge(crate::http_identity::identity_router(admin_state))
+            // 公开媒体读取必须挂在与 /{slug} 同一张表上：静态前缀优先。
+            .merge(crate::http_media::media_read_router(media_read_state));
             // 后台 SPA 挂在 /admin 子树；dist 不存在时保持未注册。
             let app = crate::http::mount_admin_spa(app, deps.admin_dist);
             // 全站最外层：分配请求编号、记录完成日志、回写 x-request-id（含被提前拒绝的 401/403）。
@@ -635,6 +659,43 @@ fn normalize_optional(value: Option<String>) -> Option<String> {
     value
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty())
+}
+
+/// 媒体库维护：回收流程是文件删除与数据库更新之间的补偿通道。
+///
+/// 上传中断（staged）与文件删除失败（pending_deletion）都会停在中间状态，
+/// 这里幂等地重试；失败项保留原状态并打印原因，可再次执行。
+async fn run_media(deps: CliDeps, action: MediaAction) -> Result<(), String> {
+    match action {
+        MediaAction::Reclaim => {
+            let report = deps
+                .media
+                .reclaim(&Actor::bootstrap_cli())
+                .await
+                .map_err(fmt_error)?;
+            println!(
+                "已认领并放弃超期未完成的上传（staged → pending_deletion）：{}",
+                report.abandoned_staged
+            );
+            println!("已完成文件删除（→ deleted）：{}", report.deleted);
+            println!(
+                "已清理无记录的暂存残留文件：{}",
+                report.orphaned_staging_files
+            );
+            if report.failures.is_empty() {
+                println!("没有失败项。");
+            } else {
+                println!(
+                    "失败 {} 项（保持原状态，可重复执行本命令重试）：",
+                    report.failures.len()
+                );
+                for failure in &report.failures {
+                    println!("  - {failure}");
+                }
+            }
+            Ok(())
+        }
+    }
 }
 
 async fn run_role(deps: CliDeps, action: RoleAction) -> Result<(), String> {

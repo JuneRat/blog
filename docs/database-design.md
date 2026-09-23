@@ -1,8 +1,8 @@
-# 数据库设计：13 张核心表
+# 数据库设计：13 张核心内容表 + 媒体 2 表
 
-更新日期：2026-09-21。采用用户提供并确认的方案：少表、关系清晰、以后再扩展；包含 Series、RBAC、OAuth，Post/Page 分表。替代此前 14 表与发布修订方案，取舍见 [ADR-0008](adr/0008-thirteen-table-blog-core.md)。
+更新日期：2026-09-23。核心内容/身份模型采用用户提供并确认的方案：少表、关系清晰、以后再扩展；包含 Series、RBAC、OAuth，Post/Page 分表。替代此前 14 表与发布修订方案，取舍见 [ADR-0008](adr/0008-thirteen-table-blog-core.md)。媒体库交付时按该 ADR 的「按需扩展」原则新增 `media_assets` 与 `content_media_refs` 两张表（迁移 `0004_media.sql`），原 13 表未改动。
 
-完整字段、类型、约束与索引见 [PostgreSQL DDL](sql/postgres-core.sql)。这是面向空 schema 的设计草案，不是已执行的数据库迁移。保留原方案的 13 张表和业务字段，只补充必要的约束、索引，以及可变记录的 `version` 并发控制字段；不增加路径、修订、会话或审计表。
+完整字段、类型、约束与索引见 [PostgreSQL DDL](sql/postgres-core.sql)（含媒体两表）；实际生效顺序由 `migrations/postgres/` 下的迁移决定（媒体是 `0004_media.sql`）。这是面向空 schema 的设计草案，不是已执行的数据库迁移。保留原方案的 13 张表和业务字段，只补充必要的约束、索引，以及可变记录的 `version` 并发控制字段；不增加路径、修订、会话或审计表。
 
 ## 1. 表与关系
 
@@ -20,6 +20,8 @@
 | 内容 | tags | 标签 |
 | 内容 | post_tags | 文章与标签多对多 |
 | 内容 | pages | 独立页面，不关联分类、标签、系列或作者 |
+| 媒体 | media_assets | 图片资产元数据与生命周期状态（随机存储路径、尺寸、校验值） |
+| 媒体 | content_media_refs | Post/Page 正文对媒体的真实引用关系；删除保护的唯一判据 |
 | 系统 | settings | 按 key 分组的 JSONB 配置 |
 
 ```mermaid
@@ -35,9 +37,20 @@ erDiagram
     series |o--o{ posts : orders
     posts ||--o{ post_tags : links
     tags ||--o{ post_tags : labels
+    media_assets ||--o{ content_media_refs : referenced_by
     pages {
         uuid id PK
         string slug UK
+    }
+    media_assets {
+        uuid id PK
+        string storage_key UK
+        string status
+    }
+    content_media_refs {
+        uuid media_id FK
+        string content_type
+        uuid content_id
     }
     settings {
         string key PK
@@ -47,7 +60,7 @@ erDiagram
 
 UUID 由应用生成；时间统一用 timestamptz。状态用字符串和 CHECK；updated_at 在更新时由应用写入，DEFAULT now() 仅处理插入。正文和 JSON 大小由接口及应用限制，不能因为 SQL 用 text/jsonb 就接受无限输入。
 
-users、roles、categories、series、posts、tags、pages、settings 额外有 `version bigint`，初始 1。有变化的写入校验 expected_version 并递增；修改文章标签也递增 posts.version，修改角色授权也递增 roles.version。它只表示当前记录的提交版本，不代表存在修订历史。
+users、roles、categories、series、posts、tags、pages、media_assets、settings 额外有 `version bigint`，初始 1。有变化的写入校验 expected_version 并递增；修改文章标签也递增 posts.version，修改角色授权也递增 roles.version。它只表示当前记录的提交版本，不代表存在修订历史。
 
 ## 2. 用户与 OAuth
 
@@ -62,7 +75,7 @@ provider 表示稳定的提供商实例，而不只是任意的“oidc”字符�
 
 `password_hash` 存 Argon2id 的 PHC 字符串（算法与参数自描述，可透明升级），OAuth-only 用户为空。本地密码登录、限流、重置与泄露处置契约见 [身份与后台 §7](identity-and-admin.md)；自助找回需要一次性令牌存储与邮件投递，本版未交付。只做登录时不长期保存 access_token/refresh_token；以后调用第三方 API 再单独设计加密凭据存储。
 
-users 的业务引用默认 RESTRICT；账号优先软删除/匿名化，不能级联删除其文章。avatar、cover 是 URL/受控静态资源路径，不是已经实现上传、附件引用或文件回收。
+users 的业务引用默认 RESTRICT；账号优先软删除/匿名化，不能级联删除其文章。avatar、cover 仍是 URL/受控静态资源路径：媒体库（§8）第一版只覆盖 Post/Page 正文图片，头像与封面接入同一媒体库属于下一段。
 
 ## 3. RBAC
 
@@ -149,12 +162,34 @@ site 分组（标题/描述）已随 M3 第一段交付，语义冻结为：
 
 ## 7. 运行时边界与后续扩展
 
-13 表是业务核心，不等于完整持久化认证/任务平台。首版按单实例运行：本站不透明会话、OAuth state/nonce/PKCE 尝试放有容量和 TTL 限制的服务端内存存储，state 原子一次消费，重启后全部失效。授权仍读主库；会话在角色/账号撤权后不能继续通过敏感操作。多实例、重启保留登录或持久邀请交付前，再选共享存储或追加专用迁移，不能把凭据塞进 settings。
+13 表（加媒体 2 表共 15 张）是业务核心，不等于完整持久化认证/任务平台。首版按单实例运行：本站不透明会话、OAuth state/nonce/PKCE 尝试放有容量和 TTL 限制的服务端内存存储，state 原子一次消费，重启后全部失效。授权仍读主库；会话在角色/账号撤权后不能继续通过敏感操作。多实例、重启保留登录或持久邀请交付前，再选共享存储或追加专用迁移，不能把凭据塞进 settings。
 
-首版仅允许 CLI 预建并明确绑定的用户登录，不开放自助注册。管理员邀请仍是后续协作功能，需同时补齐一次性消费、授权复核与存储；不宣称当前 13 表已覆盖邀请工作流。当前只有脱敏运行/安全日志，不承诺事务内持久业务审计；数据库审计随该功能补充。
+首版仅允许 CLI 预建并明确绑定的用户登录，不开放自助注册。管理员邀请仍是后续协作功能，需同时补齐一次性消费、授权复核与存储；不宣称当前 15 表已覆盖邀请工作流。当前只有脱敏运行/安全日志，不承诺事务内持久业务审计；数据库审计随该功能补充。
 
-暂不建 post_revisions、page_revisions、content_paths、media/attachments、sessions、oauth_tokens、invitations、audit_logs、series_posts、post_meta/page_meta、notifications/webhooks/analytics。媒体管理、可靠 outbox/任务和外部集成按 [路线图](product-roadmap.md) 扩展，不能为了维持 13 表而把队列和引用关系隐藏在 JSON 中。
+暂不建 post_revisions、page_revisions、content_paths、sessions、oauth_tokens、invitations、audit_logs、series_posts、post_meta/page_meta、notifications/webhooks/analytics。媒体管理的两张表已随媒体库第一版交付（§8）；其余能力按 [路线图](product-roadmap.md) 扩展，不能为了维持表数而把队列和引用关系隐藏在 JSON 中。
 
 DDL 不含种子账号、内置角色或权限数据；实施时由受控迁移/初始化命令同步注册权限和内置角色。创建、保存、关系更新与版本递增须在同一事务；不在数据库锁内调用身份提供商或其他网络接口。
 
-实施时须验证：13 表空库建立、重复 slug/外部身份拒绝、系列位置冲突与交换、分类树并发防环、标签关系/删除保护、版本冲突、草稿和私有内容隔离、Page 保留路由冲突、作者 own/any、角色编辑防提权、最后 Owner、OAuth 重放与账号绑定。当前未在真实 PostgreSQL 上执行这些集成检查。
+实施时须验证：15 表空库建立、重复 slug/外部身份拒绝、系列位置冲突与交换、分类树并发防环、标签关系/删除保护、版本冲突、草稿和私有内容隔离、Page 保留路由冲突、作者 own/any、角色编辑防提权、最后 Owner、OAuth 重放与账号绑定、媒体引用同事务写入与引用保护删除。上述检查已在真实 PostgreSQL 上执行（`crates/infrastructure/tests/`、`crates/server/tests/`）。
+
+## 8. 媒体（第一版已交付）
+
+媒体库第一版只服务 Post/Page **正文图片**，两张表：
+
+| 表 | 字段 | 规则 |
+|---|---|---|
+| media_assets | id、owner_id、storage_key、original_name、mime、byte_size、width、height、checksum_sha256、status、version、created_at、updated_at | `storage_key` 由随机 id 与格式后缀组成且唯一；`mime` 只允许四类位图；`status` ∈ staged/ready/pending_deletion/deleted |
+| content_media_refs | media_id、content_type、content_id | 复合主键去重；`media_id` 对资产 RESTRICT；`content_type` ∈ post/page |
+
+设计要点：
+
+- **文件与行一一对应**：文件落在 `BLOG_MEDIA_DIR` 下的随机路径，行是唯一权威；`storage_key` 是相对路径（`objects/<uuid>.<ext>`，上传暂存在 `staging/`），从不使用用户提供的文件名。
+- **引用不是文本搜索**：保存内容时把正文走一遍渲染 + 清洗管线，再用 HTML5 分词器读出其中所有 `<img src>`（即「真正会渲染出来的图片」），得到的集合在事务内整体替换引用行。删除判据只看这张表。
+- **多态引用无外键**：`content_id` 指向 posts 或 pages，无法建 FK，因此 `post.purge` 与 `page.delete` 必须在同一事务清理引用行（实现见 `PostgresPostRepository::purge` / `PostgresPageRepository::delete`）。
+- **公开可见性由内容决定**：`has_public_reference` 用一条与公开文章/页面谓词逐字一致的 EXISTS 查询实时判定，因此撤回、改 private、移入回收站后匿名读取立刻停止；不缓存判定结果。
+- **回收与上传就绪互斥**：`claim_abandoned_staged` 是带「创建时间早于宽限期」谓词的**单语句条件更新**（`WHERE status = 'staged' … RETURNING`），与 `mark_ready` 只有一个能命中；认领后停在 `pending_deletion`，文件删除失败可重试。不用「先查后改」，否则两个进程会同时认为自己是赢家。
+- **使用位置过滤在应用层**：`usage_of` 返回 `author_id` 等原始字段，由应用层按 Post own/any 与 Page 站点权限过滤，引用计数保持全局。授权判断不写进 SQL 适配器。
+- **删除并发保护**：内容保存对涉及媒体行取 `FOR SHARE` 并校验 `status='ready'`；删除对同一行取 `FOR UPDATE` 并在锁内校验引用。锁序一致，不会交错出「引用已写入、文件已回收」的破图状态。
+- **备份单元**：媒体文件与数据库同属一份备份清单；`PendingDeletion` 对象若已不存在，只有在确认无引用且状态符合幂等删除规则时才可记为预期缺失（见 [备份与恢复](operations-and-recovery.md)）。
+
+媒体不写进 settings JSON：引用关系需要真实外键与事务保护，塞进配置对象既无法保证一致性，也无法安全回收文件。

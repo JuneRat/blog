@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
  * - 文章：`/admin/`（列表）、`/admin/posts/new`、`/admin/posts/{slug}/edit`
  * - 页面：`/admin/pages`（列表）、`/admin/pages/new`、`/admin/pages/{slug}/edit`
  * - 标签：`/admin/tags`
+ * - 媒体库：`/admin/media`
  * - 用户与角色：`/admin/users`、`/admin/roles`
  * - 站点设置：`/admin/settings`
  *
@@ -21,6 +22,7 @@ export type Route =
   | { name: "pageNew" }
   | { name: "pageEdit"; slug: string }
   | { name: "tagList" }
+  | { name: "mediaLibrary" }
   | { name: "categoryList" }
   | { name: "seriesList" }
   | { name: "userList" }
@@ -68,6 +70,9 @@ export function parseRoute(pathname: string): Route {
   if (segments[0] === "tags") {
     return segments.length === 1 ? { name: "tagList" } : { name: "invalid" };
   }
+  if (segments[0] === "media") {
+    return segments.length === 1 ? { name: "mediaLibrary" } : { name: "invalid" };
+  }
   if (segments[0] === "categories") {
     return segments.length === 1 ? { name: "categoryList" } : { name: "invalid" };
   }
@@ -106,6 +111,7 @@ export const paths = {
   newPage: `${BASE}/pages/new`,
   editPage: (slug: string): string => `${BASE}/pages/${encodeURIComponent(slug)}/edit`,
   tags: `${BASE}/tags`,
+  media: `${BASE}/media`,
   categories: `${BASE}/categories`,
   series: `${BASE}/series`,
   users: `${BASE}/users`,

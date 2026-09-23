@@ -989,6 +989,7 @@ dependencies = [
  "base64",
  "domain",
  "getrandom 0.3.4",
+ "html5ever",
  "jsonwebtoken",
  "minijinja",
  "pulldown-cmark",

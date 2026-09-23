@@ -201,6 +201,7 @@ pub const ADMIN_ERROR_CODES: &[&str] = &[
     "tag_in_use",
     "category_in_use",
     "series_in_use",
+    "media_in_use",
     "last_owner",
     "not_found",
     "forbidden",
@@ -238,6 +239,7 @@ pub fn admin_error_code(e: &UseCaseError) -> &'static str {
         UseCaseError::TagInUse(_) => "tag_in_use",
         UseCaseError::CategoryInUse { .. } => "category_in_use",
         UseCaseError::SeriesInUse(_) => "series_in_use",
+        UseCaseError::MediaInUse(_) => "media_in_use",
         UseCaseError::LastOwnerProtected => "last_owner",
         UseCaseError::NotFound(_) => "not_found",
         UseCaseError::Forbidden => "forbidden",
@@ -262,7 +264,8 @@ pub fn admin_error_status(e: &UseCaseError) -> StatusCode {
         | UseCaseError::VersionConflict
         | UseCaseError::TagInUse(_)
         | UseCaseError::CategoryInUse { .. }
-        | UseCaseError::SeriesInUse(_) => StatusCode::CONFLICT,
+        | UseCaseError::SeriesInUse(_)
+        | UseCaseError::MediaInUse(_) => StatusCode::CONFLICT,
         UseCaseError::LastOwnerProtected => StatusCode::FORBIDDEN,
         UseCaseError::NotFound(_) => StatusCode::NOT_FOUND,
         UseCaseError::Forbidden => StatusCode::FORBIDDEN,
@@ -350,6 +353,7 @@ mod tests {
                 "category_in_use",
             ),
             (UseCaseError::SeriesInUse(4), "series_in_use"),
+            (UseCaseError::MediaInUse(2), "media_in_use"),
             (UseCaseError::LastOwnerProtected, "last_owner"),
             (UseCaseError::NotFound("x".into()), "not_found"),
             (UseCaseError::Forbidden, "forbidden"),

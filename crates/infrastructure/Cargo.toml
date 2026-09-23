@@ -11,6 +11,11 @@ tokio.workspace = true
 minijinja.workspace = true
 pulldown-cmark.workspace = true
 ammonia.workspace = true
+# HTML5 分词器：从**清洗后**的正文 HTML 里读 <img src>，与 ammonia 用的是同一个
+# 解析器（已作为 ammonia 的传递依赖存在，这里只是提升为直接依赖）。
+# 不用手写扫描：注释、属性值里的 `>`、实体转义与 script/style 原始文本都不是
+# 字符串查找能正确处理的东西，而这里判断错会直接变成破图或幽灵占用。
+html5ever = "0.40"
 time.workspace = true
 uuid.workspace = true
 serde.workspace = true

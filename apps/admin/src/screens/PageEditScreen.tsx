@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, api, withRequestId } from "../api";
 import { useAuth } from "../auth";
 import { navigate, paths } from "../router";
+import { MediaInsertPanel } from "../components/MediaInsertPanel";
+import { useImageInsertion } from "../components/useImageInsertion";
 import type { EditPageInput } from "../api";
 import type { PageDetail, Visibility } from "../types";
 
@@ -87,6 +89,10 @@ export function PageEditScreen({ slug }: { slug: string | null }) {
   const [version, setVersion] = useState<number | null>(null);
   const [pageId, setPageId] = useState<string | null>(null);
   const [pageStatus, setPageStatus] = useState<string>("draft");
+  /** 图片面板是否展开（编辑器内插入图片）。 */
+  const [mediaOpen, setMediaOpen] = useState(false);
+  /** 正文输入框：插入位置取自它的真实选区。 */
+  const contentRef = useRef<HTMLTextAreaElement | null>(null);
   /** 当前表单内容所属的 slug（`applyServer` 写入）。用于识别「表单与地址不一致」。 */
   const [formSlug, setFormSlug] = useState<string | null>(null);
   const [loading, setLoading] = useState(slug !== null);
@@ -369,6 +375,14 @@ export function PageEditScreen({ slug }: { slug: string | null }) {
   // 发布与撤回是两个独立权限：合成一个按钮时必须按当前状态检查对应动作，
   // 否则只有 page.publish 的用户会看到一个点了就 403 的「撤回」按钮。
   const published = pageStatus === "published";
+  const canReadMedia = me?.permissions.includes("media.read") ?? false;
+  const canUploadMedia = me?.permissions.includes("media.upload") ?? false;
+  /** 图片插入：拖入/粘贴上传与面板插入共用同一路径，插入只改本地表单。 */
+  const insertion = useImageInsertion(
+    contentRef,
+    () => formRef.current.content,
+    (next) => field("content", next),
+  );
   const canToggle = me?.permissions.includes(published ? "page.unpublish" : "page.publish") ?? false;
   const canDelete = me?.permissions.includes("page.delete") ?? false;
 
@@ -493,11 +507,50 @@ export function PageEditScreen({ slug }: { slug: string | null }) {
         <label>
           正文（Markdown）
           <textarea
+            ref={contentRef}
             rows={18}
             value={form.content}
             onChange={(event) => field("content", event.target.value)}
+            onDrop={(event) => {
+              const files = Array.from(event.dataTransfer.files);
+              if (files.length === 0) return;
+              event.preventDefault();
+              void insertion.insertFiles(files);
+            }}
+            onPaste={(event) => {
+              const files = Array.from(event.clipboardData?.files ?? []);
+              if (files.length === 0) return;
+              event.preventDefault();
+              void insertion.insertFiles(files);
+            }}
           />
         </label>
+        {canReadMedia && (
+          <div className="editor-tools">
+            <button
+              type="button"
+              className="link"
+              onClick={() => {
+                insertion.clear();
+                setMediaOpen((open) => !open);
+              }}
+            >
+              {mediaOpen ? "收起图片面板" : "插入图片"}
+            </button>
+            <span className="muted">
+              也可以把图片拖入正文框，或在正文框内粘贴剪贴板图片。
+            </span>
+          </div>
+        )}
+        {insertion.error !== null && <p className="error">{insertion.error}</p>}
+        {insertion.notice !== null && <p className="notice">{insertion.notice}</p>}
+        {mediaOpen && canReadMedia && (
+          <MediaInsertPanel
+            insertion={insertion}
+            canUpload={canUploadMedia}
+            onClose={() => setMediaOpen(false)}
+          />
+        )}
 
         <div className="editor-actions">
           <button type="submit" className="button" disabled={busy}>

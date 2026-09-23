@@ -53,7 +53,7 @@ migrations/
 
 首期 server 只装配 PostgreSQL。真正增加第二种数据库时，再由 Cargo feature 控制打包哪些驱动，启动配置选择已编译的后端。仓储与工作单元端口保持一致，各后端拥有自己的 SQL 和迁移。不把 SQLx Any 或统一 SQL 语法等同于业务语义兼容。以下兼容约束作为未来适配验收清单，首期只要求 PostgreSQL 对应部分。
 
-核心表、字段和事务映射见 [数据库设计](database-design.md) 与 [DDL 草案](sql/postgres-core.sql)。部分索引、事务级 advisory lock、系列位置的延迟唯一约束及外键须在真实 PostgreSQL 中验证；媒体及外部任务随功能补充 DDL。未来后端提供等价语义，不承诺直接复用同一份 DDL。
+核心表、字段和事务映射见 [数据库设计](database-design.md) 与 [DDL 草案](sql/postgres-core.sql)。部分索引、事务级 advisory lock、系列位置的延迟唯一约束及外键须在真实 PostgreSQL 中验证；媒体两表已随媒体库第一版交付，外部任务随功能补充 DDL。未来后端提供等价语义，不承诺直接复用同一份 DDL。
 
 兼容约束：
 

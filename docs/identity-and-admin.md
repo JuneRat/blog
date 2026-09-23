@@ -30,7 +30,7 @@ permissions.key 使用 resource.action。application 各模块声明可信权限
 | settings.manage | 普通站点设置，不能修改受保护 OAuth 配置 |
 | oauth.manage / ownership.manage | 提供商配置、所有权操作，要求受保护身份及重新认证 |
 
-这些是建议种子权限，仅随用例注册。Author 默认获得文章 own 动作，Editor 获得内容 any 及所需 Page 管理权限；Administrator 管理普通身份和设置，Owner 另有所有权和恢复能力，Analyst 的 analytics.read 随统计功能加入。角色名称不替代动作检查，any 覆盖 own 的关系在注册表明确声明。已注册并交付：`tag.manage`（Owner 与 Editor 内置持有；标签**目录读取**对全部已认证会话开放——Author 编辑文章要选标签，但无目录管理权；文章与标签的关联仍按 post.update/post.update_any 核验归属）。
+这些是建议种子权限，仅随用例注册。Author 默认获得文章 own 动作，Editor 获得内容 any 及所需 Page 管理权限；Administrator 管理普通身份和设置，Owner 另有所有权和恢复能力，Analyst 的 analytics.read 随统计功能加入。角色名称不替代动作检查，any 覆盖 own 的关系在注册表明确声明。已注册并交付：`media.read`/`media.upload`/`media.delete`/`media.delete_any`（媒体库第一版：Owner 全持、Editor 持 read/upload/delete_any、Author 持 read/upload/delete；公开引用的图片匿名即可读，无需 media.read）；`tag.manage`（Owner 与 Editor 内置持有；标签**目录读取**对全部已认证会话开放——Author 编辑文章要选标签，但无目录管理权；文章与标签的关联仍按 post.update/post.update_any 核验归属）。
 
 公开阅读不要求后台角色，但只返回 public、published、未软删除内容。私有文章和草稿必须校验用户及 post.read/post.read_any；页面按 page.read。接口只能传递可信 Actor，不能相信前端提交的 author_id 或权限列表。
 
@@ -206,3 +206,40 @@ OAuth 是授权协议；仅 OAuth 平台必须通过受信身份接口适配，�
 - **角色目录**：`GET /roles` 失败时必须与「目录为空」区分展示并可重试；把一次网络故障显示成“暂无可分配角色”会静默阻断角色分配。
 - **撤权后会话失效**：角色分配/移除递增目标用户 `users.version`，其旧 cookie 下一次请求即判未登录（§5）。重复分配同一角色是幂等的，不递增版本、不登出。若操作目标是本人，界面在成功后重新读 `/me`，直接进入登录态而不是继续显示已失效会话。
 - **委派上限与所有权**：接口层不重复判断，`RoleInteractor` 在用例层执行——不能授予自己不具备的权限；授予/移除 Owner 需要专门权限。
+
+## 9. 媒体库（第一版：Post/Page 正文图片）
+
+媒体库是站点级共享资源：任何作者都能引用任意已上传的图片，但删除他人上传需要显式 `media.delete_any`。业务规则（状态机、公开访问边界、引用保护与并发协议）见 [内容生命周期 §5](content-lifecycle.md)。
+
+### 9.1 接口
+
+| 方法 | 路径 | 所需权限 | 说明 |
+|---|---|---|---|
+| GET | `/media?page=N` | `media.read` | 媒体库按上传时间倒序分页（每页 24）：文件名、大小、尺寸、上传者、引用计数与公开引用计数 |
+| POST | `/media?filename=…` | `media.upload` | 上传；**请求体就是图片字节**（不是 multipart），`filename` 只提供展示名 |
+| GET | `/media/{id}` | `media.read` | 资产详情 + **有权查看的**使用位置（含每条引用是否公开可读）与 `hidden_references` |
+| DELETE | `/media/{id}` | `media.delete`（本人上传）或 `media.delete_any` | 请求体需 `expected_version`；成功 204 |
+| GET | `/media/{id}`（无 `/api` 前缀） | 匿名或 `media.read` | **公开读取**：匿名只在存在公开来源引用时返回文件；否则 404 |
+
+错误语义：仍被任何内容引用（含草稿/私密/回收站）时 409 `media_in_use`，界面据此展示使用位置；版本过期 409 `version_conflict`；格式/尺寸/大小不合法 400 `invalid_request`。
+
+### 9.2 权限与角色
+
+| 权限 | Owner | Editor | Author | Admin |
+|---|---|---|---|---|
+| media.read | ✓ | ✓ | ✓ | |
+| media.upload | ✓ | ✓ | ✓ | |
+| media.delete | ✓ | | ✓ | |
+| media.delete_any | ✓ | ✓ | | |
+
+Administrator 角色面向账号与设置，不含媒体权限（与 `page.*` 的分配不同：媒体是内容链路的一环）。匿名读取公开引用的图片**不要求任何权限**。
+
+### 9.3 浏览与阅读权限的区别
+
+`media.read` 只授予「浏览媒体库」：可以看资产元数据与引用计数，但**使用位置按内容权限过滤**——Post 走 own/any，Page 走站点级 `page.read`，此外**公开可读的内容直接可见**（它的标题与 slug 本来就能匿名访问，不构成泄露）。媒体库是共享资源，任何人上传的图片都可能被别人的草稿或私密内容引用，因此不能靠 `media.read` 顺带给出他人内容的标题与 slug。被过滤掉的条数以 `hidden_references` 返回（引用计数是全局的，差额必须能解释）。详见 [内容生命周期 §5.3](content-lifecycle.md)。
+
+### 9.4 缓存与传输边界
+
+- 上传上限由 `DefaultBodyLimit` 在解析前拦住（12 MiB 请求体上限，图片本身 ≤10 MiB）；其余管理 JSON 端点仍是 2 MiB。
+- 公开引用的响应是 `Cache-Control: no-cache` + ETag（可条件请求 304，但每次必须回源校验，撤回后立即失效）；后台预览是 `no-store`。媒体**绝不**使用长 max-age。
+- 格式由文件内容嗅探判定，扩展名与请求 `Content-Type` 都不参与——这也是不引入 multipart 解析依赖的原因之一：按声明类型放行的路径根本不存在。

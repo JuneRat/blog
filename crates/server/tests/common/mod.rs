@@ -9,6 +9,28 @@ use std::sync::Arc;
 use application::password::{PasswordDeps, PasswordInteractor};
 use application::ports::{LoginThrottle, SessionStore, UserRepository};
 
+/// 测试用媒体文件根目录：每个测试进程/用例一个独立临时目录，互不干扰。
+///
+/// 集成测试用真实本地存储（不是内存假实现）：上传的中断补偿、幂等删除与
+/// 「记录存在但文件缺失」这类跨系统一致性问题只有真实文件系统才能暴露。
+pub fn media_dir(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("blog-test-media-{name}-{}", uuid::Uuid::now_v7()));
+    std::fs::create_dir_all(&dir).expect("创建测试媒体目录失败");
+    dir
+}
+
+/// 测试装配的媒体用例：真实 PostgreSQL 仓储 + 本地文件存储。
+pub fn media_interactor(
+    pool: sqlx::PgPool,
+    root: std::path::PathBuf,
+) -> Arc<application::media::MediaInteractor> {
+    Arc::new(application::media::MediaInteractor::new(
+        Arc::new(infrastructure::PostgresMediaRepository::new(pool)),
+        Arc::new(infrastructure::LocalMediaStorage::new(root)),
+        Arc::new(infrastructure::SystemClock),
+    ))
+}
+
 /// 测试装配的本地密码用例：真实 Argon2id（生产参数）+ 默认限流。
 ///
 /// 会话存储由调用方注入，保证与认证用例看到同一份状态。

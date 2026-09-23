@@ -149,6 +149,26 @@ pub const PERMISSION_REGISTRY: &[PermissionDescriptor] = &[
         description: "修改普通站点设置；不覆盖受保护的 OAuth 配置。",
     },
     PermissionDescriptor {
+        key: "media.read",
+        name: "浏览媒体库",
+        description: "浏览媒体库并预览未公开引用的图片；公开引用的图片匿名即可读取。",
+    },
+    PermissionDescriptor {
+        key: "media.upload",
+        name: "上传图片",
+        description: "上传位图到媒体库；仅接受经内容校验的 PNG/JPEG/GIF/WebP。",
+    },
+    PermissionDescriptor {
+        key: "media.delete",
+        name: "删除本人上传的图片",
+        description: "删除本人上传且已无内容引用的图片。",
+    },
+    PermissionDescriptor {
+        key: "media.delete_any",
+        name: "删除任意图片",
+        description: "删除任意上传者且已无内容引用的图片。",
+    },
+    PermissionDescriptor {
         key: "oauth.manage",
         name: "外部身份配置",
         description: "管理 OAuth 提供商与外部身份绑定；不受普通 settings.manage 覆盖。",
@@ -204,6 +224,10 @@ pub const BUILTIN_ROLES: &[BuiltinRoleDef] = &[
             "user.manage",
             "role.manage",
             "settings.manage",
+            "media.read",
+            "media.upload",
+            "media.delete",
+            "media.delete_any",
             "oauth.manage",
             "ownership.manage",
         ],
@@ -234,6 +258,9 @@ pub const BUILTIN_ROLES: &[BuiltinRoleDef] = &[
             "tag.manage",
             "category.manage",
             "series.manage",
+            "media.read",
+            "media.upload",
+            "media.delete_any",
         ],
     },
     BuiltinRoleDef {
@@ -247,6 +274,9 @@ pub const BUILTIN_ROLES: &[BuiltinRoleDef] = &[
             "post.publish",
             "post.unpublish",
             "post.delete",
+            "media.read",
+            "media.upload",
+            "media.delete",
         ],
     },
 ];

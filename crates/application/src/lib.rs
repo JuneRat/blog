@@ -6,6 +6,7 @@ pub mod category;
 pub mod content;
 pub mod error;
 pub mod identity;
+pub mod media;
 pub mod page;
 pub mod password;
 pub mod ports;

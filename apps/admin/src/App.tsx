@@ -1,6 +1,7 @@
 import { useAuth } from "./auth";
 import { navigate, paths, useRoute } from "./router";
 import { LoginScreen } from "./screens/LoginScreen";
+import { MediaLibraryScreen } from "./screens/MediaLibraryScreen";
 import { PageEditScreen } from "./screens/PageEditScreen";
 import { PageListScreen } from "./screens/PageListScreen";
 import { PostEditScreen } from "./screens/PostEditScreen";
@@ -61,6 +62,9 @@ export function App() {
   // 路由守卫只改善体验：真正的权限判断在用例与接口层，无权限时后端返回 403。
   if (route.name === "tagList") {
     return <TagListScreen />;
+  }
+  if (route.name === "mediaLibrary") {
+    return <MediaLibraryScreen />;
   }
   if (route.name === "categoryList") {
     return <CategoryListScreen />;

@@ -201,6 +201,7 @@ async fn fresh_stack_with(secure_cookies: bool) -> Stack {
             },
         )),
         roles,
+        media: common::media_interactor(pool.clone(), common::media_dir("auth")),
         secure_cookies,
     };
 

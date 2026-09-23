@@ -136,17 +136,18 @@ fn draft_snapshot(author: uuid::Uuid, slug: &str) -> PostSnapshot {
 }
 
 #[tokio::test]
-async fn migrations_create_thirteen_core_tables() {
+async fn migrations_create_core_tables() {
     let _g = SERIAL.lock().await;
     let pool = fresh_database().await;
 
+    // 13 张核心内容/身份表 + 媒体交付加入的 2 张（docs/database-design.md）。
     let count: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename <> '_sqlx_migrations'",
     )
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(count, 13, "13 张核心表");
+    assert_eq!(count, 15, "13 张核心表 + 媒体 2 张");
 
     let tables: Vec<String> = sqlx::query_scalar(
         "SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename <> '_sqlx_migrations' ORDER BY tablename",
@@ -156,6 +157,8 @@ async fn migrations_create_thirteen_core_tables() {
     .unwrap();
     let expected = [
         "categories",
+        "content_media_refs",
+        "media_assets",
         "oauth_accounts",
         "pages",
         "permissions",
@@ -560,7 +563,10 @@ async fn rbac_registry_sync_is_idempotent() {
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(author_perms, 6, "Author 恰好 6 个 own 动作（含回收站）");
+    assert_eq!(
+        author_perms, 9,
+        "Author 恰好 9 个动作：6 个文章 own 动作（含回收站）+ 3 个媒体动作"
+    );
 
     // Owner 持有全部已注册权限（含 oauth.manage / ownership.manage）。
     let owner_perms: i64 = sqlx::query_scalar(

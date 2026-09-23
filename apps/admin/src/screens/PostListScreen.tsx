@@ -20,6 +20,7 @@ export function PostListScreen() {
   const canTrash = me?.permissions.some((p) => p === "post.delete" || p === "post.delete_any") ?? false;
   const canReadPages = me?.permissions.includes("page.read") ?? false;
   const canManageSettings = me?.permissions.includes("settings.manage") ?? false;
+  const canReadMedia = me?.permissions.includes("media.read") ?? false;
   const canAdminister =
     (me?.permissions.includes("user.manage") ?? false) ||
     (me?.permissions.includes("role.manage") ?? false);
@@ -56,6 +57,11 @@ export function PostListScreen() {
           {canReadPages && (
             <button type="button" className="button ghost" onClick={() => navigate(paths.pages)}>
               独立页面
+            </button>
+          )}
+          {canReadMedia && (
+            <button type="button" className="button ghost" onClick={() => navigate(paths.media)}>
+              媒体库
             </button>
           )}
           <button type="button" className="button ghost" onClick={() => navigate(paths.tags)}>

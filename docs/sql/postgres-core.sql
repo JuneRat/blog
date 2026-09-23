@@ -1,6 +1,7 @@
--- PostgreSQL：用户确认的 13 张博客核心表。
+-- PostgreSQL：13 张博客核心表 + 媒体库 2 表。
 -- 面向空 schema 的设计草案；UUID 由应用生成，不含种子数据或生产升级迁移。
 -- 保留贴文中的业务字段；version 为并发编辑补充，不创建路径/修订/会话等辅助表。
+-- 媒体两表随媒体库第一版交付（migrations/postgres/0004_media.sql），此处同步维护。
 BEGIN;
 
 -- 1. 本站身份；password_hash 可空，存 Argon2id 的 PHC 字符串（见 ADR-0009）。
@@ -176,5 +177,43 @@ CREATE TABLE settings (
     version bigint NOT NULL DEFAULT 1 CHECK (version > 0),
     updated_at timestamptz NOT NULL DEFAULT now()
 );
+
+-- 14. 媒体资产元数据（第一版只服务 Post/Page 正文图片）。
+-- 文件用随机标识存储，本行是唯一权威；状态机让跨系统删除可幂等重试。
+CREATE TABLE media_assets (
+    id uuid PRIMARY KEY,
+    owner_id uuid NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    storage_key varchar(200) COLLATE "C" NOT NULL UNIQUE
+        CHECK (octet_length(storage_key) BETWEEN 1 AND 200),
+    original_name varchar(200) NOT NULL CHECK (original_name <> ''),
+    mime varchar(64) COLLATE "C" NOT NULL
+        CHECK (mime IN ('image/png', 'image/jpeg', 'image/gif', 'image/webp')),
+    byte_size bigint NOT NULL CHECK (byte_size > 0),
+    width integer NOT NULL CHECK (width > 0),
+    height integer NOT NULL CHECK (height > 0),
+    checksum_sha256 varchar(64) COLLATE "C" NOT NULL
+        CHECK (checksum_sha256 ~ '^[0-9a-f]{64}$'),
+    status varchar(24) COLLATE "C" NOT NULL DEFAULT 'staged'
+        CHECK (status IN ('staged', 'ready', 'pending_deletion', 'deleted')),
+    version bigint NOT NULL DEFAULT 1 CHECK (version > 0),
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX media_assets_ready ON media_assets(created_at DESC, id DESC)
+    WHERE status = 'ready';
+CREATE INDEX media_assets_by_owner ON media_assets(owner_id, created_at DESC, id DESC);
+CREATE INDEX media_assets_by_status ON media_assets(status) WHERE status <> 'ready';
+
+-- 15. 内容 → 媒体的真实引用关系；删除保护的唯一判据。
+-- content_id 是指向 posts/pages 的多态引用（无法建 FK），
+-- 内容物理删除必须在同一事务清理对应行。
+CREATE TABLE content_media_refs (
+    media_id uuid NOT NULL REFERENCES media_assets(id) ON DELETE RESTRICT,
+    content_type varchar(16) COLLATE "C" NOT NULL
+        CHECK (content_type IN ('post', 'page')),
+    content_id uuid NOT NULL,
+    PRIMARY KEY (media_id, content_type, content_id)
+);
+CREATE INDEX content_media_refs_by_content ON content_media_refs(content_type, content_id);
 
 COMMIT;

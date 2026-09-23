@@ -165,3 +165,63 @@ export interface ThemeSettings {
   version: number;
   available: { slug: string; name: string }[];
 }
+
+/**
+ * GET /api/admin/v1/media 列表条目，同时是上传响应。
+ *
+ * `reference_count` 是**全部**引用数（含草稿/私密/回收站）：> 0 时后端拒绝删除；
+ * `public_reference_count` 只统计构成公开来源的引用：> 0 时匿名可读取该图片。
+ */
+export interface MediaAsset {
+  id: string;
+  original_name: string;
+  mime: string;
+  byte_size: number;
+  width: number;
+  height: number;
+  status: string;
+  version: number;
+  created_at: string;
+  owner_id: string;
+  owner_display: string;
+  /** 站内地址：正文插入与「复制地址」共用。 */
+  url: string;
+  reference_count: number;
+  public_reference_count: number;
+}
+
+/** GET /api/admin/v1/media?page=N */
+export interface MediaPage {
+  items: MediaAsset[];
+  total: number;
+  page: number;
+  per_page: number;
+}
+
+/** 一处使用位置（删除前提示、删除被拒后定位引用）。 */
+export interface MediaReference {
+  kind: "post" | "page";
+  content_id: string;
+  slug: string;
+  title: string;
+  status: string;
+  visibility: Visibility;
+  /** Post 回收站中的内容（Page 无软删除，恒 false）。 */
+  deleted: boolean;
+  /** 该引用是否让图片匿名可读。 */
+  public: boolean;
+}
+
+/** GET /api/admin/v1/media/{id}：资产详情 + 调用者有权查看的使用位置。 */
+export interface MediaUsageView {
+  media: MediaAsset;
+  /** 按调用者内容权限过滤后的使用位置（Post own/any、Page 站点级）。 */
+  references: MediaReference[];
+  /**
+   * 存在但调用者无权查看的引用数。
+   *
+   * 引用计数是全局的（决定能否删除），展示必须过滤——差额如实返回，
+   * 否则界面会显示「被 3 处引用」却只列出 1 处。
+   */
+  hidden_references: number;
+}

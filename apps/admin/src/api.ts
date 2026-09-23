@@ -2,6 +2,9 @@ import type {
   AdminUser,
   CreatedUser,
   Me,
+  MediaAsset,
+  MediaPage,
+  MediaUsageView,
   PageDetail,
   PageSummary,
   PasswordLoginResult,
@@ -88,10 +91,18 @@ function errorCode(data: unknown): string | null {
   return null;
 }
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+/**
+ * 统一请求执行：认证凭据、错误契约与 401 处理都在这里，调用方只负责
+ * 「body 类型」这一唯一差异（JSON 文本 vs 二进制图片）。
+ */
+async function perform<T>(
+  path: string,
+  init: RequestInit,
+  jsonBody: boolean,
+): Promise<T> {
   const method = (init.method ?? "GET").toUpperCase();
   const headers = new Headers(init.headers);
-  if (init.body !== undefined) headers.set("Content-Type", "application/json");
+  if (jsonBody) headers.set("Content-Type", "application/json");
   if (method !== "GET" && method !== "HEAD" && csrfToken !== null) {
     headers.set("X-CSRF-Token", csrfToken);
   }
@@ -120,6 +131,15 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     );
   }
   return data as T;
+}
+
+async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  return perform<T>(path, init, init.body !== undefined);
+}
+
+/** 二进制上传：不能把 Content-Type 写死为 JSON，其余契约与 `request` 一致。 */
+async function requestBinary<T>(path: string, init: RequestInit): Promise<T> {
+  return perform<T>(path, init, false);
 }
 
 export interface CreatePostInput {
@@ -456,6 +476,42 @@ export const themeSettingsApi = {
     request<ThemeSettings>("/api/admin/v1/settings/theme", {
       method: "PUT",
       body: JSON.stringify({ slug, expected_version: expectedVersion }),
+    }),
+};
+
+/**
+ * 媒体库。
+ *
+ * 上传是**裸字节体**（不是 multipart）：`?filename=` 只提供展示名，
+ * `Content-Type` 用文件自身类型。后端只按文件内容判定格式，因此这里
+ * 声明什么类型都不会让非图片通过。
+ */
+export const mediaApi = {
+  list: (page = 1): Promise<MediaPage> =>
+    request<MediaPage>(`/api/admin/v1/media?page=${page}`),
+
+  /** 资产详情 + 全部使用位置（删除前提示、删除被拒后定位引用）。 */
+  detail: (id: string): Promise<MediaUsageView> =>
+    request<MediaUsageView>(`/api/admin/v1/media/${encodeURIComponent(id)}`),
+
+  upload: (file: File): Promise<MediaAsset> =>
+    requestBinary<MediaAsset>(
+      `/api/admin/v1/media?filename=${encodeURIComponent(file.name)}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": file.type || "application/octet-stream" },
+        body: file,
+      },
+    ),
+
+  /**
+   * 删除。仍被内容引用（含草稿/私密/回收站）时 409 `media_in_use`——
+   * 先在使用位置里移除引用再删除；成功返回 204。
+   */
+  remove: (id: string, expectedVersion: number): Promise<void> =>
+    request<void>(`/api/admin/v1/media/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      body: JSON.stringify({ expected_version: expectedVersion }),
     }),
 };
 

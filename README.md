@@ -1,6 +1,6 @@
 # blog
 
-Rust 模块化单体博客。当前进度：**M1 内容闭环（Post + Page）+ M2 RBAC/会话/OAuth/本地密码/管理写 API + React 后台 + M3 标签/分类/系列与站点设置（settings 第一段）**（迁移 → 权限化写入 → 公开 SSR 阅读 → OAuth 与本地密码登录 → `/api/admin/v1` 内容与站点管理）。
+Rust 模块化单体博客。当前进度：**M1 内容闭环（Post + Page）+ M2 RBAC/会话/OAuth/本地密码/管理写 API + React 后台 + M3 标签/分类/系列、站点设置、RSS/sitemap/SEO、主题 + 媒体库第一版（正文图片）**（迁移 → 权限化写入 → 公开 SSR 阅读 → OAuth 与本地密码登录 → `/api/admin/v1` 内容/站点/媒体管理）。
 
 ## 快速开始
 
@@ -97,6 +97,10 @@ blog user show sun                             # 显示「密码登录：已启�
 | `POST /api/admin/v1/me/password` | 自助改密（会话 + CSRF；需当前密码重新认证；成功后轮换会话） |
 | `GET /api/admin/v1/settings/site` | 站点设置视图（`settings.manage`；生效值 + 来源 + 版本） |
 | `PUT /api/admin/v1/settings/site` | 保存站点标题/描述（`settings.manage`；支持 `expected_version`） |
+| `GET /api/admin/v1/media?page=` | 媒体库分页（`media.read`）：文件名/大小/尺寸/上传者/引用计数 |
+| `POST /api/admin/v1/media?filename=` | 上传图片（`media.upload`）：**请求体是图片字节**，单张 ≤10 MiB，仅 PNG/JPEG/GIF/WebP |
+| `GET /api/admin/v1/media/{id}` | 资产详情 + 全部使用位置（`media.read`） |
+| `DELETE /api/admin/v1/media/{id}` | 删除（`media.delete` 本人 / `media.delete_any` 全部；需 `expected_version`；被引用时 409 `media_in_use`） |
 
 ### 站点设置（settings 第一段，已交付）
 
@@ -107,6 +111,19 @@ blog user show sun                             # 显示「密码登录：已启�
 - **校验**：标题 trim 后非空且 ≤200 字符；描述 trim 后 ≤500 字符（可清空——已保存的空描述是合法状态，不回退）；请求体上限 16 KiB。
 - **分组隔离**：settings API 面上只有 `/settings/site` 一个地址；oauth 等受保护分组走专用权限（`oauth.manage`）与受控 CLI 入口，未知分组（含 `/settings/oauth`）一律 404，`settings.manage` 借不到道。
 - 响应含 `source: "database" | "fallback"` 与 `version`，后台设置屏据此展示当前来源；SPA 地址 `/admin/settings`，409 冲突流程与编辑器一致（重新加载 / 仍然覆盖）。
+
+### 媒体库（第一版已交付：Post/Page 正文图片）
+
+在文章与页面编辑器里拖入、粘贴或选择图片 → 上传 → 在光标处插入 → 发布后匿名可读 → 撤回后停止匿名访问 → 未被引用时才可删除。规则全文见 [内容生命周期 §5](docs/content-lifecycle.md)。
+
+- **公开访问是关键边界**：新上传默认不公开，后台预览需登录（`media.read`）。`GET /media/{id}` 只在图片被**公开发布的 Post/Page** 引用时对匿名请求返回文件；文章撤回、改为 private 或移入回收站后，若没有其他公开引用，**下一次请求即 404**。未获授权的请求也回 404（与「不存在」不可区分，不泄漏资产存在性）。公开响应是 `no-cache` + ETag，后台预览是 `no-store`——媒体绝不长缓存，否则撤回后图片会继续从缓存流出。
+- **引用关系是真实数据**：`content_media_refs` 在保存正文的同一事务内由服务端解析结果整体替换（只识别 Markdown 图片语法）。删除判据只看这张表，不搜索正文文本；引用包含草稿/私密/回收站，因此「仍被引用就拒绝删除」并给出使用位置。
+- **上传边界**：只接受常见位图（PNG/JPEG/GIF/WebP），**不开放 SVG**、视频与任意附件；格式由**文件内容**嗅探判定，扩展名与请求 `Content-Type` 都不参与；≤10 MiB、单边 ≤12000 px。文件以随机 id 落盘（`BLOG_MEDIA_DIR`，默认 `data/media`），展示文件名从不参与路径拼接。
+- **提取与渲染必须同源**：正文引用在保存时算一次，直接走渲染管线（Markdown → 清洗 HTML）再用 HTML5 分词器读出 `<img src>`——「会渲染出来的图片」与「建立引用的图片」因此是同一集合，而不是需要同步维护的两条路径。代码块、注释、普通链接与 `javascript:` 的 src 都不会建立引用；注释里的图片与 `alt=">"` 这类属性值已被固定为回归用例。
+- **可重试回收**：跨系统删除用 `staged → ready → pending_deletion → deleted` 状态机。放弃未完成上传也经过 `pending_deletion`，因此文件删除失败时保留该状态并如实报错，`blog media reclaim` 幂等重试；另有文件系统侧清扫处理「写入文件后插入行失败」这类无记录孤儿（含 `.part` 残留）。**回收与上传就绪用单语句条件更新互斥**：`staged` 行只有一个赢家；外加 1 小时宽限期，避免打断正在进行的上传。`deleted` 行保留以便重放与审计。
+- **浏览权限 ≠ 阅读权限**：`media.read` 只授予浏览媒体库；使用位置按内容权限过滤（Post own/any、Page 站点级，另加「公开可读的内容直接可见」），只返回调用者有权查看的位置，差额以 `hidden_references` 如实告知。引用计数保持全局——它决定能否删除，与能否看见引用无关。
+- **并发保护**：内容保存对涉及媒体行取 `FOR SHARE` 并校验 `ready`，删除对同一行取 `FOR UPDATE` 并在锁内校验引用——两者锁序一致，不会交错成「引用已写入、文件已回收」的破图状态。
+- 权限：`media.read`/`media.upload`（Editor、Author、Owner）、`media.delete`（本人上传：Author、Owner）、`media.delete_any`（Editor、Owner）。后台入口 `/admin/media`，编辑器内有「插入图片」面板（含替代文字），也支持拖入与粘贴。
 
 ### 公开订阅与 SEO（RSS / sitemap / robots，已交付）
 
@@ -201,7 +218,7 @@ crates/
 ├── interfaces      # 公开 HTTP 路由 + 受控 CLI（不依赖 infrastructure）
 └── server          # 装配入口（bin: blog）
 apps/admin          # React + TypeScript + Vite 后台 SPA（构建产物 dist/ 不进仓库）
-migrations/postgres # 13 表核心 DDL（sqlx 布局）
+migrations/postgres # 13 表核心 + 媒体 2 表 DDL（sqlx 布局）
 themes/default      # 模板与静态资源
 docs/               # 设计文档与 ADR
 ```
@@ -221,11 +238,12 @@ docs/               # 设计文档与 ADR
 - Series（M3 第三段）：目录管理（series.manage，被文章引用时删除受 series_in_use 保护）；文章设置系列与序号（同事务，位置唯一冲突为可定位 409）；整体重排在系列行锁 + series.version 前提下进行，成员按 id 序加锁、位置唯一约束 DEFERRED 到提交检查，同时递增涉及 posts.version 与 series.version；重排逐篇核验文章授权；公开系列页 /series/（slug） 按阅读顺序分页（草稿占位不外泄）。
 - 站点设置（M3 第四段）：`settings.site` 分组（标题/描述）的后台读写闭环（settings.manage，读写同权）；生效优先级数据库 > 环境变量 > 默认值，公开页面每次渲染解析、保存即生效、重启后配置保留；expected_version 条件写入（0 = 未配置的插入前提）与内容一致的幂等保存；越权/非法值/并发覆盖/未知分组（含 oauth，404）均有回归测试。
 - RSS/sitemap 与基础 SEO（M3 第五段）：`/feed.xml`（RSS 2.0，`guid` = canonical URL）、`/sitemap.xml`（首页/公开文章/公开 Page + 非空目录页，带 lastmod）、`/robots.txt`（声明 sitemap）；HTML 统一输出 title/description/canonical/og 与 RSS 自动发现；绝对链接取自 `BLOG_PUBLIC_BASE_URL`（装配期校验）；Unicode slug 百分号编码；XML 转义与控制字符、可见性边界（草稿/私密/撤回/软删除）与「更新后立即变化」均有单元与真实库集成测试。
+- 媒体库第一版：正文引用 `![alt](/media/{id})` 的服务端解析与同事务固化；匿名可见性随内容发布/撤回/改 private/进回收站逐次变化；图片内容校验（格式/尺寸/大小，SVG 与非图片被拒）；引用保护删除与使用位置；回收幂等（重复执行、文件已缺失、上传中断的补偿）与删除失败重试；上传/浏览/删除权限边界、公开文件缓存头与条件请求均有用例（`crates/domain`、`crates/application/tests/media_usecase.rs`、`crates/infrastructure/tests/media.rs`、`crates/server/tests/media_http.rs`、`apps/admin/src/media.test.ts`、`apps/admin/tests/media*.test.tsx`）。
 - M0 主题桥接原型（`spikes/template-bridge`）：同步模板函数 ↔ 异步 SQL 查询桥接验证可行，预算/隔离/失败场景 17 项集成测试；结论见原型 README 与 ADR-0002。
 
 ## 下一步
 
-M2（身份与后台）已交付：RBAC/委派、OAuth 登录闭环、本地密码登录（Argon2id + 限流 + 受控重置）、管理写 API、后台 SPA（文章/页面/用户与角色屏幕）；其后用户与角色管理界面也已交付（见 [身份与后台 §8](docs/identity-and-admin.md)）。M0 主题桥接原型已完成（结论可行）。M3 按 [roadmap](docs/product-roadmap.md) 推进：标签、分类树、Series、settings.site、settings.theme、RSS/sitemap 与基础 SEO、Post 回收站、Page 物理删除已交付；维护备份与隔离恢复工具已完成本机往返演练；公开只读主题函数首段与第二主题 `themes/paper` 已交付。具有 `settings.manage` 权限的用户可在后台「站点设置」选择已安装主题，公开页面下一次请求即生效。函数契约见 [主题文档](docs/themes-and-rendering.md)，备份用法见 [备份与恢复](docs/operations-and-recovery.md)。
+M2（身份与后台）已交付：RBAC/委派、OAuth 登录闭环、本地密码登录（Argon2id + 限流 + 受控重置）、管理写 API、后台 SPA（文章/页面/用户与角色屏幕）；其后用户与角色管理界面也已交付（见 [身份与后台 §8](docs/identity-and-admin.md)）。M0 主题桥接原型已完成（结论可行）。M3 按 [roadmap](docs/product-roadmap.md) 推进：标签、分类树、Series、settings.site、settings.theme、RSS/sitemap 与基础 SEO、Post 回收站、Page 物理删除、媒体库第一版已交付；维护备份与隔离恢复工具已完成本机往返演练；公开只读主题函数首段与第二主题 `themes/paper` 已交付。具有 `settings.manage` 权限的用户可在后台「站点设置」选择已安装主题，公开页面下一次请求即生效。函数契约见 [主题文档](docs/themes-and-rendering.md)，备份用法见 [备份与恢复](docs/operations-and-recovery.md)。
 
 M2 遗留（已知、未做）：
 

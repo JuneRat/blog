@@ -112,7 +112,7 @@ CI 先检查项目内边和明确禁止的框架直接依赖；第三方 feature
 
 按 `content`、`appearance`、`media`、`identity`、`site` 等业务模块组织用例，每个用例明确输入、输出、授权、事务范围和错误。
 
-端口 trait 由使用方定义，例如 `PostRepository`、`PublishedPostQuery`、`ThemeRenderer`、`MediaStorage`、`Clock`。这些是职责示例，不要求首期全部创建。简单内部逻辑不为了形式增加 trait。
+端口 trait 由使用方定义，例如 `PostRepository`、`PublishedPostQuery`、`ThemeRenderer`、`MediaStorage`（媒体文件存储，本地实现见 `infrastructure::LocalMediaStorage`）、`MediaRepository`、`Clock`。这些是职责示例，不要求首期全部创建。简单内部逻辑不为了形式增加 trait。
 
 读操作可直接返回面向页面的 DTO；写操作通过聚合维护规则。采用轻量 CQRS，共用数据库，不必为读操作重建完整聚合。
 

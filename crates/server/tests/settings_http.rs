@@ -278,6 +278,7 @@ async fn build(pool: PgPool) -> Stack {
         series,
         settings,
         roles,
+        media: common::media_interactor(pool.clone(), common::media_dir("settings")),
         secure_cookies: false,
     };
 

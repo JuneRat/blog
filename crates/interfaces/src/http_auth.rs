@@ -91,6 +91,8 @@ pub struct AdminState {
     pub settings: Arc<application::settings::SettingsInteractor>,
     /// 角色与分配用例（http_identity 模块使用）。
     pub roles: Arc<application::identity::RoleInteractor>,
+    /// 媒体用例（http_media 模块使用）：上传、浏览、使用位置与引用保护删除。
+    pub media: Arc<application::media::MediaInteractor>,
     /// 与 AuthState 保持一致：改密后重签会话 cookie 需要 Secure 属性。
     pub secure_cookies: bool,
 }
@@ -437,7 +439,8 @@ fn auth_error(e: UseCaseError) -> Response {
         | UseCaseError::Conflict(_)
         | UseCaseError::TagInUse(_)
         | UseCaseError::CategoryInUse { .. }
-        | UseCaseError::SeriesInUse(_) => StatusCode::BAD_REQUEST,
+        | UseCaseError::SeriesInUse(_)
+        | UseCaseError::MediaInUse(_) => StatusCode::BAD_REQUEST,
         UseCaseError::NotFound(_) => StatusCode::NOT_FOUND,
         UseCaseError::Forbidden | UseCaseError::LastOwnerProtected => StatusCode::FORBIDDEN,
         UseCaseError::External(_) => StatusCode::BAD_GATEWAY,

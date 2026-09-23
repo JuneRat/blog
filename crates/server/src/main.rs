@@ -35,6 +35,9 @@ struct Config {
     site_description: String,
     /// 后台 SPA 构建产物（/admin/）；默认 apps/admin/dist，不存在时不注册。
     admin_dist: PathBuf,
+    /// 媒体文件根目录：暂存与正式对象都在它下面。
+    /// 备份必须与数据库一起覆盖它（docs/operations-and-recovery.md）。
+    media_dir: PathBuf,
     /// 对外可达基础 URL：OAuth 回调、canonical、RSS 与 sitemap 共用。
     /// 装配期校验一次并失败即退出——错误地址会污染搜索索引，不能静默使用。
     public_base_url: PublicBaseUrl,
@@ -56,6 +59,9 @@ impl Config {
             admin_dist: std::env::var("BLOG_ADMIN_DIST")
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| PathBuf::from("apps/admin/dist")),
+            media_dir: std::env::var("BLOG_MEDIA_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| PathBuf::from("data/media")),
             public_base_url: PublicBaseUrl::parse(&public_base_url)
                 .unwrap_or_else(|e| panic!("BLOG_PUBLIC_BASE_URL 无效：{e}")),
         }
@@ -260,6 +266,17 @@ async fn main() {
             let tags = Arc::new(TagInteractor::new(tag_repo, clock.clone()));
             let categories = Arc::new(CategoryInteractor::new(category_repo, clock.clone()));
             let series = Arc::new(SeriesInteractor::new(series_repo, clock.clone()));
+            // 媒体库：文件在本地随机 id 路径下，元数据与引用关系在 PostgreSQL。
+            let media_repo: Arc<dyn application::ports::MediaRepository> =
+                Arc::new(infrastructure::PostgresMediaRepository::new(pool.clone()));
+            let media_storage: Arc<dyn application::ports::MediaStorage> = Arc::new(
+                infrastructure::LocalMediaStorage::new(config.media_dir.clone()),
+            );
+            let media = Arc::new(application::media::MediaInteractor::new(
+                media_repo,
+                media_storage,
+                clock.clone(),
+            ));
             // 站点信息：数据库 settings.site > 装配回退值（环境变量/默认值）。
             // 同一存储实例供公开渲染与管理用例共享，保存后公开页面即时生效。
             let settings_store: Arc<dyn SettingsStore> =
@@ -303,6 +320,7 @@ async fn main() {
                 roles,
                 auth,
                 passwords,
+                media,
                 secure_cookies,
                 public_site,
                 user_repo,

@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, api, categoryApi, seriesApi, withRequestId } from "../api";
 import { useAuth } from "../auth";
 import { navigate, paths } from "../router";
+import { MediaInsertPanel } from "../components/MediaInsertPanel";
+import { useImageInsertion } from "../components/useImageInsertion";
 import type { EditPostInput } from "../api";
 import type { CategorySummary, PostDetail, SeriesSummary, TagSummary, Visibility } from "../types";
 
@@ -151,6 +153,10 @@ export function PostEditScreen({ slug }: { slug: string | null }) {
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [conflict, setConflict] = useState(false);
+  /** 图片面板是否展开（编辑器内插入图片）。 */
+  const [mediaOpen, setMediaOpen] = useState(false);
+  /** 正文输入框：插入位置取自它的真实选区。 */
+  const contentRef = useRef<HTMLTextAreaElement | null>(null);
   /**
    * 表单与服务器基线的同步副本。异步请求返回时读它拿到「此刻正在编辑的内容」，
    * React state 在那个时点还是旧的闭包值。
@@ -475,6 +481,17 @@ export function PostEditScreen({ slug }: { slug: string | null }) {
   }
 
   const canPublish = me?.permissions.some((key) => key === "post.publish" || key === "post.publish_any") ?? false;
+  const canReadMedia = me?.permissions.includes("media.read") ?? false;
+  const canUploadMedia = me?.permissions.includes("media.upload") ?? false;
+  /**
+   * 图片插入：拖入/粘贴上传与面板插入共用同一路径，插入只改本地表单。
+   * 已发布内容仍然要显式点「保存并更新线上」才生效。
+   */
+  const insertion = useImageInsertion(
+    contentRef,
+    () => formRef.current.content,
+    (next) => field("content", next),
+  );
 
   if (loading) {
     return (
@@ -629,11 +646,50 @@ export function PostEditScreen({ slug }: { slug: string | null }) {
         <label>
           正文（Markdown）
           <textarea
+            ref={contentRef}
             rows={18}
             value={form.content}
             onChange={(event) => field("content", event.target.value)}
+            onDrop={(event) => {
+              const files = Array.from(event.dataTransfer.files);
+              if (files.length === 0) return;
+              event.preventDefault();
+              void insertion.insertFiles(files);
+            }}
+            onPaste={(event) => {
+              const files = Array.from(event.clipboardData?.files ?? []);
+              if (files.length === 0) return;
+              event.preventDefault();
+              void insertion.insertFiles(files);
+            }}
           />
         </label>
+        {canReadMedia && (
+          <div className="editor-tools">
+            <button
+              type="button"
+              className="link"
+              onClick={() => {
+                insertion.clear();
+                setMediaOpen((open) => !open);
+              }}
+            >
+              {mediaOpen ? "收起图片面板" : "插入图片"}
+            </button>
+            <span className="muted">
+              也可以把图片拖入正文框，或在正文框内粘贴剪贴板图片。
+            </span>
+          </div>
+        )}
+        {insertion.error !== null && <p className="error">{insertion.error}</p>}
+        {insertion.notice !== null && <p className="notice">{insertion.notice}</p>}
+        {mediaOpen && canReadMedia && (
+          <MediaInsertPanel
+            insertion={insertion}
+            canUpload={canUploadMedia}
+            onClose={() => setMediaOpen(false)}
+          />
+        )}
 
         <div className="editor-actions">
           <button type="submit" className="button" disabled={busy}>
