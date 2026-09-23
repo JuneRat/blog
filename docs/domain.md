@@ -64,7 +64,7 @@ crates/domain/
 | identity | User、UserId、Role、Permission、RoleAssignment、ExternalIdentity、Invitation | 账号状态、角色授权、身份绑定与邀请规则 |
 | site | SiteSettings、Navigation | 站点信息和导航约束 |
 
-当前采用 [13 表设计 + 媒体 2 表](database-design.md)：Post/Page 各存一份当前内容，无独立工作副本与修订。版本变化、状态、分类树、系列顺序、删除与 Slug 规则由 [内容生命周期](content-lifecycle.md) 统一定义；媒体库第一版（Post/Page 正文图片）已交付，模型在 `domain::media`（单文件，含资产身份、状态机与图片内容校验）。
+当前采用 [13 表设计 + 媒体 2 表 + 会话表](database-design.md)：Post/Page 各存一份当前内容，无独立工作副本与修订。版本变化、状态、分类树、系列顺序、删除与 Slug 规则由 [内容生命周期](content-lifecycle.md) 统一定义；媒体库第一版（Post/Page 正文图片）已交付，模型在 `domain::media`（单文件，含资产身份、状态机与图片内容校验）；会话模型在基础设施适配器（`PostgresSessionStore`/`InMemorySessionStore`），应用端口为 `SessionStore`。
 
 ### 聚合设计
 

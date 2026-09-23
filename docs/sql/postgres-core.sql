@@ -1,7 +1,8 @@
--- PostgreSQL：13 张博客核心表 + 媒体库 2 表。
+-- PostgreSQL：13 张博客核心表 + 媒体库 2 表 + 会话表。
 -- 面向空 schema 的设计草案；UUID 由应用生成，不含种子数据或生产升级迁移。
--- 保留贴文中的业务字段；version 为并发编辑补充，不创建路径/修订/会话等辅助表。
--- 媒体两表随媒体库第一版交付（migrations/postgres/0004_media.sql），此处同步维护。
+-- 保留贴文中的业务字段；version 为并发编辑补充，不创建路径/修订等辅助表。
+-- 媒体两表随媒体库第一版交付（migrations/postgres/0004_media.sql），
+-- 会话表随持久会话交付（migrations/postgres/0005_sessions.sql），此处同步维护。
 BEGIN;
 
 -- 1. 本站身份；password_hash 可空，存 Argon2id 的 PHC 字符串（见 ADR-0009）。
@@ -215,5 +216,26 @@ CREATE TABLE content_media_refs (
     PRIMARY KEY (media_id, content_type, content_id)
 );
 CREATE INDEX content_media_refs_by_content ON content_media_refs(content_type, content_id);
+
+-- 16. 持久会话；服务端只存令牌的 SHA-256 摘要，明文仅在签发时返回一次。
+-- 随持久会话交付（migrations/postgres/0005_sessions.sql），此处同步维护。
+-- 时间戳由应用写入（不使用 DEFAULT now()），过期语义：
+-- 有效 ⇔ expires_at >= now 且 last_seen_at >= now - 空闲 TTL。
+CREATE TABLE sessions (
+    token_hash text COLLATE "C" PRIMARY KEY
+        CHECK (token_hash ~ '^[0-9a-f]{64}$'),
+    user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    csrf_token text COLLATE "C" NOT NULL
+        CHECK (csrf_token ~ '^[0-9a-f]{64}$'),
+    user_version bigint NOT NULL CHECK (user_version > 0),
+    created_at timestamptz NOT NULL,
+    last_seen_at timestamptz NOT NULL,
+    expires_at timestamptz NOT NULL,
+    CHECK (last_seen_at >= created_at),
+    CHECK (expires_at > created_at)
+);
+CREATE INDEX sessions_by_user ON sessions(user_id);
+CREATE INDEX sessions_by_expires ON sessions(expires_at);
+CREATE INDEX sessions_by_last_seen ON sessions(last_seen_at);
 
 COMMIT;

@@ -1,6 +1,6 @@
 # 功能范围与实施路线
 
-状态：M1 内容闭环（Post + Page）与 M2 身份/后台**已交付**；M0 主题桥接原型**已完成**（结论可行，见 `spikes/template-bridge/README.md`）；M3 进行中：标签、分类树、Series、settings.site、settings.theme 后台切换、RSS/sitemap 与基础 SEO、Post 回收站、维护备份与隔离恢复演练，以及公开只读主题函数首段与第二主题已交付。生产维护编排/RPO/RTO、settings 其他分组与主题 API 候选扩展待后续部署规格。当前数据库基线为用户确认的 [13 表设计](database-design.md)，最新范围由 [ADR-0008](adr/0008-thirteen-table-blog-core.md) 记录。
+状态：M1 内容闭环（Post + Page）与 M2 身份/后台**已交付**；M0 主题桥接原型**已完成**（结论可行，见 `spikes/template-bridge/README.md`）；M3 进行中：标签、分类树、Series、settings.site、settings.theme 后台切换、RSS/sitemap 与基础 SEO、Post 回收站、维护备份与隔离恢复演练，以及公开只读主题函数首段与第二主题已交付。生产维护编排/RPO/RTO、settings 其他分组与主题 API 候选扩展待后续部署规格。当前数据库基线为用户确认的 [13 表设计](database-design.md)，并已按「按需扩展」追加媒体 2 表与持久会话 1 表（共 16 表，见 [ADR-0008](adr/0008-thirteen-table-blog-core.md)、[ADR-0010](adr/0010-persistent-postgres-sessions.md)）。
 
 ## 1. 已确认基线
 
@@ -11,8 +11,8 @@
 - 作者可直接发布自己的文章，后端检查资源归属，无强制审核。
 - 当前采用 users、oauth_accounts、roles、permissions、user_roles、role_permissions、categories、series、posts、tags、post_tags、pages、settings 共 13 表。
 - 一篇文章最多一个分类、一个系列，多个标签；分类可有父节点，系列有文章顺序；Page 独立且无文章组织关系。
-- 不预建修订、路径、媒体、会话、令牌、通知或任务等辅助表；这些能力需要时再扩展。
-- 当前已实现：M1 的 Post 内容闭环与公开 SSR、Page 的创建/编辑/发布/撤回与根路径 `/{slug}` 公开访问（含系统保留路径校验）；M2 的 RBAC、OAuth 登录、单实例会话、管理写 API 与 React 后台；M2 之后的本地密码认证（Argon2id + 登录限流 + 受控重置，见 [ADR-0009](adr/0009-local-password-authentication.md)），以及后台用户与角色管理（账号列表/创建、角色目录、角色分配与移除，含授权边界、最后可登录 Owner 保护与撤权会话失效；角色目录只读，自定义角色的创建/授权编辑仍属后续，见 [身份与后台 §8](identity-and-admin.md)）。Post 的受控 CLI 写通道已交付；Page 目前只经后台管理 API，尚未提供 CLI 子命令。
+- 不预建修订、路径、令牌、通知或任务等辅助表；媒体 2 表与会话 1 表已随对应功能交付，这些能力按需扩展。
+- 当前已实现：M1 的 Post 内容闭环与公开 SSR、Page 的创建/编辑/发布/撤回与根路径 `/{slug}` 公开访问（含系统保留路径校验）；M2 的 RBAC、OAuth 登录、PostgreSQL 持久会话（重启后仍登录、跨进程共享撤销）、管理写 API 与 React 后台；M2 之后的本地密码认证（Argon2id + 登录限流 + 受控重置，见 [ADR-0009](adr/0009-local-password-authentication.md)），以及后台用户与角色管理（账号列表/创建、角色目录、角色分配与移除，含授权边界、最后可登录 Owner 保护与撤权会话失效；角色目录只读，自定义角色的创建/授权编辑仍属后续，见 [身份与后台 §8](identity-and-admin.md)）。Post 的受控 CLI 写通道已交付；Page 目前只经后台管理 API，尚未提供 CLI 子命令。
 - M3 已交付第一段：标签目录管理（创建/改名/删除，`tag.manage`，slug 创建后不可改，引用保护拒绝删除）、文章编辑器多标签选择与正文同事务保存（仅标签变化也递增 posts.version）、公开标签页 `/tags/{slug}` 分页（每页 20，只列公开已发布文章）、文章详情展示标签；管理 API `GET/POST /api/admin/v1/tags`、`PATCH/DELETE /api/admin/v1/tags/{slug}`，业务码 `tag_in_use`（409，与 slug 占用区分）。
 - M3 已交付第二段：分类树（创建/更新/移动/删除，category.manage，slug 创建后不可改；移动在分类树事务锁内做深度受限祖先链防环；被文章引用或含子分类时删除受 category_in_use 保护）、文章编辑器分类选择（三态 category_id，与正文/标签同事务，仅分类变化也递增 version）、公开分类页 /categories/（slug） 分页（直接归属）、详情页分类链接。
 - M3 已交付第三段：Series 目录管理与并发重排（创建/更新/删除，series.manage，slug 创建后不可改，被文章引用时删除受 series_in_use 保护）；文章设置系列与序号（三态，同事务保存，位置唯一冲突报 conflict）；整体重排在系列行锁 + series.version 校验下进行，成员按 id 序加锁、位置唯一约束 DEFERRED 到提交检查，递增涉及 posts.version 与 series.version，跨系列移动按 ID 序锁两个系列；重排逐篇核验文章授权（Author 不能借重排改他人文章）；公开系列页 /series/（slug） 按阅读顺序分页（草稿占位不外泄，页内连续编号）。
@@ -40,7 +40,8 @@
 | 页面地址 | 根路径 /{slug}，保留系统路由 | 已实现：领域在创建/改名/发布校验保留路径，公开读取再拒绝一次，固定路由优先 |
 | 删除 | Post 回收站；Page 无回收站，物理删除 | Post 与 Page 删除闭环已交付 |
 | Owner/账号开通 | CLI 显式创建用户并绑定稳定外部身份 | 工程建议；禁止首个任意登录自动提权 |
-| 会话/OAuth 临时状态 | 单实例有界内存存储，重启失效 | 不建辅助表下的首版实现建议 |
+| 会话 | PostgreSQL `sessions` 表（摘要、CSRF、签发版本、空闲/绝对过期） | 已交付：重启后仍登录、跨进程撤销、空闲/绝对过期（[ADR-0010](adr/0010-persistent-postgres-sessions.md)） |
+| OAuth 临时状态 | 单实例有界内存存储，重启失效 | 一次性 state，进程重启作废是有意行为 |
 | 管理员邀请 | 保留后续协作需求，暂不属于核心闭环 | 需补持久化或共享短期存储、一次性消费与权限复核 |
 | 审计 | 当前脱敏运行/安全日志；事务审计后续增加 | 当前无 audit_logs，不承诺无遗漏业务审计 |
 | 主题桥接/缓存 | M0 验证桥接；初期无页面缓存 | 保持既定方向，generation 仍为待验证方案 |
@@ -57,14 +58,14 @@
 | 开工前置 | 冻结字段/状态/权限 key、路由保留与事务规则，建立项目依赖检查 | 核心 DDL 在目标 PostgreSQL 建表验证 |
 | M0：主题原型（已完成） | MiniJinja 桥接、预算、请求隔离、查询依赖 | 原型位于 `spikes/template-bridge`，17 项真实库测试全绿，结论**可行**：spawn_blocking 内 `Handle::block_on(timeout(剩余截止时间))` 桥接开销 µs 级；预算组合（deadline/查询/调用/fuel/递归/许可）实测校准；fuel 不限宿主 I/O、输出无引擎上限需宿主实现。结论与措辞见原型 README 与 [ADR-0002](adr/0002-template-data-functions.md) |
 | M1：内容闭环（已交付） | users、posts/pages、草稿→发布→SSR；Post 受控 CLI 驱动（Page 经后台 API） | 单份正文更新语义、version、公开/private 隔离、slug 唯一和根 Page 保留路由；无 React/OAuth 依赖 |
-| M2：身份与后台（已交付） | 核心角色/权限、OIDC/GitHub、CLI 账号开通、单实例内存会话、React 文章与页面编辑 | own/any、角色编辑防提权、Owner 保护、OAuth 防重放、CSRF、重启后会话失效 |
+| M2：身份与后台（已交付） | 核心角色/权限、OIDC/GitHub、CLI 账号开通、PostgreSQL 持久会话、React 文章与页面编辑 | own/any、角色编辑防提权、Owner 保护、OAuth 防重放、CSRF、重启后会话保留且撤权即时失效 |
 | M3：核心运营 | 分类树（**已交付**）、标签（**已交付**）、Series 目录与重排（**已交付**：锁协议/引用保护/公开系列页）、Series 排序、settings（**第一段已交付**：site 分组后台读写/优先级/版本 CAS/分组隔离）、主题函数/第二主题、RSS/sitemap 与基础 SEO（**已交付**：feed/sitemap/robots + canonical/标题/描述统一）、Post 回收站、备份恢复 | 13 表核心完整；分类防环、系列并发重排、设置隔离、维护备份与隔离恢复 |
 | M4：按需扩展 | 邀请、持久审计；媒体扩展到封面/头像/logo；Webhook、外部搜索/统计与可靠 outbox/任务 | 每项补齐自己的存储、权限、失败与恢复规则后才开放；不为维持表数省略必要可靠性 |
 | M5：上线验收 | 对拟上线范围做端到端、压测、迁移与完整恢复演练 | 无未实现能力的支持承诺；达到已确定的 RPO/RTO 和部署指标 |
 
 M1 的测试/CLI 身份不能进入公开管理 HTTP。提前提供 HTTP 写接口时，认证、授权、CSRF 必须一起交付。核心建表顺序按 FK 排序；完整 DDL 不等于所有表都需在第一条用例实现前建立。
 
-M4 不是一次性补回旧版全部辅助表。某项功能确有使用场景才设计它；历史修订、URL 改名/重定向、私有附件、多实例及持久会话都需要独立范围与迁移，不因架构预留而自动进入本版。
+M4 不是一次性补回旧版全部辅助表。某项功能确有使用场景才设计它；历史修订、URL 改名/重定向、私有附件和多实例都需要独立范围与迁移，不因架构预留而自动进入本版（持久会话已按此原则交付，见 [ADR-0010](adr/0010-persistent-postgres-sessions.md)）。
 
 ## 4. 后续候选能力
 

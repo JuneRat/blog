@@ -217,12 +217,41 @@ impl AuthInteractor {
     /// 版本比对让**跨进程**的改密/改角色/软删除同样立刻生效——CLI 在另一个进程
     /// 改了 `users.version`，这里读到的版本就不再等于会话签发时的值。
     pub async fn actor_from_session(&self, token: &str) -> Result<Actor, UseCaseError> {
-        let record: SessionRecord = self
-            .deps
+        let record = self.validate_session(token).await?;
+        self.actor_from_validated_record(&record).await
+    }
+
+    /// 一次校验同时得到会话记录与 Actor。
+    ///
+    /// 管理提取器既要用记录的 `csrf_token` 校验 CSRF，又要用 Actor 授权；若分别
+    /// 调用 [`Self::session_record`] 与 [`Self::actor_from_session`]，同一请求会校验
+    /// 两次会话。持久存储下 `validate` 会刷新 `last_seen_at`，也就是同一请求写两次库，
+    /// 因此提供这个合并入口。校验顺序与两次调用一致：先令牌有效，再版本比对。
+    pub async fn session_actor(&self, token: &str) -> Result<(SessionRecord, Actor), UseCaseError> {
+        let record = self.validate_session(token).await?;
+        let actor = self.actor_from_validated_record(&record).await?;
+        Ok((record, actor))
+    }
+
+    /// 会话元数据（含 CSRF token）；用于受保护写请求的 CSRF 校验。
+    pub async fn session_record(&self, token: &str) -> Result<SessionRecord, UseCaseError> {
+        self.validate_session(token).await
+    }
+
+    /// 校验令牌并返回记录；未知/过期映射为未登录。
+    async fn validate_session(&self, token: &str) -> Result<SessionRecord, UseCaseError> {
+        self.deps
             .sessions
             .validate(token)
             .await?
-            .ok_or(UseCaseError::Unauthenticated)?;
+            .ok_or(UseCaseError::Unauthenticated)
+    }
+
+    /// 用**已校验**的会话记录解析 Actor：只做版本比对与权限读取，不重复校验令牌。
+    async fn actor_from_validated_record(
+        &self,
+        record: &SessionRecord,
+    ) -> Result<Actor, UseCaseError> {
         let (actor, revision) = self
             .users
             .actor_with_revision(record.user_id, ActorChannel::Session)
@@ -233,15 +262,6 @@ impl AuthInteractor {
             return Err(UseCaseError::Unauthenticated);
         }
         Ok(actor)
-    }
-
-    /// 会话元数据（含 CSRF token）；用于受保护写请求的 CSRF 校验。
-    pub async fn session_record(&self, token: &str) -> Result<SessionRecord, UseCaseError> {
-        self.deps
-            .sessions
-            .validate(token)
-            .await?
-            .ok_or(UseCaseError::Unauthenticated)
     }
 
     /// 退出：撤销会话（受保护写操作，接口层校验 CSRF 后调用）。

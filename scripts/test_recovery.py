@@ -1,4 +1,7 @@
+import argparse
+import contextlib
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -74,6 +77,40 @@ class RecoveryTests(unittest.TestCase):
             with self.assertRaises(recovery.RecoveryError):
                 recovery.db_config(url)
         self.assertEqual(recovery.db_config("postgres://user:pass@localhost/blog")["PGDATABASE"], "blog")
+
+    def test_restore_invalidates_persisted_sessions(self):
+        class FakePg:
+            def __init__(self, url, container=None):
+                self.config = {"PGDATABASE": "admin"}
+                self.calls = []
+
+            def query(self, sql, database=None):
+                self.calls.append(("query", sql))
+                return ""
+
+            def run(self, tool, args, database=None, input_path=None, output_path=None):
+                self.calls.append(("run", tool))
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.bundle(root)
+            fake = FakePg("")
+            args = argparse.Namespace(
+                backup=root,
+                target_db="blog_restore_unit",
+                isolation_confirmed=True,
+                output=root / "restore-out",
+                docker_container=None,
+            )
+            with (
+                patch.object(recovery, "PgTools", return_value=fake),
+                patch.object(recovery, "validate_restored", return_value={"ok": True}),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                recovery.restore(args)
+
+            # 持久会话不能因备份回退而复活：恢复流程必须显式清空 sessions。
+            self.assertIn(("query", "DELETE FROM sessions"), fake.calls)
 
 
 if __name__ == "__main__":

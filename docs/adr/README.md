@@ -1,6 +1,6 @@
 # 架构决策记录
 
-记录始于 2026-09-20，索引更新日期：2026-09-22。这里只记录重要取舍；详细规则由专项设计文档维护。
+记录始于 2026-09-20，索引更新日期：2026-09-23。这里只记录重要取舍；详细规则由专项设计文档维护。
 
 状态含义：
 
@@ -19,5 +19,6 @@
 | [0007 精简核心表与 Post/Page 分表](0007-simple-separated-content-schema.md) | 被替代 | 由 ADR-0008 替代，保留原 14 表设计作为历史 |
 | [0008 用户确认的 13 表核心](0008-thirteen-table-blog-core.md) | 已采纳，待实施 | 用户提供 Series、RBAC、OAuth 的具体表设计并要求采用 |
 | [0009 启用本地密码认证](0009-local-password-authentication.md) | 已采纳并实现 | 用户要求优先启用 `users.password_hash`，并明确要 Argon2id、限流、重置与泄露处置 |
+| [0010 会话持久化到 PostgreSQL](0010-persistent-postgres-sessions.md) | 已采纳并实现 | 用户要求保留认证流程、自研 PostgreSQL `SessionStore`，实现重启后仍登录 |
 
 内容修订、URL、Owner 引导、授权变更、媒体/分类规则和会话存储的建议状态集中记录于 [决策登记表](../product-roadmap.md)；重大取舍可先以“提议”记录，确认后更新状态，避免把草案回填为历史事实。

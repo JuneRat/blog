@@ -127,9 +127,11 @@ where
         let Some(token) = cookie_value(&parts.headers, SESSION_COOKIE) else {
             return Err(admin_error(UseCaseError::Unauthenticated, &request_id));
         };
-        let record = admin
+        // 一次校验同时拿到会话记录与 Actor：分开调用会对同一请求写两次 last_seen_at。
+        // 「先令牌有效、再版本比对」的判定顺序不变，CSRF 仍在授权动作之前。
+        let (record, actor) = admin
             .auth
-            .session_record(&token)
+            .session_actor(&token)
             .await
             .map_err(|e| admin_error(e, &request_id))?;
 
@@ -150,11 +152,6 @@ where
             }
         }
 
-        let actor = admin
-            .auth
-            .actor_from_session(&token)
-            .await
-            .map_err(|e| admin_error(e, &request_id))?;
         // 身份已由会话验证：只有这里可以补录 actor，完成日志才带上它。
         request_id.set_actor(actor.user_id.0);
         Ok(Self { actor })

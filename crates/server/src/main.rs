@@ -204,15 +204,17 @@ async fn main() {
                 clock.clone(),
             ));
 
-            // 认证装配：单实例内存会话/尝试 + OAuth 客户端（秘密经环境变量 secret_ref 读取）。
+            // 认证装配：会话落 PostgreSQL（重启后仍登录、跨进程共享撤销），
+            // OAuth 尝试仍在内存（一次性 state，进程重启即作废是有意行为）。
             let secrets: Arc<dyn application::ports::SecretSource> =
                 Arc::new(infrastructure::EnvSecretSource);
             let identity_client: Arc<dyn application::ports::ExternalIdentityClient> =
                 Arc::new(infrastructure::ReqwestIdentityClient::new(secrets));
             let random: Arc<dyn application::ports::SecureRandom> =
                 Arc::new(infrastructure::SystemSecureRandom);
-            let session_store: Arc<dyn application::ports::SessionStore> =
-                Arc::new(infrastructure::InMemorySessionStore::with_defaults());
+            let session_store: Arc<dyn application::ports::SessionStore> = Arc::new(
+                infrastructure::PostgresSessionStore::with_defaults(pool.clone()),
+            );
             let attempt_store: Arc<dyn application::ports::OAuthAttemptStore> =
                 Arc::new(infrastructure::InMemoryOAuthAttemptStore::with_defaults());
             let oauth_configs: Arc<dyn application::ports::OAuthConfigStore> =

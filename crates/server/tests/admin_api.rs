@@ -3,6 +3,7 @@
 
 mod common;
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use application::auth::{AuthDeps, AuthInteractor};
@@ -11,7 +12,7 @@ use application::identity::{Actor, CreateUserCmd, RoleInteractor, UserInteractor
 use application::page::PageInteractor;
 use application::ports::{
     Clock, ExternalIdentity, ExternalIdentityClient, OAuthAccountStore, OAuthConfigStore,
-    ProviderConfig, ProviderKind, SecureRandom,
+    ProviderConfig, ProviderKind, SecureRandom, SessionRecord, SessionStore,
 };
 use async_trait::async_trait;
 use axum::body::Body;
@@ -80,8 +81,46 @@ struct Stack {
     router: axum::Router,
     idp: Arc<FakeIdpClient>,
     roles: Arc<RoleInteractor>,
+    /// 会话校验次数：`validate` 会刷新 `last_seen_at`，用于断言单请求只校验一次。
+    session_validates: Arc<AtomicUsize>,
     #[allow(dead_code)]
     pool: PgPool,
+}
+
+/// 计数包装：`validate` 次数可观测，其余委托内存实现。
+struct CountingSessionStore {
+    inner: InMemorySessionStore,
+    validates: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl SessionStore for CountingSessionStore {
+    async fn create(
+        &self,
+        user_id: Uuid,
+        user_version: i64,
+    ) -> Result<String, application::error::UseCaseError> {
+        self.inner.create(user_id, user_version).await
+    }
+
+    async fn validate(
+        &self,
+        token: &str,
+    ) -> Result<Option<SessionRecord>, application::error::UseCaseError> {
+        self.validates.fetch_add(1, Ordering::SeqCst);
+        self.inner.validate(token).await
+    }
+
+    async fn revoke(&self, token: &str) -> Result<(), application::error::UseCaseError> {
+        self.inner.revoke(token).await
+    }
+
+    async fn revoke_all_for_user(
+        &self,
+        user_id: Uuid,
+    ) -> Result<(), application::error::UseCaseError> {
+        self.inner.revoke_all_for_user(user_id).await
+    }
 }
 
 async fn fresh_stack() -> Stack {
@@ -190,8 +229,11 @@ async fn fresh_stack() -> Stack {
         },
     ));
 
-    let sessions: Arc<dyn application::ports::SessionStore> =
-        Arc::new(InMemorySessionStore::with_defaults());
+    let session_validates = Arc::new(AtomicUsize::new(0));
+    let sessions: Arc<dyn SessionStore> = Arc::new(CountingSessionStore {
+        inner: InMemorySessionStore::with_defaults(),
+        validates: session_validates.clone(),
+    });
     let auth = Arc::new(AuthInteractor::new(
         AuthDeps {
             sessions: sessions.clone(),
@@ -243,6 +285,7 @@ async fn fresh_stack() -> Stack {
         router,
         idp,
         roles,
+        session_validates,
         pool,
     }
 }
@@ -365,6 +408,32 @@ async fn api(
     let status = response.status();
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
     (status, String::from_utf8_lossy(&bytes).to_string())
+}
+
+/// 管理请求只校验一次会话：提取器不再「先取记录、再解析 Actor」各校验一次。
+/// 持久存储下每次 validate 都会写一次 `last_seen_at`，两次就是双倍写。
+#[tokio::test]
+async fn admin_request_validates_session_once() {
+    let _g = SERIAL.lock().await;
+    let stack = fresh_stack().await;
+    let (cookie, _csrf) = login_as(&stack.router, &stack.idp, "author").await;
+
+    let before = stack.session_validates.load(Ordering::SeqCst);
+    let (status, body) = api(
+        &stack.router,
+        "GET",
+        "/api/admin/v1/posts",
+        Some(&cookie),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        stack.session_validates.load(Ordering::SeqCst) - before,
+        1,
+        "一个管理请求只应校验一次会话"
+    );
 }
 
 #[tokio::test]

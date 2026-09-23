@@ -28,8 +28,8 @@ pub use persistence::{
 pub use rbac::PostgresRbacStore;
 pub use rendering::{MiniJinjaThemeRenderer, SanitizingMarkdownRenderer};
 pub use sessions::{
-    AttemptStoreConfig, InMemoryOAuthAttemptStore, InMemorySessionStore, SessionStoreConfig,
-    SystemSecureRandom,
+    AttemptStoreConfig, InMemoryOAuthAttemptStore, InMemorySessionStore, PostgresSessionStore,
+    SessionStoreConfig, SystemSecureRandom,
 };
 pub use settings::PostgresSettingsStore;
 pub use throttle::{InMemoryLoginThrottle, ThrottleConfig};

@@ -2,6 +2,7 @@
 //! PKCE challenge/nonce/redirect_uri 传递、绑定检查与会话解析。
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use application::auth::{AuthInteractor, LoginSuccess};
@@ -43,6 +44,13 @@ impl SecureRandom for FakeRandom {
 #[derive(Default)]
 struct FakeSessionStore {
     sessions: Mutex<HashMap<String, SessionRecord>>,
+    validates: AtomicUsize,
+}
+
+impl FakeSessionStore {
+    fn validate_count(&self) -> usize {
+        self.validates.load(Ordering::SeqCst)
+    }
 }
 
 #[async_trait::async_trait]
@@ -62,6 +70,7 @@ impl SessionStore for FakeSessionStore {
         Ok(token)
     }
     async fn validate(&self, token: &str) -> Result<Option<SessionRecord>, UseCaseError> {
+        self.validates.fetch_add(1, Ordering::SeqCst);
         Ok(self.sessions.lock().unwrap().get(token).cloned())
     }
     async fn revoke(&self, token: &str) -> Result<(), UseCaseError> {
@@ -222,6 +231,7 @@ impl ExternalIdentityClient for FakeIdentityClient {
 struct Fixture {
     auth: Arc<AuthInteractor>,
     identity_client: Arc<FakeIdentityClient>,
+    sessions: Arc<FakeSessionStore>,
     member_id: Uuid,
 }
 
@@ -280,9 +290,10 @@ async fn fixture() -> Fixture {
         authorize_requests: Mutex::new(vec![]),
     });
 
+    let sessions = Arc::new(FakeSessionStore::default());
     let auth = Arc::new(AuthInteractor::new(
         application::auth::AuthDeps {
-            sessions: Arc::new(FakeSessionStore::default()),
+            sessions: sessions.clone(),
             attempts: Arc::new(FakeAttemptStore::default()),
             configs: Arc::new(FakeProviderConfigStore { providers }),
             accounts,
@@ -297,6 +308,7 @@ async fn fixture() -> Fixture {
     Fixture {
         auth,
         identity_client,
+        sessions,
         member_id: member.id,
     }
 }
@@ -477,6 +489,30 @@ async fn login_round_trip_issues_session() {
     assert!(actor.has_permission("post.read"));
     assert!(actor.has_permission("post.create"));
     assert_eq!(application::identity::ActorChannel::Session, actor.channel);
+}
+
+/// 管理提取器需要 CSRF（记录）与授权（Actor）两样东西；合并入口必须一次校验，
+/// 否则持久存储下同一请求会写两次 `last_seen_at`。
+#[tokio::test]
+async fn session_actor_validates_once_and_returns_record_with_actor() {
+    let f = fixture().await;
+    let success = complete_login(&f, "/admin").await.unwrap();
+
+    let before = f.sessions.validate_count();
+    let (record, actor) = f.auth.session_actor(&success.token).await.unwrap();
+    assert_eq!(
+        f.sessions.validate_count() - before,
+        1,
+        "session_actor 只应校验一次会话"
+    );
+    assert_eq!(record.user_id, actor.user_id.0, "记录与 Actor 指向同一用户");
+    assert_eq!(record.csrf_token, format!("csrf-{}", f.member_id));
+
+    // 未登录令牌仍是未登录错误，不会因为合并入口而放行。
+    assert!(matches!(
+        f.auth.session_actor("not-a-session").await,
+        Err(UseCaseError::Unauthenticated)
+    ));
 }
 
 #[tokio::test]

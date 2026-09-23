@@ -296,12 +296,9 @@ async fn me(
     let Some(token) = cookie_value(&headers, SESSION_COOKIE_NAME) else {
         return admin_error(UseCaseError::Unauthenticated, &request_id);
     };
-    let (actor, record) = match (
-        state.auth.actor_from_session(&token).await,
-        state.auth.session_record(&token).await,
-    ) {
-        (Ok(a), Ok(r)) => (a, r),
-        (Err(e), _) | (_, Err(e)) => return admin_error(e, &request_id),
+    let (record, actor) = match state.auth.session_actor(&token).await {
+        Ok(pair) => pair,
+        Err(e) => return admin_error(e, &request_id),
     };
     request_id.set_actor(actor.user_id.0);
     let _ = &state.users;
@@ -336,9 +333,10 @@ async fn change_password(
     if let Err(e) = ensure_same_origin(&headers) {
         return admin_error(e, &request_id);
     }
-    let record = match state.auth.session_record(&token).await {
-        Ok(record) => record,
-        Err(_) => return admin_error(UseCaseError::Unauthenticated, &request_id),
+    // 一次校验同时拿到记录与 Actor：CSRF 用记录的 token，动作授权用 Actor。
+    let (record, actor) = match state.auth.session_actor(&token).await {
+        Ok(pair) => pair,
+        Err(e) => return admin_error(e, &request_id),
     };
     let provided = headers
         .get("x-csrf-token")
@@ -347,10 +345,6 @@ async fn change_password(
     if provided.is_empty() || provided != record.csrf_token {
         return admin_error(UseCaseError::Forbidden, &request_id);
     }
-    let actor = match state.auth.actor_from_session(&token).await {
-        Ok(actor) => actor,
-        Err(e) => return admin_error(e, &request_id),
-    };
     request_id.set_actor(actor.user_id.0);
 
     // 重新认证与登录共用失败预算；来源地址维度只取 socket 对端，不读转发头。

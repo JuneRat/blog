@@ -976,7 +976,13 @@ pub struct SessionRecord {
     pub user_version: i64,
 }
 
-/// 单实例内存会话存储：有 TTL 与容量上限，重启全部失效。
+/// 会话存储端口：不透明令牌 + 服务端摘要，有 TTL 与容量上限。
+///
+/// 两个适配器（内存 / PostgreSQL）都必须满足同一套契约：
+/// - `create` 返回的明文令牌只出现一次，服务端只保存其验证摘要；
+/// - `validate` 在空闲或绝对过期后返回 None，有效时把 `last_seen_at` 刷新到当前；
+/// - `revoke` 幂等；`revoke_all_for_user` 必须让该用户既有会话全部失效；
+/// - 存储位置是实现细节：内存实现重启即清空，数据库实现重启保留、跨进程共享。
 #[async_trait]
 pub trait SessionStore: Send + Sync {
     /// 创建会话，返回不透明令牌（明文只出现一次；服务端保存验证摘要）。

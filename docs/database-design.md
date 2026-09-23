@@ -1,8 +1,8 @@
-# 数据库设计：13 张核心内容表 + 媒体 2 表
+# 数据库设计：13 张核心内容表 + 媒体 2 表 + 会话 1 表
 
-更新日期：2026-09-23。核心内容/身份模型采用用户提供并确认的方案：少表、关系清晰、以后再扩展；包含 Series、RBAC、OAuth，Post/Page 分表。替代此前 14 表与发布修订方案，取舍见 [ADR-0008](adr/0008-thirteen-table-blog-core.md)。媒体库交付时按该 ADR 的「按需扩展」原则新增 `media_assets` 与 `content_media_refs` 两张表（迁移 `0004_media.sql`），原 13 表未改动。
+更新日期：2026-09-23。核心内容/身份模型采用用户提供并确认的方案：少表、关系清晰、以后再扩展；包含 Series、RBAC、OAuth，Post/Page 分表。替代此前 14 表与发布修订方案，取舍见 [ADR-0008](adr/0008-thirteen-table-blog-core.md)。媒体库交付时按该 ADR 的「按需扩展」原则新增 `media_assets` 与 `content_media_refs` 两张表（迁移 `0004_media.sql`），原 13 表未改动。会话持久化交付时按同一原则新增 `sessions` 一张表（迁移 `0005_sessions.sql`），见 [ADR-0010](adr/0010-persistent-postgres-sessions.md)。
 
-完整字段、类型、约束与索引见 [PostgreSQL DDL](sql/postgres-core.sql)（含媒体两表）；实际生效顺序由 `migrations/postgres/` 下的迁移决定（媒体是 `0004_media.sql`）。这是面向空 schema 的设计草案，不是已执行的数据库迁移。保留原方案的 13 张表和业务字段，只补充必要的约束、索引，以及可变记录的 `version` 并发控制字段；不增加路径、修订、会话或审计表。
+完整字段、类型、约束与索引见 [PostgreSQL DDL](sql/postgres-core.sql)（含媒体两表与会话表）；实际生效顺序由 `migrations/postgres/` 下的迁移决定（媒体是 `0004_media.sql`，会话是 `0005_sessions.sql`）。这是面向空 schema 的设计草案，不是已执行的数据库迁移。保留原方案的 13 张表和业务字段，只补充必要的约束、索引，以及可变记录的 `version` 并发控制字段；不增加路径、修订或审计表。
 
 ## 1. 表与关系
 
@@ -162,15 +162,15 @@ site 分组（标题/描述）已随 M3 第一段交付，语义冻结为：
 
 ## 7. 运行时边界与后续扩展
 
-13 表（加媒体 2 表共 15 张）是业务核心，不等于完整持久化认证/任务平台。首版按单实例运行：本站不透明会话、OAuth state/nonce/PKCE 尝试放有容量和 TTL 限制的服务端内存存储，state 原子一次消费，重启后全部失效。授权仍读主库；会话在角色/账号撤权后不能继续通过敏感操作。多实例、重启保留登录或持久邀请交付前，再选共享存储或追加专用迁移，不能把凭据塞进 settings。
+13 表（加媒体 2 表、会话 1 表共 16 张）是业务核心，不等于完整持久化认证/任务平台。会话已持久化到 PostgreSQL（§9）：服务重启后仍登录，多个进程共享同一份会话，按用户批量撤销跨进程生效；授权仍读主库，会话绑定 `users.version`，撤权后旧 Cookie 下一次请求即失效。OAuth state/nonce/PKCE 尝试仍放有容量和 TTL 限制的服务端内存存储，state 原子一次消费，进程重启即作废。多实例、持久邀请交付前，仍需补齐共享的登录限流与 OAuth 尝试存储，不能把凭据或临时状态塞进 settings。
 
-首版仅允许 CLI 预建并明确绑定的用户登录，不开放自助注册。管理员邀请仍是后续协作功能，需同时补齐一次性消费、授权复核与存储；不宣称当前 15 表已覆盖邀请工作流。当前只有脱敏运行/安全日志，不承诺事务内持久业务审计；数据库审计随该功能补充。
+首版仅允许 CLI 预建并明确绑定的用户登录，不开放自助注册。管理员邀请仍是后续协作功能，需同时补齐一次性消费、授权复核与存储；不宣称当前 16 表已覆盖邀请工作流。当前只有脱敏运行/安全日志，不承诺事务内持久业务审计；数据库审计随该功能补充。
 
-暂不建 post_revisions、page_revisions、content_paths、sessions、oauth_tokens、invitations、audit_logs、series_posts、post_meta/page_meta、notifications/webhooks/analytics。媒体管理的两张表已随媒体库第一版交付（§8）；其余能力按 [路线图](product-roadmap.md) 扩展，不能为了维持表数而把队列和引用关系隐藏在 JSON 中。
+暂不建 post_revisions、page_revisions、content_paths、oauth_tokens、invitations、audit_logs、series_posts、post_meta/page_meta、notifications/webhooks/analytics。媒体管理的两张表已随媒体库第一版交付（§8），`sessions` 已随会话持久化交付（§9）；其余能力按 [路线图](product-roadmap.md) 扩展，不能为了维持表数而把队列和引用关系隐藏在 JSON 中。
 
 DDL 不含种子账号、内置角色或权限数据；实施时由受控迁移/初始化命令同步注册权限和内置角色。创建、保存、关系更新与版本递增须在同一事务；不在数据库锁内调用身份提供商或其他网络接口。
 
-实施时须验证：15 表空库建立、重复 slug/外部身份拒绝、系列位置冲突与交换、分类树并发防环、标签关系/删除保护、版本冲突、草稿和私有内容隔离、Page 保留路由冲突、作者 own/any、角色编辑防提权、最后 Owner、OAuth 重放与账号绑定、媒体引用同事务写入与引用保护删除。上述检查已在真实 PostgreSQL 上执行（`crates/infrastructure/tests/`、`crates/server/tests/`）。
+实施时须验证：16 表空库建立、重复 slug/外部身份拒绝、系列位置冲突与交换、分类树并发防环、标签关系/删除保护、版本冲突、草稿和私有内容隔离、Page 保留路由冲突、作者 own/any、角色编辑防提权、最后 Owner、OAuth 重放与账号绑定、媒体引用同事务写入与引用保护删除、会话跨进程读取与撤销、并发创建/撤销与空闲/绝对过期。上述检查已在真实 PostgreSQL 上执行（`crates/infrastructure/tests/`、`crates/server/tests/`）。
 
 ## 8. 媒体（第一版已交付）
 
@@ -193,3 +193,20 @@ DDL 不含种子账号、内置角色或权限数据；实施时由受控迁移/
 - **备份单元**：媒体文件与数据库同属一份备份清单；`PendingDeletion` 对象若已不存在，只有在确认无引用且状态符合幂等删除规则时才可记为预期缺失（见 [备份与恢复](operations-and-recovery.md)）。
 
 媒体不写进 settings JSON：引用关系需要真实外键与事务保护，塞进配置对象既无法保证一致性，也无法安全回收文件。
+
+## 9. 会话（已交付）
+
+会话持久化到 PostgreSQL，服务重启后仍登录，多个进程共享同一份状态（取舍见 [ADR-0010](adr/0010-persistent-postgres-sessions.md)）。一张表：
+
+| 表 | 字段 | 规则 |
+|---|---|---|
+| sessions | token_hash、user_id、csrf_token、user_version、created_at、last_seen_at、expires_at | `token_hash` 是令牌的 SHA-256 小写 hex 主键；`user_id` 对 users CASCADE；`csrf_token` 为 32 字节 hex；`user_version` 记录签发时 `users.version`；`expires_at = created_at + 绝对 TTL` |
+
+设计要点：
+
+- **只存摘要**：明文令牌只在签发时返回一次。cookie 泄露不能从库中反查令牌，库泄露也不能直接当 cookie 使用；`token_hash` 的 CHECK 限定 64 位小写 hex，避免大小写/长度不一致导致查找静默落空。
+- **空闲与绝对过期**：有效条件是 `expires_at >= now` 且 `last_seen_at >= now - 空闲 TTL`；每次校验刷新 `last_seen_at`，活动可续期但不可逾越绝对上限。比较边界与内存实现（`InMemorySessionStore`）逐字对齐。
+- **撤销与清理索引**：`sessions_by_user` 供按用户批量撤销（改密、改角色、软删除）；`sessions_by_expires`/`sessions_by_last_seen` 供过期清理与容量淘汰。
+- **容量上限与批量撤销是同一把事务级锁上的不变量**：`create` 在 `pg_advisory_xact_lock` 内做「清理过期—按最久未活跃淘汰—插入」，并发创建也精确不超 `max_entries`；`revoke_all_for_user` 共用这把锁做整用户删除，因此撤销返回后不会再有此前已开始、尚未提交的创建落库（排在撤销之后的创建视为撤销后的新登录）。这与内存实现单锁下的语义一致。过期行在创建/校验路径顺带清理，适配器另提供显式清理方法供运维与恢复流程调用。
+- **版本绑定仍在**：`user_version` 与校验时重读的 `users.version` 比对，跨进程撤权不以「存储是否共享」为前提；持久化只是让撤销本身也能跨进程即时生效。
+- **备份影响**：`sessions` 属于恢复单元；从备份恢复会带回旧会话行，恢复流程必须显式撤销（见 [备份与恢复](operations-and-recovery.md) §3）。

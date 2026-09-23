@@ -19,3 +19,5 @@ RBAC 使用权限目录与两张关系表，权限语义由可信 key 描述符�
 完整字段见 [数据库设计](../database-design.md)，SQL 见 [核心 DDL](../sql/postgres-core.sql)，阶段见 [路线图](../product-roadmap.md)。
 
 后续变更：本文第 13 行「password_hash 仅预留，不自动开放本地登录」已被 [ADR-0009](0009-local-password-authentication.md) 取代——本地密码认证已启用，仍不新增表，限流与会话一样使用单实例内存存储。本文其余决策不变。
+
+后续变更：上文「不建……会话……表」与「首版单实例会话……重启失效」中关于**会话**的部分已由 [ADR-0010](0010-persistent-postgres-sessions.md) 取代——会话持久化到 PostgreSQL 的 `sessions` 表（第 16 张），重启后仍登录。OAuth 尝试与登录失败限流仍为单实例内存。本文其余决策不变。

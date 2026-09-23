@@ -1,8 +1,14 @@
-//! 单实例内存会话与 OAuth 尝试存储 + 安全随机源。
+//! 会话与 OAuth 尝试存储 + 安全随机源。
 //!
-//! - 有 TTL 与容量上限；重启全部失效（明确行为，不承诺跨重启保持登录）。
+//! 会话有两个适配器，共享同一套令牌形态（32 字节 hex）、SHA-256 摘要与
+//! 空闲/绝对过期语义，区别只在状态放哪里：
+//! - [`InMemorySessionStore`]：单实例内存，重启全部失效（测试与无库场景）；
+//! - [`PostgresSessionStore`]：状态落库，重启后仍登录，且多个进程共享同一份会话。
+//!
+//! 其余共同约定：
 //! - 服务端只保存令牌的 SHA-256 摘要；明文令牌仅在签发时返回一次。
-//! - state 一次性消费：consume 即删除。
+//! - 有 TTL 与容量上限；容量上限是「清理 + 淘汰 + 插入」的原子更新。
+//! - OAuth state 一次性消费：consume 即删除。
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -10,6 +16,7 @@ use std::sync::Mutex;
 use async_trait::async_trait;
 use base64::Engine as _;
 use sha2::{Digest, Sha256};
+use sqlx::{PgPool, Row};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -21,6 +28,22 @@ use application::ports::{
 fn sha256_hex(input: &[u8]) -> String {
     let digest = Sha256::digest(input);
     digest.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// 32 字节不透明随机令牌（小写 hex，64 字符）。
+///
+/// 会话令牌与 CSRF token 用同一种形态；明文只在签发时返回一次，
+/// 服务端只落 [`sha256_hex`] 摘要。两个会话适配器共用它，保证摘要算法一致。
+fn opaque_token() -> Result<String, UseCaseError> {
+    let mut buf = [0u8; 32];
+    getrandom::fill(&mut buf)
+        .map_err(|e| UseCaseError::Repository(format!("系统随机源失败：{e}")))?;
+    Ok(buf.iter().map(|b| format!("{b:02x}")).collect())
+}
+
+/// 会话表上的适配器把 sqlx 技术错误统一映射为端口错误。
+fn repo_err(e: sqlx::Error) -> UseCaseError {
+    UseCaseError::Repository(format!("会话存储失败：{e}"))
 }
 
 /// 从用户索引里摘掉一个会话摘要；列表空了顺带删键，避免索引无限累积。
@@ -153,19 +176,11 @@ impl SessionStore for InMemorySessionStore {
     async fn create(&self, user_id: Uuid, user_version: i64) -> Result<String, UseCaseError> {
         // 令牌生成需要系统随机；由应用层 SecureRandom 注入更纯粹，
         // 但存储自身也必须保证摘要在同一路径下计算，故内部直接生成。
-        let mut buf = [0u8; 32];
-        getrandom::fill(&mut buf)
-            .map_err(|e| UseCaseError::Repository(format!("系统随机源失败：{e}")))?;
-        let token = buf.iter().map(|b| format!("{b:02x}")).collect::<String>();
+        let token = opaque_token()?;
         let digest = sha256_hex(token.as_bytes());
 
         let now = self.now();
-        let csrf_token = {
-            let mut c = [0u8; 32];
-            getrandom::fill(&mut c)
-                .map_err(|e| UseCaseError::Repository(format!("系统随机源失败：{e}")))?;
-            c.iter().map(|b| format!("{b:02x}")).collect::<String>()
-        };
+        let csrf_token = opaque_token()?;
 
         // 淘汰、插入与索引更新在同一把锁内完成：不会出现只更新了一半的中间态，
         // 并发的 revoke_all_for_user 也不可能漏掉刚插入的会话。
@@ -218,6 +233,224 @@ impl SessionStore for InMemorySessionStore {
             return Ok(());
         }
         state.entries.retain(|e| !digests.contains(&e.digest));
+        Ok(())
+    }
+}
+
+/// 会话表的创建/批量撤销互斥锁键（与 persistence::IDENTITY_LOCK 同一手法，取不同键）。
+///
+/// `create` 的「清理过期 + 按需淘汰 + 插入」和 `revoke_all_for_user` 的整用户删除
+/// 必须共用这把锁，否则撤销返回后，一个此前已开始、尚未提交的创建仍可能落库。
+/// 事务级锁在提交/回滚时释放；`validate` 与单会话 `revoke` 不需要它。
+///
+/// 对 crate 外公开（`#[doc(hidden)]`）只为让集成测试能验证两者确实共用同一把锁。
+#[doc(hidden)]
+pub const SESSION_LOCK: (i32, i32) = (2048002, 1);
+
+/// PostgreSQL 会话存储：状态落库，因此**重启后仍登录**。
+///
+/// 与 [`InMemorySessionStore`] 使用同一套令牌形态、摘要算法与过期语义，
+/// 差别只在状态位置：
+/// - 重启不清空；服务与运维进程（或多个实例）看到同一份会话；
+/// - 另一个进程的 `revoke_all_for_user` 立刻生效，不再只靠 `users.version` 兜底；
+/// - 代价是每次校验都要写一次 `last_seen_at`（空闲续期），并依赖数据库可用性。
+///
+/// 时钟由构造时注入：生产用系统时钟，测试可在不 sleep 的情况下推进过期。
+pub struct PostgresSessionStore {
+    pool: PgPool,
+    config: SessionStoreConfig,
+    clock: Box<dyn Fn() -> OffsetDateTime + Send + Sync>,
+}
+
+impl PostgresSessionStore {
+    pub fn new(
+        pool: PgPool,
+        config: SessionStoreConfig,
+        clock: Box<dyn Fn() -> OffsetDateTime + Send + Sync>,
+    ) -> Self {
+        Self {
+            pool,
+            config,
+            clock,
+        }
+    }
+
+    /// 生产默认（系统时钟、默认 TTL 与容量）。
+    pub fn with_defaults(pool: PgPool) -> Self {
+        Self::new(
+            pool,
+            SessionStoreConfig::default(),
+            Box::new(OffsetDateTime::now_utc),
+        )
+    }
+
+    fn now(&self) -> OffsetDateTime {
+        (self.clock)()
+    }
+
+    /// 空闲过期下界：`last_seen_at >= now - idle` 才算有效。
+    fn idle_cutoff(&self, now: OffsetDateTime) -> OffsetDateTime {
+        now - time::Duration::seconds(self.config.idle_secs)
+    }
+
+    /// 删除全部已过期会话，返回删除行数。
+    ///
+    /// 创建/校验路径已顺带清理；这里是给运维用的显式入口（例如定时维护，
+    /// 或在不触发会话创建的窗口里主动回收）。恢复流程需要的是**清空全部**
+    /// 会话而不是只清过期行，走的是 `DELETE FROM sessions`（见 scripts/recovery.py）。
+    pub async fn purge_expired(&self) -> Result<u64, UseCaseError> {
+        let now = self.now();
+        let idle_cutoff = self.idle_cutoff(now);
+        // 过期 = 有效条件的取反：expires_at < now 或 last_seen_at < now - idle。
+        let result = sqlx::query("DELETE FROM sessions WHERE expires_at < $1 OR last_seen_at < $2")
+            .bind(now)
+            .bind(idle_cutoff)
+            .execute(&self.pool)
+            .await
+            .map_err(repo_err)?;
+        Ok(result.rows_affected())
+    }
+}
+
+#[async_trait]
+impl SessionStore for PostgresSessionStore {
+    async fn create(&self, user_id: Uuid, user_version: i64) -> Result<String, UseCaseError> {
+        let token = opaque_token()?;
+        let digest = sha256_hex(token.as_bytes());
+        let csrf_token = opaque_token()?;
+        let now = self.now();
+        let idle_cutoff = self.idle_cutoff(now);
+        let expires_at = now + time::Duration::seconds(self.config.absolute_secs);
+
+        let mut tx = self.pool.begin().await.map_err(repo_err)?;
+        // 先拿会话锁再动容量：让「计数—淘汰—插入」对其他创建者原子可见。
+        sqlx::query("SELECT pg_advisory_xact_lock($1::int, $2::int)")
+            .bind(SESSION_LOCK.0)
+            .bind(SESSION_LOCK.1)
+            .execute(&mut *tx)
+            .await
+            .map_err(repo_err)?;
+
+        // 清理已过期（绝对 + 空闲），两个索引都能用上。
+        sqlx::query("DELETE FROM sessions WHERE expires_at < $1 OR last_seen_at < $2")
+            .bind(now)
+            .bind(idle_cutoff)
+            .execute(&mut *tx)
+            .await
+            .map_err(repo_err)?;
+
+        // 仍满则淘汰最久未活跃；本次插入后不得超过 max_entries。
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM sessions")
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(repo_err)?;
+        let max_entries = i64::try_from(self.config.max_entries).unwrap_or(i64::MAX);
+        let overflow = count.saturating_add(1).saturating_sub(max_entries);
+        if overflow > 0 {
+            // 并列 last_seen_at 用 token_hash 兜底排序，保证结果稳定。
+            sqlx::query(
+                "DELETE FROM sessions WHERE token_hash IN ( \
+                     SELECT token_hash FROM sessions \
+                     ORDER BY last_seen_at ASC, token_hash ASC LIMIT $1 \
+                 )",
+            )
+            .bind(overflow)
+            .execute(&mut *tx)
+            .await
+            .map_err(repo_err)?;
+        }
+
+        sqlx::query(
+            "INSERT INTO sessions \
+                 (token_hash, user_id, csrf_token, user_version, created_at, last_seen_at, expires_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        )
+        .bind(&digest)
+        .bind(user_id)
+        .bind(&csrf_token)
+        .bind(user_version)
+        .bind(now)
+        .bind(now)
+        .bind(expires_at)
+        .execute(&mut *tx)
+        .await
+        .map_err(repo_err)?;
+
+        tx.commit().await.map_err(repo_err)?;
+        Ok(token)
+    }
+
+    async fn validate(&self, token: &str) -> Result<Option<SessionRecord>, UseCaseError> {
+        let digest = sha256_hex(token.as_bytes());
+        let now = self.now();
+        let idle_cutoff = self.idle_cutoff(now);
+
+        // 有效边界与内存实现逐字对齐（>=，不是 >）：过期/未知都不返回记录。
+        // RETURNING 给出**更新后**的 last_seen_at（= now），与内存返回的续期结果一致。
+        let row = sqlx::query(
+            "UPDATE sessions SET last_seen_at = $2 \
+             WHERE token_hash = $1 AND expires_at >= $2 AND last_seen_at >= $3 \
+             RETURNING user_id, csrf_token, created_at, last_seen_at, user_version",
+        )
+        .bind(&digest)
+        .bind(now)
+        .bind(idle_cutoff)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(repo_err)?;
+
+        let Some(row) = row else {
+            // 未知或刚过期：按主键精确清掉残留，避免过期行一直占位。
+            sqlx::query(
+                "DELETE FROM sessions WHERE token_hash = $1 \
+                 AND (expires_at < $2 OR last_seen_at < $3)",
+            )
+            .bind(&digest)
+            .bind(now)
+            .bind(idle_cutoff)
+            .execute(&self.pool)
+            .await
+            .map_err(repo_err)?;
+            return Ok(None);
+        };
+
+        Ok(Some(SessionRecord {
+            user_id: row.try_get("user_id").map_err(repo_err)?,
+            csrf_token: row.try_get("csrf_token").map_err(repo_err)?,
+            created_at: row.try_get("created_at").map_err(repo_err)?,
+            last_seen_at: row.try_get("last_seen_at").map_err(repo_err)?,
+            user_version: row.try_get("user_version").map_err(repo_err)?,
+        }))
+    }
+
+    async fn revoke(&self, token: &str) -> Result<(), UseCaseError> {
+        let digest = sha256_hex(token.as_bytes());
+        // 幂等：未知/已撤销令牌同样返回成功，重复撤销不报错。
+        sqlx::query("DELETE FROM sessions WHERE token_hash = $1")
+            .bind(&digest)
+            .execute(&self.pool)
+            .await
+            .map_err(repo_err)?;
+        Ok(())
+    }
+
+    async fn revoke_all_for_user(&self, user_id: Uuid) -> Result<(), UseCaseError> {
+        // 与 create 共用会话锁，形成同一顺序：撤销要么排在「已开始的创建」之后
+        // （于是那个会话也被删掉），要么排在它之前（之后的创建属于撤销后的新登录）。
+        // 不共用锁时，上一条路径会漏掉「锁内计数完但尚未插入」的会话。
+        let mut tx = self.pool.begin().await.map_err(repo_err)?;
+        sqlx::query("SELECT pg_advisory_xact_lock($1::int, $2::int)")
+            .bind(SESSION_LOCK.0)
+            .bind(SESSION_LOCK.1)
+            .execute(&mut *tx)
+            .await
+            .map_err(repo_err)?;
+        sqlx::query("DELETE FROM sessions WHERE user_id = $1")
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(repo_err)?;
+        tx.commit().await.map_err(repo_err)?;
         Ok(())
     }
 }

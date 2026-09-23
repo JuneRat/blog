@@ -53,7 +53,7 @@ blog oauth bindings --user sun
 
 - 浏览器访问 `GET /auth/login?provider=<id>&next=/admin` → OIDC（PKCE S256 + nonce + JWKS 校验）或 GitHub → `GET /auth/callback/{provider}` 签发会话。发起登录会下发短命 `blog_oauth_state` 绑定 cookie（Secure 部署用 `__Host-` 前缀），回调必须由同一浏览器带回，防登录 CSRF。
 - `GET /auth/providers` 是公开只读端点（`no-store`），只返回 `[{id, name, kind}]`，供登录页渲染按钮，不含 client_id/issuer/secret_ref 等配置细节；展示名由 `oauth add-* --name` 设置，缺省回退到 id。
-- 会话为单实例内存存储（HttpOnly/SameSite=Lax cookie，服务端只存 SHA-256 摘要）；空闲/绝对过期、容量淘汰、重启全部失效。
+- 会话持久化到 PostgreSQL 的 `sessions` 表（HttpOnly/SameSite=Lax cookie，服务端只存 SHA-256 摘要）；空闲/绝对过期、容量淘汰、重启后仍登录，跨进程共享撤销。
 - `GET /api/admin/v1/me` 返回当前用户与权限并集（每次重新读取，撤权即时生效）；`POST /auth/logout` 需会话 + `X-CSRF-Token` 头 + 同源 Origin。
 - 相关环境变量：`BLOG_PUBLIC_BASE_URL`（回调 redirect_uri 基址；同时是 canonical、RSS 与 sitemap 绝对链接的唯一来源）、`BLOG_SECURE_COOKIES`（不设时按 `BLOG_PUBLIC_BASE_URL` 的 scheme 推断，HTTPS 部署自动加 Secure）。
 
@@ -71,7 +71,7 @@ blog user show sun                             # 显示「密码登录：已启�
 - 失败限流按**账号**（15 分钟 5 次）与**来源地址**（15 分钟 50 次）分别计数，临时锁定 15 分钟。额度在哈希校验**之前**预占：只做事后计数的话，并发请求会在任何失败被记录前全部通过，一次突发就是 N 次爆破机会。锁定期间拒绝但不延长锁定，成功登录清账号历史失败并保留其他请求的预占，来源地址维度只归还本次预占（不清历史失败）。请求取消/超时自动归还额度；主体容量耗尽且无空闲条目可淘汰时拒绝新增主体。
 - 来源地址只取 socket 对端，**不读 `X-Forwarded-For`**；反向代理后的真实客户端地址需要部署侧配置可信转发（后续能力）。
 - `POST /api/admin/v1/me/password`（会话 + `X-CSRF-Token` + 同源 Origin）自助改密：已启用密码时需重新提供当前密码（**与登录共用失败预算，同样受限流**）；凭据写入是条件写入，**并发的管理员强制重置不会被自助改密覆盖**；成功后轮换会话并回新的 `csrf_token`。
-- **设置/重置/清除密码与自助改密都会撤销该用户全部会话**，旧 Cookie 立即失效。会话绑定签发时的 `users.version`，所以**另一个进程**（运维跑 CLI 改密、改角色、软删除）也能让运行中服务的旧会话立即失效，不依赖服务进程内的内存撤销。「至少保留一种登录方式」的检查与清除在同一把身份锁内完成，与解绑外部身份互斥。
+- **设置/重置/清除密码与自助改密都会撤销该用户全部会话**，旧 Cookie 立即失效。会话持久化到 PostgreSQL，所以**另一个进程**（运维跑 CLI 改密、改角色、软删除）的撤销对运行中服务立即生效；同时会话绑定签发时的 `users.version`，即使撤销与版本递增交错也不会漏判。「至少保留一种登录方式」的检查与清除在同一把身份锁内完成，与解绑外部身份互斥。
 - 设置/清除需 `user.manage`，且只经受控入口（CLI 引导身份 / 后台会话）；口令不接受 `--password` 参数，避免进入进程表与 shell 历史。
 - 自助邮箱找回**未交付**（需要一次性令牌存储与邮件投递）；忘记密码只能由有部署权限的运维用 CLI 重置。泄露处置见 [docs/operations-and-recovery.md §6](docs/operations-and-recovery.md)，取舍见 [ADR-0009](docs/adr/0009-local-password-authentication.md)。
 
@@ -218,7 +218,7 @@ crates/
 ├── interfaces      # 公开 HTTP 路由 + 受控 CLI（不依赖 infrastructure）
 └── server          # 装配入口（bin: blog）
 apps/admin          # React + TypeScript + Vite 后台 SPA（构建产物 dist/ 不进仓库）
-migrations/postgres # 13 表核心 + 媒体 2 表 DDL（sqlx 布局）
+migrations/postgres # 13 表核心 + 媒体 2 表 + 会话 1 表 DDL（sqlx 布局）
 themes/default      # 模板与静态资源
 docs/               # 设计文档与 ADR
 ```
@@ -250,4 +250,4 @@ M2 遗留（已知、未做）：
 - 禁用 provider 时校验是否使最后 Owner 失去登录方式（需跨 settings 与 `oauth_accounts` 的检查）。
 - `post.transfer_author` 与所有权转移的重新认证流程；`post.purge` 已交付独立授权，重新认证可后续补强。
 - 角色编辑 API（当前只有分配/移除；内置 slug 保护与委派上限已就位）。
-- 本地密码自助找回（邮箱一次性令牌 + 投递）与多实例共享的会话/限流存储；当前重置只走部署权限 CLI，限流计数为单实例内存。
+- 本地密码自助找回（邮箱一次性令牌 + 投递）与多实例共享的登录限流/OAuth 尝试存储；当前重置只走部署权限 CLI，限流计数与 OAuth 尝试为单实例内存（会话已持久化，见 [ADR-0010](docs/adr/0010-persistent-postgres-sessions.md)）。

@@ -19,82 +19,20 @@ use domain::identity::{User, UserId};
 use infrastructure::{
     PostgresOAuthAccountStore, PostgresPageRepository, PostgresPostRepository,
     PostgresPublishedPageQuery, PostgresPublishedPostQuery, PostgresRbacStore,
-    PostgresUserRepository, SanitizingMarkdownRenderer, connect, migrate,
+    PostgresUserRepository, SanitizingMarkdownRenderer, connect,
 };
 use sqlx::{PgPool, Row};
 use time::OffsetDateTime;
 use tokio::sync::Mutex;
 
+mod common;
+use common::{admin_url, seed_user, test_db_url};
+
 static SERIAL: Mutex<()> = Mutex::const_new(());
 
-fn admin_url() -> String {
-    std::env::var("BLOG_TEST_ADMIN_URL")
-        .unwrap_or_else(|_| "postgres://blog:blog@127.0.0.1:5432/postgres".into())
-}
-
-/// 从管理 DSN 推导同一主机上的测试库 DSN（替换最后一段路径）。
-fn test_db_url(admin: &str) -> String {
-    let base = admin.trim_end_matches('/');
-    let idx = base
-        .rfind('/')
-        .expect("管理 DSN 缺少路径段，形如 postgres://user:pass@host:port/postgres");
-    format!("{}/blog_test", &base[..idx])
-}
-
-/// 破坏性测试守卫：只允许 loopback 主机，防止误删远端同名库。
-fn assert_loopback(admin: &str) {
-    let after_scheme = admin.split("://").nth(1).unwrap_or_default();
-    let host_port = after_scheme
-        .rsplit_once('@')
-        .map(|(_, rest)| rest)
-        .unwrap_or(after_scheme);
-    let host = host_port.split([':', '/']).next().unwrap_or_default();
-    assert!(
-        matches!(host, "127.0.0.1" | "::1" | "localhost"),
-        "拒绝在非 loopback 主机 {host} 上执行破坏性测试（BLOG_TEST_ADMIN_URL 指向了远端？）"
-    );
-}
-
+/// 本文件专用测试库；库名在 common 里换取隔离与并行安全。
 async fn fresh_database() -> PgPool {
-    let admin_dsn = admin_url();
-    assert_loopback(&admin_dsn);
-    let test_dsn = test_db_url(&admin_dsn);
-
-    let admin = connect(&admin_dsn).await.expect("连接管理库失败");
-
-    // raw_sql 走简单协议且不包事务；CREATE/DROP DATABASE 不能在事务块内执行。
-    sqlx::raw_sql("DROP DATABASE IF EXISTS blog_test WITH (FORCE)")
-        .execute(&admin)
-        .await
-        .expect("删除旧测试库失败");
-    sqlx::raw_sql("CREATE DATABASE blog_test")
-        .execute(&admin)
-        .await
-        .expect("创建测试库失败");
-    admin.close().await;
-
-    let pool = connect(&test_dsn).await.expect("连接测试库失败");
-    migrate(&pool, "../../migrations/postgres")
-        .await
-        .expect("迁移失败");
-    pool
-}
-
-async fn seed_user(pool: &PgPool, username: &str) -> uuid::Uuid {
-    let id = uuid::Uuid::now_v7();
-    let now = OffsetDateTime::now_utc();
-    sqlx::query(
-        "INSERT INTO users (id, username, display_name, version, created_at, updated_at) \
-         VALUES ($1, $2, $3, 1, $4, $4)",
-    )
-    .bind(id)
-    .bind(username)
-    .bind(format!("{username}的展示名"))
-    .bind(now)
-    .execute(pool)
-    .await
-    .unwrap();
-    id
+    common::fresh_database("blog_test").await
 }
 
 /// 给用户绑定一个外部登录方式（“有效 Owner”判定要求至少一种登录方式）。
@@ -140,14 +78,14 @@ async fn migrations_create_core_tables() {
     let _g = SERIAL.lock().await;
     let pool = fresh_database().await;
 
-    // 13 张核心内容/身份表 + 媒体交付加入的 2 张（docs/database-design.md）。
+    // 13 张核心内容/身份表 + 媒体 2 张 + 持久会话 1 张（docs/database-design.md）。
     let count: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename <> '_sqlx_migrations'",
     )
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(count, 15, "13 张核心表 + 媒体 2 张");
+    assert_eq!(count, 16, "13 张核心表 + 媒体 2 张 + 会话 1 张");
 
     let tables: Vec<String> = sqlx::query_scalar(
         "SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename <> '_sqlx_migrations' ORDER BY tablename",
@@ -167,6 +105,7 @@ async fn migrations_create_core_tables() {
         "role_permissions",
         "roles",
         "series",
+        "sessions",
         "settings",
         "tags",
         "user_roles",
@@ -356,7 +295,9 @@ async fn truly_concurrent_saves_exactly_one_wins() {
     let author = seed_user(&pool, "author").await;
 
     let repo_a = PostgresPostRepository::new(pool.clone());
-    let pool_b = connect(&test_db_url(&admin_url())).await.unwrap();
+    let pool_b = connect(&test_db_url(&admin_url(), "blog_test"))
+        .await
+        .unwrap();
     let repo_b = PostgresPostRepository::new(pool_b);
 
     let snapshot = draft_snapshot(author, "race-real");
@@ -2374,9 +2315,8 @@ async fn settings_partial_row_reads_missing_fields_as_none() {
 async fn settings_row_survives_new_pool_and_keeps_oauth_group_isolated() {
     let _g = SERIAL.lock().await;
     let pool = fresh_database().await;
-    let dsn = std::env::var("BLOG_TEST_ADMIN_URL")
-        .unwrap_or_else(|_| "postgres://blog:blog@127.0.0.1:5432/postgres".into());
-    let test_dsn = test_db_url(&dsn);
+    let dsn = admin_url();
+    let test_dsn = test_db_url(&dsn, "blog_test");
 
     let first = infrastructure::PostgresSettingsStore::new(pool);
     first
@@ -2434,9 +2374,9 @@ async fn settings_row_survives_new_pool_and_keeps_oauth_group_isolated() {
 async fn settings_concurrent_saves_on_two_connections_exactly_one_wins() {
     let _g = SERIAL.lock().await;
     let pool = fresh_database().await;
-    let dsn = std::env::var("BLOG_TEST_ADMIN_URL")
-        .unwrap_or_else(|_| "postgres://blog:blog@127.0.0.1:5432/postgres".into());
-    let pool2 = connect(&test_db_url(&dsn)).await.unwrap();
+    let pool2 = connect(&test_db_url(&admin_url(), "blog_test"))
+        .await
+        .unwrap();
 
     let a = infrastructure::PostgresSettingsStore::new(pool);
     let b = infrastructure::PostgresSettingsStore::new(pool2);

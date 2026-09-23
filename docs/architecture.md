@@ -9,7 +9,7 @@
 范围按交付阶段拆分，统一里程碑详见 [功能路线](product-roadmap.md)：
 
 - M1 内容闭环：PostgreSQL、Post/Page、单份正文的草稿/发布与 SSR 阅读，通过受控 CLI 或测试验证，不要求完整后台。
-- M2 身份与后台：Owner/用户 CLI 开通、OIDC/GitHub、本地密码（Argon2id + 限流 + 受控重置）、RBAC、单实例内存会话、React SPA。作者可直接发布自己的文章，无强制审核。
+- M2 身份与后台：Owner/用户 CLI 开通、OIDC/GitHub、本地密码（Argon2id + 限流 + 受控重置）、RBAC、PostgreSQL 持久会话、React SPA。作者可直接发布自己的文章，无强制审核。
 - M3 可运营：分类树、标签、Series、settings 配置、MiniJinja 主题与模板数据函数、RSS、sitemap、SEO 及备份恢复。
 - M4 扩展闭环：受限扩展、Webhook、外部搜索与统计接入能力；具体搜索/统计提供商待定。
 
@@ -19,7 +19,7 @@
 
 专项规格分别由 [内容生命周期](content-lifecycle.md)、[Domain](domain.md)、[身份与后台](identity-and-admin.md)、[主题与渲染](themes-and-rendering.md)、[扩展与数据](extensions-and-data.md)、[备份与恢复](operations-and-recovery.md) 维护；重大取舍见 [ADR](adr/README.md)。
 
-PostgreSQL 的表、字段、约束及阶段集中在 [数据库设计](database-design.md)，附 [13 张核心表的 DDL 草案](sql/postgres-core.sql)。采用用户确认的 users/oauth_accounts、四张权限表、分类/系列/文章/标签关系、pages 和 settings；不预建路径、修订、媒体、会话、审计或队列表。不代表已经建立数据库表。
+PostgreSQL 的表、字段、约束及阶段集中在 [数据库设计](database-design.md)，附 [DDL 草案](sql/postgres-core.sql)。采用用户确认的 users/oauth_accounts、四张权限表、分类/系列/文章/标签关系、pages 和 settings，并随功能交付追加媒体 2 表与会话 1 表（当前 16 张）；不预建路径、修订、审计或队列表。不代表已经建立数据库表。
 
 ## 2. 核心决策
 

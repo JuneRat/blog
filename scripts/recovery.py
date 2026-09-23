@@ -289,6 +289,9 @@ def restore(args):
         pg.run("createdb", ["--template=template0", args.target_db], database="postgres")
         pg.run("pg_restore", ["--exit-on-error", "--no-owner", "--no-acl", "--dbname=" + args.target_db],
                input_path=Path(args.backup) / "data" / "database.dump")
+        # 会话是运行态：恢复后一律作废，防止备份回退让旧 Cookie 重新有效（ADR-0010）。
+        # 失败限流与 OAuth 尝试本就在进程内存，不随备份回来。
+        pg.query("DELETE FROM sessions", database=args.target_db)
         source_data = Path(args.backup) / "data"
         shutil.copytree(source_data / "theme", target / "theme")
         if (source_data / "resources").is_dir():
