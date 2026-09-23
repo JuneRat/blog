@@ -469,6 +469,24 @@ pub trait SettingsStore: Send + Sync {
     ) -> Result<SaveOutcome, UseCaseError>;
 }
 
+/// 与 site/oauth 分组隔离的主题选择设置。主题目录由部署方安装，数据库只保存 slug。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThemeSettingsRecord {
+    pub slug: String,
+    pub version: i64,
+}
+
+#[async_trait]
+pub trait ThemeSettingsStore: Send + Sync {
+    async fn find_theme(&self) -> Result<Option<ThemeSettingsRecord>, UseCaseError>;
+    async fn save_theme(
+        &self,
+        slug: &str,
+        expected_version: i64,
+        now: OffsetDateTime,
+    ) -> Result<SaveOutcome, UseCaseError>;
+}
+
 /// 视图用角色条目。
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct RoleDto {

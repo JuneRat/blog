@@ -2,7 +2,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
-import { ApiError, settingsApi } from "../src/api";
+import { ApiError, settingsApi, themeSettingsApi } from "../src/api";
 import { paths } from "../src/router";
 import type { SiteSettings } from "../src/types";
 
@@ -18,6 +18,7 @@ vi.mock("../src/api", async (importOriginal) => {
   return {
     ...original,
     settingsApi: { get: vi.fn(), save: vi.fn() },
+    themeSettingsApi: { get: vi.fn(), save: vi.fn() },
   };
 });
 
@@ -32,10 +33,29 @@ beforeEach(() => {
   vi.resetAllMocks();
   window.history.replaceState(null, "", paths.settings);
   vi.mocked(settingsApi.get).mockResolvedValue(fallbackView);
+  vi.mocked(themeSettingsApi.get).mockResolvedValue({ slug: "default", effective_slug: "default", source: "fallback", version: 0, available: [{ slug: "default", name: "Default" }, { slug: "paper", name: "Paper" }] });
 });
 afterEach(cleanup);
 
 describe("站点设置屏", () => {
+  it("切换主题携带版本并显示即时生效", async () => {
+    vi.mocked(themeSettingsApi.save).mockResolvedValue({ slug: "paper", effective_slug: "paper", source: "database", version: 1, available: [{ slug: "default", name: "Default" }, { slug: "paper", name: "Paper" }] });
+    render(<App />);
+    const select = await screen.findByLabelText("选择主题");
+    fireEvent.change(select, { target: { value: "paper" } });
+    fireEvent.click(screen.getByRole("button", { name: "切换主题" }));
+    await waitFor(() => expect(themeSettingsApi.save).toHaveBeenCalledWith("paper", 0));
+    await waitFor(() => expect(screen.getByText(/主题已切换为「Paper」/)).toBeTruthy());
+  });
+
+  it("已保存主题缺失时提示默认主题并允许修复", async () => {
+    vi.mocked(themeSettingsApi.get).mockResolvedValue({ slug: "removed", effective_slug: "default", source: "database", version: 3, available: [{ slug: "default", name: "Default" }, { slug: "paper", name: "Paper" }] });
+    vi.mocked(themeSettingsApi.save).mockResolvedValue({ slug: "default", effective_slug: "default", source: "database", version: 4, available: [{ slug: "default", name: "Default" }, { slug: "paper", name: "Paper" }] });
+    render(<App />);
+    expect(await screen.findByText(/已保存的主题「removed」当前未安装/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "切换主题" }));
+    await waitFor(() => expect(themeSettingsApi.save).toHaveBeenCalledWith("default", 3));
+  });
   it("加载生效值并标注来源为环境变量/默认值", async () => {
     render(<App />);
     const title = (await screen.findByLabelText("站点标题")) as HTMLInputElement;

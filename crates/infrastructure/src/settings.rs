@@ -4,7 +4,10 @@
 //! 与这里物理上就是不同的 key、不同的端口与授权路径，互不影响。
 
 use application::error::UseCaseError;
-use application::ports::{SaveOutcome, SettingsStore, SiteSettingsRecord, SiteSettingsValue};
+use application::ports::{
+    SaveOutcome, SettingsStore, SiteSettingsRecord, SiteSettingsValue, ThemeSettingsRecord,
+    ThemeSettingsStore,
+};
 use async_trait::async_trait;
 use sqlx::PgPool;
 use time::OffsetDateTime;
@@ -72,5 +75,48 @@ impl SettingsStore for PostgresSettingsStore {
             }),
             None => Ok(SaveOutcome::StaleConflict),
         }
+    }
+}
+
+#[async_trait]
+impl ThemeSettingsStore for PostgresSettingsStore {
+    async fn find_theme(&self) -> Result<Option<ThemeSettingsRecord>, UseCaseError> {
+        let row: Option<(String, i64)> =
+            sqlx::query_as("SELECT value->>'slug', version FROM settings WHERE key = 'theme'")
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(|e| UseCaseError::Repository(e.to_string()))?;
+        Ok(row.map(|(slug, version)| ThemeSettingsRecord { slug, version }))
+    }
+
+    async fn save_theme(
+        &self,
+        slug: &str,
+        expected_version: i64,
+        now: OffsetDateTime,
+    ) -> Result<SaveOutcome, UseCaseError> {
+        let value = serde_json::json!({ "schema_version": 1, "slug": slug });
+        let new_version: Option<i64> = sqlx::query_scalar(
+            r#"
+            INSERT INTO settings (key, value, version, updated_at)
+            VALUES ('theme', $1, 1, $2)
+            ON CONFLICT (key) DO UPDATE SET
+                value = EXCLUDED.value,
+                version = settings.version + 1,
+                updated_at = EXCLUDED.updated_at
+            WHERE settings.version = $3
+            RETURNING version
+            "#,
+        )
+        .bind(value)
+        .bind(now)
+        .bind(expected_version)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| UseCaseError::Repository(e.to_string()))?;
+        Ok(match new_version {
+            Some(new_version) => SaveOutcome::Saved { new_version },
+            None => SaveOutcome::StaleConflict,
+        })
     }
 }

@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ApiError, settingsApi, withRequestId } from "../api";
+import { ApiError, settingsApi, themeSettingsApi, withRequestId } from "../api";
 import { navigate, paths } from "../router";
 import { codePointLength } from "../text";
-import type { SiteSettings } from "../types";
+import type { SiteSettings, ThemeSettings } from "../types";
 
 function messageOf(error: unknown): string {
   if (error instanceof ApiError) {
@@ -275,6 +275,82 @@ export function SettingsScreen() {
           )}
         </>
       )}
+      <ThemeSettingsForm />
     </div>
+  );
+}
+
+function ThemeSettingsForm() {
+  const [view, setView] = useState<ThemeSettings | null>(null);
+  const [slug, setSlug] = useState("");
+  const [conflict, setConflict] = useState<ThemeSettings | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    void themeSettingsApi.get().then((current) => {
+      setView(current);
+      setSlug(current.effective_slug);
+    }).catch((cause) => setError(messageOf(cause)));
+  }, []);
+
+  async function save(expectedVersion: number) {
+    const submitted = slug;
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const saved = await themeSettingsApi.save(submitted, expectedVersion);
+      setView(saved);
+      setSlug((current) => current === submitted ? saved.effective_slug : current);
+      setConflict(null);
+      setNotice(`主题已切换为「${saved.available.find((item) => item.slug === saved.slug)?.name ?? saved.slug}」（v${saved.version}），公开页面即刻生效。`);
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.code === "version_conflict") {
+        try {
+          setConflict(await themeSettingsApi.get());
+        } catch (reloadError) {
+          setError(messageOf(reloadError));
+        }
+      } else {
+        setError(messageOf(cause));
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="settings-form" aria-label="主题设置">
+      <h2>主题</h2>
+      <p className="muted">选择已安装的主题。切换会同时更新公开页面和对应样式资源。</p>
+      {error !== null && <p className="error">{error}</p>}
+      {notice !== null && <p className="notice">{notice}</p>}
+      {view === null && error === null && <p className="muted">正在加载主题…</p>}
+      {view !== null && <>
+        <p className="muted">当前主题：{view.available.find((item) => item.slug === view.effective_slug)?.name ?? view.effective_slug}（{view.source === "database" ? `数据库 v${view.version}` : "启动配置"}）</p>
+        {view.slug !== view.effective_slug && <p className="error">已保存的主题「{view.slug}」当前未安装，公开页面暂用默认主题。请选择一个已安装主题并保存。</p>}
+        <div className="field">
+          <label htmlFor="active-theme">选择主题</label>
+          <select id="active-theme" value={slug} disabled={busy} onChange={(event) => setSlug(event.target.value)}>
+            {view.available.map((item) => <option key={item.slug} value={item.slug}>{item.name}</option>)}
+          </select>
+        </div>
+        {conflict === null ? (
+          <button type="button" className="button" disabled={busy || slug === view.slug} onClick={() => void save(view.version)}>切换主题</button>
+        ) : (
+          <div className="conflict">
+            <p>主题已在别处被修改（服务器当前 v{conflict.version}）。你的选择已保留。</p>
+            <div className="conflict-actions">
+              <button type="button" className="button ghost" disabled={busy} onClick={() => { setView(conflict); setSlug(conflict.effective_slug); setConflict(null); }}>重新加载</button>
+              <button type="button" className="button danger" disabled={busy} onClick={() => {
+                if (window.confirm("仍然覆盖服务器当前主题？公开页面会立即切换。")) void save(conflict.version);
+              }}>仍然覆盖</button>
+            </div>
+          </div>
+        )}
+      </>}
+    </section>
   );
 }

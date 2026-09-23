@@ -13,6 +13,7 @@ import type {
   CategorySummary,
   SeriesMemberRow,
   SiteSettings,
+  ThemeSettings,
   TagSummary,
   Visibility,
 } from "./types";
@@ -429,7 +430,7 @@ export interface SaveSiteSettingsInput {
   expected_version?: number;
 }
 
-/** 站点设置（site 分组）：读/写都需 `settings.manage`；只此一个分组。 */
+/** 站点设置的 site 分组：读/写都需 `settings.manage`。 */
 export const settingsApi = {
   /** 生效值 + 来源 + 版本；未配置时返回环境变量/默认值（version=0）。 */
   get: (): Promise<SiteSettings> => request<SiteSettings>("/api/admin/v1/settings/site"),
@@ -439,6 +440,15 @@ export const settingsApi = {
     request<SiteSettings>("/api/admin/v1/settings/site", {
       method: "PUT",
       body: JSON.stringify(input),
+    }),
+};
+
+export const themeSettingsApi = {
+  get: (): Promise<ThemeSettings> => request<ThemeSettings>("/api/admin/v1/settings/theme"),
+  save: (slug: string, expectedVersion: number): Promise<ThemeSettings> =>
+    request<ThemeSettings>("/api/admin/v1/settings/theme", {
+      method: "PUT",
+      body: JSON.stringify({ slug, expected_version: expectedVersion }),
     }),
 };
 

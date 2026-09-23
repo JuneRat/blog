@@ -16,7 +16,7 @@ use application::identity::Actor;
 use application::page::{CreatePageCmd, EditPageCmd, PageDto};
 use application::ports::SESSION_COOKIE;
 use application::series::{CreateSeriesCmd, ReorderSeriesCmd, SeriesDto, UpdateSeriesCmd};
-use application::settings::{SaveSiteSettingsCmd, SiteSettingsView};
+use application::settings::{SaveSiteSettingsCmd, SaveThemeSettingsCmd, SiteSettingsView};
 use application::tag::{CreateTagCmd, TagDto};
 use axum::extract::{FromRef, Path, Query, State};
 use axum::http::{StatusCode, request::Parts};
@@ -1204,7 +1204,7 @@ pub struct SaveSiteSettingsBody {
     pub expected_version: Option<i64>,
 }
 
-/// 站点设置路由。**只有 `/settings/site` 一个地址**：oauth 等受保护分组
+/// 站点设置路由：site 与 theme 分组。oauth 等受保护分组
 /// 使用专用权限（oauth.manage）与独立入口，不暴露在本 API 面上，
 /// 未知分组（含猜测 `/settings/oauth`）由路由层直接 404。
 pub fn settings_router(state: AdminState) -> Router {
@@ -1213,9 +1213,52 @@ pub fn settings_router(state: AdminState) -> Router {
             "/api/admin/v1/settings/site",
             get(get_site_settings).put(put_site_settings),
         )
+        .route(
+            "/api/admin/v1/settings/theme",
+            get(get_theme_settings).put(put_theme_settings),
+        )
         .layer(axum::extract::DefaultBodyLimit::max(SETTINGS_BODY_LIMIT))
         .layer(middleware::from_fn(no_store))
         .with_state(state)
+}
+
+#[derive(Deserialize)]
+pub struct SaveThemeSettingsBody {
+    pub slug: String,
+    pub expected_version: Option<i64>,
+}
+
+async fn get_theme_settings(
+    AdminAuth { actor }: AdminAuth,
+    request_id: RequestId,
+    State(state): State<AdminState>,
+) -> Response {
+    match state.settings.theme_view(&actor).await {
+        Ok(view) => (StatusCode::OK, Json(view)).into_response(),
+        Err(e) => admin_error(e, &request_id),
+    }
+}
+
+async fn put_theme_settings(
+    AdminAuth { actor }: AdminAuth,
+    request_id: RequestId,
+    State(state): State<AdminState>,
+    Json(body): Json<SaveThemeSettingsBody>,
+) -> Response {
+    match state
+        .settings
+        .save_theme(
+            &actor,
+            SaveThemeSettingsCmd {
+                slug: body.slug,
+                expected_version: body.expected_version,
+            },
+        )
+        .await
+    {
+        Ok(view) => (StatusCode::OK, Json(view)).into_response(),
+        Err(e) => admin_error(e, &request_id),
+    }
 }
 
 async fn get_site_settings(

@@ -8,11 +8,12 @@ use time::OffsetDateTime;
 use crate::error::UseCaseError;
 use crate::ports::{
     ContentRenderer, PublishedCategoryQuery, PublishedPageQuery, PublishedPostQuery,
-    PublishedSeriesQuery, PublishedTagQuery, SettingsStore,
+    PublishedSeriesQuery, PublishedTagQuery, SettingsStore, ThemeSettingsStore,
 };
 use crate::seo::{self, PublicBaseUrl, SeoMeta};
 use crate::settings::effective_site;
 use crate::syndication::{self, FeedChannel, FeedItem, SitemapEntry};
+use crate::themes::ThemeRegistry;
 use domain::content::is_reserved_root_slug;
 
 /// 模板展示用的时间格式（应用层渲染契约的一部分）。
@@ -191,6 +192,7 @@ pub struct PublicSiteInteractor {
     series: Arc<dyn PublishedSeriesQuery>,
     markdown: Arc<dyn ContentRenderer>,
     theme: Arc<dyn ThemeRenderer>,
+    themes: Option<(Arc<dyn ThemeSettingsStore>, Arc<ThemeRegistry>)>,
     render_limit: Arc<tokio::sync::Semaphore>,
     /// settings 的 site 分组（数据库未配置时整体回退）。
     settings: Arc<dyn SettingsStore>,
@@ -222,6 +224,7 @@ impl PublicSiteInteractor {
             series,
             markdown,
             theme,
+            themes: None,
             render_limit: Arc::new(tokio::sync::Semaphore::new(16)),
             settings,
             fallback,
@@ -229,10 +232,31 @@ impl PublicSiteInteractor {
         }
     }
 
+    pub fn with_themes(
+        mut self,
+        store: Arc<dyn ThemeSettingsStore>,
+        registry: Arc<ThemeRegistry>,
+    ) -> Self {
+        self.themes = Some((store, registry));
+        self
+    }
+
     async fn render_theme<F>(&self, task: F) -> Result<String, UseCaseError>
     where
         F: FnOnce(Arc<dyn ThemeRenderer>) -> Result<String, UseCaseError> + Send + 'static,
     {
+        let theme = if let Some((store, registry)) = &self.themes {
+            let slug = store
+                .find_theme()
+                .await?
+                .map(|record| record.slug)
+                .unwrap_or_else(|| registry.fallback().to_string());
+            registry
+                .renderer(&slug)
+                .or_else(|_| registry.renderer(registry.fallback()))?
+        } else {
+            self.theme.clone()
+        };
         let permit = tokio::time::timeout(
             std::time::Duration::from_millis(250),
             self.render_limit.clone().acquire_owned(),
@@ -240,7 +264,6 @@ impl PublicSiteInteractor {
         .await
         .map_err(|_| UseCaseError::Render("主题渲染队列已满".into()))?
         .map_err(|e| UseCaseError::Render(e.to_string()))?;
-        let theme = self.theme.clone();
         tokio::task::spawn_blocking(move || {
             let _permit = permit;
             task(theme)

@@ -139,7 +139,7 @@ blog user show sun                             # 显示「密码登录：已启�
 |---|---|---|
 | `DATABASE_URL` | `postgres://blog:blog@127.0.0.1:5432/blog` | PostgreSQL 连接 |
 | `BLOG_BIND` | `127.0.0.1:8080` | serve 监听地址（`--addr` 优先） |
-| `BLOG_THEME_DIR` | `themes/default` | 主题目录（模板 + assets） |
+| `BLOG_THEME_DIR` | `themes/default` | 默认主题目录；后台可在同级已安装主题之间切换 |
 | `BLOG_MIGRATIONS_DIR` | `migrations/postgres` | 迁移目录 |
 | `BLOG_ADMIN_DIST` | `apps/admin/dist` | 后台 SPA 构建产物；目录不存在时不注册 `/admin` |
 | `BLOG_SITE_TITLE` / `BLOG_SITE_DESCRIPTION` | Sun's Blog / 一个 Rust 博客 | **回退值**：数据库 `settings.site` 未配置时才生效（见「站点设置」） |
@@ -224,7 +224,7 @@ docs/               # 设计文档与 ADR
 
 ## 下一步
 
-M2（身份与后台）已交付：RBAC/委派、OAuth 登录闭环、本地密码登录（Argon2id + 限流 + 受控重置）、管理写 API、后台 SPA（文章/页面/用户与角色屏幕）；其后用户与角色管理界面也已交付（见 [身份与后台 §8](docs/identity-and-admin.md)）。M0 主题桥接原型已完成（结论可行）。M3 按 [roadmap](docs/product-roadmap.md) 推进：标签、分类树、Series、settings.site、RSS/sitemap 与基础 SEO、Post 回收站已交付；维护备份与隔离恢复工具已完成本机往返演练；公开只读主题函数首段与第二主题 `themes/paper` 已交付（启动时设 `BLOG_THEME_DIR=themes/paper`）。函数契约见 [主题文档](docs/themes-and-rendering.md)，备份用法见 [备份与恢复](docs/operations-and-recovery.md)。
+M2（身份与后台）已交付：RBAC/委派、OAuth 登录闭环、本地密码登录（Argon2id + 限流 + 受控重置）、管理写 API、后台 SPA（文章/页面/用户与角色屏幕）；其后用户与角色管理界面也已交付（见 [身份与后台 §8](docs/identity-and-admin.md)）。M0 主题桥接原型已完成（结论可行）。M3 按 [roadmap](docs/product-roadmap.md) 推进：标签、分类树、Series、settings.site、settings.theme、RSS/sitemap 与基础 SEO、Post 回收站已交付；维护备份与隔离恢复工具已完成本机往返演练；公开只读主题函数首段与第二主题 `themes/paper` 已交付。具有 `settings.manage` 权限的用户可在后台「站点设置」选择已安装主题，公开页面下一次请求即生效。函数契约见 [主题文档](docs/themes-and-rendering.md)，备份用法见 [备份与恢复](docs/operations-and-recovery.md)。
 
 M2 遗留（已知、未做）：
 

@@ -51,6 +51,14 @@ pub fn public_router(state: PublicSiteState, assets_dir: Option<PathBuf>) -> Rou
     router
 }
 
+/// Mount each installed theme under its own stable asset namespace.
+pub fn mount_theme_assets(mut router: Router, themes: Vec<(String, PathBuf)>) -> Router {
+    for (slug, dir) in themes {
+        router = router.nest_service(&format!("/assets/{slug}"), ServeDir::new(dir));
+    }
+    router
+}
+
 /// 兼容无静态资源/探针的调用方（如测试）。
 pub fn public_router_minimal(state: Arc<PublicSiteInteractor>) -> Router {
     public_router(

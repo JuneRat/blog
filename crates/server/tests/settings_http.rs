@@ -13,10 +13,11 @@ use application::identity::{Actor, CreateUserCmd, RoleInteractor, UserInteractor
 use application::page::PageInteractor;
 use application::ports::{
     Clock, ExternalIdentity, ExternalIdentityClient, OAuthAccountStore, OAuthConfigStore,
-    ProviderConfig, ProviderKind, SecureRandom, SettingsStore,
+    ProviderConfig, ProviderKind, SecureRandom, SettingsStore, ThemeSettingsStore,
 };
 use application::public_site::{PublicSiteInteractor, SiteInfo};
 use application::settings::SettingsInteractor;
+use application::themes::ThemeRegistry;
 use async_trait::async_trait;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -30,7 +31,7 @@ use infrastructure::{
     PostgresPublishedTagQuery, PostgresRbacStore, PostgresSeriesRepository, PostgresSettingsStore,
     PostgresTagRepository, PostgresUserRepository, SanitizingMarkdownRenderer, SystemClock,
 };
-use interfaces::http::{PublicSiteState, public_router};
+use interfaces::http::{PublicSiteState, mount_theme_assets, public_router};
 use interfaces::http_admin::settings_router;
 use interfaces::http_auth::{AdminState, AuthState, admin_router, auth_router};
 use interfaces::http_support::request_context;
@@ -217,29 +218,49 @@ async fn build(pool: PgPool) -> Stack {
     ));
 
     let settings_store: Arc<dyn SettingsStore> = Arc::new(PostgresSettingsStore::new(pool.clone()));
-    let settings = Arc::new(SettingsInteractor::new(
-        settings_store.clone(),
-        clock,
-        site_fallback(),
-    ));
-
-    // 公开站点：真实主题 + settings 解析（数据库 site 行 > 装配回退值）。
-    let theme = Arc::new(
-        MiniJinjaThemeRenderer::load(std::path::Path::new("../../themes/default"))
-            .expect("模板加载失败"),
-    );
-    let public_site = Arc::new(PublicSiteInteractor::new(
+    let theme_store: Arc<dyn ThemeSettingsStore> =
+        Arc::new(PostgresSettingsStore::new(pool.clone()));
+    let theme_data = Arc::new(application::theme_data::ThemeData::new(
         Arc::new(PostgresPublishedPostQuery::new(pool.clone())),
-        Arc::new(PostgresPublishedPageQuery::new(pool.clone())),
         Arc::new(PostgresPublishedTagQuery::new(pool.clone())),
         Arc::new(PostgresPublishedCategoryQuery::new(pool.clone())),
-        Arc::new(PostgresPublishedSeriesQuery::new(pool.clone())),
-        Arc::new(SanitizingMarkdownRenderer::new()),
-        theme,
-        settings_store,
-        site_fallback(),
-        test_base_url(),
     ));
+    let default_theme = MiniJinjaThemeRenderer::load(std::path::Path::new("../../themes/default"))
+        .expect("默认主题加载失败")
+        .with_data(theme_data.clone());
+    let paper_theme = MiniJinjaThemeRenderer::load(std::path::Path::new("../../themes/paper"))
+        .expect("Paper 主题加载失败")
+        .with_data(theme_data);
+    let mut registry = ThemeRegistry::new("default".into());
+    registry
+        .add("default".into(), "Default".into(), Arc::new(default_theme))
+        .unwrap();
+    registry
+        .add("paper".into(), "Paper".into(), Arc::new(paper_theme))
+        .unwrap();
+    let registry = Arc::new(registry);
+    let settings = Arc::new(
+        SettingsInteractor::new(settings_store.clone(), clock, site_fallback())
+            .with_themes(theme_store.clone(), registry.clone()),
+    );
+
+    // 公开站点：真实主题 + settings 解析（数据库 site 行 > 装配回退值）。
+    let theme = registry.renderer("default").unwrap();
+    let public_site = Arc::new(
+        PublicSiteInteractor::new(
+            Arc::new(PostgresPublishedPostQuery::new(pool.clone())),
+            Arc::new(PostgresPublishedPageQuery::new(pool.clone())),
+            Arc::new(PostgresPublishedTagQuery::new(pool.clone())),
+            Arc::new(PostgresPublishedCategoryQuery::new(pool.clone())),
+            Arc::new(PostgresPublishedSeriesQuery::new(pool.clone())),
+            Arc::new(SanitizingMarkdownRenderer::new()),
+            theme,
+            settings_store,
+            site_fallback(),
+            test_base_url(),
+        )
+        .with_themes(theme_store, registry),
+    );
 
     let auth_state = AuthState {
         auth: auth.clone(),
@@ -260,12 +281,18 @@ async fn build(pool: PgPool) -> Stack {
         secure_cookies: false,
     };
 
-    let router = public_router(
-        PublicSiteState {
-            site: public_site,
-            health: None,
-        },
-        None,
+    let router = mount_theme_assets(
+        public_router(
+            PublicSiteState {
+                site: public_site,
+                health: None,
+            },
+            None,
+        ),
+        vec![
+            ("default".into(), "../../themes/default/assets".into()),
+            ("paper".into(), "../../themes/paper/assets".into()),
+        ],
     )
     .merge(auth_router(auth_state))
     .merge(admin_router(admin_state.clone()))
@@ -686,13 +713,8 @@ async fn unknown_or_protected_settings_groups_are_not_routed() {
     let stack = fresh_stack().await;
     let (cookie, csrf) = login_as(&stack, "admin").await;
 
-    // settings API 面只有 site 分组：oauth（受 oauth.manage 保护的分组）、
-    // 未知分组与集合路径都不是可寻址资源。
-    for uri in [
-        "/api/admin/v1/settings/oauth",
-        "/api/admin/v1/settings/theme",
-        "/api/admin/v1/settings",
-    ] {
+    // oauth（受 oauth.manage 保护的分组）、未知分组与集合路径不可寻址。
+    for uri in ["/api/admin/v1/settings/oauth", "/api/admin/v1/settings"] {
         let (status, _, _) = get(&stack.router, uri, Some(&cookie)).await;
         assert_eq!(status, StatusCode::NOT_FOUND, "GET {uri}");
         let (status, _) = put(
@@ -705,6 +727,143 @@ async fn unknown_or_protected_settings_groups_are_not_routed() {
         .await;
         assert_eq!(status, StatusCode::NOT_FOUND, "PUT {uri}");
     }
+}
+
+#[tokio::test]
+async fn theme_switch_is_authorized_versioned_and_updates_html_and_assets() {
+    let _g = SERIAL.lock().await;
+    let stack = fresh_stack().await;
+    let uri = "/api/admin/v1/settings/theme";
+    let (status, _, _) = get(&stack.router, uri, None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (editor_cookie, editor_csrf) = login_as(&stack, "editor").await;
+    let (status, _, _) = get(&stack.router, uri, Some(&editor_cookie)).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _) = put(
+        &stack.router,
+        uri,
+        &editor_cookie,
+        &editor_csrf,
+        serde_json::json!({"slug":"paper","expected_version":0}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    let (cookie, csrf) = login_as(&stack, "admin").await;
+    let (status, initial, cache) = get(&stack.router, uri, Some(&cookie)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(cache.as_deref(), Some("no-store"));
+    assert_eq!(initial["slug"], "default");
+    assert_eq!(initial["source"], "fallback");
+    assert_eq!(initial["version"], 0);
+    assert_eq!(initial["available"].as_array().unwrap().len(), 2);
+    assert!(
+        public_home(&stack.router)
+            .await
+            .contains("/assets/default/style.css?v=")
+    );
+
+    let (status, body) = put(
+        &stack.router,
+        uri,
+        &cookie,
+        "wrong-csrf",
+        serde_json::json!({"slug":"paper","expected_version":0}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let (status, body) = put(
+        &stack.router,
+        uri,
+        &cookie,
+        &csrf,
+        serde_json::json!({"slug":"../paper","expected_version":0}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let (status, saved) = put(
+        &stack.router,
+        uri,
+        &cookie,
+        &csrf,
+        serde_json::json!({"slug":"paper","expected_version":0}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!(saved["version"], 1);
+    assert_eq!(saved["source"], "database");
+    let html = public_home(&stack.router).await;
+    assert!(html.contains("/assets/paper/paper.css?v="));
+    assert!(!html.contains("/assets/default/style.css"));
+    let (status, _, _) = get(&stack.router, "/assets/paper/paper.css", None).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, stale) = put(
+        &stack.router,
+        uri,
+        &cookie,
+        &csrf,
+        serde_json::json!({"slug":"default","expected_version":0}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{stale}");
+    let (status, same) = put(
+        &stack.router,
+        uri,
+        &cookie,
+        &csrf,
+        serde_json::json!({"slug":"paper","expected_version":1}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(same["version"], 1);
+    let (status, restored) = put(
+        &stack.router,
+        uri,
+        &cookie,
+        &csrf,
+        serde_json::json!({"slug":"default","expected_version":1}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{restored}");
+    assert_eq!(restored["version"], 2);
+    assert!(
+        public_home(&stack.router)
+            .await
+            .contains("/assets/default/style.css?v=")
+    );
+}
+
+#[tokio::test]
+async fn missing_saved_theme_falls_back_and_can_be_replaced() {
+    let _g = SERIAL.lock().await;
+    let stack = fresh_stack().await;
+    sqlx::query("INSERT INTO settings (key,value,version) VALUES ('theme', '{\"schema_version\":1,\"slug\":\"removed\"}'::jsonb, 1)")
+        .execute(&stack.pool).await.unwrap();
+    let (cookie, csrf) = login_as(&stack, "admin").await;
+    let (_, view, _) = get(&stack.router, "/api/admin/v1/settings/theme", Some(&cookie)).await;
+    assert_eq!(view["slug"], "removed");
+    assert_eq!(view["effective_slug"], "default");
+    assert!(
+        public_home(&stack.router)
+            .await
+            .contains("/assets/default/style.css?v=")
+    );
+    let (status, saved) = put(
+        &stack.router,
+        "/api/admin/v1/settings/theme",
+        &cookie,
+        &csrf,
+        serde_json::json!({"slug":"paper","expected_version":1}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!(saved["effective_slug"], "paper");
+    assert!(
+        public_home(&stack.router)
+            .await
+            .contains("/assets/paper/paper.css?v=")
+    );
 }
 
 #[tokio::test]

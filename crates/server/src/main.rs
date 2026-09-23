@@ -11,13 +11,14 @@ use application::page::PageInteractor;
 use application::ports::{
     CategoryRepository, PageRepository, PostRepository, PublishedCategoryQuery, PublishedPageQuery,
     PublishedPostQuery, PublishedSeriesQuery, PublishedTagQuery, SeriesRepository, SettingsStore,
-    TagRepository, UserRepository,
+    TagRepository, ThemeSettingsStore, UserRepository,
 };
 use application::public_site::{PublicSiteInteractor, SiteInfo};
 use application::seo::PublicBaseUrl;
 use application::series::SeriesInteractor;
 use application::settings::SettingsInteractor;
 use application::tag::TagInteractor;
+use application::themes::ThemeRegistry;
 use infrastructure::{
     MiniJinjaThemeRenderer, PostgresCategoryRepository, PostgresPageRepository,
     PostgresPostRepository, PostgresPublishedCategoryQuery, PostgresPublishedPageQuery,
@@ -124,15 +125,71 @@ async fn main() {
             let public_series_query: Arc<dyn PublishedSeriesQuery> =
                 Arc::new(PostgresPublishedSeriesQuery::new(pool.clone()));
 
-            let renderer = Arc::new(
-                MiniJinjaThemeRenderer::load(&config.theme_dir)
-                    .expect("加载主题模板失败")
-                    .with_data(Arc::new(application::theme_data::ThemeData::new(
-                        public_query.clone(),
-                        public_tag_query.clone(),
-                        public_category_query.clone(),
-                    ))),
+            let theme_data = Arc::new(application::theme_data::ThemeData::new(
+                public_query.clone(),
+                public_tag_query.clone(),
+                public_category_query.clone(),
+            ));
+            let fallback_renderer = MiniJinjaThemeRenderer::load(&config.theme_dir)
+                .expect("加载默认主题模板失败")
+                .with_data(theme_data.clone());
+            assert_eq!(
+                config.theme_dir.file_name().and_then(|name| name.to_str()),
+                Some(fallback_renderer.slug()),
+                "默认主题目录名必须与清单 slug 一致"
             );
+            let fallback_slug = fallback_renderer.slug().to_string();
+            let mut registry = ThemeRegistry::new(fallback_slug.clone());
+            let mut theme_assets = Vec::new();
+            theme_assets.push((fallback_slug.clone(), config.theme_dir.join("assets")));
+            registry
+                .add(
+                    fallback_slug,
+                    fallback_renderer.name().to_string(),
+                    Arc::new(fallback_renderer),
+                )
+                .expect("默认主题清单无效");
+            if let Some(parent) = config.theme_dir.parent() {
+                for entry in std::fs::read_dir(parent).expect("读取主题目录失败") {
+                    let entry = entry.expect("读取主题目录项失败");
+                    let dir = entry.path();
+                    if dir == config.theme_dir
+                        || entry.file_type().is_ok_and(|kind| kind.is_symlink())
+                        || !dir.is_dir()
+                        || !dir.join("theme.json").is_file()
+                    {
+                        continue;
+                    }
+                    match MiniJinjaThemeRenderer::load(&dir) {
+                        Ok(renderer)
+                            if dir.file_name().and_then(|s| s.to_str())
+                                == Some(renderer.slug()) =>
+                        {
+                            let slug = renderer.slug().to_string();
+                            let name = renderer.name().to_string();
+                            if registry
+                                .add(
+                                    slug.clone(),
+                                    name,
+                                    Arc::new(renderer.with_data(theme_data.clone())),
+                                )
+                                .is_ok()
+                            {
+                                theme_assets.push((slug, dir.join("assets")));
+                            }
+                        }
+                        Ok(_) => eprintln!("跳过主题 {}：目录名与清单 slug 不一致", dir.display()),
+                        Err(e) => eprintln!("跳过无效主题 {}：{e}", dir.display()),
+                    }
+                }
+            }
+            registry.validate().expect("默认主题未安装");
+            let registry = Arc::new(registry);
+            let theme_store: Arc<dyn ThemeSettingsStore> =
+                Arc::new(infrastructure::PostgresSettingsStore::new(pool.clone()));
+            let renderer = registry
+                .renderer(registry.fallback())
+                .expect("默认主题未安装");
             let markdown = Arc::new(SanitizingMarkdownRenderer::new());
 
             let users = Arc::new(UserInteractor::new(
@@ -211,23 +268,29 @@ async fn main() {
                 title: config.site_title,
                 description: config.site_description,
             };
-            let settings = Arc::new(SettingsInteractor::new(
-                settings_store.clone(),
-                clock.clone(),
-                site_fallback.clone(),
-            ));
-            let public_site = Arc::new(PublicSiteInteractor::new(
-                public_query,
-                public_page_query,
-                public_tag_query,
-                public_category_query,
-                public_series_query,
-                markdown,
-                renderer,
-                settings_store,
-                site_fallback,
-                config.public_base_url.clone(),
-            ));
+            let settings = Arc::new(
+                SettingsInteractor::new(
+                    settings_store.clone(),
+                    clock.clone(),
+                    site_fallback.clone(),
+                )
+                .with_themes(theme_store.clone(), registry.clone()),
+            );
+            let public_site = Arc::new(
+                PublicSiteInteractor::new(
+                    public_query,
+                    public_page_query,
+                    public_tag_query,
+                    public_category_query,
+                    public_series_query,
+                    markdown,
+                    renderer,
+                    settings_store,
+                    site_fallback,
+                    config.public_base_url.clone(),
+                )
+                .with_themes(theme_store, registry),
+            );
 
             let deps = CliDeps {
                 users,
@@ -243,7 +306,8 @@ async fn main() {
                 secure_cookies,
                 public_site,
                 user_repo,
-                assets_dir: Some(config.theme_dir.join("assets")),
+                assets_dir: None,
+                theme_assets,
                 admin_dist: Some(config.admin_dist),
                 health: Some(Arc::new(infrastructure::PgHealthCheck::new(pool.clone()))),
             };

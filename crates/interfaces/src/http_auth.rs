@@ -86,7 +86,7 @@ pub struct AdminState {
     pub categories: Arc<application::category::CategoryInteractor>,
     /// 系列用例（管理动作 series.manage；重排逐篇核验文章授权）。
     pub series: Arc<application::series::SeriesInteractor>,
-    /// 站点设置用例（读/写都要求 settings.manage；只覆盖 site 分组，
+    /// 站点设置用例（读/写都要求 settings.manage；覆盖 site/theme 分组，
     /// oauth 等受保护分组不在此 API 面上）。
     pub settings: Arc<application::settings::SettingsInteractor>,
     /// 角色与分配用例（http_identity 模块使用）。

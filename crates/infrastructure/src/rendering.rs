@@ -34,7 +34,7 @@ struct ThemeManifest {
     required_functions: Vec<String>,
 }
 
-fn verify_manifest(theme_dir: &Path) -> Result<(), UseCaseError> {
+fn verify_manifest(theme_dir: &Path) -> Result<ThemeManifest, UseCaseError> {
     let path = theme_dir.join("theme.json");
     let raw =
         std::fs::read(&path).map_err(|e| UseCaseError::Render(format!("读取主题清单失败：{e}")))?;
@@ -43,7 +43,13 @@ fn verify_manifest(theme_dir: &Path) -> Result<(), UseCaseError> {
     if manifest.schema_version != 1 || manifest.theme_api_version != THEME_API_VERSION {
         return Err(UseCaseError::Render("主题清单/API 版本不兼容".into()));
     }
-    if manifest.slug.is_empty() || manifest.name.trim().is_empty() {
+    if manifest.slug.is_empty()
+        || !manifest
+            .slug
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        || manifest.name.trim().is_empty()
+    {
         return Err(UseCaseError::Render("主题清单名称不能为空".into()));
     }
     for required in &manifest.required_functions {
@@ -53,7 +59,7 @@ fn verify_manifest(theme_dir: &Path) -> Result<(), UseCaseError> {
             )));
         }
     }
-    Ok(())
+    Ok(manifest)
 }
 
 /// Markdown 渲染 + ammonia 清洗。
@@ -157,13 +163,15 @@ pub struct MiniJinjaThemeRenderer {
     env: Environment<'static>,
     data: Option<Arc<ThemeData>>,
     assets: Arc<HashMap<String, String>>,
+    slug: String,
+    name: String,
 }
 
 impl MiniJinjaThemeRenderer {
     /// M1 最小模板集：base/index/post/page；M3 增加标签页 tag。
     /// 模板在启动时一次性加载；Environment 复用要求 'static，故按启动期资源泄漏源码。
     pub fn load(theme_dir: &Path) -> Result<Self, UseCaseError> {
-        verify_manifest(theme_dir)?;
+        let manifest = verify_manifest(theme_dir)?;
         let mut env = Environment::new();
         env.set_undefined_behavior(UndefinedBehavior::Strict);
         env.set_fuel(Some(200_000));
@@ -185,12 +193,21 @@ impl MiniJinjaThemeRenderer {
             env.add_template(name, source)
                 .map_err(|e| UseCaseError::Render(format!("解析模板 {name} 失败：{e}")))?;
         }
-        let assets = load_asset_urls(&theme_dir.join("assets"))?;
+        let assets = load_asset_urls(&theme_dir.join("assets"), &manifest.slug)?;
         Ok(Self {
             env,
             data: None,
             assets: Arc::new(assets),
+            slug: manifest.slug,
+            name: manifest.name,
         })
+    }
+
+    pub fn slug(&self) -> &str {
+        &self.slug
+    }
+    pub fn name(&self) -> &str {
+        &self.name
     }
 
     pub fn with_data(mut self, data: Arc<ThemeData>) -> Self {
@@ -218,7 +235,7 @@ impl MiniJinjaThemeRenderer {
     }
 }
 
-fn load_asset_urls(dir: &Path) -> Result<HashMap<String, String>, UseCaseError> {
+fn load_asset_urls(dir: &Path, slug: &str) -> Result<HashMap<String, String>, UseCaseError> {
     use sha2::{Digest, Sha256};
     let mut urls = HashMap::new();
     if !dir.is_dir() {
@@ -227,6 +244,7 @@ fn load_asset_urls(dir: &Path) -> Result<HashMap<String, String>, UseCaseError> 
     fn visit(
         root: &Path,
         dir: &Path,
+        slug: &str,
         urls: &mut HashMap<String, String>,
     ) -> Result<(), UseCaseError> {
         for entry in std::fs::read_dir(dir).map_err(|e| UseCaseError::Render(e.to_string()))? {
@@ -238,7 +256,7 @@ fn load_asset_urls(dir: &Path) -> Result<HashMap<String, String>, UseCaseError> 
                 return Err(UseCaseError::Render("主题资源不允许符号链接".into()));
             }
             if kind.is_dir() {
-                visit(root, &entry.path(), urls)?;
+                visit(root, &entry.path(), slug, urls)?;
             } else if kind.is_file() {
                 let path = entry.path();
                 let relative = path
@@ -256,12 +274,12 @@ fn load_asset_urls(dir: &Path) -> Result<HashMap<String, String>, UseCaseError> 
                     .map(application::seo::encode_path_segment)
                     .collect::<Vec<_>>()
                     .join("/");
-                urls.insert(name, format!("/assets/{encoded}?v={}", &hash[..12]));
+                urls.insert(name, format!("/assets/{slug}/{encoded}?v={}", &hash[..12]));
             }
         }
         Ok(())
     }
-    visit(dir, dir, &mut urls)?;
+    visit(dir, dir, slug, &mut urls)?;
     Ok(urls)
 }
 

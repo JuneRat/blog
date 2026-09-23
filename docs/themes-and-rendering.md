@@ -44,7 +44,7 @@ MiniJinja 类型只出现在 infrastructure；application 定义引擎无关的�
 
 ### 2.1 当前已交付的固定上下文与 SEO 元数据
 
-模板仍拿到预取主体上下文，并可额外调用上述公开函数；两个主题都含 7 个模板：base、index、post、page、tag、category、series。通过 `BLOG_THEME_DIR=themes/default` 或 `themes/paper` 在启动时选择。
+模板仍拿到预取主体上下文，并可额外调用上述公开函数；两个主题都含 7 个模板：base、index、post、page、tag、category、series。`BLOG_THEME_DIR` 指定启动默认主题；服务启动时加载其同级目录下清单有效、目录名与 slug 一致的主题。具有 `settings.manage` 权限的管理员可在后台「站点设置」选择主题，选择保存到独立的 `settings.theme` 行（版本 CAS）；公开 HTML 每次请求读取该行，切换后无需重启。若已保存的主题后来不可用，公开页面暂用启动默认主题，后台显示原选择并允许重新保存。主题资源使用 `/assets/{theme_slug}/{path}?v={hash}`，旧页面的样式资源仍可读取。部署新主题文件需要重启服务以加载模板和挂载资源；多实例部署需在所有实例安装同一主题集。
 
 | 变量 | 内容 | 可用模板 |
 |---|---|---|

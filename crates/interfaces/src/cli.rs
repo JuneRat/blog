@@ -283,7 +283,7 @@ pub struct CliDeps {
     pub categories: Arc<application::category::CategoryInteractor>,
     /// 系列用例（管理动作 series.manage；重排逐篇核验文章授权）。
     pub series: Arc<application::series::SeriesInteractor>,
-    /// 站点设置用例（settings.manage；只覆盖 site 分组）。
+    /// 站点设置用例（settings.manage；覆盖 site/theme 分组）。
     pub settings: Arc<application::settings::SettingsInteractor>,
     pub roles: Arc<RoleInteractor>,
     pub auth: Arc<AuthInteractor>,
@@ -294,6 +294,7 @@ pub struct CliDeps {
     pub user_repo: Arc<dyn UserRepository>,
     /// 主题静态资源目录（/assets/）。
     pub assets_dir: Option<PathBuf>,
+    pub theme_assets: Vec<(String, PathBuf)>,
     /// 后台 SPA 构建产物目录（/admin/）；不存在时不注册该路由。
     pub admin_dist: Option<PathBuf>,
     /// readiness 探针（healthz）。
@@ -338,16 +339,19 @@ pub async fn run(deps: CliDeps, command: Command) -> Result<(), String> {
                 roles: deps.roles,
                 secure_cookies: deps.secure_cookies,
             };
-            let app = public_router(public_state, deps.assets_dir)
-                .merge(crate::http_auth::auth_router(auth_state))
-                .merge(crate::http_auth::admin_router(admin_state.clone()))
-                .merge(crate::http_admin::posts_router(admin_state.clone()))
-                .merge(crate::http_admin::pages_router(admin_state.clone()))
-                .merge(crate::http_admin::tags_router(admin_state.clone()))
-                .merge(crate::http_admin::categories_router(admin_state.clone()))
-                .merge(crate::http_admin::series_router(admin_state.clone()))
-                .merge(crate::http_admin::settings_router(admin_state.clone()))
-                .merge(crate::http_identity::identity_router(admin_state));
+            let app = crate::http::mount_theme_assets(
+                public_router(public_state, deps.assets_dir),
+                deps.theme_assets,
+            )
+            .merge(crate::http_auth::auth_router(auth_state))
+            .merge(crate::http_auth::admin_router(admin_state.clone()))
+            .merge(crate::http_admin::posts_router(admin_state.clone()))
+            .merge(crate::http_admin::pages_router(admin_state.clone()))
+            .merge(crate::http_admin::tags_router(admin_state.clone()))
+            .merge(crate::http_admin::categories_router(admin_state.clone()))
+            .merge(crate::http_admin::series_router(admin_state.clone()))
+            .merge(crate::http_admin::settings_router(admin_state.clone()))
+            .merge(crate::http_identity::identity_router(admin_state));
             // 后台 SPA 挂在 /admin 子树；dist 不存在时保持未注册。
             let app = crate::http::mount_admin_spa(app, deps.admin_dist);
             // 全站最外层：分配请求编号、记录完成日志、回写 x-request-id（含被提前拒绝的 401/403）。

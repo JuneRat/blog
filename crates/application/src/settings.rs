@@ -1,11 +1,10 @@
-//! 站点设置用例：site 分组的读取视图与条件保存。
+//! 站点设置用例：site/theme 分组的读取视图与条件保存。
 //!
 //! 权限约定（docs/identity-and-admin.md §2）：
 //! - 读取与写入都要求 `settings.manage`：站点设置界面只服务于持有者，
 //!   与标签目录不同，Author 编辑文章不需要读站点配置，不开放目录读取；
-//! - 本用例**只覆盖 site 分组**：oauth 分组的写入仍走 `oauth.manage`
-//!   （受控 CLI / OAuth 用例），不受 settings.manage 覆盖；HTTP 面上也只
-//!   注册 `/settings/site` 一个地址，未知分组（含 oauth）一律 404。
+//! - 本用例覆盖 site/theme 分组：oauth 分组的写入仍走 `oauth.manage`
+//!   （受控 CLI / OAuth 用例），不受 settings.manage 覆盖；未知分组一律 404。
 //!
 //! 生效优先级（docs/database-design.md §6）：数据库 site 行 > 装配回退值
 //! （环境变量 `BLOG_SITE_TITLE`/`BLOG_SITE_DESCRIPTION` 或内置默认值）。
@@ -19,8 +18,9 @@ use std::sync::Arc;
 
 use crate::error::UseCaseError;
 use crate::identity::Actor;
-use crate::ports::{Clock, SaveOutcome, SettingsStore, SiteSettingsValue};
+use crate::ports::{Clock, SaveOutcome, SettingsStore, SiteSettingsValue, ThemeSettingsStore};
 use crate::public_site::SiteInfo;
+use crate::themes::{ThemeOption, ThemeRegistry};
 use crate::version::checked_version;
 use domain::settings::SiteSettings;
 
@@ -55,6 +55,21 @@ pub struct SettingsInteractor {
     clock: Arc<dyn Clock>,
     /// 装配回退值：环境变量/内置默认值（server 装配层构造，进程内不变）。
     fallback: SiteInfo,
+    themes: Option<(Arc<dyn ThemeSettingsStore>, Arc<ThemeRegistry>)>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ThemeSettingsView {
+    pub slug: String,
+    pub effective_slug: String,
+    pub source: SiteSettingsSource,
+    pub version: i64,
+    pub available: Vec<ThemeOption>,
+}
+
+pub struct SaveThemeSettingsCmd {
+    pub slug: String,
+    pub expected_version: Option<i64>,
 }
 
 /// 行值 + 装配回退值 → 生效值（字段级回退）。
@@ -84,6 +99,105 @@ impl SettingsInteractor {
             store,
             clock,
             fallback,
+            themes: None,
+        }
+    }
+
+    pub fn with_themes(
+        mut self,
+        store: Arc<dyn ThemeSettingsStore>,
+        registry: Arc<ThemeRegistry>,
+    ) -> Self {
+        self.themes = Some((store, registry));
+        self
+    }
+
+    pub async fn theme_view(&self, actor: &Actor) -> Result<ThemeSettingsView, UseCaseError> {
+        if !actor.has_permission("settings.manage") {
+            return Err(UseCaseError::Forbidden);
+        }
+        self.load_theme_view().await
+    }
+
+    pub async fn save_theme(
+        &self,
+        actor: &Actor,
+        cmd: SaveThemeSettingsCmd,
+    ) -> Result<ThemeSettingsView, UseCaseError> {
+        actor.ensure_write_channel()?;
+        if !actor.has_permission("settings.manage") {
+            return Err(UseCaseError::Forbidden);
+        }
+        let (store, registry) = self
+            .themes
+            .as_ref()
+            .ok_or_else(|| UseCaseError::Render("主题设置未装配".into()))?;
+        if !registry.contains(&cmd.slug) {
+            return Err(UseCaseError::Invalid("主题未安装或清单无效".into()));
+        }
+        let current = store.find_theme().await?;
+        let version = current.as_ref().map_or(0, |v| v.version);
+        let expected = checked_version(version, cmd.expected_version)?;
+        if current.as_ref().is_some_and(|v| v.slug == cmd.slug) {
+            return Ok(self.theme_view_of(
+                cmd.slug,
+                SiteSettingsSource::Database,
+                version,
+                registry,
+            ));
+        }
+        match store
+            .save_theme(&cmd.slug, expected, self.clock.now())
+            .await?
+        {
+            SaveOutcome::Saved { new_version } => Ok(self.theme_view_of(
+                cmd.slug,
+                SiteSettingsSource::Database,
+                new_version,
+                registry,
+            )),
+            SaveOutcome::StaleConflict | SaveOutcome::Gone => Err(UseCaseError::VersionConflict),
+        }
+    }
+
+    async fn load_theme_view(&self) -> Result<ThemeSettingsView, UseCaseError> {
+        let (store, registry) = self
+            .themes
+            .as_ref()
+            .ok_or_else(|| UseCaseError::Render("主题设置未装配".into()))?;
+        match store.find_theme().await? {
+            Some(record) => Ok(self.theme_view_of(
+                record.slug,
+                SiteSettingsSource::Database,
+                record.version,
+                registry,
+            )),
+            None => Ok(self.theme_view_of(
+                registry.fallback().to_string(),
+                SiteSettingsSource::Fallback,
+                0,
+                registry,
+            )),
+        }
+    }
+
+    fn theme_view_of(
+        &self,
+        slug: String,
+        source: SiteSettingsSource,
+        version: i64,
+        registry: &ThemeRegistry,
+    ) -> ThemeSettingsView {
+        ThemeSettingsView {
+            effective_slug: if registry.contains(&slug) {
+                slug.clone()
+            } else {
+                registry.fallback().to_string()
+            },
+            slug,
+            source,
+            version,
+            available: registry.options(),
         }
     }
 

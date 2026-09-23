@@ -755,7 +755,7 @@ async fn paper_theme_functions_use_only_public_data() {
     assert_eq!(status, StatusCode::OK, "{index}");
     assert!(index.contains("纸张主题可见文章"));
     assert!(!index.contains("纸张主题不可见草稿"));
-    assert!(index.contains("/assets/paper.css?v="));
+    assert!(index.contains("/assets/paper/paper.css?v="));
     assert!(index.contains("/categories/paper-category"));
     assert!(index.contains("/tags/paper-tag"));
     let (status, detail) = get(&s.router, "/posts/paper-visible").await;

@@ -56,7 +56,7 @@
 
 ## 5. 交付与验收
 
-当前工具为 [`scripts/recovery.py`](../scripts/recovery.py)。它要求操作者先在部署层停止服务、CLI 写入和 worker，再显式传入 `--maintenance-confirmed`；脚本不能凭自身证明所有外部写入已停止。备份用 `pg_dump` custom 格式，连同主题（含 `theme.json`；可用 `--resource name=目录` 附加当前自托管资源）写入权限为 0700 的临时目录；文件逐一记 SHA-256/大小，校验 `pg_restore --list`，最后才原子写出带 `COMPLETE` 的目录。OAuth `secret_ref` 会从数据库读取并记录引用名，实际秘密值不入备份；环境中缺少引用值时备份失败。应由独立的秘密管理备份保证相同版本可重建，不能把演练用占位值当生产秘密。
+当前工具为 [`scripts/recovery.py`](../scripts/recovery.py)。它要求操作者先在部署层停止服务、CLI 写入和 worker，再显式传入 `--maintenance-confirmed`；脚本不能凭自身证明所有外部写入已停止。备份用 `pg_dump` custom 格式，连同默认主题及同级已安装主题（含 `theme.json`；并核对数据库当前选择的主题在备份中；可用 `--resource name=目录` 附加其他自托管资源）写入权限为 0700 的临时目录；文件逐一记 SHA-256/大小，校验 `pg_restore --list`，最后才原子写出带 `COMPLETE` 的目录。OAuth `secret_ref` 会从数据库读取并记录引用名，实际秘密值不入备份；环境中缺少引用值时备份失败。应由独立的秘密管理备份保证相同版本可重建，不能把演练用占位值当生产秘密。
 
 本机容器示例（`DATABASE_URL` 和秘密环境变量由受保护的 shell/部署环境注入，不写在命令行参数中）：
 

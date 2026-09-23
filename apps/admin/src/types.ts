@@ -157,3 +157,11 @@ export interface SiteSettings {
   /** site 行版本；未配置为 0（首次保存以此为 expected_version）。 */
   version: number;
 }
+
+export interface ThemeSettings {
+  slug: string;
+  effective_slug: string;
+  source: SiteSettingsSource;
+  version: number;
+  available: { slug: string; name: string }[];
+}

@@ -22,6 +22,7 @@ from urllib.parse import unquote, urlsplit
 
 FORMAT = 1
 SAFE_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,62}$")
+THEME_SLUG = re.compile(r"^[a-z0-9-]+$")
 RESTORE_NAME = re.compile(r"^blog_restore_[A-Za-z0-9_]{1,48}$")
 SCHEMA_TABLES = (
     "users", "oauth_accounts", "roles", "permissions", "user_roles",
@@ -180,11 +181,23 @@ def backup(args):
         for template in ("base.html", "index.html", "post.html", "page.html"):
             if not (data / "theme" / "templates" / template).is_file():
                 raise RecoveryError(f"theme is missing required template: {template}")
+        # The admin can select any validated sibling theme. Preserve the complete installed set,
+        # otherwise a database restored with a non-default active slug could not render.
+        installed = data / "resources" / "installed-themes"
+        installed.mkdir(parents=True)
+        for candidate in Path(args.theme_dir).parent.iterdir():
+            if not candidate.is_symlink() and candidate.is_dir() and (candidate / "theme.json").is_file():
+                copy_resource(candidate, installed / candidate.name)
+        active_slug = pg.query("SELECT COALESCE((SELECT value->>'slug' FROM settings WHERE key='theme'), '')")
+        if active_slug and not THEME_SLUG.fullmatch(active_slug):
+            raise RecoveryError("active database theme slug is unsafe")
+        if active_slug and not (data / "resources" / "installed-themes" / active_slug / "theme.json").is_file():
+            raise RecoveryError("active database theme is not installed in the backup")
         for spec in args.resource:
             if "=" not in spec:
                 raise RecoveryError("--resource must be name=directory")
             name, source = spec.split("=", 1)
-            if not SAFE_NAME.fullmatch(name) or name in ("theme", "database"):
+            if not SAFE_NAME.fullmatch(name) or name in ("theme", "database", "installed-themes"):
                 raise RecoveryError("invalid or duplicate resource name")
             if (data / "resources" / name).exists():
                 raise RecoveryError("duplicate resource name")
