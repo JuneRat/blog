@@ -278,6 +278,13 @@ export const api = {
       body: JSON.stringify({ expected_version: expectedVersion }),
     }),
 
+  /** Page 没有回收站；同时核对 id 与版本，避免 slug 被重新占用后误删新页面。 */
+  deletePage: (slug: string, expectedId: string, expectedVersion: number): Promise<void> =>
+    request<void>(`/api/admin/v1/pages/${encodeURIComponent(slug)}`, {
+      method: "DELETE",
+      body: JSON.stringify({ expected_id: expectedId, expected_version: expectedVersion }),
+    }),
+
   /** 账号列表：需 `user.manage` 或 `role.manage`，否则 403 forbidden。 */
   listUsers: (limit?: number, offset?: number): Promise<AdminUser[]> => {
     const query = new URLSearchParams();

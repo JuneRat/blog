@@ -13,12 +13,12 @@ use uuid::Uuid;
 use application::error::{ConflictKind, UseCaseError};
 use application::ports::{
     AdminUserRow, CategoryDeleteOutcome, CategoryRepository, CategoryWithUsage,
-    ClearPasswordOutcome, Clock, HealthCheck, PageRepository, PasswordCredential, PostRepository,
-    PublicCategoryRef, PublicCategorySummary, PublicPageDetail, PublicPostDetail,
-    PublicPostSummary, PublicSeriesRef, PublicSeriesSummary, PublicTagSummary, PublicUrlEntry,
-    PublishedCategoryQuery, PublishedPageQuery, PublishedPostQuery, PublishedSeriesQuery,
-    PublishedTagQuery, ReorderOutcome, SaveOutcome, SeriesDeleteOutcome, SeriesMember,
-    SeriesRepository, SeriesWithUsage, TagDeleteOutcome, TagRepository, TagWithUsage,
+    ClearPasswordOutcome, Clock, HealthCheck, PageDeleteOutcome, PageRepository,
+    PasswordCredential, PostRepository, PublicCategoryRef, PublicCategorySummary, PublicPageDetail,
+    PublicPostDetail, PublicPostSummary, PublicSeriesRef, PublicSeriesSummary, PublicTagSummary,
+    PublicUrlEntry, PublishedCategoryQuery, PublishedPageQuery, PublishedPostQuery,
+    PublishedSeriesQuery, PublishedTagQuery, ReorderOutcome, SaveOutcome, SeriesDeleteOutcome,
+    SeriesMember, SeriesRepository, SeriesWithUsage, TagDeleteOutcome, TagRepository, TagWithUsage,
     UserRepository,
 };
 use domain::content::page::{PageSnapshot, PageStatus};
@@ -1084,6 +1084,33 @@ impl PageRepository for PostgresPageRepository {
             Some(_) => Ok(SaveOutcome::StaleConflict),
             None => Ok(SaveOutcome::Gone),
         }
+    }
+
+    async fn delete(
+        &self,
+        id: Uuid,
+        expected_version: i64,
+    ) -> Result<PageDeleteOutcome, UseCaseError> {
+        let deleted: Option<(Uuid,)> =
+            sqlx::query_as("DELETE FROM pages WHERE id = $1 AND version = $2 RETURNING id")
+                .bind(id)
+                .bind(expected_version)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(map_sqlx_error)?;
+        if deleted.is_some() {
+            return Ok(PageDeleteOutcome::Deleted);
+        }
+        let alive: Option<(i64,)> = sqlx::query_as("SELECT version FROM pages WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(map_sqlx_error)?;
+        Ok(if alive.is_some() {
+            PageDeleteOutcome::StaleVersion
+        } else {
+            PageDeleteOutcome::Gone
+        })
     }
 }
 

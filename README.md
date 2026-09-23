@@ -93,6 +93,7 @@ blog user show sun                             # 显示「密码登录：已启�
 | `PATCH /api/admin/v1/pages/{slug}` | 编辑页面（`page.update`；支持 `expected_version`） |
 | `POST /api/admin/v1/pages/{slug}/publish` | 发布页面（`page.publish`；幂等） |
 | `POST /api/admin/v1/pages/{slug}/unpublish` | 撤回页面（`page.unpublish`） |
+| `DELETE /api/admin/v1/pages/{slug}` | 永久删除页面（`page.delete`；请求体需 `expected_id` 与 `expected_version`；成功返回 204） |
 | `POST /api/admin/v1/me/password` | 自助改密（会话 + CSRF；需当前密码重新认证；成功后轮换会话） |
 | `GET /api/admin/v1/settings/site` | 站点设置视图（`settings.manage`；生效值 + 来源 + 版本） |
 | `PUT /api/admin/v1/settings/site` | 保存站点标题/描述（`settings.manage`；支持 `expected_version`） |
@@ -224,7 +225,7 @@ docs/               # 设计文档与 ADR
 
 ## 下一步
 
-M2（身份与后台）已交付：RBAC/委派、OAuth 登录闭环、本地密码登录（Argon2id + 限流 + 受控重置）、管理写 API、后台 SPA（文章/页面/用户与角色屏幕）；其后用户与角色管理界面也已交付（见 [身份与后台 §8](docs/identity-and-admin.md)）。M0 主题桥接原型已完成（结论可行）。M3 按 [roadmap](docs/product-roadmap.md) 推进：标签、分类树、Series、settings.site、settings.theme、RSS/sitemap 与基础 SEO、Post 回收站已交付；维护备份与隔离恢复工具已完成本机往返演练；公开只读主题函数首段与第二主题 `themes/paper` 已交付。具有 `settings.manage` 权限的用户可在后台「站点设置」选择已安装主题，公开页面下一次请求即生效。函数契约见 [主题文档](docs/themes-and-rendering.md)，备份用法见 [备份与恢复](docs/operations-and-recovery.md)。
+M2（身份与后台）已交付：RBAC/委派、OAuth 登录闭环、本地密码登录（Argon2id + 限流 + 受控重置）、管理写 API、后台 SPA（文章/页面/用户与角色屏幕）；其后用户与角色管理界面也已交付（见 [身份与后台 §8](docs/identity-and-admin.md)）。M0 主题桥接原型已完成（结论可行）。M3 按 [roadmap](docs/product-roadmap.md) 推进：标签、分类树、Series、settings.site、settings.theme、RSS/sitemap 与基础 SEO、Post 回收站、Page 物理删除已交付；维护备份与隔离恢复工具已完成本机往返演练；公开只读主题函数首段与第二主题 `themes/paper` 已交付。具有 `settings.manage` 权限的用户可在后台「站点设置」选择已安装主题，公开页面下一次请求即生效。函数契约见 [主题文档](docs/themes-and-rendering.md)，备份用法见 [备份与恢复](docs/operations-and-recovery.md)。
 
 M2 遗留（已知、未做）：
 

@@ -13,7 +13,7 @@ use application::category::{CategoryDto, CreateCategoryCmd, UpdateCategoryCmd};
 use application::content::{CreatePostCmd, EditPostCmd, PostDto, PostVisibility};
 use application::error::UseCaseError;
 use application::identity::Actor;
-use application::page::{CreatePageCmd, EditPageCmd, PageDto};
+use application::page::{CreatePageCmd, DeletePageCmd, EditPageCmd, PageDto};
 use application::ports::SESSION_COOKIE;
 use application::series::{CreateSeriesCmd, ReorderSeriesCmd, SeriesDto, UpdateSeriesCmd};
 use application::settings::{SaveSiteSettingsCmd, SaveThemeSettingsCmd, SiteSettingsView};
@@ -564,15 +564,48 @@ pub struct EditPageBody {
     pub expected_version: Option<i64>,
 }
 
+#[derive(Deserialize)]
+pub struct DeletePageBody {
+    pub expected_id: Uuid,
+    pub expected_version: i64,
+}
+
 pub fn pages_router(state: AdminState) -> Router {
     Router::new()
         .route("/api/admin/v1/pages", get(list_pages).post(create_page))
-        .route("/api/admin/v1/pages/{slug}", get(get_page).patch(edit_page))
+        .route(
+            "/api/admin/v1/pages/{slug}",
+            get(get_page).patch(edit_page).delete(delete_page),
+        )
         .route("/api/admin/v1/pages/{slug}/publish", post(publish_page))
         .route("/api/admin/v1/pages/{slug}/unpublish", post(unpublish_page))
         .layer(axum::extract::DefaultBodyLimit::max(ADMIN_BODY_LIMIT))
         .layer(middleware::from_fn(no_store))
         .with_state(state)
+}
+
+async fn delete_page(
+    AdminAuth { actor }: AdminAuth,
+    request_id: RequestId,
+    State(state): State<AdminState>,
+    Path(slug): Path<String>,
+    Json(body): Json<DeletePageBody>,
+) -> Response {
+    match state
+        .pages
+        .delete(
+            &actor,
+            DeletePageCmd {
+                slug,
+                expected_id: body.expected_id,
+                expected_version: body.expected_version,
+            },
+        )
+        .await
+    {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => admin_error(e, &request_id),
+    }
 }
 
 async fn create_page(

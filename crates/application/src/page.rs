@@ -1,4 +1,4 @@
-//! 页面用例：创建、读取、列表、编辑、发布、撤回。
+//! 页面用例：创建、读取、列表、编辑、发布、撤回、物理删除。
 //!
 //! 权限约定：`page.*` 是**站点级**权限——Page 没有 author_id，
 //! 不套用文章的 own/any 规则（docs/content-lifecycle.md §2）。
@@ -10,7 +10,7 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::error::UseCaseError;
-use crate::ports::{Clock, PageRepository, SaveOutcome};
+use crate::ports::{Clock, PageDeleteOutcome, PageRepository, SaveOutcome};
 use crate::version::checked_version;
 use domain::content::page::{Page, PageError, PagePatch, PageSnapshot, Slug, Visibility};
 
@@ -35,6 +35,12 @@ pub struct EditPageCmd {
     pub visibility: Option<Visibility>,
     /// None 表示使用读取到的当前版本（仍可检测读后并发修改）。
     pub expected_version: Option<i64>,
+}
+
+pub struct DeletePageCmd {
+    pub slug: String,
+    pub expected_id: Uuid,
+    pub expected_version: i64,
 }
 
 /// 面向 CLI/后台的页面视图（含非公开状态与正文源文）。
@@ -183,6 +189,29 @@ impl PageInteractor {
             return self.commit(page, expected).await;
         }
         Ok(PageDto::from_snapshot(&page.snapshot()))
+    }
+
+    /// Page 无回收站：物理删除后公开入口立即消失，slug 可重新使用。
+    pub async fn delete(
+        &self,
+        actor: &crate::identity::Actor,
+        cmd: DeletePageCmd,
+    ) -> Result<(), UseCaseError> {
+        actor.ensure_write_channel()?;
+        let (page, loaded_version) = self.load_versioned(actor, &cmd.slug, "page.delete").await?;
+        if page.snapshot().id != cmd.expected_id {
+            return Err(UseCaseError::VersionConflict);
+        }
+        checked_version(loaded_version, Some(cmd.expected_version))?;
+        match self
+            .pages
+            .delete(cmd.expected_id, cmd.expected_version)
+            .await?
+        {
+            PageDeleteOutcome::Deleted => Ok(()),
+            PageDeleteOutcome::StaleVersion => Err(UseCaseError::VersionConflict),
+            PageDeleteOutcome::Gone => Err(UseCaseError::NotFound(format!("页面 {}", cmd.slug))),
+        }
     }
 
     /// 提交聚合变更：三态结果映射为用例错误；成功时采用数据库返回的新版本。

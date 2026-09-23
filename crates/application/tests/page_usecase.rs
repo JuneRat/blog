@@ -6,8 +6,8 @@ use std::sync::{Arc, Mutex};
 
 use application::error::{ConflictKind, UseCaseError};
 use application::identity::{Actor, ActorChannel};
-use application::page::{CreatePageCmd, EditPageCmd, PageInteractor};
-use application::ports::{Clock, PageRepository, SaveOutcome};
+use application::page::{CreatePageCmd, DeletePageCmd, EditPageCmd, PageInteractor};
+use application::ports::{Clock, PageDeleteOutcome, PageRepository, SaveOutcome};
 use domain::content::page::{PageSnapshot, PageStatus, Visibility};
 use domain::identity::{PermissionSet, UserId};
 use time::OffsetDateTime;
@@ -78,6 +78,22 @@ impl PageRepository for FakePageRepo {
         Ok(SaveOutcome::Saved {
             new_version: next.version,
         })
+    }
+
+    async fn delete(
+        &self,
+        id: Uuid,
+        expected_version: i64,
+    ) -> Result<PageDeleteOutcome, UseCaseError> {
+        let mut pages = self.pages.lock().unwrap();
+        let Some(existing) = pages.values().find(|p| p.id == id).cloned() else {
+            return Ok(PageDeleteOutcome::Gone);
+        };
+        if existing.version != expected_version {
+            return Ok(PageDeleteOutcome::StaleVersion);
+        }
+        pages.remove(&existing.slug);
+        Ok(PageDeleteOutcome::Deleted)
     }
 }
 
@@ -194,6 +210,70 @@ async fn read_and_list_require_page_read() {
         pages.list(&outsider).await.unwrap_err(),
         UseCaseError::Forbidden
     ));
+}
+
+#[tokio::test]
+async fn physical_delete_requires_permission_and_exact_identity_and_version() {
+    let pages = interactor();
+    let editor = actor_with(EDITOR);
+    let deleter = actor_with(&["page.delete"]);
+    let without_delete = actor_with(&["page.read", "page.update"]);
+    let created = pages
+        .create(&editor, cmd(Some("about"), "关于"))
+        .await
+        .unwrap();
+    let command = || DeletePageCmd {
+        slug: "about".into(),
+        expected_id: created.id,
+        expected_version: created.version,
+    };
+    assert!(matches!(
+        pages.delete(&without_delete, command()).await,
+        Err(UseCaseError::Forbidden)
+    ));
+    assert!(matches!(
+        pages
+            .delete(
+                &deleter,
+                DeletePageCmd {
+                    expected_id: Uuid::now_v7(),
+                    ..command()
+                }
+            )
+            .await,
+        Err(UseCaseError::VersionConflict)
+    ));
+    assert!(matches!(
+        pages
+            .delete(
+                &deleter,
+                DeletePageCmd {
+                    expected_version: 99,
+                    ..command()
+                }
+            )
+            .await,
+        Err(UseCaseError::VersionConflict)
+    ));
+    assert!(pages.find(&editor, "about").await.is_ok());
+    pages.delete(&deleter, command()).await.unwrap();
+    assert!(matches!(
+        pages.delete(&deleter, command()).await,
+        Err(UseCaseError::NotFound(_))
+    ));
+    let replacement = pages
+        .create(&editor, cmd(Some("about"), "新页面"))
+        .await
+        .unwrap();
+    assert_ne!(replacement.id, created.id);
+    assert!(matches!(
+        pages.delete(&deleter, command()).await,
+        Err(UseCaseError::VersionConflict)
+    ));
+    assert_eq!(
+        pages.find(&editor, "about").await.unwrap().id,
+        replacement.id
+    );
 }
 
 #[tokio::test]

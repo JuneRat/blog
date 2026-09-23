@@ -85,6 +85,7 @@ export function PageEditScreen({ slug }: { slug: string | null }) {
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [baseline, setBaseline] = useState<FormState>(EMPTY_FORM);
   const [version, setVersion] = useState<number | null>(null);
+  const [pageId, setPageId] = useState<string | null>(null);
   const [pageStatus, setPageStatus] = useState<string>("draft");
   /** 当前表单内容所属的 slug（`applyServer` 写入）。用于识别「表单与地址不一致」。 */
   const [formSlug, setFormSlug] = useState<string | null>(null);
@@ -93,6 +94,7 @@ export function PageEditScreen({ slug }: { slug: string | null }) {
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [conflict, setConflict] = useState(false);
+  const [deleteConflict, setDeleteConflict] = useState(false);
   const formRef = useRef<FormState>(EMPTY_FORM);
   const baselineRef = useRef<FormState>(EMPTY_FORM);
   const loadedSlugRef = useRef<string | null>(null);
@@ -113,8 +115,10 @@ export function PageEditScreen({ slug }: { slug: string | null }) {
     setBaseline(server);
     setFormSlug(server.slug);
     setVersion(page.version);
+    setPageId(page.id);
     setPageStatus(page.status);
     setConflict(false);
+    setDeleteConflict(false);
     return !formEquals(merged, server);
   }, []);
 
@@ -152,11 +156,13 @@ export function PageEditScreen({ slug }: { slug: string | null }) {
       setBaseline(EMPTY_FORM);
       setFormSlug(null);
       setVersion(null);
+      setPageId(null);
       setPageStatus("draft");
       setBusy(false);
       setNotice(null);
       setError(null);
       setConflict(false);
+      setDeleteConflict(false);
       setLoading(false);
       return;
     }
@@ -338,10 +344,33 @@ export function PageEditScreen({ slug }: { slug: string | null }) {
     }
   }
 
+  async function deletePage(): Promise<void> {
+    if (slug === null || formMismatch || pageId === null || version === null) return;
+    if (!window.confirm(`永久删除页面「${form.title || slug}」（/${slug}）？此操作没有回收站，无法恢复；未保存的修改也会丢失。`)) return;
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    setDeleteConflict(false);
+    try {
+      await api.deletePage(slug, pageId, version);
+      navigate(paths.pages, { replace: true });
+    } catch (cause) {
+      if (isVersionConflict(cause)) {
+        setError("页面已被修改。请重新加载并核对最新内容后再决定是否删除。");
+        setDeleteConflict(true);
+      } else {
+        setError(messageOf(cause));
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
   // 发布与撤回是两个独立权限：合成一个按钮时必须按当前状态检查对应动作，
   // 否则只有 page.publish 的用户会看到一个点了就 403 的「撤回」按钮。
   const published = pageStatus === "published";
   const canToggle = me?.permissions.includes(published ? "page.unpublish" : "page.publish") ?? false;
+  const canDelete = me?.permissions.includes("page.delete") ?? false;
 
   if (loading) {
     return (
@@ -402,6 +431,11 @@ export function PageEditScreen({ slug }: { slug: string | null }) {
 
       {notice !== null && <p className="notice">{notice}</p>}
       {error !== null && <p className="error">{error}</p>}
+      {deleteConflict && (
+        <button type="button" className="button" disabled={busy} onClick={() => void reloadFromServer()}>
+          重新加载页面
+        </button>
+      )}
       {unloaded && (
         <div className="warning">
           <strong>页面未能加载。</strong>{" "}
@@ -477,6 +511,11 @@ export function PageEditScreen({ slug }: { slug: string | null }) {
               onClick={() => void setPublished(pageStatus !== "published")}
             >
               {pageStatus === "published" ? "撤回为草稿" : "发布"}
+            </button>
+          )}
+          {canDelete && slug !== null && !formMismatch && pageId !== null && (
+            <button type="button" className="button danger" disabled={busy} onClick={() => void deletePage()}>
+              永久删除页面
             </button>
           )}
         </div>

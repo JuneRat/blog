@@ -37,7 +37,7 @@ status 为 draft/published/archived；归档暂按终态处理，不等同于物
 
 Post 支持 deleted_at 回收站：移入后不公开，保留 slug、系列位置与标签关系。恢复为 draft，原 archived 仍为 archived；不会自动上线。默认不自动清空回收站，永久删除需 post.purge 权限，删除文章及 post_tags，释放 slug 和系列位置。
 
-Page 按选定 schema 没有 deleted_at，page.delete 是物理删除，没有回收站恢复。后台需明确展示这一行为。需要 Page 回收站时再增加字段和恢复用例，不假称当前已支持。
+Page 按选定 schema 没有 deleted_at，`page.delete` 是物理删除，没有回收站恢复。后台永久删除按钮会二次确认并明确提示不可恢复。请求携带页面 ID 和 `expected_version`；旧版本或同 slug 的新页面不能被旧请求删除。成功后公开详情和 sitemap 下一次请求即消失，slug 释放并可重用。需要 Page 回收站时再增加字段和恢复用例。
 
 本版没有历史修订，因此没有修订固定、100 条/90 天保留、历史关系冻结或历史恢复。备份用于部署恢复，不等于逐篇撤销编辑。
 

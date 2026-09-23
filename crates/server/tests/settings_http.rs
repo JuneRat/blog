@@ -32,7 +32,7 @@ use infrastructure::{
     PostgresTagRepository, PostgresUserRepository, SanitizingMarkdownRenderer, SystemClock,
 };
 use interfaces::http::{PublicSiteState, mount_theme_assets, public_router};
-use interfaces::http_admin::settings_router;
+use interfaces::http_admin::{pages_router, settings_router};
 use interfaces::http_auth::{AdminState, AuthState, admin_router, auth_router};
 use interfaces::http_support::request_context;
 use sqlx::PgPool;
@@ -296,6 +296,7 @@ async fn build(pool: PgPool) -> Stack {
     )
     .merge(auth_router(auth_state))
     .merge(admin_router(admin_state.clone()))
+    .merge(pages_router(admin_state.clone()))
     .merge(settings_router(admin_state))
     .layer(middleware::from_fn(request_context));
     Stack { router, idp, pool }
@@ -486,6 +487,47 @@ async fn public_home(router: &axum::Router) -> String {
     String::from_utf8_lossy(&response.into_body().collect().await.unwrap().to_bytes()).to_string()
 }
 
+async fn page_write(
+    router: &axum::Router,
+    method: &str,
+    uri: &str,
+    cookie: &str,
+    csrf: &str,
+    body: serde_json::Value,
+) -> (StatusCode, serde_json::Value) {
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(method)
+                .uri(uri)
+                .header("cookie", format!("blog_session={cookie}"))
+                .header("x-csrf-token", csrf)
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null),
+    )
+}
+
+async fn public_text(router: &axum::Router, uri: &str) -> (StatusCode, String) {
+    let response = router
+        .clone()
+        .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    (status, String::from_utf8_lossy(&bytes).to_string())
+}
+
 // ---------------------------------------------------------------------------
 // 认证与授权
 // ---------------------------------------------------------------------------
@@ -619,6 +661,142 @@ async fn saved_settings_take_effect_on_public_pages_immediately() {
     let revived = revived_public_router(&stack.pool).await;
     let html = public_home(&revived).await;
     assert!(html.contains("数据库站点标题"));
+}
+
+#[tokio::test]
+async fn page_physical_delete_removes_public_entries_and_releases_slug() {
+    let _g = SERIAL.lock().await;
+    let stack = fresh_stack().await;
+    let (editor_cookie, editor_csrf) = login_as(&stack, "editor").await;
+    let (author_cookie, author_csrf) = login_as(&stack, "author").await;
+    let path = "/api/admin/v1/pages/about";
+    let (status, created) = page_write(
+        &stack.router,
+        "POST",
+        "/api/admin/v1/pages",
+        &editor_cookie,
+        &editor_csrf,
+        serde_json::json!({"slug":"about","title":"关于","content":"# 关于","visibility":"public"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let id = created["id"].as_str().unwrap();
+    let (status, published) = page_write(
+        &stack.router,
+        "POST",
+        "/api/admin/v1/pages/about/publish",
+        &editor_cookie,
+        &editor_csrf,
+        serde_json::json!({"expected_version":1}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{published}");
+    assert_eq!(published["version"], 2);
+    assert_eq!(public_text(&stack.router, "/about").await.0, StatusCode::OK);
+    assert!(
+        public_text(&stack.router, "/sitemap.xml")
+            .await
+            .1
+            .contains("https://blog.test/about")
+    );
+
+    let body = serde_json::json!({"expected_id":id,"expected_version":2});
+    let (status, _) = page_write(
+        &stack.router,
+        "DELETE",
+        path,
+        &author_cookie,
+        &author_csrf,
+        body.clone(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _) = page_write(
+        &stack.router,
+        "DELETE",
+        path,
+        &editor_cookie,
+        "bad-csrf",
+        body.clone(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    for stale in [
+        serde_json::json!({"expected_id":id,"expected_version":1}),
+        serde_json::json!({"expected_id":uuid::Uuid::now_v7(),"expected_version":2}),
+    ] {
+        let (status, error) = page_write(
+            &stack.router,
+            "DELETE",
+            path,
+            &editor_cookie,
+            &editor_csrf,
+            stale,
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{error}");
+        assert_eq!(error["code"], "version_conflict");
+    }
+    assert_eq!(public_text(&stack.router, "/about").await.0, StatusCode::OK);
+
+    let (status, _) = page_write(
+        &stack.router,
+        "DELETE",
+        path,
+        &editor_cookie,
+        &editor_csrf,
+        body.clone(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(
+        public_text(&stack.router, "/about").await.0,
+        StatusCode::NOT_FOUND
+    );
+    assert!(
+        !public_text(&stack.router, "/sitemap.xml")
+            .await
+            .1
+            .contains("https://blog.test/about")
+    );
+    let (status, _, _) = get(&stack.router, path, Some(&editor_cookie)).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = page_write(
+        &stack.router,
+        "DELETE",
+        path,
+        &editor_cookie,
+        &editor_csrf,
+        body.clone(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let (status, replacement) = page_write(
+        &stack.router,
+        "POST",
+        "/api/admin/v1/pages",
+        &editor_cookie,
+        &editor_csrf,
+        serde_json::json!({"slug":"about","title":"新页面","content":"new"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{replacement}");
+    assert_ne!(replacement["id"], id);
+    let (status, stale) = page_write(
+        &stack.router,
+        "DELETE",
+        path,
+        &editor_cookie,
+        &editor_csrf,
+        serde_json::json!({"expected_id":id,"expected_version":1}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{stale}");
+    assert_eq!(
+        get(&stack.router, path, Some(&editor_cookie)).await.0,
+        StatusCode::OK
+    );
 }
 
 #[tokio::test]

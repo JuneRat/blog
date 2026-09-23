@@ -19,6 +19,7 @@ vi.mock("../auth", () => ({
         "page.update",
         "page.publish",
         "page.unpublish",
+        "page.delete",
       ],
       csrf_token: "csrf",
       channel: "session",
@@ -42,6 +43,7 @@ vi.mock("../api", async (importOriginal) => {
       updatePage: vi.fn(),
       publishPage: vi.fn(),
       unpublishPage: vi.fn(),
+      deletePage: vi.fn(),
     },
   };
 });
@@ -54,6 +56,7 @@ const getPage = vi.mocked(api.getPage);
 const createPage = vi.mocked(api.createPage);
 const updatePage = vi.mocked(api.updatePage);
 const publishPage = vi.mocked(api.publishPage);
+const deletePage = vi.mocked(api.deletePage);
 
 function pageDetail(overrides: Partial<PageDetail> = {}): PageDetail {
   return {
@@ -94,6 +97,32 @@ afterEach(() => {
 });
 
 describe("PageEditScreen 保存流程", () => {
+  it("物理删除必须确认，携带 id 与版本并返回列表", async () => {
+    await openExistingPage();
+    const confirm = vi.spyOn(window, "confirm").mockReturnValueOnce(false).mockReturnValueOnce(true);
+    fireEvent.click(screen.getByRole("button", { name: "永久删除页面" }));
+    expect(deletePage).not.toHaveBeenCalled();
+    deletePage.mockResolvedValue();
+    fireEvent.click(screen.getByRole("button", { name: "永久删除页面" }));
+    await waitFor(() => expect(deletePage).toHaveBeenCalledWith("about", "p1", 1));
+    await waitFor(() => expect(navigate).toHaveBeenCalledWith("/admin/pages", { replace: true }));
+    expect(confirm.mock.calls[0]?.[0]).toContain("无法恢复");
+    confirm.mockRestore();
+  });
+
+  it("删除遇到旧版本时保留页面并要求重新核对", async () => {
+    await openExistingPage();
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    deletePage.mockRejectedValue(new ApiError(409, "版本冲突", "version_conflict"));
+    fireEvent.click(screen.getByRole("button", { name: "永久删除页面" }));
+    await screen.findByText(/请重新加载并核对最新内容/);
+    expect(navigate).not.toHaveBeenCalled();
+    getPage.mockResolvedValueOnce(pageDetail({ version: 2 }));
+    fireEvent.click(screen.getByRole("button", { name: "重新加载页面" }));
+    await screen.findByText("v2");
+    expect(screen.queryByRole("button", { name: "重新加载页面" })).toBeNull();
+    confirm.mockRestore();
+  });
   it("新建页面：提交后跳转到编辑地址", async () => {
     createPage.mockResolvedValue(pageDetail({ slug: "contact", title: "联系" }));
     render(<PageEditScreen slug={null} />);

@@ -18,7 +18,8 @@
 - M3 已交付第三段：Series 目录管理与并发重排（创建/更新/删除，series.manage，slug 创建后不可改，被文章引用时删除受 series_in_use 保护）；文章设置系列与序号（三态，同事务保存，位置唯一冲突报 conflict）；整体重排在系列行锁 + series.version 校验下进行，成员按 id 序加锁、位置唯一约束 DEFERRED 到提交检查，递增涉及 posts.version 与 series.version，跨系列移动按 ID 序锁两个系列；重排逐篇核验文章授权（Author 不能借重排改他人文章）；公开系列页 /series/（slug） 按阅读顺序分页（草稿占位不外泄，页内连续编号）。
 - M3 已交付第四段：settings 第一段——`site` 分组（站点标题/描述）。管理 API `GET/PUT /api/admin/v1/settings/site`（读写都要求 `settings.manage`，内置 admin/owner 持有）；生效优先级数据库 site 行 > 环境变量 `BLOG_SITE_TITLE`/`BLOG_SITE_DESCRIPTION` > 内置默认值，公开页面每次渲染解析（保存即生效，重启后保留），行内缺字段按字段回退、存储读取失败公开页整体回退；`expected_version` 条件写入（未配置行为 0，插入前提），内容一致的保存幂等不递增版本，并发覆盖一方 409 `version_conflict`；标题 trim 非空 ≤200 字符、描述 ≤500 字符（空描述合法）；oauth 等受保护分组不在 settings API 面（未知分组 404），写路径只触碰 key='site'。后台 SPA `/admin/settings`（来源提示 + 统一 409 冲突流程）。
 - M3 已交付第五段：RSS/sitemap 与基础 SEO。公开端点 `GET /feed.xml`（RSS 2.0，最新 20 篇公开已发布文章；`guid` 取 canonical URL 且 `isPermaLink="true"`，带 `pubDate`、绝对链接与 `atom:link` 自指；`application/rss+xml`）、`GET /sitemap.xml`（首页 + 公开文章 + 公开 Page，各自带 `lastmod`；标签/分类/系列页**只在至少有一篇公开文章时**收录，分页变体不单独收录；50,000 条是**整个文件**的预算，按「首页 → 文章 → Page → 目录」依次占用并在渲染层兜底截断）、`GET /robots.txt`（放行公开内容，`Disallow` 后台/接口/认证前缀，声明 sitemap）；三者均 `no-cache`，内容变化后下一次请求立即反映。SEO：`seo` 上下文由应用层统一计算标题（详情页「页面标题 - 站点标题」）、单行且截断到 160 字符的描述、绝对 canonical（列表页第 2 页起自指 `?page=N`）与 `og:*`，主题模板不再各自拼 `<title>`；站点公开地址一律取可信配置 `BLOG_PUBLIC_BASE_URL`（用 `url` crate 解析：绝对 http/https、无凭据、无查询片段、无路径前缀，不用请求 Host 头；子路径部署明确拒绝并在文档说明），Unicode slug 按百分号编码进入 canonical/feed/sitemap。可见性与公开页面同一条谓词：草稿、私密、已撤回、软删除内容不出现在任何机器可读入口。机器可读输出不经过主题模板，XML 转义与控制字符处理在应用层纯函数内单独测试。
-- M3 已交付第六段：Post 回收站。普通列表隐藏、回收站按作者分页；移入/恢复使用 post.delete own/any 和版本 CAS，恢复为 draft（原 archived 保持 archived）；永久删除仅限回收站并要求独立 post.purge 权限，释放 slug/标签关联/系列位置，系列版本与重排共用锁协议。公开详情、目录、RSS、sitemap 使用统一可见性谓词。Page 物理删除仍单独交付。
+- M3 已交付第六段：Post 回收站。普通列表隐藏、回收站按作者分页；移入/恢复使用 post.delete own/any 和版本 CAS，恢复为 draft（原 archived 保持 archived）；永久删除仅限回收站并要求独立 post.purge 权限，释放 slug/标签关联/系列位置，系列版本与重排共用锁协议。公开详情、目录、RSS、sitemap 使用统一可见性谓词。
+- M3 Page 物理删除已交付：`page.delete` 站点级授权；后台明确提示无回收站且不可恢复；删除请求同时校验页面 ID 与版本，避免旧请求命中重新占用同一 slug 的新页面。删除后公开详情和 sitemap 即时消失，slug 可重新使用。
 - M3 备份恢复：维护窗口 `pg_dump` + 主题/资源文件清单（SHA-256、完成标记、秘密引用核验），只向新建 `blog_restore_*` 库隔离恢复；本机以公开/私密/草稿/回收站、Page、分类、系列、标签及 Owner 完成往返演练。生产停止写入编排和 RPO/RTO 仍需部署验收。
 - M3 主题函数与第二主题：`get_posts`、`get_post`、`get_categories`、`get_tags`、`asset_url`、`post_url` 已接入公开渲染；请求级缓存、查询/调用预算、有界阻塞渲染与 `themes/paper` 已交付。cursor、导航及公开作者函数仍为后续扩展。
 - M3 后台主题切换：`settings.theme` 独立分组，`settings.manage` 读写与版本 CAS；仅列出启动时验证通过的同级主题。保存后下一次公开 HTML 请求使用新主题，静态资源按主题 slug 隔离；数据库选择跨重启保留。
@@ -36,7 +37,7 @@
 | 编辑发布 | 保存已发布内容直接更新线上；不提供线上旧版与编辑新版隔离 | 单份正文模型的明确行为 |
 | Slug | 创建时唯一；首次发布后锁定，无旧链接跳转；硬删除释放 | 工程约定，替代原路径登记建议 |
 | 页面地址 | 根路径 /{slug}，保留系统路由 | 已实现：领域在创建/改名/发布校验保留路径，公开读取再拒绝一次，固定路由优先 |
-| 删除 | Post 回收站；Page 无回收站，物理删除 | Post 已交付；Page 物理删除用例尚未实现 |
+| 删除 | Post 回收站；Page 无回收站，物理删除 | Post 与 Page 删除闭环已交付 |
 | Owner/账号开通 | CLI 显式创建用户并绑定稳定外部身份 | 工程建议；禁止首个任意登录自动提权 |
 | 会话/OAuth 临时状态 | 单实例有界内存存储，重启失效 | 不建辅助表下的首版实现建议 |
 | 管理员邀请 | 保留后续协作需求，暂不属于核心闭环 | 需补持久化或共享短期存储、一次性消费与权限复核 |

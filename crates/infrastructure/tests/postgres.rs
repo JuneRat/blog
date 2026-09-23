@@ -8,10 +8,10 @@ use std::sync::Arc;
 
 use application::error::{ConflictKind, UseCaseError};
 use application::ports::{
-    CategoryRepository, ClearPasswordOutcome, ContentRenderer, OAuthAccountStore, PageRepository,
-    PostRepository, PublishedCategoryQuery, PublishedPageQuery, PublishedPostQuery,
-    PublishedSeriesQuery, PublishedTagQuery, RbacStore, SaveOutcome, SeriesRepository,
-    SettingsStore, TagRepository, UserRepository,
+    CategoryRepository, ClearPasswordOutcome, ContentRenderer, OAuthAccountStore,
+    PageDeleteOutcome, PageRepository, PostRepository, PublishedCategoryQuery, PublishedPageQuery,
+    PublishedPostQuery, PublishedSeriesQuery, PublishedTagQuery, RbacStore, SaveOutcome,
+    SeriesRepository, SettingsStore, TagRepository, UserRepository,
 };
 use domain::content::page::Page;
 use domain::content::post::{Post, PostSnapshot, PostStatus, Slug, Visibility};
@@ -966,6 +966,40 @@ async fn page_repository_crud_version_and_public_query() {
         public.find_public_by_slug("about").await.unwrap().is_none(),
         "private 页面不可公开读取"
     );
+    assert_eq!(
+        pages.delete(snapshot.id, 2).await.unwrap(),
+        PageDeleteOutcome::StaleVersion
+    );
+    assert_eq!(
+        pages.delete(snapshot.id, 3).await.unwrap(),
+        PageDeleteOutcome::Deleted
+    );
+    assert_eq!(
+        pages.delete(snapshot.id, 3).await.unwrap(),
+        PageDeleteOutcome::Gone
+    );
+    assert!(pages.find_by_slug("about").await.unwrap().is_none());
+    pages.insert(&duplicate.snapshot()).await.unwrap();
+    assert_ne!(
+        pages.find_by_slug("about").await.unwrap().unwrap().id,
+        snapshot.id
+    );
+
+    // 同一版本的并发删除只能成功一次；另一次必须看到记录已不存在。
+    let race = Page::create_draft(
+        Slug::new("race-page").unwrap(),
+        "并发删除".into(),
+        "正文".into(),
+        Visibility::Public,
+        now,
+    )
+    .unwrap()
+    .snapshot();
+    pages.insert(&race).await.unwrap();
+    let (left, right) = tokio::join!(pages.delete(race.id, 1), pages.delete(race.id, 1));
+    let outcomes = [left.unwrap(), right.unwrap()];
+    assert!(outcomes.contains(&PageDeleteOutcome::Deleted));
+    assert!(outcomes.contains(&PageDeleteOutcome::Gone));
 }
 
 /// 密码凭据的持久化语义：写入递增版本、软删除用户在登录查询层被排除、清除后不再可登录。

@@ -402,6 +402,13 @@ pub trait SeriesRepository: Send + Sync {
 // Page（站点级内容，无作者归属）
 // ---------------------------------------------------------------------------
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PageDeleteOutcome {
+    Deleted,
+    StaleVersion,
+    Gone,
+}
+
 /// Page 写侧端口。Page 无软删除：不存在「已消失但仍是版本冲突」之外的第三态，
 /// 但沿用同一 `SaveOutcome` 以便与 Post 的并发语义保持一致。
 #[async_trait]
@@ -419,6 +426,13 @@ pub trait PageRepository: Send + Sync {
         expected_version: i64,
         now: OffsetDateTime,
     ) -> Result<SaveOutcome, UseCaseError>;
+
+    /// 只删除指定 id 与版本；slug 可重用，不能仅凭 slug 删除新占位者。
+    async fn delete(
+        &self,
+        id: Uuid,
+        expected_version: i64,
+    ) -> Result<PageDeleteOutcome, UseCaseError>;
 }
 
 // ---------------------------------------------------------------------------
