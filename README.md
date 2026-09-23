@@ -224,11 +224,11 @@ docs/               # 设计文档与 ADR
 
 ## 下一步
 
-M2（身份与后台）已交付：RBAC/委派、OAuth 登录闭环、本地密码登录（Argon2id + 限流 + 受控重置）、管理写 API、后台 SPA（文章/页面/用户与角色屏幕）；其后用户与角色管理界面也已交付（见 [身份与后台 §8](docs/identity-and-admin.md)）。M0 主题桥接原型已完成（结论可行）。M3 按 [roadmap](docs/product-roadmap.md) 推进：标签闭环、分类树（防环树锁 + 引用保护）、Series（并发重排锁协议 + 公开系列页）、**站点设置第一段（site 分组：标题/描述）**与 **RSS/sitemap 与基础 SEO** 已交付，接下来是 Post 回收站、备份恢复、settings 后续分组与正式主题函数。
+M2（身份与后台）已交付：RBAC/委派、OAuth 登录闭环、本地密码登录（Argon2id + 限流 + 受控重置）、管理写 API、后台 SPA（文章/页面/用户与角色屏幕）；其后用户与角色管理界面也已交付（见 [身份与后台 §8](docs/identity-and-admin.md)）。M0 主题桥接原型已完成（结论可行）。M3 按 [roadmap](docs/product-roadmap.md) 推进：标签、分类树、Series、settings.site、RSS/sitemap 与基础 SEO、Post 回收站已交付；维护备份与隔离恢复工具已完成本机往返演练（用法见 [备份与恢复](docs/operations-and-recovery.md)）。下一段是正式主题数据函数及第二主题。
 
 M2 遗留（已知、未做）：
 
 - 禁用 provider 时校验是否使最后 Owner 失去登录方式（需跨 settings 与 `oauth_accounts` 的检查）。
-- `post.purge` / `post.transfer_author` 与所有权转移的重新认证流程。
+- `post.transfer_author` 与所有权转移的重新认证流程；`post.purge` 已交付独立授权，重新认证可后续补强。
 - 角色编辑 API（当前只有分配/移除；内置 slug 保护与委派上限已就位）。
 - 本地密码自助找回（邮箱一次性令牌 + 投递）与多实例共享的会话/限流存储；当前重置只走部署权限 CLI，限流计数为单实例内存。

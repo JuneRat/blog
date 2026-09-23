@@ -1,6 +1,6 @@
 # 备份与恢复
 
-状态：工程建议，待实施及恢复演练验证。先覆盖 [13 表核心](database-design.md) 与实际部署的主题/静态资源；下文媒体、队列等流程仅在对应功能交付后适用。采用单站点、PostgreSQL、维护窗口恢复；备份频率、保留期、允许的数据丢失时间（RPO）和恢复耗时（RTO）在 M3 部署规格中确定，不承诺在线一致备份、零数据丢失或跨库无停机切换。
+状态：13 表核心、当前主题目录与环境变量秘密引用的维护备份工具及本机隔离恢复演练已交付；生产维护编排、备份频率/保留期、RPO/RTO 仍待部署规格确定。下文媒体、队列等流程仅在对应功能交付后适用。采用单站点、PostgreSQL、维护窗口恢复，不承诺在线一致备份、零数据丢失或跨库无停机切换。
 
 本文统一定义备份与恢复的操作边界，不重复内容保留、账号恢复和事件协议。相关规则见 [内容生命周期](content-lifecycle.md)、[身份与后台](identity-and-admin.md)、[扩展与数据](extensions-and-data.md)；方案取舍见 [ADR-0005](adr/0005-consistent-backup-and-recovery.md)。
 
@@ -55,6 +55,23 @@
 租约重置只能在旧 worker 已停止且外部在途请求已核对后进行。仅等待本地租约过期不能证明远端请求停止；结果不明的外部任务继续隔离。恢复边界和重放记录作为新的运维审计保存。
 
 ## 5. 交付与验收
+
+当前工具为 [`scripts/recovery.py`](../scripts/recovery.py)。它要求操作者先在部署层停止服务、CLI 写入和 worker，再显式传入 `--maintenance-confirmed`；脚本不能凭自身证明所有外部写入已停止。备份用 `pg_dump` custom 格式，连同主题（可用 `--resource name=目录` 附加当前自托管资源）写入权限为 0700 的临时目录；文件逐一记 SHA-256/大小，校验 `pg_restore --list`，最后才原子写出带 `COMPLETE` 的目录。OAuth `secret_ref` 会从数据库读取并记录引用名，实际秘密值不入备份；环境中缺少引用值时备份失败。应由独立的秘密管理备份保证相同版本可重建，不能把演练用占位值当生产秘密。
+
+本机容器示例（`DATABASE_URL` 和秘密环境变量由受保护的 shell/部署环境注入，不写在命令行参数中）：
+
+```sh
+python3 -B scripts/recovery.py backup --output /secure/backups/blog-2026-09-23 \
+  --theme-dir themes/default --docker-container blog-postgres --maintenance-confirmed
+python3 -B scripts/recovery.py verify /secure/backups/blog-2026-09-23
+python3 -B scripts/recovery.py restore /secure/backups/blog-2026-09-23 \
+  --target-db blog_restore_drill_20260923 --output /secure/isolated/blog-2026-09-23 \
+  --docker-container blog-postgres --isolation-confirmed
+```
+
+不使用容器时需在执行环境提供匹配版本的 `pg_dump`、`pg_restore`、`psql`、`createdb` 与 `DATABASE_URL`。恢复只允许新建 `blog_restore_*` 数据库，拒绝已有目标和原库，输出目录保留 `ISOLATED` 标记，不启动服务或 worker。它复核 13 表、迁移版本、可登录 Owner 和备份时记录的内容计数；缺秘密、损坏文件或校验失败均不得转为可用部署。若在创建隔离库后失败，保留 `FAILED` 标记供检查，操作者确认后手工清理隔离库。
+
+2026-09-23 本机演练：从隔离源库备份，再恢复到新的 `blog_restore_roundtrip_20260923`；复核 6 用户、4 Post（公开/私密/草稿/回收站各 1）、1 Page、1 分类、1 系列、1 标签和 2 条 post_tags、1 位可登录 Owner，逐条核对正文、回收站状态/系列位置及标签关系。缺 `IDP_SECRET` 的恢复在建库前拒绝。该演练验证工具与当前 schema；生产 RPO/RTO 和外部秘密备份仍需另验。
 
 M3 交付核心数据库/资源清单、维护备份、隔离恢复和身份核对；M4 加入媒体、搜索/Webhook 时补齐对应恢复流程；M5 对拟上线的全部能力执行完整演练。按实际交付范围验收：
 
