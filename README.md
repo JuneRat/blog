@@ -224,7 +224,7 @@ docs/               # 设计文档与 ADR
 
 ## 下一步
 
-M2（身份与后台）已交付：RBAC/委派、OAuth 登录闭环、本地密码登录（Argon2id + 限流 + 受控重置）、管理写 API、后台 SPA（文章/页面/用户与角色屏幕）；其后用户与角色管理界面也已交付（见 [身份与后台 §8](docs/identity-and-admin.md)）。M0 主题桥接原型已完成（结论可行）。M3 按 [roadmap](docs/product-roadmap.md) 推进：标签、分类树、Series、settings.site、RSS/sitemap 与基础 SEO、Post 回收站已交付；维护备份与隔离恢复工具已完成本机往返演练（用法见 [备份与恢复](docs/operations-and-recovery.md)）。下一段是正式主题数据函数及第二主题。
+M2（身份与后台）已交付：RBAC/委派、OAuth 登录闭环、本地密码登录（Argon2id + 限流 + 受控重置）、管理写 API、后台 SPA（文章/页面/用户与角色屏幕）；其后用户与角色管理界面也已交付（见 [身份与后台 §8](docs/identity-and-admin.md)）。M0 主题桥接原型已完成（结论可行）。M3 按 [roadmap](docs/product-roadmap.md) 推进：标签、分类树、Series、settings.site、RSS/sitemap 与基础 SEO、Post 回收站已交付；维护备份与隔离恢复工具已完成本机往返演练；公开只读主题函数首段与第二主题 `themes/paper` 已交付（启动时设 `BLOG_THEME_DIR=themes/paper`）。函数契约见 [主题文档](docs/themes-and-rendering.md)，备份用法见 [备份与恢复](docs/operations-and-recovery.md)。
 
 M2 遗留（已知、未做）：
 

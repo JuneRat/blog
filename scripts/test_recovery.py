@@ -15,6 +15,7 @@ class RecoveryTests(unittest.TestCase):
         (data / "theme" / "templates").mkdir(parents=True, exist_ok=True)
         for name in ("base.html", "index.html", "post.html", "page.html"):
             (data / "theme" / "templates" / name).write_text(name)
+        (data / "theme" / "theme.json").write_text('{"theme_api_version":1}')
         dump = data / "database.dump"
         dump.write_bytes(b"PGDMPfake")
         manifest = {

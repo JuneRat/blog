@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "slug": "paper",
+  "name": "Paper",
+  "theme_api_version": 1,
+  "required_functions": ["get_posts", "get_post", "get_categories", "get_tags", "asset_url", "post_url"]
+}

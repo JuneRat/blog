@@ -125,7 +125,13 @@ async fn main() {
                 Arc::new(PostgresPublishedSeriesQuery::new(pool.clone()));
 
             let renderer = Arc::new(
-                MiniJinjaThemeRenderer::load(&config.theme_dir).expect("加载主题模板失败"),
+                MiniJinjaThemeRenderer::load(&config.theme_dir)
+                    .expect("加载主题模板失败")
+                    .with_data(Arc::new(application::theme_data::ThemeData::new(
+                        public_query.clone(),
+                        public_tag_query.clone(),
+                        public_category_query.clone(),
+                    ))),
             );
             let markdown = Arc::new(SanitizingMarkdownRenderer::new());
 

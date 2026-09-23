@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ seo.title }}</title>
+  <meta name="description" content="{{ seo.description }}">
+  <link rel="canonical" href="{{ seo.canonical_url | url }}">
+  <link rel="alternate" type="application/rss+xml" title="{{ site.title }}" href="{{ seo.feed_url | url }}">
+  <meta property="og:type" content="{{ seo.og_type }}">
+  <meta property="og:site_name" content="{{ site.title }}">
+  <meta property="og:title" content="{{ seo.title }}">
+  <meta property="og:description" content="{{ seo.description }}">
+  <meta property="og:url" content="{{ seo.canonical_url | url }}">
+  <link rel="stylesheet" href="{{ asset_url(path='paper.css') | url }}">
+</head>
+<body>
+  <div class="site-shell">
+    <header class="masthead">
+      <p class="eyebrow">Independent notes &amp; essays</p>
+      <a class="brand" href="/">{{ site.title }}</a>
+      <p class="subtitle">{{ site.description }}</p>
+      <nav aria-label="主导航"><a href="/">首页</a><a href="/feed.xml">订阅 RSS</a><a href="/sitemap.xml">站点地图</a></nav>
+    </header>
+    <div class="layout">
+      <main id="content">{% block content %}{% endblock %}</main>
+      <aside class="sidebar" aria-label="内容目录">
+        {% set categories = get_categories(limit=10) %}
+        {% if categories.items %}<section><h2>分类</h2><ul>{% for item in categories.items %}<li><a href="{{ item.url | url }}">{{ item.name }}</a></li>{% endfor %}</ul></section>{% endif %}
+        {% set tags = get_tags(limit=12) %}
+        {% if tags.items %}<section><h2>标签</h2><div class="tag-cloud">{% for item in tags.items %}<a href="{{ item.url | url }}">{{ item.name }}</a>{% endfor %}</div></section>{% endif %}
+        <section><h2>关于本站</h2><p>{{ site.description }}</p></section>
+      </aside>
+    </div>
+    <footer class="footer"><span>© {{ site.title }}</span><span><a href="/feed.xml">RSS</a> · <a href="/sitemap.xml">Sitemap</a></span></footer>
+  </div>
+</body>
+</html>

@@ -49,6 +49,9 @@ jobs:
       - name: Tests
         run: cargo test --workspace
 
+      - name: Recovery tool tests
+        run: PYTHONPATH=scripts python3 -B -m unittest scripts/test_recovery.py
+
   web:
     runs-on: ubuntu-latest
 

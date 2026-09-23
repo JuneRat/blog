@@ -321,7 +321,7 @@ impl PostInteractor {
         page: i64,
     ) -> Result<TrashPage, UseCaseError> {
         authorize_own_or_any(actor, "post.read", "post.read_any", author)?;
-        if page < 1 || page > i64::MAX / 20 {
+        if !(1..=i64::MAX / 20).contains(&page) {
             return Err(UseCaseError::Invalid("页码超出范围".into()));
         }
         let (snapshots, total) = self

@@ -1,18 +1,20 @@
 # 主题、MiniJinja 与模板数据函数
 
-状态：MiniJinja 与函数取数能力已确定；M0 原型（`spikes/template-bridge`）已验证 §4 的同步-异步桥接、预算与请求隔离方案**可行**，结论与硬约束见原型 README 及 [ADR-0002](adr/0002-template-data-functions.md)。当前生产渲染仍是「预取上下文 + 固定模板」：base/index/post/page/tag/category/series 七个模板与一个 `url` 转义过滤器（见 §2.1），无模板数据函数；正式函数 API 的冻结不再被原型阻塞，随 M3 主题函数交付落地。根据主题需要通过模板函数获取数据的需求，模板引擎由原计划 Tera 调整为 MiniJinja。
+状态：M0 原型已验证同步-异步桥接；生产渲染现已接入公开只读模板函数与第二主题 `themes/paper`。当前函数子集及预算见 §2/§4；未实现的候选函数仍列在后续范围。模板引擎使用 MiniJinja。
 
 ## 1. 选型与边界
 
 MiniJinja 支持通过 `Environment::add_function` 注册函数、关键字参数以及通过 `State` 访问渲染状态，适合构建面向主题作者的查询 API。Tera 同样支持注册函数；选择 MiniJinja 是扩展接口和运行时模型的取舍，不意味着 Tera 无法获取数据，也不预先宣称性能更高。
 
-MiniJinja 类型只出现在 infrastructure，application 定义引擎无关的查询输入、展示 DTO、渲染端口与请求作用域。主题只能调用注册的只读函数，不能获取仓储、数据库连接、SQL、任意 HTTP 客户端或管理 API。
+MiniJinja 类型只出现在 infrastructure；application 定义引擎无关的公开查询门面、展示 DTO 与渲染端口，infrastructure 为每次渲染创建独立作用域。主题只能调用注册的只读函数，不能获取仓储、数据库连接、SQL、任意 HTTP 客户端或管理 API。
 
 模板函数由核心服务提供并版本化，主题负责调用，不允许主题上传新的 Rust 可执行函数。该机制属于已经确认的受限扩展范围。
 
+每个主题包含 `theme.json`（`schema_version: 1`、`theme_api_version: 1`、名称及 `required_functions`）。启动时检查版本和必需函数，未知函数或不兼容版本直接拒绝加载。当前支持的函数集合固定为下表六项；清单只描述兼容性，不赋予主题新权限。
+
 ## 2. 主题 API 示例
 
-以下是拟定的主题 API，不是 MiniJinja 内置函数或已实现接口：
+以下函数由应用提供，不是 MiniJinja 内置函数。当前可用：
 
 ```jinja
 {% set recent = get_posts(limit=5, tag="rust") %}
@@ -30,21 +32,19 @@ MiniJinja 类型只出现在 infrastructure，application 定义引擎无关的�
 
 | 函数 | 输入与输出 | 约束 |
 |---|---|---|
-| `get_posts` | limit、cursor、tag、category、预定义 sort → 分页摘要 | 默认只读公开文章，不返回全文；稳定排序含 ID 次序 |
-| `get_post` | slug → 文章详情或 none | 公开请求不返回草稿；不存在与无权查看不泄漏差异 |
-| `get_categories` / `get_tags` | 分页 → 分类/标签摘要 | 数量上限，计数仅基于可见内容 |
-| `get_navigation` | 已注册菜单名 → 导航 DTO | 不暴露全部站点配置 |
-| `get_public_authors` | 有上限的 ID 列表 → 公开作者信息 | 不提供邮箱、外部身份或角色数据 |
-| `asset_url` | 主题内相对路径 → 指纹资源 URL | 禁止越界路径与任意协议 |
-| `post_url` | 文章标识或 slug → URL | 使用统一路由规则与 URL 编码 |
+| `get_posts` | `limit`（默认 10，1–50）、可选 `tag` 或 `category`（互斥）→ `{items}` 文章摘要 | 仅公开已发布未删除文章；`url` 为根相对路径，按发布时间及 ID 稳定排序 |
+| `get_post` | `slug` → 公开文章摘要与 `updated_at` 或 none | 草稿、私密、回收站与不存在同为 none；不提供正文源文 |
+| `get_categories` / `get_tags` | `limit`（默认 20，1–50）→ `{items}` 目录 | 返回公开目录名称、slug、URL；目录可为空，不暴露非公开引用量 |
+| `asset_url` | `path` → 带内容摘要查询串的主题资源 URL | 仅主题 assets 中已扫描的普通文件；不存在或越界路径报错 |
+| `post_url` | `slug` → 根相对文章 URL | 校验 slug，按 UTF-8 百分号编码 |
 
-未知参数、非法排序和超限请求返回受控模板错误，不接受原始 SQL、任意字段选择或任意条件表达式。分页默认不计算昂贵的 total；以 next_cursor 等明确契约表达后续页面。批量查询与列表预关联公开作者/标签数据用于避免逐条补查。
+未知参数和超限请求返回受控模板错误，不接受原始 SQL、任意字段选择或任意条件表达式。当前只提供首批摘要，不接受 cursor/sort；`get_navigation`、`get_public_authors` 与 cursor 分页是候选扩展，尚未注册。`themes/paper` 的侧栏使用目录函数，文章页用 `get_posts` 查同类公开文章、`get_post` 查公开更新时间，资源与文章链接通过宿主函数生成。
 
-基础上下文仍提供 `site`、`navigation`、`page`、`theme` 等常用数据。路由可预加载文章主体，模板函数补充侧栏、分类和相关文章，不强迫全部内容通过函数获取。
+基础上下文仍提供 `site`、`seo` 与当前页面主体。路由预加载文章正文，模板函数补充侧栏、分类和相关文章，不强迫全部内容通过函数获取。
 
 ### 2.1 当前已交付的固定上下文与 SEO 元数据
 
-RSS/sitemap/SEO 与 settings 交付后，模板拿到的仍是**预取上下文**（尚无模板数据函数），共 7 个模板：base、index、post、page、tag、category、series。
+模板仍拿到预取主体上下文，并可额外调用上述公开函数；两个主题都含 7 个模板：base、index、post、page、tag、category、series。通过 `BLOG_THEME_DIR=themes/default` 或 `themes/paper` 在启动时选择。
 
 | 变量 | 内容 | 可用模板 |
 |---|---|---|
@@ -72,13 +72,13 @@ RSS/sitemap/SEO 与 settings 交付后，模板拿到的仍是**预取上下文*
 
 该运行时回调不新增反向编译依赖：infrastructure 实现 application 的端口，也可以调用 application 定义的查询门面；application 不依赖 MiniJinja。server 装配各实现。查询门面禁止再次调用渲染器，避免递归渲染或等待自己占用的工作队列。
 
-ThemeDataProvider 必须封装权限和预算，而不是简单转发底层仓储。渲染请求附带由后端构造的不可变 RenderScope：公开/预览模式、允许的内容范围、语言、主题版本、截止时间、查询预算与请求级缓存。具体 Rust trait 签名在实现原型中确定，不把引擎 Value 或 State 写入 application 契约。
+当前 `ThemeData` 只封装公开查询端口，不接受 Actor；`RenderScope` 在 infrastructure 内持有截止时间、查询/调用预算与请求级缓存。预览、语言、主题版本和可配置预算尚未接入，不借公开函数提供这些能力。引擎 `Value` 不进入 application 契约。
 
 模板 Environment 按活动主题版本复用，不能把当前用户、预览权限或请求缓存捕获到共享全局闭包中。请求级函数闭包或只读 Object 可绑定独立 RenderScope，必须避免跨请求共享可变身份。模板参数和模板变量不能修改可信权限范围；不能依赖模板可覆盖的变量充当授权依据。
 
 ## 4. 同步渲染与异步数据库
 
-MiniJinja 的常规渲染与注册函数接口是同步接口，不假设 SQLx future 能自动被模板 await。拟采用“常用数据异步预取 + 缺失时受控查询”的设计，M0 验证后才冻结接口；M1 内容闭环可仅使用预取上下文：
+MiniJinja 的常规渲染与注册函数接口是同步接口，SQLx future 不会自动被模板 await。当前实现采用“页面主体异步预取 + 函数按需受控查询”：
 
 1. 用例异步读取页面主体与已知公共数据，准备请求级结果缓存。
 2. 在异步侧获取有界渲染许可，将同步渲染送入阻塞工作池；不能每次请求无上限创建线程。
@@ -88,9 +88,9 @@ MiniJinja 的常规渲染与注册函数接口是同步接口，不假设 SQLx f
 
 禁止在 Axum 异步执行线程内直接 `block_on`，不为每次查询新建 runtime，不在同步锁或未提交写事务内等待查询。同步函数调用会占用渲染线程并可能串行访问数据库，因此这是功能支持机制，不是吞吐量优化；热点页面应依靠预取、缓存与批量查询减少 miss。
 
-已启动的 Tokio `spawn_blocking` 任务不能通过 abort 强制停止。仅给外层 future 加 timeout 不足以释放线程：预算、截止时间和取消标记必须传播到每次宿主调用和数据库查询，同时设置数据库语句超时、模板 fuel、递归深度及输出大小限制。fuel 不能限制宿主函数内部 I/O，必须单独限制。渲染许可由实际工作持有到退出，不能在客户端超时后提前释放并造成后台任务无限堆积。
+已启动的 Tokio `spawn_blocking` 任务不能通过 abort 强制停止。当前实现以每次宿主查询剩余 deadline 的 `tokio::time::timeout` 取消等待中的 future；MiniJinja fuel=200,000、递归深度=100，渲染结果超过 1 MiB 则拒绝返回（这是渲染后检查，不是分配时的硬内存上限）。渲染许可由实际工作持有到退出，客户端提前离开不会释放仍占用线程的许可。数据库侧 `statement_timeout` 与对纯模板执行时间的独立硬截止仍可在部署层补强。
 
-首期预算初值供压测校准：单列表默认 10、最大 50；每页最多 10 次独立数据查询，另设总返回条目和模板函数调用上限。重复查询命中请求缓存仍计入函数调用预算，但不重复计入数据库查询次数。饱和时有限等待后返回受控服务错误，不无限排队。
+当前预算：单列表默认 10（目录 20）、最大 50；每次渲染最多 10 次独立数据查询与 64 次函数调用，函数查询总截止 500ms；渲染许可 16 个、最多等待 250ms。重复查询命中请求缓存仍计入函数调用预算，但不重复计入数据库查询次数。饱和时返回受控服务错误，不无限排队。
 
 ### 对照方案与验证顺序
 

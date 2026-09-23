@@ -1,15 +1,60 @@
 //! 渲染适配器：Markdown → 清洗 HTML，以及 MiniJinja 主题渲染。
 //! MiniJinja 仅存在于本层；interfaces 通过应用端口间接使用。
 
+use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
 
 use application::error::UseCaseError;
 use application::public_site::{
     CategoryView, PageView, PostCard, PostView, SeriesView, SiteInfo, TagView, ThemeRenderer,
 };
 use application::seo::SeoMeta;
-use minijinja::{Environment, Value};
+use application::theme_data::ThemeData;
+use minijinja::{Environment, UndefinedBehavior, Value};
 use pulldown_cmark::{Options, Parser, html::push_html};
+
+const THEME_API_VERSION: u32 = 1;
+const THEME_FUNCTIONS: &[&str] = &[
+    "get_posts",
+    "get_post",
+    "get_categories",
+    "get_tags",
+    "asset_url",
+    "post_url",
+];
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ThemeManifest {
+    schema_version: u32,
+    slug: String,
+    name: String,
+    theme_api_version: u32,
+    required_functions: Vec<String>,
+}
+
+fn verify_manifest(theme_dir: &Path) -> Result<(), UseCaseError> {
+    let path = theme_dir.join("theme.json");
+    let raw =
+        std::fs::read(&path).map_err(|e| UseCaseError::Render(format!("读取主题清单失败：{e}")))?;
+    let manifest: ThemeManifest = serde_json::from_slice(&raw)
+        .map_err(|e| UseCaseError::Render(format!("解析主题清单失败：{e}")))?;
+    if manifest.schema_version != 1 || manifest.theme_api_version != THEME_API_VERSION {
+        return Err(UseCaseError::Render("主题清单/API 版本不兼容".into()));
+    }
+    if manifest.slug.is_empty() || manifest.name.trim().is_empty() {
+        return Err(UseCaseError::Render("主题清单名称不能为空".into()));
+    }
+    for required in &manifest.required_functions {
+        if !THEME_FUNCTIONS.contains(&required.as_str()) {
+            return Err(UseCaseError::Render(format!(
+                "主题要求未知函数：{required}"
+            )));
+        }
+    }
+    Ok(())
+}
 
 /// Markdown 渲染 + ammonia 清洗。
 /// 输出进入模板时以 |safe 注入，因此清洗步骤不可省略。
@@ -110,13 +155,19 @@ fn url_attr(value: String) -> Value {
 /// MiniJinja 主题渲染器：启动时加载并解析主题模板，请求期复用。
 pub struct MiniJinjaThemeRenderer {
     env: Environment<'static>,
+    data: Option<Arc<ThemeData>>,
+    assets: Arc<HashMap<String, String>>,
 }
 
 impl MiniJinjaThemeRenderer {
     /// M1 最小模板集：base/index/post/page；M3 增加标签页 tag。
     /// 模板在启动时一次性加载；Environment 复用要求 'static，故按启动期资源泄漏源码。
     pub fn load(theme_dir: &Path) -> Result<Self, UseCaseError> {
+        verify_manifest(theme_dir)?;
         let mut env = Environment::new();
+        env.set_undefined_behavior(UndefinedBehavior::Strict);
+        env.set_fuel(Some(200_000));
+        env.set_recursion_limit(100);
         env.add_filter("url", url_attr);
         for name in [
             "base.html",
@@ -134,8 +185,84 @@ impl MiniJinjaThemeRenderer {
             env.add_template(name, source)
                 .map_err(|e| UseCaseError::Render(format!("解析模板 {name} 失败：{e}")))?;
         }
-        Ok(Self { env })
+        let assets = load_asset_urls(&theme_dir.join("assets"))?;
+        Ok(Self {
+            env,
+            data: None,
+            assets: Arc::new(assets),
+        })
     }
+
+    pub fn with_data(mut self, data: Arc<ThemeData>) -> Self {
+        self.data = Some(data);
+        self
+    }
+
+    fn render<T: serde::Serialize>(
+        &self,
+        template: &str,
+        context: T,
+    ) -> Result<String, UseCaseError> {
+        let mut env = self.env.clone();
+        let scope =
+            crate::theme_functions::RenderScope::new(self.data.clone(), self.assets.clone())?;
+        crate::theme_functions::register(&mut env, scope);
+        let html = env
+            .get_template(template)
+            .and_then(|t| t.render(context))
+            .map_err(|e| UseCaseError::Render(e.to_string()))?;
+        if html.len() > 1024 * 1024 {
+            return Err(UseCaseError::Render("主题输出超过 1 MiB".into()));
+        }
+        Ok(html)
+    }
+}
+
+fn load_asset_urls(dir: &Path) -> Result<HashMap<String, String>, UseCaseError> {
+    use sha2::{Digest, Sha256};
+    let mut urls = HashMap::new();
+    if !dir.is_dir() {
+        return Ok(urls);
+    }
+    fn visit(
+        root: &Path,
+        dir: &Path,
+        urls: &mut HashMap<String, String>,
+    ) -> Result<(), UseCaseError> {
+        for entry in std::fs::read_dir(dir).map_err(|e| UseCaseError::Render(e.to_string()))? {
+            let entry = entry.map_err(|e| UseCaseError::Render(e.to_string()))?;
+            let kind = entry
+                .file_type()
+                .map_err(|e| UseCaseError::Render(e.to_string()))?;
+            if kind.is_symlink() {
+                return Err(UseCaseError::Render("主题资源不允许符号链接".into()));
+            }
+            if kind.is_dir() {
+                visit(root, &entry.path(), urls)?;
+            } else if kind.is_file() {
+                let path = entry.path();
+                let relative = path
+                    .strip_prefix(root)
+                    .map_err(|e| UseCaseError::Render(e.to_string()))?;
+                let name = relative
+                    .to_str()
+                    .ok_or_else(|| UseCaseError::Render("主题资源路径不是 UTF-8".into()))?
+                    .replace('\\', "/");
+                let bytes =
+                    std::fs::read(&path).map_err(|e| UseCaseError::Render(e.to_string()))?;
+                let hash = format!("{:x}", Sha256::digest(bytes));
+                let encoded = name
+                    .split('/')
+                    .map(application::seo::encode_path_segment)
+                    .collect::<Vec<_>>()
+                    .join("/");
+                urls.insert(name, format!("/assets/{encoded}?v={}", &hash[..12]));
+            }
+        }
+        Ok(())
+    }
+    visit(dir, dir, &mut urls)?;
+    Ok(urls)
 }
 
 impl ThemeRenderer for MiniJinjaThemeRenderer {
@@ -146,10 +273,7 @@ impl ThemeRenderer for MiniJinjaThemeRenderer {
         posts: &[PostCard],
     ) -> Result<String, UseCaseError> {
         let ctx = IndexContext { site, seo, posts };
-        self.env
-            .get_template("index.html")
-            .and_then(|t| t.render(ctx))
-            .map_err(|e| UseCaseError::Render(e.to_string()))
+        self.render("index.html", ctx)
     }
 
     fn render_post(
@@ -159,10 +283,7 @@ impl ThemeRenderer for MiniJinjaThemeRenderer {
         post: &PostView,
     ) -> Result<String, UseCaseError> {
         let ctx = PostContext { site, seo, post };
-        self.env
-            .get_template("post.html")
-            .and_then(|t| t.render(ctx))
-            .map_err(|e| UseCaseError::Render(e.to_string()))
+        self.render("post.html", ctx)
     }
 
     fn render_page(
@@ -172,10 +293,7 @@ impl ThemeRenderer for MiniJinjaThemeRenderer {
         page: &PageView,
     ) -> Result<String, UseCaseError> {
         let ctx = PageContext { site, seo, page };
-        self.env
-            .get_template("page.html")
-            .and_then(|t| t.render(ctx))
-            .map_err(|e| UseCaseError::Render(e.to_string()))
+        self.render("page.html", ctx)
     }
 
     fn render_tag(
@@ -185,10 +303,7 @@ impl ThemeRenderer for MiniJinjaThemeRenderer {
         tag: &TagView,
     ) -> Result<String, UseCaseError> {
         let ctx = TagContext { site, seo, tag };
-        self.env
-            .get_template("tag.html")
-            .and_then(|t| t.render(ctx))
-            .map_err(|e| UseCaseError::Render(e.to_string()))
+        self.render("tag.html", ctx)
     }
 
     fn render_category(
@@ -202,10 +317,7 @@ impl ThemeRenderer for MiniJinjaThemeRenderer {
             seo,
             category,
         };
-        self.env
-            .get_template("category.html")
-            .and_then(|t| t.render(ctx))
-            .map_err(|e| UseCaseError::Render(e.to_string()))
+        self.render("category.html", ctx)
     }
 
     fn render_series(
@@ -215,16 +327,13 @@ impl ThemeRenderer for MiniJinjaThemeRenderer {
         series: &SeriesView,
     ) -> Result<String, UseCaseError> {
         let ctx = SeriesContext { site, seo, series };
-        self.env
-            .get_template("series.html")
-            .and_then(|t| t.render(ctx))
-            .map_err(|e| UseCaseError::Render(e.to_string()))
+        self.render("series.html", ctx)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::url_attr;
+    use super::{url_attr, verify_manifest};
 
     #[test]
     fn url_attr_keeps_slashes_and_escapes_attribute_specials() {
@@ -244,5 +353,18 @@ mod tests {
         let rendered = out.as_str().unwrap();
         assert!(!rendered.contains('"'), "{rendered}");
         assert!(rendered.contains("&quot;"), "{rendered}");
+    }
+
+    #[test]
+    fn theme_manifest_rejects_incompatible_api_and_unknown_function() {
+        let dir =
+            std::env::temp_dir().join(format!("blog-theme-manifest-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir(&dir).unwrap();
+        let path = dir.join("theme.json");
+        std::fs::write(&path, r#"{"schema_version":1,"slug":"x","name":"X","theme_api_version":2,"required_functions":[]}"#).unwrap();
+        assert!(verify_manifest(&dir).is_err());
+        std::fs::write(&path, r#"{"schema_version":1,"slug":"x","name":"X","theme_api_version":1,"required_functions":["admin_sql"]}"#).unwrap();
+        assert!(verify_manifest(&dir).is_err());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

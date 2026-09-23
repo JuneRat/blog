@@ -56,7 +56,7 @@
 
 ## 5. 交付与验收
 
-当前工具为 [`scripts/recovery.py`](../scripts/recovery.py)。它要求操作者先在部署层停止服务、CLI 写入和 worker，再显式传入 `--maintenance-confirmed`；脚本不能凭自身证明所有外部写入已停止。备份用 `pg_dump` custom 格式，连同主题（可用 `--resource name=目录` 附加当前自托管资源）写入权限为 0700 的临时目录；文件逐一记 SHA-256/大小，校验 `pg_restore --list`，最后才原子写出带 `COMPLETE` 的目录。OAuth `secret_ref` 会从数据库读取并记录引用名，实际秘密值不入备份；环境中缺少引用值时备份失败。应由独立的秘密管理备份保证相同版本可重建，不能把演练用占位值当生产秘密。
+当前工具为 [`scripts/recovery.py`](../scripts/recovery.py)。它要求操作者先在部署层停止服务、CLI 写入和 worker，再显式传入 `--maintenance-confirmed`；脚本不能凭自身证明所有外部写入已停止。备份用 `pg_dump` custom 格式，连同主题（含 `theme.json`；可用 `--resource name=目录` 附加当前自托管资源）写入权限为 0700 的临时目录；文件逐一记 SHA-256/大小，校验 `pg_restore --list`，最后才原子写出带 `COMPLETE` 的目录。OAuth `secret_ref` 会从数据库读取并记录引用名，实际秘密值不入备份；环境中缺少引用值时备份失败。应由独立的秘密管理备份保证相同版本可重建，不能把演练用占位值当生产秘密。
 
 本机容器示例（`DATABASE_URL` 和秘密环境变量由受保护的 shell/部署环境注入，不写在命令行参数中）：
 
@@ -71,7 +71,7 @@ python3 -B scripts/recovery.py restore /secure/backups/blog-2026-09-23 \
 
 不使用容器时需在执行环境提供匹配版本的 `pg_dump`、`pg_restore`、`psql`、`createdb` 与 `DATABASE_URL`。恢复只允许新建 `blog_restore_*` 数据库，拒绝已有目标和原库，输出目录保留 `ISOLATED` 标记，不启动服务或 worker。它复核 13 表、迁移版本、可登录 Owner 和备份时记录的内容计数；缺秘密、损坏文件或校验失败均不得转为可用部署。若在创建隔离库后失败，保留 `FAILED` 标记供检查，操作者确认后手工清理隔离库。
 
-2026-09-23 本机演练：从隔离源库备份，再恢复到新的 `blog_restore_roundtrip_20260923`；复核 6 用户、4 Post（公开/私密/草稿/回收站各 1）、1 Page、1 分类、1 系列、1 标签和 2 条 post_tags、1 位可登录 Owner，逐条核对正文、回收站状态/系列位置及标签关系。缺 `IDP_SECRET` 的恢复在建库前拒绝。该演练验证工具与当前 schema；生产 RPO/RTO 和外部秘密备份仍需另验。
+2026-09-23 本机演练：从隔离源库备份，再恢复到新的 `blog_restore_roundtrip_v2`，一并恢复第二主题 `paper` 与其 API 版本清单；复核 6 用户、4 Post（公开/私密/草稿/回收站各 1）、1 Page、1 分类、1 系列、1 标签和 2 条 post_tags、1 位可登录 Owner，逐条核对正文、回收站状态/系列位置及标签关系。缺 `IDP_SECRET` 的恢复在建库前拒绝。该演练验证工具与当前 schema；生产 RPO/RTO 和外部秘密备份仍需另验。
 
 M3 交付核心数据库/资源清单、维护备份、隔离恢复和身份核对；M4 加入媒体、搜索/Webhook 时补齐对应恢复流程；M5 对拟上线的全部能力执行完整演练。按实际交付范围验收：
 

@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="tag-page">
+  <h1># {{ tag.tag_name }}</h1>
+  {% if tag.posts %}
+  <ul class="post-list">
+    {% for post in tag.posts %}
+    <li class="post-item">
+      <h2><a href="/posts/{{ post.slug }}">{{ post.title }}</a></h2>
+      {% if post.excerpt %}<p class="excerpt">{{ post.excerpt }}</p>{% endif %}
+      <p class="meta">
+        <time>{{ post.published_at }}</time>
+        <span class="author">{{ post.author_display }}</span>
+      </p>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="empty">这个标签下还没有公开文章。</p>
+  {% endif %}
+  {% if tag.total_pages > 1 %}
+  <nav class="pagination">
+    {% if tag.page > 1 %}<a class="pagination-prev" href="/tags/{{ tag.tag_slug }}?page={{ tag.page - 1 }}">上一页</a>{% endif %}
+    <span class="pagination-state">第 {{ tag.page }} / {{ tag.total_pages }} 页</span>
+    {% if tag.page < tag.total_pages %}<a class="pagination-next" href="/tags/{{ tag.tag_slug }}?page={{ tag.page + 1 }}">下一页</a>{% endif %}
+  </nav>
+  {% endif %}
+</section>
+{% endblock %}

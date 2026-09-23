@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block content %}
+<article class="entry">
+  <p class="eyebrow">Article / {{ post.author_display }}</p>
+  <h1>{{ post.title }}</h1>
+  <p class="article-meta"><time>{{ post.published_at }}</time>{% if post.category %}<span> · </span><a href="/categories/{{ post.category.slug }}">{{ post.category.name }}</a>{% endif %}</p>
+  {% if post.excerpt %}<p class="lead">{{ post.excerpt }}</p>{% endif %}
+  <div class="prose">{{ post.content_html | safe }}</div>
+  {% set public_meta = get_post(slug=post.slug) %}
+  {% if public_meta %}<p class="article-meta">更新于 {{ public_meta.updated_at }}</p>{% endif %}
+  {% if post.tags %}<div class="tag-cloud">{% for tag in post.tags %}<a href="/tags/{{ tag.slug }}">{{ tag.name }}</a>{% endfor %}</div>{% endif %}
+  {% if post.series %}<p class="series-note">系列：<a href="/series/{{ post.series.slug }}">{{ post.series.name }}</a> · 第 {{ post.series.order }} 篇</p>{% endif %}
+</article>
+{% if post.category %}
+  {% set related = get_posts(limit=4, category=post.category.slug) %}
+  {% if related.items | length > 1 or (related.items | length == 1 and related.items[0].slug != post.slug) %}<section class="related"><h2>同类文章</h2><ul>{% for item in related.items %}{% if item.slug != post.slug %}<li><a href="{{ item.url | url }}">{{ item.title }}</a></li>{% endif %}{% endfor %}</ul></section>{% endif %}
+{% endif %}
+{% endblock %}

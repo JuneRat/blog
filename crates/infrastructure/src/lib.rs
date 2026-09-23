@@ -8,6 +8,7 @@ pub mod rbac;
 pub mod rendering;
 pub mod sessions;
 pub mod settings;
+mod theme_functions;
 pub mod throttle;
 
 pub use oauth::{

@@ -175,6 +175,8 @@ def backup(args):
             raise RecoveryError("pg_dump did not produce a PostgreSQL custom-format archive")
         pg.run("pg_restore", ["--list"], input_path=data / "database.dump")
         copy_resource(args.theme_dir, data / "theme")
+        if not (data / "theme" / "theme.json").is_file():
+            raise RecoveryError("theme manifest is missing")
         for template in ("base.html", "index.html", "post.html", "page.html"):
             if not (data / "theme" / "templates" / template).is_file():
                 raise RecoveryError(f"theme is missing required template: {template}")
@@ -231,6 +233,8 @@ def verify(path):
     for template in ("base.html", "index.html", "post.html", "page.html"):
         if not any(item.get("path") == f"theme/templates/{template}" for item in records):
             raise RecoveryError(f"theme template is missing from manifest: {template}")
+    if not any(item.get("path") == "theme/theme.json" for item in records):
+        raise RecoveryError("theme manifest is missing from backup")
     if not is_pg_archive(root / "data" / "database.dump"):
         raise RecoveryError("database dump is not a PostgreSQL custom-format archive")
     seen = set()

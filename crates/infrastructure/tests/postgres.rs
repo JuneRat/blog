@@ -560,7 +560,7 @@ async fn rbac_registry_sync_is_idempotent() {
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(author_perms, 5, "Author 恰好 5 个 own 动作");
+    assert_eq!(author_perms, 6, "Author 恰好 6 个 own 动作（含回收站）");
 
     // Owner 持有全部已注册权限（含 oauth.manage / ownership.manage）。
     let owner_perms: i64 = sqlx::query_scalar(

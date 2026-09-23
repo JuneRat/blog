@@ -54,6 +54,10 @@ async fn actor_for(users: &Arc<UserInteractor>, username: &str) -> Actor {
 }
 
 async fn stack() -> Stack {
+    stack_with_theme("../../themes/default").await
+}
+
+async fn stack_with_theme(theme_dir: &str) -> Stack {
     let pool = common::fresh_database("blog_server_test").await;
 
     let clock = Arc::new(SystemClock);
@@ -68,10 +72,6 @@ async fn stack() -> Stack {
     let public_page_query: Arc<dyn PublishedPageQuery> =
         Arc::new(PostgresPublishedPageQuery::new(pool.clone()));
 
-    let theme = Arc::new(
-        MiniJinjaThemeRenderer::load(std::path::Path::new("../../themes/default"))
-            .expect("模板加载失败"),
-    );
     let markdown = Arc::new(SanitizingMarkdownRenderer::new());
 
     let users = Arc::new(UserInteractor::new(user_repo, rbac, clock.clone()));
@@ -82,6 +82,15 @@ async fn stack() -> Stack {
         Arc::new(PostgresCategoryRepository::new(pool.clone()));
     let public_category_query: Arc<dyn PublishedCategoryQuery> =
         Arc::new(PostgresPublishedCategoryQuery::new(pool.clone()));
+    let theme = Arc::new(
+        MiniJinjaThemeRenderer::load(std::path::Path::new(theme_dir))
+            .expect("模板加载失败")
+            .with_data(Arc::new(application::theme_data::ThemeData::new(
+                public_query.clone(),
+                public_tag_query.clone(),
+                public_category_query.clone(),
+            ))),
+    );
     let series_repo: Arc<dyn application::ports::SeriesRepository> =
         Arc::new(infrastructure::PostgresSeriesRepository::new(pool.clone()));
     let public_series_query: Arc<dyn application::ports::PublishedSeriesQuery> = Arc::new(
@@ -700,4 +709,76 @@ async fn series_page_lists_public_posts_in_reading_order() {
     let (status, body) = get(&stack.router, "/posts/guide-first").await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert!(body.contains(r#"href="/series/guide""#), "{body}");
+}
+
+#[tokio::test]
+async fn paper_theme_functions_use_only_public_data() {
+    let _g = SERIAL.lock().await;
+    let s = stack_with_theme("../../themes/paper").await;
+    let tag = seed_tag(&s, "主题标签", "paper-tag").await;
+    let category = domain::content::Category::new(
+        "主题分类".into(),
+        domain::content::post::Slug::new("paper-category").unwrap(),
+        None,
+        None,
+        time::OffsetDateTime::now_utc(),
+    )
+    .unwrap()
+    .snapshot();
+    s.categories.insert(&category).await.unwrap();
+    for (slug, title, publish) in [
+        ("paper-visible", "纸张主题可见文章", true),
+        ("paper-related", "同类可见文章", true),
+        ("paper-draft", "纸张主题不可见草稿", false),
+    ] {
+        s.posts
+            .create(
+                &s.author,
+                CreatePostCmd {
+                    slug: Some(slug.into()),
+                    title: title.into(),
+                    excerpt: None,
+                    content: "# 正文".into(),
+                    visibility: application::content::PostVisibility::Public,
+                    tag_ids: vec![tag],
+                    category_id: Some(category.id),
+                    series: None,
+                },
+            )
+            .await
+            .unwrap();
+        if publish {
+            s.posts.publish(&s.author, slug, None).await.unwrap();
+        }
+    }
+    let (status, index) = get(&s.router, "/").await;
+    assert_eq!(status, StatusCode::OK, "{index}");
+    assert!(index.contains("纸张主题可见文章"));
+    assert!(!index.contains("纸张主题不可见草稿"));
+    assert!(index.contains("/assets/paper.css?v="));
+    assert!(index.contains("/categories/paper-category"));
+    assert!(index.contains("/tags/paper-tag"));
+    let (status, detail) = get(&s.router, "/posts/paper-visible").await;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    assert!(detail.contains("同类文章"));
+    assert!(detail.contains("同类可见文章"));
+    assert!(detail.contains("更新于"));
+    assert!(!detail.contains("纸张主题不可见草稿"));
+    for path in ["/tags/paper-tag", "/categories/paper-category"] {
+        let (status, listing) = get(&s.router, path).await;
+        assert_eq!(status, StatusCode::OK, "{path}: {listing}");
+        assert!(listing.contains("纸张主题可见文章"));
+        assert!(!listing.contains("纸张主题不可见草稿"));
+    }
+    s.pages
+        .create(&s.editor, page_cmd("paper-page", "纸张主题页面"))
+        .await
+        .unwrap();
+    s.pages
+        .publish(&s.editor, "paper-page", None)
+        .await
+        .unwrap();
+    let (status, page) = get(&s.router, "/paper-page").await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert!(page.contains("纸张主题页面"));
 }

@@ -1340,6 +1340,18 @@ impl PostgresPublishedTagQuery {
 
 #[async_trait]
 impl PublishedTagQuery for PostgresPublishedTagQuery {
+    async fn list_public_tags(&self, limit: i64) -> Result<Vec<PublicTagSummary>, UseCaseError> {
+        let rows: Vec<(String, String)> =
+            sqlx::query_as("SELECT slug, name FROM tags ORDER BY slug LIMIT $1")
+                .bind(limit.clamp(1, 50))
+                .fetch_all(&self.pool)
+                .await
+                .map_err(map_sqlx_error)?;
+        Ok(rows
+            .into_iter()
+            .map(|(slug, name)| PublicTagSummary { slug, name })
+            .collect())
+    }
     async fn find_public_by_slug(
         &self,
         slug: &str,
@@ -1742,6 +1754,21 @@ impl PostgresPublishedCategoryQuery {
 
 #[async_trait]
 impl PublishedCategoryQuery for PostgresPublishedCategoryQuery {
+    async fn list_public_categories(
+        &self,
+        limit: i64,
+    ) -> Result<Vec<PublicCategorySummary>, UseCaseError> {
+        let rows: Vec<(String, String)> =
+            sqlx::query_as("SELECT slug, name FROM categories ORDER BY slug LIMIT $1")
+                .bind(limit.clamp(1, 50))
+                .fetch_all(&self.pool)
+                .await
+                .map_err(map_sqlx_error)?;
+        Ok(rows
+            .into_iter()
+            .map(|(slug, name)| PublicCategorySummary { slug, name })
+            .collect())
+    }
     async fn find_public_by_slug(
         &self,
         slug: &str,

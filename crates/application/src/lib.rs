@@ -15,6 +15,7 @@ pub mod series;
 pub mod settings;
 pub mod syndication;
 pub mod tag;
+pub mod theme_data;
 pub mod version;
 
 pub use error::UseCaseError;

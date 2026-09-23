@@ -191,6 +191,7 @@ pub struct PublicSiteInteractor {
     series: Arc<dyn PublishedSeriesQuery>,
     markdown: Arc<dyn ContentRenderer>,
     theme: Arc<dyn ThemeRenderer>,
+    render_limit: Arc<tokio::sync::Semaphore>,
     /// settings 的 site 分组（数据库未配置时整体回退）。
     settings: Arc<dyn SettingsStore>,
     /// 装配回退值：环境变量/内置默认值（进程内不变）。
@@ -221,10 +222,31 @@ impl PublicSiteInteractor {
             series,
             markdown,
             theme,
+            render_limit: Arc::new(tokio::sync::Semaphore::new(16)),
             settings,
             fallback,
             base_url,
         }
+    }
+
+    async fn render_theme<F>(&self, task: F) -> Result<String, UseCaseError>
+    where
+        F: FnOnce(Arc<dyn ThemeRenderer>) -> Result<String, UseCaseError> + Send + 'static,
+    {
+        let permit = tokio::time::timeout(
+            std::time::Duration::from_millis(250),
+            self.render_limit.clone().acquire_owned(),
+        )
+        .await
+        .map_err(|_| UseCaseError::Render("主题渲染队列已满".into()))?
+        .map_err(|e| UseCaseError::Render(e.to_string()))?;
+        let theme = self.theme.clone();
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            task(theme)
+        })
+        .await
+        .map_err(|e| UseCaseError::Render(format!("主题渲染任务失败：{e}")))?
     }
 
     /// 本次渲染的生效站点信息：**每次请求解析**，不缓存。
@@ -255,7 +277,8 @@ impl PublicSiteInteractor {
             .collect();
         let site = self.site_info().await;
         let seo = SeoMeta::home(&site, &self.base_url);
-        self.theme.render_index(&site, &seo, &summaries)
+        self.render_theme(move |theme| theme.render_index(&site, &seo, &summaries))
+            .await
     }
 
     /// 渲染公开文章详情；不满足公开条件一律 NotFound（知道 slug 不等于有权读取）。
@@ -299,7 +322,8 @@ impl PublicSiteInteractor {
             &view.slug,
             view.excerpt.as_deref(),
         );
-        self.theme.render_post(&site, &seo, &view)
+        self.render_theme(move |theme| theme.render_post(&site, &seo, &view))
+            .await
     }
 
     /// 渲染公开页面详情（根路径 `/{slug}`）。
@@ -324,7 +348,8 @@ impl PublicSiteInteractor {
         };
         let site = self.site_info().await;
         let seo = SeoMeta::page(&site, &self.base_url, &view.title, &view.slug);
-        self.theme.render_page(&site, &seo, &view)
+        self.render_theme(move |theme| theme.render_page(&site, &seo, &view))
+            .await
     }
 
     /// 渲染公开标签页 /tags/{slug}?page=N。
@@ -369,7 +394,8 @@ impl PublicSiteInteractor {
             &view.tag_slug,
             view.page,
         );
-        self.theme.render_tag(&site, &seo, &view)
+        self.render_theme(move |theme| theme.render_tag(&site, &seo, &view))
+            .await
     }
 
     /// 渲染公开分类页 /categories/{slug}?page=N（直接归属，不含子树）。
@@ -411,7 +437,8 @@ impl PublicSiteInteractor {
             &view.category_slug,
             view.page,
         );
-        self.theme.render_category(&site, &seo, &view)
+        self.render_theme(move |theme| theme.render_category(&site, &seo, &view))
+            .await
     }
 
     /// 渲染公开系列页 /series/{slug}?page=N：按阅读顺序（series_order 升序）。
@@ -458,7 +485,8 @@ impl PublicSiteInteractor {
             &view.series_slug,
             view.page,
         );
-        self.theme.render_series(&site, &seo, &view)
+        self.render_theme(move |theme| theme.render_series(&site, &seo, &view))
+            .await
     }
 
     /// 渲染 `/feed.xml`：最新公开已发布文章的 RSS 2.0。

@@ -13,4 +13,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 echo "==> cargo test --workspace"
 cargo test --workspace
 
+echo "==> backup/restore tool tests"
+PYTHONPATH=scripts python3 -B -m unittest scripts/test_recovery.py
+
 echo "全部通过。"

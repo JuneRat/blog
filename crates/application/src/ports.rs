@@ -654,6 +654,10 @@ pub trait PublishedSeriesQuery: Send + Sync {
 
 #[async_trait]
 pub trait PublishedCategoryQuery: Send + Sync {
+    async fn list_public_categories(
+        &self,
+        limit: i64,
+    ) -> Result<Vec<PublicCategorySummary>, UseCaseError>;
     async fn find_public_by_slug(
         &self,
         slug: &str,
@@ -673,6 +677,7 @@ pub trait PublishedCategoryQuery: Send + Sync {
 
 #[async_trait]
 pub trait PublishedTagQuery: Send + Sync {
+    async fn list_public_tags(&self, limit: i64) -> Result<Vec<PublicTagSummary>, UseCaseError>;
     /// 标签是否存在（未知 slug 一律 None，与文章详情同样不泄漏差异）。
     async fn find_public_by_slug(
         &self,
