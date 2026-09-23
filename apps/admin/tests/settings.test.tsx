@@ -41,8 +41,12 @@ describe("站点设置屏", () => {
   it("切换主题携带版本并显示即时生效", async () => {
     vi.mocked(themeSettingsApi.save).mockResolvedValue({ slug: "paper", effective_slug: "paper", source: "database", version: 1, available: [{ slug: "default", name: "Default" }, { slug: "paper", name: "Paper" }] });
     render(<App />);
+    // 主题下拉是 antd Select，不是原生控件：fireEvent.change 改不动它的值。
+    // 先等主题加载完成（否则展开的是空列表），再 mouseDown 展开、点选项文案。
+    await screen.findByText(/当前主题：Default/);
     const select = await screen.findByLabelText("选择主题");
-    fireEvent.change(select, { target: { value: "paper" } });
+    fireEvent.mouseDown(select);
+    fireEvent.click(await screen.findByTitle("Paper"));
     fireEvent.click(screen.getByRole("button", { name: "切换主题" }));
     await waitFor(() => expect(themeSettingsApi.save).toHaveBeenCalledWith("paper", 0));
     await waitFor(() => expect(screen.getByText(/主题已切换为「Paper」/)).toBeTruthy());
@@ -96,7 +100,8 @@ describe("站点设置屏", () => {
     const title = await screen.findByLabelText("站点标题");
     fireEvent.change(title, { target: { value: "   " } });
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
-    expect(screen.getByText("站点标题不能为空。")).toBeTruthy();
+    // antd Form 的 onFinish 在异步校验之后才触发，错误文案不是点击后同步出现。
+    await waitFor(() => expect(screen.getByText("站点标题不能为空。")).toBeTruthy());
     expect(settingsApi.save).not.toHaveBeenCalled();
   });
 
@@ -124,8 +129,15 @@ describe("站点设置屏", () => {
         description: "描述",
         source: "database",
         version: 2,
+      })
+      // 保存成功会让站点设置查询失效并在后台重取（这里补上兜底返回值，
+      // 避免那次后台读取拿到 undefined）。
+      .mockResolvedValue({
+        title: "我的标题",
+        description: "描述",
+        source: "database",
+        version: 3,
       });
-    window.confirm = vi.fn(() => true);
     render(<App />);
 
     fireEvent.change(await screen.findByLabelText("站点标题"), {
@@ -140,6 +152,8 @@ describe("站点设置屏", () => {
     expect((screen.getByLabelText("站点标题") as HTMLInputElement).value).toBe("我的标题");
 
     fireEvent.click(screen.getByRole("button", { name: "仍然覆盖" }));
+    // window.confirm 换成 antd modal.confirm：确认动作挪进弹窗的默认「确定」。
+    fireEvent.click(await screen.findByRole("button", { name: "确定" }));
     await waitFor(() =>
       expect(settingsApi.save).toHaveBeenLastCalledWith({
         title: "我的标题",
@@ -173,7 +187,9 @@ describe("站点设置屏", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "重新加载" }));
-    expect((screen.getByLabelText("站点标题") as HTMLInputElement).value).toBe("服务器标题");
+    await waitFor(() =>
+      expect((screen.getByLabelText("站点标题") as HTMLInputElement).value).toBe("服务器标题"),
+    );
     expect(screen.getByText(/已重新加载服务器当前值/)).toBeTruthy();
     expect(settingsApi.save).toHaveBeenCalledTimes(1, "重新加载本身不再保存");
   });

@@ -74,7 +74,7 @@ describe("系列管理屏", () => {
     await waitFor(() => expect(screen.getByText("第一篇")).toBeTruthy());
     fireEvent.click(screen.getAllByRole("button", { name: "↑" })[1]);
     await waitFor(() => expect(seriesApi.reorder).toHaveBeenCalled());
-    expect(screen.getByText(/无权执行该操作/)).toBeTruthy();
+    expect(await screen.findByText(/无权执行该操作/)).toBeTruthy();
   });
 
   it("创建系列并展示删除保护", async () => {
@@ -82,7 +82,6 @@ describe("系列管理屏", () => {
     vi.mocked(seriesApi.remove).mockRejectedValue(
       new ApiError(409, "系列仍被 2 篇文章引用，先解除关联再删除", "series_in_use", "req-2"),
     );
-    window.confirm = vi.fn(() => true);
     render(<App />);
     await waitFor(() => expect(screen.getByText("指南")).toBeTruthy());
 
@@ -94,8 +93,10 @@ describe("系列管理屏", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "删除" }));
+    // 确认弹窗改由 antd 的 modal.confirm 渲染，必须点掉它才会发请求。
+    fireEvent.click(await screen.findByRole("button", { name: "确定" }));
     await waitFor(() => expect(seriesApi.remove).toHaveBeenCalledWith("guide", 3));
-    expect(screen.getByText(/2 篇文章引用/)).toBeTruthy();
+    expect(await screen.findByText(/2 篇文章引用/)).toBeTruthy();
   });
 });
 
@@ -120,16 +121,27 @@ describe("文章编辑器系列校验", () => {
     apiAny.updatePost = vi.fn();
   });
 
+  /**
+   * 选中 antd Select 的选项：它没有原生 `<select>`，`fireEvent.change`
+   * 只改输入框里的过滤文字、不会产生选中值，必须先在 combobox 上 mouseDown
+   * 展开下拉，再点中带 `title` 的选项（与 categories.test.tsx 同一写法）。
+   */
+  async function selectOption(labelText: string, optionTitle: string): Promise<void> {
+    fireEvent.mouseDown(screen.getByLabelText(labelText));
+    fireEvent.click(await screen.findByTitle(optionTitle));
+  }
+
   it("选择系列但序号为空：展示错误且不发请求（不静默丢系列）", async () => {
     render(<App />);
     const title = await screen.findByLabelText("标题");
     fireEvent.change(title, { target: { value: "新篇" } });
-    fireEvent.change(await screen.findByLabelText("系列"), { target: { value: "ser-1" } });
+    await selectOption("系列", "指南");
     // 序号留空。
     fireEvent.click(screen.getByRole("button", { name: "保存并更新线上" }));
 
+    // antd Form 的 onFinish 是异步的，校验错误要等文案出现。
     expect(
-      screen.getByText("选择了系列时，系列内序号必须是正整数（如 1、2、3）。"),
+      await screen.findByText("选择了系列时，系列内序号必须是正整数（如 1、2、3）。"),
     ).toBeTruthy();
     const apiAny = api as unknown as Record<string, ReturnType<typeof vi.fn>>;
     expect(apiAny.createPost).not.toHaveBeenCalled();
@@ -138,11 +150,11 @@ describe("文章编辑器系列校验", () => {
   it("小数序号（1.5）被拒绝，不被 parseInt 截断", async () => {
     render(<App />);
     fireEvent.change(await screen.findByLabelText("标题"), { target: { value: "新篇" } });
-    fireEvent.change(await screen.findByLabelText("系列"), { target: { value: "ser-1" } });
+    await selectOption("系列", "指南");
     fireEvent.change(screen.getByLabelText("系列内序号"), { target: { value: "1.5" } });
     fireEvent.click(screen.getByRole("button", { name: "保存并更新线上" }));
 
-    expect(screen.getByText(/正整数/)).toBeTruthy();
+    expect(await screen.findByText(/正整数/)).toBeTruthy();
     const apiAny = api as unknown as Record<string, ReturnType<typeof vi.fn>>;
     expect(apiAny.createPost).not.toHaveBeenCalled();
   });
@@ -150,7 +162,7 @@ describe("文章编辑器系列校验", () => {
   it("合法序号随载荷提交系列", async () => {
     render(<App />);
     fireEvent.change(await screen.findByLabelText("标题"), { target: { value: "新篇" } });
-    fireEvent.change(await screen.findByLabelText("系列"), { target: { value: "ser-1" } });
+    await selectOption("系列", "指南");
     fireEvent.change(screen.getByLabelText("系列内序号"), { target: { value: "3" } });
     fireEvent.click(screen.getByRole("button", { name: "保存并更新线上" }));
 

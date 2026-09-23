@@ -81,11 +81,12 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("用户与角色管理", () => {
-  it("没有账号管理权限时不渲染控件，也不调用账号接口", () => {
+  it("没有账号管理权限时不渲染控件，也不调用账号接口", async () => {
     auth.me = me(["post.read"]);
     render(<App />);
 
-    expect(screen.getByText(/无法查看或管理账号/)).toBeTruthy();
+    // 屏幕按路由懒加载：等真实屏幕挂载后再断言，避免撞上 Suspense 占位。
+    expect(await screen.findByText(/无法查看或管理账号/)).toBeTruthy();
     expect(vi.mocked(api.listUsers)).not.toHaveBeenCalled();
     expect(vi.mocked(api.listRoles)).not.toHaveBeenCalled();
   });
@@ -171,8 +172,10 @@ describe("用户与角色管理", () => {
 
   it("角色目录加载失败时显示错误并可重试，而不是伪装成空列表", async () => {
     vi.mocked(api.listUsers).mockResolvedValue([user()]);
+    // 用非 5xx：Query 策略只对 5xx 自动重试，500 会把错误提示推迟到重试耗尽
+    // 之后（约 3 秒）。这条用例测的是「失败可见 + 可重试」，不是重试时序。
     vi.mocked(api.listRoles).mockRejectedValueOnce(
-      new ApiError(500, "服务器内部错误", "internal_error", "req-roles"),
+      new ApiError(403, "无权查看角色目录", "forbidden", "req-roles"),
     );
     render(<App />);
 
@@ -192,11 +195,17 @@ describe("用户与角色管理", () => {
     render(<App />);
 
     const select = await screen.findByLabelText("为 author 选择角色");
-    fireEvent.change(select, { target: { value: "editor" } });
+    // antd Select 不是原生 select：`fireEvent.change` 改不动它的值，
+    // 要先 mousedown 打开下拉，再点中具体选项（选项带 title=标签文本）。
+    fireEvent.mouseDown(select);
+    fireEvent.click(await screen.findByTitle("Editor（editor）"));
+    const add = screen.getByRole("button", { name: "为 author 添加角色" }) as HTMLButtonElement;
+    await waitFor(() => expect(add.disabled).toBe(false));
+
     vi.mocked(api.assignRole).mockRejectedValue(
       new ApiError(403, "无权执行该操作", "forbidden", "req-4"),
     );
-    fireEvent.click(screen.getByRole("button", { name: "为 author 添加角色" }));
+    fireEvent.click(add);
 
     await waitFor(() => expect(screen.getByText(/没有权限执行该操作/)).toBeTruthy());
     expect(screen.getByText(/req-4/)).toBeTruthy();

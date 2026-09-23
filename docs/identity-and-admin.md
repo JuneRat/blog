@@ -4,7 +4,7 @@
 
 ## 1. 前后台结构
 
-公开站点使用 MiniJinja SSR；后台 React + TypeScript + Vite 通过版本化管理 API 调用用例。推荐同源部署：/admin/* 提供 SPA（`apps/admin`，构建产物不进备份），/api/admin/v1/* 提供 JSON API，/auth/* 提供认证入口。SPA fallback 只注册在 /admin 子树内，不覆盖 API、认证和公开页面。登录页渲染用的 `GET /auth/providers` 是公开只读端点，只返回提供商的 id/展示名/类型。
+公开站点使用 MiniJinja SSR；后台 React + TypeScript + Vite + Ant Design v6（选型见 [ADR-0011](adr/0011-admin-ui-library.md)）通过版本化管理 API 调用用例。推荐同源部署：/admin/* 提供 SPA（`apps/admin`，构建产物不进备份），/api/admin/v1/* 提供 JSON API，/auth/* 提供认证入口。SPA fallback 只注册在 /admin 子树内，不覆盖 API、认证和公开页面。登录页渲染用的 `GET /auth/providers` 是公开只读端点，只返回提供商的 id/展示名/类型。
 
 管理响应和预览使用 Cache-Control: no-store，前端路由守卫只改善体验，权限由后端执行。OpenAPI 维护接口契约，错误响应为 `{"error", "code", "request_id"}`：`code` 是业务码，同一状态码的不同原因必须可区分（409 的 slug 占用是 `conflict`，版本冲突是 `version_conflict`，用户名/邮箱占用分别是 `username_taken`/`email_taken`；403 的最后可登录 Owner 保护是 `last_owner`），客户端不得只按状态码分支；`request_id` 为每请求 UUIDv7，与 `x-request-id` 响应头一致，客户端报障文案需展示它。编辑携带 expected_version，分页限制上限，批量命令逐项授权。
 
@@ -82,7 +82,7 @@ OAuth 是授权协议；仅 OAuth 平台必须通过受信身份接口适配，�
 
 ## 6. 后台与验证
 
-后台优先实现文章、页面、分类、标签、系列顺序、角色用户、外部身份绑定与站点设置。没有修订表，所以不展示历史恢复；没有媒体表，所以不宣称具备附件库。保存已发布内容会直接更新线上，不能标为“保存草稿”。当前后台已交付：文章与页面编辑、用户与角色管理（见 §8；角色目录只读，分配在用户界面完成）、站点设置屏（`/admin/settings`，site 分组的标题/描述，读写都要求 `settings.manage`，生效优先级与冲突流程见 [数据库设计 §6](database-design.md)；oauth 等受保护分组不在此界面，仍走受控 CLI 与 `oauth.manage`）。
+后台优先实现文章、页面、分类、标签、系列顺序、角色用户、外部身份绑定与站点设置。**其中「外部身份绑定」尚未交付**：后端只有用户与角色路由，前端也没有绑定/解绑界面，绑定当前仍只能靠受控 CLI（见 §4/§5），不应把它算进已交付能力。没有修订表，所以不展示历史恢复；媒体库只覆盖正文图片的上传、引用与保护删除，不宣称具备完整附件库（无目录、无版本、无批量整理）。保存已发布内容会直接更新线上，不能标为“保存草稿”。当前后台已交付：文章与页面编辑、标签/分类/系列管理、媒体库、用户与角色管理（见 §8；角色目录只读，分配在用户界面完成）、自助改密（`/admin` 右上角「修改密码」，契约见 §7.5）、站点设置屏（`/admin/settings`，site 分组的标题/描述，读写都要求 `settings.manage`，生效优先级与冲突流程见 [数据库设计 §6](database-design.md)；oauth 等受保护分组不在此界面，仍走受控 CLI 与 `oauth.manage`）。
 
 访问日志为每个请求记录 request ID、method/path、结果状态与耗时，actor 只取自服务端验证过的会话（匿名留空），隐藏 Cookie、code、token、密码和秘密；预期 4xx 记 info、5xx 记 warn。它只回答"谁请求了哪个接口、结果如何"，**不构成业务审计**。角色变更、身份绑定等动作仍需记录明确的动作与对象：当前 13 表不承诺事务内持久审计；如需不可遗漏的业务审计，须在该功能交付时补充专用存储和事务实现。
 
@@ -154,6 +154,7 @@ OAuth 是授权协议；仅 OAuth 平台必须通过受信身份接口适配，�
 - **写入是条件写入（compare-and-swap）**：只在凭据仍等于刚校验过的那一份时才替换。期间若管理员下发了强制重置（或别人改了密码），本次自助改密作废并返回 `409 version_conflict`，**不会**把管理员的新口令覆盖掉——否则泄露处置的强制重置会被一次并发的自助改密静默撤销。OAuth 用户设置初始密码同理，期望值为「当前必须为空」。 条件写入通过同一条 `UPDATE … RETURNING version` 返回本次产生的版本，新会话只绑定此版本；不重新读取并借用后续重置的版本，因此写入后再发生的管理员重置仍会让本次会话失效。
 - 成功后轮换会话：撤销该用户全部会话，再签发新会话下发给当前浏览器，响应体回新的 `csrf_token`。
 - 当前密码不正确返回 `403` + `code=invalid_credentials`（不是 401）：用户并未掉线，前端不应清空登录态。
+- 前端入口是 `/admin` 右上角「修改密码」（`apps/admin/src/components/PasswordChangeModal.tsx`）：成功即用响应里的新 `csrf_token` 覆盖内存 token（会话已轮换，旧 token 立即失效），失败按 code 分支提示，`403` 明确告知「仍然处于登录状态」。`Me` 不含 `password_enabled`，所以「当前密码」在界面上可留空，由服务端判定是重新认证还是首次设置密码——前端不复制口令策略。
 
 ### 7.6 泄露处置
 

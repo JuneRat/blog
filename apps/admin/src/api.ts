@@ -212,6 +212,13 @@ export interface RenameTagInput {
 export const api = {
   me: (): Promise<Me> => request<Me>("/api/admin/v1/me"),
 
+  /** 自助改密：成功后服务端轮换会话并回新 csrf_token（调用方负责更新内存 token）。 */
+  changeOwnPassword: (input: { current_password?: string; new_password: string }): Promise<{ user_id: string; csrf_token: string }> =>
+    request<{ user_id: string; csrf_token: string }>("/api/admin/v1/me/password", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+
   providers: (): Promise<ProviderSummary[]> => request<ProviderSummary[]>("/auth/providers"),
 
   /**

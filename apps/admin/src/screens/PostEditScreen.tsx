@@ -1,11 +1,28 @@
+import {
+  Alert,
+  App as AntdApp,
+  Button,
+  Checkbox,
+  Flex,
+  Form,
+  Input,
+  Select,
+  Space,
+  Tag,
+  Typography,
+} from "antd";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ApiError, api, categoryApi, seriesApi, withRequestId } from "../api";
+import { ApiError, api, categoryApi, seriesApi } from "../api";
+import { permissionMessageOf } from "../apiError";
 import { useAuth } from "../auth";
+import { queryKeys } from "../queryClient";
 import { navigate, paths } from "../router";
+import { useLeaveConfirmation, useUnsavedGuard } from "../unsaved";
 import { MediaInsertPanel } from "../components/MediaInsertPanel";
 import { useImageInsertion } from "../components/useImageInsertion";
 import type { EditPostInput } from "../api";
-import type { CategorySummary, PostDetail, SeriesSummary, TagSummary, Visibility } from "../types";
+import type { PostDetail, Visibility } from "../types";
 
 interface FormState {
   slug: string;
@@ -49,19 +66,26 @@ function toForm(post: PostDetail): FormState {
   };
 }
 
+/**
+ * antd `Select` 的 `allowClear` 清空后给出 `undefined`，某些写法会给出 `""`；
+ * `FormState` 用 `null` 表示「未分类 / 不属于系列」。这里统一收敛，
+ * 否则 `pickServer`/`mergeServer` 会把 `undefined` 与 `null` 当成两种不同的值。
+ */
+function normalizeForm(raw: FormState): FormState {
+  const categoryId = raw.categoryId;
+  const seriesId = raw.seriesId;
+  return {
+    ...raw,
+    categoryId: typeof categoryId === "string" && categoryId.length > 0 ? categoryId : null,
+    seriesId: typeof seriesId === "string" && seriesId.length > 0 ? seriesId : null,
+  };
+}
+
 /** 集合相等（标签选择顺序无关）。 */
 function sameTags(left: string[], right: string[]): boolean {
   if (left.length !== right.length) return false;
   const set = new Set(left);
   return right.every((id) => set.has(id));
-}
-
-function messageOf(error: unknown): string {
-  if (error instanceof ApiError) {
-    const base = error.status === 403 ? `没有权限：${error.message}` : error.message;
-    return withRequestId(base, error.requestId);
-  }
-  return error instanceof Error ? error.message : "未知错误";
 }
 
 function formEquals(left: FormState, right: FormState): boolean {
@@ -126,6 +150,9 @@ function isVersionConflict(error: unknown): boolean {
   return error.code === null || error.code === "version_conflict";
 }
 
+/** antd `Input.TextArea` 的 ref 不是 DOM 节点，取出里面的原生 textarea 供插入逻辑使用。 */
+type TextAreaHandle = { resizableTextArea?: { textArea: HTMLTextAreaElement } };
+
 /**
  * 编辑屏。`slug === null` 表示新建。
  *
@@ -133,23 +160,42 @@ function isVersionConflict(error: unknown): boolean {
  * 409 时**保留客户端编辑并提示处理**，不自动覆盖：
  * - 「重新加载」拉取服务器最新内容并丢弃本地改动；
  * - 「仍然覆盖」二次确认后，用**服务器最新 version** 重新提交本地内容。
+ *
+ * 值的唯一来源是 antd Form 的 store；`view` 只是给渲染与脏判断用的镜像，
+ * 由 `onValuesChange`（同步回调）与写入函数共同维护，不另立第二份数据。
+ * 这样 `pickServer`/`mergeServer` 仍能读到「响应回来那一刻」的真实输入，
+ * 保留「请求飞行期间的新输入不被服务器响应覆盖」的既有语义。
  */
 export function PostEditScreen({ slug }: { slug: string | null }) {
   const { me } = useAuth();
-  const [form, setForm] = useState<FormState>(EMPTY_FORM);
-  /** 最近一次与服务器同步的表单内容，用于判断是否有未保存编辑。 */
-  const [baseline, setBaseline] = useState<FormState>(EMPTY_FORM);
+  const { modal } = AntdApp.useApp();
+  const [formApi] = Form.useForm<FormState>();
+  const [view, setView] = useState<FormState>(EMPTY_FORM);
   const [version, setVersion] = useState<number | null>(null);
   const [postStatus, setPostStatus] = useState<string>("draft");
   const [loading, setLoading] = useState(slug !== null);
   const [busy, setBusy] = useState(false);
-  /** 标签目录（编辑器选择器）：已登录会话即可读。 */
-  const [catalog, setCatalog] = useState<TagSummary[] | null>(null);
-  /** 分类目录（编辑器选择器）。 */
-  const [categoryCatalog, setCategoryCatalog] = useState<CategorySummary[] | null>(null);
-  /** 系列目录（编辑器选择器）。 */
-  const [seriesCatalog, setSeriesCatalog] = useState<SeriesSummary[] | null>(null);
-  const [catalogError, setCatalogError] = useState<string | null>(null);
+  /**
+   * 三个目录（标签/分类/系列）走 React Query：与标签、分类、系列三个管理屏
+   * 共用同一份缓存，编辑器之间也不再各拉一遍。
+   *
+   * 目录加载失败**不阻塞正文编辑**——只是暂时无法勾选，所以这里不进入 loading 分支，
+   * 只在选择区上方显示一条错误。
+   */
+  const tagsQuery = useQuery({ queryKey: queryKeys.tags(), queryFn: () => api.listTags() });
+  const categoriesQuery = useQuery({
+    queryKey: queryKeys.categories(),
+    queryFn: () => categoryApi.list(),
+  });
+  const seriesQuery = useQuery({
+    queryKey: queryKeys.series(),
+    queryFn: () => seriesApi.list(),
+  });
+  const catalog = tagsQuery.data ?? null;
+  const categoryCatalog = categoriesQuery.data ?? null;
+  const seriesCatalog = seriesQuery.data ?? null;
+  const catalogFailure = tagsQuery.error ?? categoriesQuery.error ?? seriesQuery.error;
+  const catalogError = catalogFailure === null ? null : permissionMessageOf(catalogFailure);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [conflict, setConflict] = useState(false);
@@ -157,22 +203,43 @@ export function PostEditScreen({ slug }: { slug: string | null }) {
   const [mediaOpen, setMediaOpen] = useState(false);
   /** 正文输入框：插入位置取自它的真实选区。 */
   const contentRef = useRef<HTMLTextAreaElement | null>(null);
-  /**
-   * 表单与服务器基线的同步副本。异步请求返回时读它拿到「此刻正在编辑的内容」，
-   * React state 在那个时点还是旧的闭包值。
-   */
-  const formRef = useRef<FormState>(EMPTY_FORM);
+  /** 最近一次与服务器同步的表单内容，用于判断是否有未保存编辑。 */
   const baselineRef = useRef<FormState>(EMPTY_FORM);
   /**
    * 当前表单对应的服务器 slug。改名成功后会先本地同步再更新地址栏；
    * 效果钩子据此跳过"同一篇文章"的重载，避免把刚合并好的编辑覆盖掉。
    */
   const loadedSlugRef = useRef<string | null>(null);
+  /**
+   * 当前表单内容所属的 slug（`applyServer` 写入）。
+   *
+   * 编辑屏后退或切换到另一篇文章时组件会被复用（App 不按 slug 加 key）：
+   * 若目标文章加载失败，表单里留着的仍是**上一篇**的正文与版本号。
+   * 用「表单所属 slug」而不是「version 是否为空」判断，才能覆盖
+   * A(已加载) → B(加载失败) 这条路径，避免把 A 的内容连 A 的 expected_version
+   * 写到 B 的地址上（版本恰好相同就是静默覆盖）。
+   * 与 `PageEditScreen` 的 `formSlug`/`formMismatch`/`unloaded` 同源。
+   */
+  const [formSlug, setFormSlug] = useState<string | null>(null);
 
-  function commitForm(next: FormState): void {
-    formRef.current = next;
-    setForm(next);
-  }
+  const attachContentRef = useCallback((node: TextAreaHandle | null): void => {
+    contentRef.current = node?.resizableTextArea?.textArea ?? null;
+  }, []);
+
+  /** 读当前值。字段尚未注册（例如「系列内序号」）时用 EMPTY_FORM 补齐成完整的 FormState。 */
+  const readForm = useCallback(
+    (): FormState => normalizeForm({ ...EMPTY_FORM, ...formApi.getFieldsValue() }),
+    [formApi],
+  );
+
+  /** 唯一的写入口：antd store 与渲染镜像一起更新（setFieldsValue 不触发 onValuesChange）。 */
+  const writeForm = useCallback(
+    (next: FormState): void => {
+      formApi.setFieldsValue(next);
+      setView(next);
+    },
+    [formApi],
+  );
 
   /**
    * 用服务器响应同步表单，返回同步后是否仍有未保存改动。
@@ -180,19 +247,21 @@ export function PostEditScreen({ slug }: { slug: string | null }) {
    * 传入 `sent`（发出请求时的表单快照）时逐字段合并：请求飞行期间的新输入被保留。
    * 不传表示显式丢弃本地改动（初次加载、用户点「重新加载」）。
    */
-  const applyServer = useCallback((post: PostDetail, sent?: FormState): boolean => {
-    const server = toForm(post);
-    const merged = sent === undefined ? server : mergeServer(formRef.current, sent, server);
-    formRef.current = merged;
-    baselineRef.current = server;
-    loadedSlugRef.current = server.slug;
-    setForm(merged);
-    setBaseline(server);
-    setVersion(post.version);
-    setPostStatus(post.status);
-    setConflict(false);
-    return !formEquals(merged, server);
-  }, []);
+  const applyServer = useCallback(
+    (post: PostDetail, sent?: FormState): boolean => {
+      const server = toForm(post);
+      const merged = sent === undefined ? server : mergeServer(readForm(), sent, server);
+      baselineRef.current = server;
+      loadedSlugRef.current = server.slug;
+      writeForm(merged);
+      setFormSlug(server.slug);
+      setVersion(post.version);
+      setPostStatus(post.status);
+      setConflict(false);
+      return !formEquals(merged, server);
+    },
+    [readForm, writeForm],
+  );
 
   /**
    * 发布/撤回只改状态、不改正文：只同步状态类字段，表单与脏标记原样保留。
@@ -204,46 +273,41 @@ export function PostEditScreen({ slug }: { slug: string | null }) {
     setConflict(false);
   }, []);
 
-  /** 此刻是否仍有未保存改动（读 ref，可用于 await 之后）。 */
+  /** 此刻是否仍有未保存改动（读 form store，可用于 await 之后）。 */
   function hasUnsaved(): boolean {
-    return !formEquals(formRef.current, baselineRef.current);
+    return !formEquals(readForm(), baselineRef.current);
   }
 
-  const dirty = !formEquals(form, baseline);
+  /** 表单内容与当前地址不一致：见 `formSlug` 的说明。 */
+  const formMismatch = slug !== null && formSlug !== slug;
+  /** 未加载成功（非加载中但表单仍不属于当前地址）：显示告警与重试入口。 */
+  const unloaded = formMismatch && !loading;
+  /** 渲染镜像与最近一次服务器同步值的差异；用于离开确认（见 src/unsaved.tsx）。 */
+  const dirty = !formEquals(view, baselineRef.current);
+  useUnsavedGuard(dirty, "文章有未保存的修改，离开会丢失。");
+  const queryClient = useQueryClient();
+  /**
+   * 写成功后让文章列表失效。
+   *
+   * 列表查询是 30s 新鲜度、且关闭了窗口聚焦重取；不显式失效的话，
+   * 「改完标题/改名 → 返回列表」会命中旧缓存，看到的是保存前的标题与 slug。
+   * 失效只打标记，真正取数发生在列表下次挂载时（此时它多半不在挂载状态）。
+   */
+  const invalidateList = useCallback((): void => {
+    void queryClient.invalidateQueries({ queryKey: queryKeys.posts() });
+  }, [queryClient]);
 
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const [tags, categories, seriesList] = await Promise.all([
-          api.listTags(),
-          categoryApi.list(),
-          seriesApi.list(),
-        ]);
-        if (!cancelled) {
-          setCatalog(tags);
-          setCategoryCatalog(categories);
-          setSeriesCatalog(seriesList);
-        }
-      } catch (e) {
-        // 目录加载失败不阻塞正文编辑：只是暂时无法勾选标签。
-        if (!cancelled) setCatalogError(messageOf(e));
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  const confirmLeave = useLeaveConfirmation();
+
 
   useEffect(() => {
     if (slug === null) {
       // 编辑页后退到新建页时组件会复用；清空全部编辑状态。
       // 创建成功的 null → slug 跳转仍由 loadedSlugRef 保留已合并的新输入。
-      formRef.current = EMPTY_FORM;
       baselineRef.current = EMPTY_FORM;
       loadedSlugRef.current = null;
-      setForm(EMPTY_FORM);
-      setBaseline(EMPTY_FORM);
+      writeForm(EMPTY_FORM);
+      setFormSlug(null);
       setVersion(null);
       setPostStatus("draft");
       setBusy(false);
@@ -265,7 +329,7 @@ export function PostEditScreen({ slug }: { slug: string | null }) {
         const post = await api.getPost(slug);
         if (!cancelled) applyServer(post);
       } catch (e) {
-        if (!cancelled) setError(messageOf(e));
+        if (!cancelled) setError(permissionMessageOf(e));
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -273,17 +337,16 @@ export function PostEditScreen({ slug }: { slug: string | null }) {
     return () => {
       cancelled = true;
     };
-  }, [slug, applyServer]);
+  }, [slug, applyServer, writeForm]);
 
-  function field<K extends keyof FormState>(key: K, value: FormState[K]): void {
-    // 同步更新 ref：await 之后要用到「此刻」的内容，不能等 React 提交 state。
-    commitForm({ ...formRef.current, [key]: value });
+  function commitContent(next: string): void {
+    writeForm({ ...readForm(), content: next });
   }
 
-  /** 只在 slug 变化时提交 new_slug，避免把未改动值当作改名；读 ref 取最新编辑。
+  /** 只在 slug 变化时提交 new_slug，避免把未改动值当作改名；读 store 取最新编辑。
    *  标签集合总是提交：后端按「整体替换」处理，未变化的集合是幂等重写。 */
   function editPayload(): EditPostInput {
-    const current = formRef.current;
+    const current = readForm();
     const trimmed = current.slug.trim();
     return {
       new_slug: slug !== null && trimmed.length > 0 && trimmed !== slug ? trimmed : undefined,
@@ -310,18 +373,15 @@ export function PostEditScreen({ slug }: { slug: string | null }) {
     return { id: current.seriesId, order: Number(current.seriesOrder.trim()) };
   }
 
-  /** 勾选/取消一个标签（集合操作）。 */
-  function toggleTag(tagId: string): void {
-    const current = formRef.current;
-    const next = current.tagIds.includes(tagId)
-      ? current.tagIds.filter((id) => id !== tagId)
-      : [...current.tagIds, tagId];
-    commitForm({ ...current, tagIds: next });
-  }
-
   async function save(): Promise<void> {
+    // 表单不属于当前地址时绝不能写入：`expected_version` 会用上一篇的版本号
+    // 打到新 slug 上，版本相同即静默覆盖。（加载途中同样适用，故用 formMismatch 而非 unloaded。）
+    if (formMismatch) {
+      setError("文章尚未成功加载，请先重新加载再保存，避免覆盖服务器内容。");
+      return;
+    }
     // 系列序号是提交前提：非法值直接阻止，绝不静默丢弃系列选择。
-    if (formRef.current.seriesId !== null && !validSeriesOrder(formRef.current.seriesOrder)) {
+    if (readForm().seriesId !== null && !validSeriesOrder(readForm().seriesOrder)) {
       setError("选择了系列时，系列内序号必须是正整数（如 1、2、3）。");
       return;
     }
@@ -330,11 +390,11 @@ export function PostEditScreen({ slug }: { slug: string | null }) {
     setBusy(true);
     try {
       if (slug === null) {
-        const sent = formRef.current;
+        const sent = readForm();
         const created = await api.createPost({
           slug: sent.slug.trim().length > 0 ? sent.slug.trim() : undefined,
           title: sent.title,
-          excerpt: sent.excerpt.trim().length > 0 ? sent.excerpt : undefined,
+          excerpt: sent.excerpt.trim().length > 0 ? sent.excerpt.trim() : undefined,
           content: sent.content,
           visibility: sent.visibility,
           tag_ids: sent.tagIds,
@@ -343,16 +403,18 @@ export function PostEditScreen({ slug }: { slug: string | null }) {
         });
         // 先本地同步（含创建期间的新输入），再更新地址；效果钩子会跳过重载。
         applyServer(created, sent);
+        invalidateList();
         navigate(paths.editPost(created.slug));
         return;
       }
-      const sent = formRef.current;
+      const sent = readForm();
       const saved = await api.updatePost(slug, {
         ...editPayload(),
         expected_version: version ?? undefined,
       });
       // 合并而不是整体覆盖：请求飞行期间的新输入必须保留。
       const stillDirty = applyServer(saved, sent);
+      invalidateList();
       if (saved.slug !== slug) {
         // 改名成功：先本地同步再替换地址栏，否则编辑器、发布按钮与公开链接
         // 会继续指向已不存在的旧地址，直到手动刷新。
@@ -366,7 +428,7 @@ export function PostEditScreen({ slug }: { slug: string | null }) {
       if (isVersionConflict(e)) {
         setConflict(true);
       } else {
-        setError(messageOf(e));
+        setError(permissionMessageOf(e));
       }
     } finally {
       setBusy(false);
@@ -382,43 +444,50 @@ export function PostEditScreen({ slug }: { slug: string | null }) {
       applyServer(await api.getPost(slug));
       setNotice("已重新加载服务器最新内容。");
     } catch (e) {
-      setError(messageOf(e));
+      setError(permissionMessageOf(e));
     } finally {
       setBusy(false);
     }
   }
 
   /** 冲突动作二：二次确认后用服务器最新 version 覆盖本地内容。 */
-  async function overwriteWithLatest(): Promise<void> {
+  function overwriteWithLatest(): void {
     if (slug === null) return;
-    if (!window.confirm("将用你当前的编辑内容覆盖服务器上的最新版本，确定继续？")) return;
-    setError(null);
-    setBusy(true);
-    try {
-      const latest = await api.getPost(slug);
-      // 等待 getPost 期间的新输入也要一起提交，不能在覆盖时丢掉。
-      const sent = formRef.current;
-      const saved = await api.updatePost(slug, {
-        ...editPayload(),
-        expected_version: latest.version,
-      });
-      const stillDirty = applyServer(saved, sent);
-      if (saved.slug !== slug) {
-        navigate(paths.editPost(saved.slug), { replace: true });
-        return;
-      }
-      setNotice(
-        stillDirty ? "已覆盖保存；等待期间的新改动尚未保存。" : "已用服务器最新版本覆盖保存。",
-      );
-    } catch (e) {
-      if (isVersionConflict(e)) {
-        setConflict(true);
-      } else {
-        setError(messageOf(e));
-      }
-    } finally {
-      setBusy(false);
-    }
+    modal.confirm({
+      title: "用当前编辑内容覆盖服务器上的最新版本？",
+      content: "将用你当前的编辑内容覆盖服务器上的最新版本，确定继续？",
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        setError(null);
+        setBusy(true);
+        try {
+          const latest = await api.getPost(slug);
+          // 等待 getPost 期间的新输入也要一起提交，不能在覆盖时丢掉。
+          const sent = readForm();
+          const saved = await api.updatePost(slug, {
+            ...editPayload(),
+            expected_version: latest.version,
+          });
+          const stillDirty = applyServer(saved, sent);
+          invalidateList();
+          if (saved.slug !== slug) {
+            navigate(paths.editPost(saved.slug), { replace: true });
+            return;
+          }
+          setNotice(
+            stillDirty ? "已覆盖保存；等待期间的新改动尚未保存。" : "已用服务器最新版本覆盖保存。",
+          );
+        } catch (e) {
+          if (isVersionConflict(e)) {
+            setConflict(true);
+          } else {
+            setError(permissionMessageOf(e));
+          }
+        } finally {
+          setBusy(false);
+        }
+      },
+    });
   }
 
   /**
@@ -427,22 +496,23 @@ export function PostEditScreen({ slug }: { slug: string | null }) {
    * 因此有未保存改动时先保存，再用保存得到的版本发布/撤回。
    */
   async function setPublished(publish: boolean): Promise<void> {
-    if (slug === null) return;
+    // 表单不属于当前地址时不得改状态：没有可依据的版本号，等于盲写。
+    if (slug === null || formMismatch) return;
     // 保存未存编辑走同一前提校验。
-    if (formRef.current.seriesId !== null && !validSeriesOrder(formRef.current.seriesOrder)) {
+    if (readForm().seriesId !== null && !validSeriesOrder(readForm().seriesOrder)) {
       setError("选择了系列时，系列内序号必须是正整数（如 1、2、3）。");
       return;
     }
     setError(null);
     setNotice(null);
     setBusy(true);
-    const hadUnsavedEdits = dirty;
+    const hadUnsavedEdits = hasUnsaved();
     /** 保存若发生改名，后续发布必须打到新地址。 */
     let activeSlug = slug;
     try {
       let expected = version ?? undefined;
       if (hadUnsavedEdits) {
-        const sent = formRef.current;
+        const sent = readForm();
         const saved = await api.updatePost(activeSlug, {
           ...editPayload(),
           expected_version: expected,
@@ -450,12 +520,19 @@ export function PostEditScreen({ slug }: { slug: string | null }) {
         activeSlug = saved.slug;
         expected = saved.version;
         applyServer(saved, sent);
+        /**
+         * 先行保存已经改动了列表数据（标题/slug/版本）：**立刻失效**，不能等到
+         * 状态切换成功——那一步失败时返回列表看到的还是保存前的数据。
+         * 下面那次失效仍要保留：状态列（已发布/草稿）只有状态切换成功才变。
+         */
+        invalidateList();
       }
       // 发布/撤回不改正文：只同步状态，保留（可能还在变化的）表单。
       const result = publish
         ? await api.publishPost(activeSlug, expected)
         : await api.unpublishPost(activeSlug, expected);
       applyStatus(result);
+      invalidateList();
       const stillDirty = hasUnsaved();
       if (publish) {
         if (stillDirty) setNotice("已发布；等待期间的新改动尚未保存。");
@@ -468,7 +545,7 @@ export function PostEditScreen({ slug }: { slug: string | null }) {
       if (isVersionConflict(e)) {
         setConflict(true);
       } else {
-        setError(messageOf(e));
+        setError(permissionMessageOf(e));
       }
     } finally {
       // 改名已落库：无论发布成功还是失败，地址都必须先指向新 slug，
@@ -489,167 +566,160 @@ export function PostEditScreen({ slug }: { slug: string | null }) {
    */
   const insertion = useImageInsertion(
     contentRef,
-    () => formRef.current.content,
-    (next) => field("content", next),
+    () => readForm().content,
+    commitContent,
   );
 
   if (loading) {
-    return (
-      <div className="screen">
-        <p className="muted">正在加载…</p>
-      </div>
-    );
+    return <Typography.Text type="secondary">正在加载…</Typography.Text>;
   }
 
   return (
-    <div className="screen">
-      <header className="topbar">
-        <div>
-          <button type="button" className="link" onClick={() => navigate(paths.list)}>
-            ← 返回列表
-          </button>
-          <h1>{slug === null ? "新建草稿" : form.slug}</h1>
-        </div>
-        <div className="topbar-actions">
-          <span className="badge">{postStatus === "published" ? "已发布" : "草稿"}</span>
-          {version !== null && <span className="muted">v{version}</span>}
-          {postStatus === "published" && slug !== null && (
-            <a className="link" href={`/posts/${encodeURIComponent(slug)}`} target="_blank" rel="noreferrer">
-              查看公开页面
-            </a>
-          )}
-        </div>
-      </header>
+    <>
+      <Flex justify="space-between" align="center" wrap gap={12} style={{ marginBottom: 16 }}>
+        <Flex align="center" gap={8}>
+          <Typography.Title level={3} style={{ margin: 0 }}>
+            {slug === null ? "新建草稿" : view.slug}
+          </Typography.Title>
+          <Tag color={postStatus === "published" ? "green" : undefined}>
+            {postStatus === "published" ? "已发布" : "草稿"}
+          </Tag>
+          {version !== null && <Typography.Text type="secondary">v{version}</Typography.Text>}
+        </Flex>
+        {postStatus === "published" && slug !== null && (
+          <Typography.Link
+            href={`/posts/${encodeURIComponent(slug)}`}
+            target="_blank"
+            rel="noreferrer"
+          >
+            查看公开页面
+          </Typography.Link>
+        )}
+      </Flex>
 
       {conflict && (
-        <div className="conflict">
-          <strong>内容已在别处修改。</strong> 你的编辑仍保留在下面，未被自动覆盖。
-          <div className="conflict-actions">
-            <button type="button" className="button" disabled={busy} onClick={() => void reloadFromServer()}>
-              重新加载（丢弃本地改动）
-            </button>
-            <button type="button" className="button danger" disabled={busy} onClick={() => void overwriteWithLatest()}>
-              仍然覆盖
-            </button>
-          </div>
-        </div>
+        <Alert
+          type="warning"
+          showIcon
+          title="内容已在别处修改。"
+          description="你的编辑仍保留在下面，未被自动覆盖。"
+          style={{ marginBottom: 16 }}
+          action={
+            <Space>
+              <Button disabled={busy} onClick={() => void reloadFromServer()}>
+                重新加载（丢弃本地改动）
+              </Button>
+              <Button danger disabled={busy} onClick={overwriteWithLatest}>
+                仍然覆盖
+              </Button>
+            </Space>
+          }
+        />
       )}
 
-      {notice !== null && <p className="notice">{notice}</p>}
-      {error !== null && <p className="error">{error}</p>}
+      {notice !== null && (
+        <Alert type="success" showIcon title={notice} style={{ marginBottom: 16 }} />
+      )}
+      {error !== null && (
+        <Alert type="error" showIcon title={error} style={{ marginBottom: 16 }} />
+      )}
+      {unloaded && (
+        <Alert
+          type="warning"
+          showIcon
+          title="文章未能加载。"
+          description="可能已被删除或暂时不可达。已禁用保存与发布，避免把上一次打开的内容写到这个地址。"
+          style={{ marginBottom: 16 }}
+          action={
+            <Button disabled={busy} onClick={() => void reloadFromServer()}>
+              重新加载
+            </Button>
+          }
+        />
+      )}
 
-      <form
-        className="editor"
-        onSubmit={(event) => {
-          event.preventDefault();
-          void save();
-        }}
+      <Form
+        form={formApi}
+        layout="vertical"
+        initialValues={EMPTY_FORM}
+        onValuesChange={(_changed, all) => setView(normalizeForm({ ...EMPTY_FORM, ...all }))}
+        onFinish={() => void save()}
       >
-        <label>
-          slug
-          <input
-            value={form.slug}
-            onChange={(event) => field("slug", event.target.value)}
-            placeholder="留空则自动生成（发布后锁定）"
+        <Form.Item label="slug" name="slug">
+          <Input placeholder="留空则自动生成（发布后锁定）" />
+        </Form.Item>
+        <Form.Item label="标题" name="title">
+          <Input />
+        </Form.Item>
+        <Form.Item label="摘要" name="excerpt">
+          <Input />
+        </Form.Item>
+        <Form.Item label="可见性" name="visibility">
+          <Select
+            options={[
+              { value: "public", label: "公开" },
+              { value: "private", label: "私有" },
+            ]}
           />
-        </label>
-        <label>
-          标题
-          <input value={form.title} onChange={(event) => field("title", event.target.value)} />
-        </label>
-        <label>
-          摘要
-          <input value={form.excerpt} onChange={(event) => field("excerpt", event.target.value)} />
-        </label>
-        <label>
-          可见性
-          <select
-            value={form.visibility}
-            onChange={(event) => field("visibility", event.target.value as Visibility)}
-          >
-            <option value="public">公开</option>
-            <option value="private">私有</option>
-          </select>
-        </label>
-        <label>
-          分类
-          <select
-            value={form.categoryId ?? ""}
-            onChange={(event) =>
-              commitForm({
-                ...formRef.current,
-                categoryId: event.target.value.length > 0 ? event.target.value : null,
-              })
-            }
-          >
-            <option value="">（未分类）</option>
-            {(categoryCatalog ?? []).map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          系列
-          <select
-            value={form.seriesId ?? ""}
-            onChange={(event) =>
-              commitForm({
-                ...formRef.current,
-                seriesId: event.target.value.length > 0 ? event.target.value : null,
-              })
-            }
-          >
-            <option value="">（不属于系列）</option>
-            {(seriesCatalog ?? []).map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        {form.seriesId !== null && (
-          <label>
-            系列内序号
-            <input
-              inputMode="numeric"
-              value={form.seriesOrder}
-              onChange={(event) =>
-                commitForm({ ...formRef.current, seriesOrder: event.target.value })
-              }
-              placeholder="正整数；同一系列内唯一"
-            />
-          </label>
+        </Form.Item>
+        <Form.Item label="分类" name="categoryId">
+          <Select
+            allowClear
+            placeholder="（未分类）"
+            options={(categoryCatalog ?? []).map((category) => ({
+              value: category.id,
+              label: category.name,
+            }))}
+          />
+        </Form.Item>
+        <Form.Item label="系列" name="seriesId">
+          <Select
+            allowClear
+            placeholder="（不属于系列）"
+            options={(seriesCatalog ?? []).map((series) => ({
+              value: series.id,
+              label: series.name,
+            }))}
+          />
+        </Form.Item>
+        {view.seriesId !== null && (
+          <Form.Item label="系列内序号" name="seriesOrder">
+            <Input inputMode="numeric" placeholder="正整数；同一系列内唯一" />
+          </Form.Item>
         )}
-        <fieldset className="tag-picker">
-          <legend>标签</legend>
-          {catalogError !== null && <p className="error">{catalogError}</p>}
-          {catalog === null && catalogError === null && <p className="muted">正在加载标签目录…</p>}
-          {catalog !== null && catalog.length === 0 && (
-            <p className="muted">
-              还没有可用标签；先在<a href={paths.tags} onClick={(event) => { event.preventDefault(); navigate(paths.tags); }}>标签目录</a>创建。
-            </p>
-          )}
-          {catalog !== null &&
-            catalog.map((tag) => (
-              <label key={tag.id} className="tag-option">
-                <input
-                  type="checkbox"
-                  checked={form.tagIds.includes(tag.id)}
-                  onChange={() => toggleTag(tag.id)}
-                />
-                {tag.name}
-              </label>
-            ))}
-        </fieldset>
-        <label>
-          正文（Markdown）
-          <textarea
-            ref={contentRef}
+        <Form.Item label="标签" name="tagIds">
+          <Checkbox.Group
+            options={(catalog ?? []).map((tag) => ({ label: tag.name, value: tag.id }))}
+          />
+        </Form.Item>
+        {catalogError !== null && (
+          <Alert type="error" showIcon title={catalogError} style={{ marginBottom: 16 }} />
+        )}
+        {catalog === null && catalogError === null && (
+          <Typography.Text type="secondary" style={{ display: "block", marginBottom: 16 }}>
+            正在加载标签目录…
+          </Typography.Text>
+        )}
+        {catalog !== null && catalog.length === 0 && (
+          <Typography.Text type="secondary" style={{ display: "block", marginBottom: 16 }}>
+            还没有可用标签；先在
+            <Typography.Link
+              href={paths.tags}
+              onClick={(event) => {
+                event.preventDefault();
+                // 屏内离页入口走同一确认口径，否则保护只覆盖侧栏菜单。
+                confirmLeave(() => navigate(paths.tags));
+              }}
+            >
+              标签目录
+            </Typography.Link>
+            创建。
+          </Typography.Text>
+        )}
+        <Form.Item label="正文（Markdown）" name="content">
+          <Input.TextArea
+            ref={attachContentRef}
             rows={18}
-            value={form.content}
-            onChange={(event) => field("content", event.target.value)}
             onDrop={(event) => {
               const files = Array.from(event.dataTransfer.files);
               if (files.length === 0) return;
@@ -663,50 +733,57 @@ export function PostEditScreen({ slug }: { slug: string | null }) {
               void insertion.insertFiles(files);
             }}
           />
-        </label>
+        </Form.Item>
+
         {canReadMedia && (
-          <div className="editor-tools">
-            <button
-              type="button"
-              className="link"
+          <Flex gap={12} align="center" style={{ marginBottom: 16 }}>
+            <Button
+              type="link"
               onClick={() => {
                 insertion.clear();
                 setMediaOpen((open) => !open);
               }}
             >
               {mediaOpen ? "收起图片面板" : "插入图片"}
-            </button>
-            <span className="muted">
+            </Button>
+            <Typography.Text type="secondary">
               也可以把图片拖入正文框，或在正文框内粘贴剪贴板图片。
-            </span>
+            </Typography.Text>
+          </Flex>
+        )}
+        {insertion.error !== null && (
+          <Alert type="error" showIcon title={insertion.error} style={{ marginBottom: 16 }} />
+        )}
+        {insertion.notice !== null && (
+          <Alert type="success" showIcon title={insertion.notice} style={{ marginBottom: 16 }} />
+        )}
+        {mediaOpen && canReadMedia && (
+          <div style={{ marginBottom: 16 }}>
+            <MediaInsertPanel
+              insertion={insertion}
+              canUpload={canUploadMedia}
+              onClose={() => setMediaOpen(false)}
+            />
           </div>
         )}
-        {insertion.error !== null && <p className="error">{insertion.error}</p>}
-        {insertion.notice !== null && <p className="notice">{insertion.notice}</p>}
-        {mediaOpen && canReadMedia && (
-          <MediaInsertPanel
-            insertion={insertion}
-            canUpload={canUploadMedia}
-            onClose={() => setMediaOpen(false)}
-          />
-        )}
 
-        <div className="editor-actions">
-          <button type="submit" className="button" disabled={busy}>
+        <Space>
+          {/*
+            用文案切换而不是 Button 的 loading 属性表示进行中。
+            antd 的 loading 图标在动画结束后仍会留在 DOM 里（jsdom 里动画不结束，
+            查询更明显），其 `role="img" aria-label="loading"` 会污染按钮的无障碍名，
+            让按名字定位变脆、读屏也会念出多余的 "loading"。
+          */}
+          <Button type="primary" htmlType="submit" disabled={busy}>
             {busy ? "处理中…" : "保存并更新线上"}
-          </button>
+          </Button>
           {canPublish && slug !== null && (
-            <button
-              type="button"
-              className="button ghost"
-              disabled={busy}
-              onClick={() => void setPublished(postStatus !== "published")}
-            >
+            <Button disabled={busy} onClick={() => void setPublished(postStatus !== "published")}>
               {postStatus === "published" ? "撤回为草稿" : "发布"}
-            </button>
+            </Button>
           )}
-        </div>
-      </form>
-    </div>
+        </Space>
+      </Form>
+    </>
   );
 }

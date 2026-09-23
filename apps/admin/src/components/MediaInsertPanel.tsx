@@ -1,8 +1,21 @@
+import {
+  Alert,
+  Button,
+  Card,
+  Empty,
+  Flex,
+  Image,
+  Input,
+  Space,
+  Spin,
+  Typography,
+  theme,
+} from "antd";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { mediaApi } from "../api";
 import type { MediaAsset } from "../types";
 import { MEDIA_ACCEPT, formatBytes } from "../media";
-import { messageOf } from "./useImageInsertion";
+import { permissionMessageOf } from "../apiError";
 import type { ImageInsertion } from "./useImageInsertion";
 
 /** 面板一次展示的资产数（第一页就够用，必要时可去媒体库查找）。 */
@@ -25,6 +38,7 @@ export function MediaInsertPanel({
   canUpload: boolean;
   onClose: () => void;
 }) {
+  const { token } = theme.useToken();
   const [assets, setAssets] = useState<MediaAsset[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [alt, setAlt] = useState("");
@@ -38,7 +52,7 @@ export function MediaInsertPanel({
       setAssets(page.items);
     } catch (e) {
       setAssets([]);
-      setLoadError(messageOf(e));
+      setLoadError(permissionMessageOf(e));
     }
   }, []);
 
@@ -53,8 +67,9 @@ export function MediaInsertPanel({
   }
 
   return (
-    <section
-      className={`media-panel${dragActive ? " drag-active" : ""}`}
+    <Card
+      size="small"
+      title="插入图片"
       aria-label="插入图片"
       onDragOver={(event) => {
         event.preventDefault();
@@ -66,85 +81,101 @@ export function MediaInsertPanel({
         setDragActive(false);
         if (canUpload) void upload(Array.from(event.dataTransfer.files));
       }}
+      style={dragActive ? { borderColor: token.colorPrimary } : undefined}
+      extra={
+        <Space>
+          <Typography.Text type="secondary">
+            单张上限 {formatBytes(10 * 1024 * 1024)}，仅 PNG/JPEG/GIF/WebP
+          </Typography.Text>
+          <input
+            ref={fileInput}
+            type="file"
+            accept={MEDIA_ACCEPT}
+            multiple
+            hidden
+            onChange={(event) => {
+              const files = Array.from(event.target.files ?? []);
+              event.target.value = "";
+              void upload(files);
+            }}
+          />
+          {canUpload && (
+            <Button disabled={insertion.busy} onClick={() => fileInput.current?.click()}>
+              {insertion.busy ? "上传中…" : "上传图片"}
+            </Button>
+          )}
+          <Button type="link" onClick={onClose}>
+            收起
+          </Button>
+        </Space>
+      }
     >
-      <header className="media-panel-head">
-        <strong>插入图片</strong>
-        <span className="muted">
-          单张上限 {formatBytes(10 * 1024 * 1024)}，仅 PNG/JPEG/GIF/WebP
-        </span>
-        <input
-          ref={fileInput}
-          type="file"
-          accept={MEDIA_ACCEPT}
-          multiple
-          hidden
-          onChange={(event) => {
-            const files = Array.from(event.target.files ?? []);
-            event.target.value = "";
-            void upload(files);
-          }}
-        />
-        {canUpload && (
-          <button
-            type="button"
-            className="button ghost"
-            disabled={insertion.busy}
-            onClick={() => fileInput.current?.click()}
-          >
-            {insertion.busy ? "上传中…" : "上传图片"}
-          </button>
+      <Flex vertical gap={12}>
+        <Flex vertical gap={4}>
+          {/* 用原生 label 关联：面板不处于 antd Form 内，Form.Item 拿不到表单上下文。 */}
+          <label htmlFor="media-insert-alt">替代文字</label>
+          <Input
+            id="media-insert-alt"
+            value={alt}
+            onChange={(event) => setAlt(event.target.value)}
+            placeholder="描述图片内容；留空则用文件名"
+          />
+        </Flex>
+
+        {insertion.error !== null && <Alert type="error" showIcon title={insertion.error} />}
+        {insertion.notice !== null && <Alert type="success" showIcon title={insertion.notice} />}
+        {loadError !== null && <Alert type="error" showIcon title={loadError} />}
+        {assets === null && (
+          <Flex justify="center" align="center" gap={8} style={{ padding: 12 }}>
+            <Spin size="small" />
+            <Typography.Text type="secondary">正在加载媒体库…</Typography.Text>
+          </Flex>
         )}
-        <button type="button" className="link" onClick={onClose}>
-          收起
-        </button>
-      </header>
+        {assets !== null && assets.length === 0 && loadError === null && (
+          <Empty
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+            description="媒体库还是空的：拖入、粘贴或点击「上传图片」。"
+          />
+        )}
 
-      <label className="media-alt">
-        替代文字
-        <input
-          value={alt}
-          onChange={(event) => setAlt(event.target.value)}
-          placeholder="描述图片内容；留空则用文件名"
-        />
-      </label>
+        {assets !== null && assets.length > 0 && (
+          <Flex wrap gap={12}>
+            {assets.slice(0, PANEL_PAGE_SIZE).map((asset) => (
+              <Card key={asset.id} size="small" style={{ width: 180 }}>
+                <Flex vertical gap={8}>
+                  <Image
+                    src={asset.url}
+                    alt={asset.original_name}
+                    height={96}
+                    style={{ objectFit: "cover" }}
+                  />
+                  <Typography.Text code title={asset.original_name}>
+                    {asset.original_name}
+                  </Typography.Text>
+                  <Typography.Text type="secondary">
+                    {asset.width}×{asset.height} · {formatBytes(asset.byte_size)}
+                  </Typography.Text>
+                  <Button
+                    disabled={insertion.busy}
+                    onClick={() =>
+                      insertion.insertAsset(
+                        asset,
+                        alt.trim().length > 0 ? alt : asset.original_name,
+                      )
+                    }
+                  >
+                    插入
+                  </Button>
+                </Flex>
+              </Card>
+            ))}
+          </Flex>
+        )}
 
-      {insertion.error !== null && <p className="error">{insertion.error}</p>}
-      {insertion.notice !== null && <p className="notice">{insertion.notice}</p>}
-      {loadError !== null && <p className="error">{loadError}</p>}
-      {assets === null && <p className="muted">正在加载媒体库…</p>}
-      {assets !== null && assets.length === 0 && loadError === null && (
-        <p className="muted">媒体库还是空的：拖入、粘贴或点击「上传图片」。</p>
-      )}
-
-      {assets !== null && assets.length > 0 && (
-        <ul className="media-grid">
-          {assets.slice(0, PANEL_PAGE_SIZE).map((asset) => (
-            <li key={asset.id} className="media-card">
-              <img src={asset.url} alt={asset.original_name} loading="lazy" />
-              <div className="media-meta">
-                <code title={asset.original_name}>{asset.original_name}</code>
-                <span className="muted">
-                  {asset.width}×{asset.height} · {formatBytes(asset.byte_size)}
-                </span>
-              </div>
-              <button
-                type="button"
-                className="button ghost"
-                disabled={insertion.busy}
-                onClick={() =>
-                  insertion.insertAsset(asset, alt.trim().length > 0 ? alt : asset.original_name)
-                }
-              >
-                插入
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-
-      <p className="muted">
-        提示：也可以直接把图片拖到正文框，或在正文框内粘贴剪贴板图片。
-      </p>
-    </section>
+        <Typography.Text type="secondary">
+          提示：也可以直接把图片拖到正文框，或在正文框内粘贴剪贴板图片。
+        </Typography.Text>
+      </Flex>
+    </Card>
   );
 }

@@ -1,17 +1,9 @@
 import { useCallback, useRef, useState } from "react";
 import type { RefObject } from "react";
-import { ApiError, mediaApi, withRequestId } from "../api";
+import { mediaApi } from "../api";
+import { permissionMessageOf } from "../apiError";
 import type { MediaAsset } from "../types";
 import { defaultAltText, insertImageMarkdown, uploadRejection } from "../media";
-
-/** 上传错误文案（带服务端请求编号，便于报障对齐）。 */
-export function messageOf(error: unknown): string {
-  if (error instanceof ApiError) {
-    const base = error.status === 403 ? `没有权限：${error.message}` : error.message;
-    return withRequestId(base, error.requestId);
-  }
-  return error instanceof Error ? error.message : "未知错误";
-}
 
 /**
  * 上传一组图片，按顺序返回。
@@ -60,6 +52,12 @@ export function useImageInsertion(
   const [notice, setNotice] = useState<string | null>(null);
   /** 插入后要恢复的选区；DOM 更新完成后由 `restore` 应用。 */
   const pendingSelection = useRef<{ start: number; end: number } | null>(null);
+  /**
+   * 同步闸门：`busy` 要等下一次渲染才为真，同一 tick 内的两批拖放/粘贴
+   * 都会看到 `busy === false`，于是并发上传并各自按「当前选区」插入，
+   * 后一批的光标位置会与先一批竞争。闸门必须在调用时就生效。
+   */
+  const inFlight = useRef(false);
 
   /** 选区：textarea 不存在或尚未挂载时退化为「正文末尾」。 */
   const selection = useCallback((): { start: number; end: number } => {
@@ -109,7 +107,8 @@ export function useImageInsertion(
 
   const insertFiles = useCallback(
     async (files: File[]): Promise<void> => {
-      if (files.length === 0) return;
+      if (files.length === 0 || inFlight.current) return;
+      inFlight.current = true;
       setError(null);
       setNotice(null);
       setBusy(true);
@@ -132,8 +131,9 @@ export function useImageInsertion(
         apply(value, caret, caret);
         setNotice(`已插入 ${uploaded.length} 张图片（尚未保存，点保存后生效）。`);
       } catch (e) {
-        setError(messageOf(e));
+        setError(permissionMessageOf(e));
       } finally {
+        inFlight.current = false;
         setBusy(false);
       }
     },

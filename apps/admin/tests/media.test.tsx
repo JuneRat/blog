@@ -112,14 +112,15 @@ describe("媒体库屏", () => {
       // 引用计数是全局的，但列表按权限过滤；差额必须如实展示。
       hidden_references: 2,
     });
-    vi.spyOn(window, "confirm").mockReturnValue(true);
 
     render(<App />);
     await waitFor(() => expect(screen.getByText("photo.png")).toBeTruthy());
 
     fireEvent.click(screen.getByRole("button", { name: "删除" }));
+    // 确认弹窗由 antd 的 modal.confirm 渲染，必须点掉它才会发请求。
+    fireEvent.click(await screen.findByRole("button", { name: "确定" }));
     await waitFor(() => expect(mediaApi.detail).toHaveBeenCalledWith("media-1"));
-    expect(screen.getByText(/仍被以下内容引用/)).toBeTruthy();
+    expect(await screen.findByText(/仍被以下内容引用/)).toBeTruthy();
     expect(screen.getByText(/带图文章/)).toBeTruthy();
     expect(screen.getByText(/已发布；公开可读/)).toBeTruthy();
     // 被权限过滤掉的引用要解释清楚，否则「被 N 处引用」与列表条数会对不上。
@@ -149,19 +150,25 @@ describe("媒体库屏", () => {
       ],
       hidden_references: 0,
     });
-    vi.spyOn(window, "confirm").mockReturnValue(true);
 
     render(<App />);
     await waitFor(() => expect(screen.getByText("photo.png")).toBeTruthy());
     fireEvent.click(screen.getByRole("button", { name: "删除" }));
-    await waitFor(() => expect(mediaApi.detail).toHaveBeenCalled());
+    fireEvent.click(await screen.findByRole("button", { name: "确定" }));
+    // 先等使用位置面板出现（唯一那处引用可见），再断言「无隐藏引用」的解释文案缺席。
+    expect(await screen.findByText(/我的草稿/)).toBeTruthy();
     expect(screen.queryByText(/无权查看/)).toBeNull();
-    expect(screen.getByText(/我的草稿/)).toBeTruthy();
     expect(screen.getByText(/草稿；不公开/)).toBeTruthy();
   });
 
-  it("上传成功后刷新列表", async () => {
+  it("上传成功后让列表重取并展示新资产", async () => {
     vi.mocked(mediaApi.upload).mockResolvedValue(asset({ id: "new-media" }));
+    // 上传成功后重取的列表里带上新资产：用界面变化证明「刷新了」，
+    // 而不是去数 api.list 调用了几次（那是取数实现的细节）。
+    vi.mocked(mediaApi.list)
+      .mockResolvedValueOnce(pageOf([asset()]))
+      .mockResolvedValue(pageOf([asset({ id: "new-media", original_name: "new.png" })]));
+
     render(<App />);
     await waitFor(() => expect(screen.getByText("photo.png")).toBeTruthy());
 
@@ -169,8 +176,9 @@ describe("媒体库屏", () => {
     const file = new File([new Uint8Array(16)], "new.png", { type: "image/png" });
     fireEvent.change(input, { target: { files: [file] } });
 
-    await waitFor(() => expect(mediaApi.upload).toHaveBeenCalledWith(file));
-    await waitFor(() => expect(mediaApi.list).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText("new.png")).toBeTruthy();
+    expect(screen.getByText(/已上传 1 张图片/)).toBeTruthy();
+    expect(mediaApi.upload).toHaveBeenCalledWith(file);
   });
 
   it("客户端预筛拦下不支持的格式，不发请求", async () => {
@@ -193,9 +201,16 @@ describe("媒体库屏", () => {
       per_page: 24,
     });
     render(<App />);
-    await waitFor(() => expect(screen.getByText("第 1 / 3 页")).toBeTruthy());
 
-    fireEvent.click(screen.getByRole("button", { name: "下一页" }));
+    // 第 1 页展示第 1 页数据（请求第 1 页）；总数 50、每页 24 → 共 3 页，当前页为 1。
+    await waitFor(() => expect(screen.getByText("photo.png")).toBeTruthy());
+    expect(mediaApi.list).toHaveBeenCalledWith(1);
+    expect(screen.getByText("共 50 张")).toBeTruthy();
+    expect(screen.getByTitle("3")).toBeTruthy();
+    expect(screen.getByTitle("1").className).toContain("ant-pagination-item-active");
+
+    // antd Pagination 的「下一页」是带 title 的 <li>；点击后请求第 2 页。
+    fireEvent.click(screen.getByTitle("下一页"));
     await waitFor(() => expect(mediaApi.list).toHaveBeenCalledWith(2));
   });
 

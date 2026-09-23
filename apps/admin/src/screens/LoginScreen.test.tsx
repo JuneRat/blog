@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const { refresh } = vi.hoisted(() => ({ refresh: vi.fn(async () => {}) }));
@@ -22,9 +22,22 @@ vi.mock("../api", async (importOriginal) => {
 });
 
 import { ApiError, api } from "../api";
+import { AdminProviders } from "../providers";
 import { LoginScreen } from "./LoginScreen";
 
 const loginWithPassword = vi.mocked(api.loginWithPassword);
+
+/**
+ * 登录屏在真实应用里总处于 AdminProviders 内（主题、zh_CN locale、antd App 上下文）。
+ * 测试直接渲染屏幕时补上同样的外壳，否则会拿到 antd 的英文默认 locale 与插空格行为。
+ */
+function renderLogin(): ReturnType<typeof render> {
+  return render(
+    <AdminProviders>
+      <LoginScreen />
+    </AdminProviders>,
+  );
+}
 
 function submitButton(): HTMLButtonElement {
   return screen.getByRole("button", { name: "登录" }) as HTMLButtonElement;
@@ -43,7 +56,7 @@ afterEach(() => {
 describe("LoginScreen", () => {
   it("submits trimmed credentials and refreshes the session on success", async () => {
     loginWithPassword.mockResolvedValueOnce({ user_id: "u1", next: "/admin/" });
-    render(<LoginScreen />);
+    renderLogin();
 
     fillForm("  sun ", "harbor-lantern-2026");
     fireEvent.click(submitButton());
@@ -60,7 +73,7 @@ describe("LoginScreen", () => {
     loginWithPassword.mockRejectedValueOnce(
       new ApiError(401, "用户名或密码不正确", "invalid_credentials", "req-1"),
     );
-    render(<LoginScreen />);
+    renderLogin();
 
     fillForm("sun", "wrong-password-value");
     fireEvent.click(submitButton());
@@ -78,7 +91,7 @@ describe("LoginScreen", () => {
         resolveLogin = resolve;
       }),
     );
-    render(<LoginScreen />);
+    renderLogin();
 
     fillForm("sun", "harbor-lantern-2026");
     const button = submitButton();
@@ -86,6 +99,10 @@ describe("LoginScreen", () => {
     fireEvent.click(button);
     fireEvent.click(button);
     fireEvent.submit(button.closest("form") as HTMLFormElement);
+    // antd Form 的 onFinish 在异步校验之后才跑，三个触发都排进微任务队列，
+    // 同步闸门只能放过第一个。
+    await waitFor(() => expect(loginWithPassword).toHaveBeenCalledTimes(1));
+    await act(async () => {});
     expect(loginWithPassword).toHaveBeenCalledTimes(1);
 
     resolveLogin({ user_id: "u1", next: "/admin/" });
@@ -93,7 +110,7 @@ describe("LoginScreen", () => {
   });
 
   it("keeps submit disabled until both fields are filled", () => {
-    render(<LoginScreen />);
+    renderLogin();
     expect(submitButton().disabled).toBe(true);
 
     fillForm("sun", "harbor-lantern-2026");
@@ -101,7 +118,7 @@ describe("LoginScreen", () => {
   });
 
   it("renders provider buttons from the public provider list", () => {
-    render(<LoginScreen />);
+    renderLogin();
     const link = screen.getByRole("link", { name: "使用 示例 IdP 登录" }) as HTMLAnchorElement;
     expect(link.getAttribute("href")).toBe("/auth/login?provider=idp&next=%2Fadmin%2F");
   });

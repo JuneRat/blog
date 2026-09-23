@@ -166,7 +166,7 @@ blog user show sun                             # 显示「密码登录：已启�
 
 ## 后台 SPA（apps/admin）
 
-React + TypeScript + Vite，挂在 `/admin` 子树：
+React + TypeScript + Vite + Ant Design v6，服务端状态用 TanStack Query，挂在 `/admin` 子树（组件库选型见 [ADR-0011](docs/adr/0011-admin-ui-library.md)，取数层与查询键/重试策略见 [ADR-0013](docs/adr/0013-tanstack-query.md)）：
 
 ```bash
 cd apps/admin
@@ -176,6 +176,8 @@ pnpm dev          # 开发服务器 http://localhost:5173/admin/
 ```
 
 `/admin` 由后端只在该子树内注册（`mount_admin_spa`）：`index.html` 与深链回退 `no-cache`，`/admin/assets/*` 的**成功**响应带指纹 `immutable`（缺失资源是 404，同样 `no-cache`，避免错误被缓存固化）。SPA 内部路由为 `/admin/`（文章）、`/admin/posts/new`、`/admin/posts/{slug}/edit`、`/admin/pages`（页面）、`/admin/pages/new`、`/admin/pages/{slug}/edit`、`/admin/settings`（站点设置，需 `settings.manage`）——编辑地址带 `/edit` 后缀，slug 恰好是 `new` 的内容才不会与新建页相撞。axum 按路径匹配，SPA fallback 结构上不可能遮挡 `/api`、`/auth`、`/posts/{slug}` 与页面根路径等路由。
+
+后台外壳（`src/components/AdminLayout.tsx`）负责侧边栏导航、面包屑与账号操作：**自助改密**在右上角「修改密码」（`POST /api/admin/v1/me/password`，成功后会轮换会话并回新 CSRF token），**未保存离开保护**由 `src/unsaved.tsx` + 菜单拦截 + `beforeunload` 提供——有未保存改动时点菜单会先确认，刷新/关闭标签页由浏览器确认；浏览器前进后退有意不覆盖（见该文件注释）。
 
 ### 开发期同源不变量（务必遵守）
 
@@ -203,7 +205,7 @@ cargo test --workspace
 - `crates/application`：用例 + 内存 fake（权限、委派上限、Owner 保护、版本冲突、真并发 join!；密码登录的统一失败语义、等价开销校验、限流、设置/清除与自助改密轮换；站点设置的优先级回退、非法值、并发保存与「重启」保留）。
 - `crates/infrastructure/tests`：真实 PostgreSQL（迁移、约束、三态保存、两连接真并发、公开过滤、RBAC 幂等与 Owner 并发、密码凭据的软删除作用域、settings 的 UPSERT+CAS/分组隔离/新连接池保留）；单元测试覆盖 Argon2id 哈希/校验/参数升级与内存限流。
 - `crates/server/tests`：完整装配 + HTTP（会话/CSRF/Origin、own/any 越权、浏览器绑定、撤权与软删除后旧会话、`/auth/providers`、密码登录全链路与限流/Retry-After、改密轮换、SPA 挂载与缓存头、草稿/private 不可公开访问、站点设置的认证/越权/CSRF/非法值/版本冲突/未知分组 404 与公开页面即时生效）。
-- `apps/admin`：`pnpm test`（Vitest + React Testing Library）覆盖登录表单、编辑器交互（含标签选择）、标签管理屏、用户与角色屏幕与路由解析；`pnpm build`（`tsc --noEmit` + Vite 构建）检查前端类型与产物。
+- `apps/admin`：`pnpm test`（Vitest + React Testing Library）覆盖登录表单、编辑器交互（含标签选择、图片插入、A→B 加载失败时拒绝误写）、未保存离开保护、自助改密、标签/分类/系列/媒体库/设置屏、用户与角色屏幕与路由解析；`pnpm build`（`tsc --noEmit` + Vite 构建）检查前端类型与产物。
 - `spikes/template-bridge`：M0 原型（独立 workspace，不在根清单），`cargo test` 跑桥接/预算/隔离集成测试；生产 crate 不依赖它。
 
 集成测试需要可写的 PostgreSQL，且**只允许 loopback 主机**：默认 `postgres://blog:blog@127.0.0.1:5432`，可用 `BLOG_TEST_ADMIN_URL` 覆盖（infrastructure 与 server 的测试库 DSN 都自动从它推导），会重建 `blog_test` / `blog_server_test` / `blog_admin_test` / `blog_auth_test` 数据库。CI 见 `.github/workflows/ci.yml`。

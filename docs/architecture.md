@@ -156,9 +156,9 @@ CI 先检查项目内边和明确禁止的框架直接依赖；第三方 feature
 
 ## 6. 主题与模板
 
-已选产品技术：PostgreSQL、MiniJinja、React + TypeScript + Vite。HTTP/数据访问的工程建议为 Axum + Tokio + Tower、SQLx，尚待实施验证，不能把参考链接当作已经接入。具体版本与兼容性在实现时锁定。
+已选产品技术：PostgreSQL、MiniJinja、React + TypeScript + Vite。后台的 UI 组件库为 Ant Design v6（[ADR-0011](adr/0011-admin-ui-library.md)），设计语言集中在 `apps/admin/src/providers.tsx` 的 seed token；服务端状态用 TanStack Query（查询键与重试策略集中在 `apps/admin/src/queryClient.ts`，见 [ADR-0013](adr/0013-tanstack-query.md)）；错误文案集中在 `apps/admin/src/apiError.ts`。HTTP/数据访问的工程建议为 Axum + Tokio + Tower、SQLx，尚待实施验证，不能把参考链接当作已经接入。具体版本与兼容性在实现时锁定。
 
-公开站点使用 MiniJinja SSR，后台 SPA 使用管理 API，不共用主题模板。后台采用 React + TypeScript + Vite；登录接入通用 OIDC + GitHub。搜索、统计等通过端口接入，不能成为正文阅读的同步必要依赖。首期插件通过主题、Webhook 和配置式外部服务连接提供扩展，不执行第三方 Rust/WASM/JavaScript 服务端代码。
+公开站点使用 MiniJinja SSR，后台 SPA 使用管理 API，不共用主题模板。后台采用 React + TypeScript + Vite + Ant Design v6；登录接入通用 OIDC + GitHub。搜索、统计等通过端口接入，不能成为正文阅读的同步必要依赖。首期插件通过主题、Webhook 和配置式外部服务连接提供扩展，不执行第三方 Rust/WASM/JavaScript 服务端代码。
 
 MiniJinja 的运行时模板能力用于无需重新编译的主题切换。不同主题是同一渲染适配器加载的资源，不应为每个主题新增 Rust 适配器。
 

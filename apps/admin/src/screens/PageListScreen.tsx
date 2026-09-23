@@ -1,104 +1,116 @@
-import { useCallback, useEffect, useState } from "react";
-import { ApiError, api, withRequestId } from "../api";
+import { Alert, Button, Flex, Table, Typography } from "antd";
+import type { TableProps } from "antd";
+import { useQuery } from "@tanstack/react-query";
+import { api } from "../api";
+import { permissionMessageOf } from "../apiError";
 import { useAuth } from "../auth";
+import { queryKeys } from "../queryClient";
 import { navigate, paths } from "../router";
 import type { PageSummary } from "../types";
 
-function messageOf(error: unknown): string {
-  if (error instanceof ApiError) {
-    const base = error.status === 403 ? `没有权限：${error.message}` : error.message;
-    return withRequestId(base, error.requestId);
-  }
-  return error instanceof Error ? error.message : "未知错误";
-}
-
-/** 独立页面列表：站点级 page.read，与文章列表（按作者）不同。 */
+/**
+ * 独立页面列表：站点级 page.read，与文章列表（按作者）不同。
+ *
+ * 导航交给 `AdminLayout` 的左侧菜单，本屏只保留页面说明、自己的空状态与
+ * 「新建页面」动作；失败提示沿用内联 `Alert`。
+ */
 export function PageListScreen() {
-  const { me, logout, logoutError } = useAuth();
-  const [pages, setPages] = useState<PageSummary[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { me } = useAuth();
+  /** 只读列表：失败按管理屏口径加「没有权限：」前缀（本屏没有写操作）。 */
+  const pages = useQuery({ queryKey: queryKeys.pages(), queryFn: () => api.listPages() });
+  const errorText = pages.error === null ? null : permissionMessageOf(pages.error);
   const canCreate = me?.permissions.includes("page.create") ?? false;
-  const canAdminister =
-    (me?.permissions.includes("user.manage") ?? false) ||
-    (me?.permissions.includes("role.manage") ?? false);
 
-  const load = useCallback(async () => {
-    setError(null);
-    try {
-      setPages(await api.listPages());
-    } catch (e) {
-      setPages([]);
-      setError(messageOf(e));
-    }
-  }, []);
+  const columns: TableProps<PageSummary>["columns"] = [
+    {
+      title: "版本",
+      dataIndex: "version",
+      render: (version: number) => <Typography.Text type="secondary">v{version}</Typography.Text>,
+    },
+    {
+      title: "状态",
+      dataIndex: "status",
+      render: (status: string) => (status === "published" ? "已发布" : "草稿"),
+    },
+    {
+      title: "可见",
+      dataIndex: "visibility",
+      render: (visibility: string) => (visibility === "public" ? "公开" : "私有"),
+    },
+    {
+      title: "slug",
+      dataIndex: "slug",
+      render: (slug: string) => <Typography.Text code>/{slug}</Typography.Text>,
+    },
+    {
+      title: "标题",
+      dataIndex: "title",
+      render: (title: string) => title || "（无标题）",
+    },
+    {
+      title: "更新时间",
+      dataIndex: "updated_at",
+      render: (updatedAt: string) => <Typography.Text type="secondary">{updatedAt}</Typography.Text>,
+    },
+  ];
 
-  useEffect(() => {
-    void load();
-  }, [load]);
+  // 「编辑」是整行点击的键盘可达等价路径（行点击对键盘用户不可用）。
+  columns.push({
+    title: "操作",
+    key: "actions",
+    render: (_value, page) => (
+      <Button
+        type="link"
+        onClick={(event) => {
+          // 行本身可点进编辑页；操作按钮不能冒泡成一次跳转。
+          event.stopPropagation();
+          navigate(paths.editPage(page.slug));
+        }}
+      >
+        编辑
+      </Button>
+    ),
+  });
 
   return (
-    <div className="screen">
-      <header className="topbar">
-        <h1>独立页面</h1>
-        <div className="topbar-actions">
-          <button type="button" className="button ghost" onClick={() => navigate(paths.list)}>
-            我的文章
-          </button>
-          {canAdminister && (
-            <button type="button" className="button ghost" onClick={() => navigate(paths.users)}>
-              用户与角色
-            </button>
-          )}
-          {canCreate && (
-            <button type="button" className="button" onClick={() => navigate(paths.newPage)}>
-              新建页面
-            </button>
-          )}
-          <button type="button" className="button ghost" onClick={() => void logout()}>
-            退出
-          </button>
-        </div>
-      </header>
+    <>
+      <Typography.Title level={3}>独立页面</Typography.Title>
 
-      <p className="muted">
+      <Typography.Paragraph type="secondary">
         发布后通过根路径访问（如 /about）。slug 不能占用 admin、api、auth 等系统路径。
-      </p>
+      </Typography.Paragraph>
 
-      {error !== null && <p className="error">{error}</p>}
-      {logoutError !== null && <p className="error">{logoutError}</p>}
-      {pages === null && <p className="muted">正在加载…</p>}
-      {pages !== null && pages.length === 0 && error === null && (
-        <p className="muted">还没有页面。{canCreate ? "点击「新建页面」开始。" : ""}</p>
+      {errorText !== null && (
+        <Alert type="error" showIcon title={errorText} style={{ marginBottom: 16 }} />
       )}
 
-      {pages !== null && pages.length > 0 && (
-        <table className="posts">
-          <thead>
-            <tr>
-              <th>版本</th>
-              <th>状态</th>
-              <th>可见</th>
-              <th>slug</th>
-              <th>标题</th>
-              <th>更新时间</th>
-            </tr>
-          </thead>
-          <tbody>
-            {pages.map((page) => (
-              <tr key={page.id} onClick={() => navigate(paths.editPage(page.slug))}>
-                <td>v{page.version}</td>
-                <td>{page.status === "published" ? "已发布" : "草稿"}</td>
-                <td>{page.visibility === "public" ? "公开" : "私有"}</td>
-                <td>
-                  <code>/{page.slug}</code>
-                </td>
-                <td>{page.title || "（无标题）"}</td>
-                <td className="muted">{page.updated_at}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      {canCreate && (
+        <Flex justify="flex-end" style={{ marginBottom: 16 }}>
+          <Button type="primary" onClick={() => navigate(paths.newPage)}>
+            新建页面
+          </Button>
+        </Flex>
       )}
-    </div>
+
+      <Table<PageSummary>
+        rowKey="id"
+        size="middle"
+        loading={pages.isPending}
+        dataSource={pages.data ?? []}
+        columns={columns}
+        pagination={false}
+        // 保留迁移前的语义：整行点击进入该页面的编辑页。
+        onRow={(page) => ({
+          onClick: () => navigate(paths.editPage(page.slug)),
+          style: { cursor: "pointer" },
+        })}
+        locale={{
+          emptyText:
+            errorText !== null
+              ? "页面加载失败。"
+              : `还没有页面。${canCreate ? "点击「新建页面」开始。" : ""}`,
+        }}
+      />
+    </>
   );
 }

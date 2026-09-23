@@ -1,8 +1,21 @@
-import { useCallback, useEffect, useState } from "react";
-import type { FormEvent } from "react";
+import {
+  Alert,
+  Button,
+  Form,
+  Input,
+  Select,
+  Space,
+  Table,
+  Tag,
+  Typography,
+} from "antd";
+import type { TableProps } from "antd";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
 import { ApiError, api, withRequestId } from "../api";
+import { messageOf as apiMessageOf } from "../apiError";
 import { useAuth } from "../auth";
-import { navigate, paths } from "../router";
+import { queryKeys } from "../queryClient";
 import type { AdminUser, RoleSummary } from "../types";
 
 /// 账号列表一次读取的上限（与后端 `ADMIN_USER_PAGE_MAX` 对齐）。
@@ -14,9 +27,12 @@ const USER_PAGE_LIMIT = 200;
  * 权限由后端执行，这里只据 `/me` 的权限决定「展示哪些控件」，避免把 403
  * 当作正常交互；路由守卫同理只改善体验。所有写操作都走受保护的 API
  * （会话 + CSRF），并按业务码给出精确文案：
- * - `username_taken` / `email_taken`：创建表单字段级错误；
+ * - `username_taken` / `email_taken`：创建失败的具体原因；
  * - `last_owner`：解释最后一个可登录 Owner 为何不能被移除；
  * - `forbidden`：可能是缺少 ownership.manage 或超出委派上限。
+ *
+ * 这些文案统一用**内联 Alert 而不是 message 吐司**：冲突、权限与最后 Owner
+ * 的说明需要停留在屏幕上，3 秒后自动消失会让人来不及看清。
  */
 function messageOf(error: unknown): string {
   if (error instanceof ApiError) {
@@ -33,74 +49,94 @@ function messageOf(error: unknown): string {
           error.requestId,
         );
       default:
-        return withRequestId(error.message, error.requestId);
+        // 其余情况回落到通用文案（含 requestId），不再各写一份 tail。
+        return apiMessageOf(error);
     }
   }
-  return error instanceof Error ? error.message : "未知错误";
+  return apiMessageOf(error);
+}
+
+/** 创建账号表单的字段；用 antd Form 托管，提交时读回同一份值。 */
+interface CreateUserDraft {
+  username: string;
+  email: string;
+  displayName: string;
+}
+
+const EMPTY_CREATE: CreateUserDraft = { username: "", email: "", displayName: "" };
+
+/** 登录方式文案：停用 > 无登录方式 > 密码/外部身份的组合。 */
+function loginLabel(user: AdminUser): string {
+  if (user.deleted) return "已停用";
+  if (!user.can_login) return "无（无法登录）";
+  if (user.password_enabled && user.external_identities > 0) return "密码 + 外部身份";
+  if (user.password_enabled) return "本地密码";
+  return "外部身份";
 }
 
 export function UserListScreen() {
-  const { me, refresh, logout, logoutError } = useAuth();
-  const [users, setUsers] = useState<AdminUser[] | null>(null);
-  /**
-   * `null` 表示「尚未加载成功」，与 `[]`（确实是空目录）区分开：
-   * 一次网络故障不能伪装成「暂无可分配角色」，否则角色分配会被静默阻断。
-   */
-  const [roles, setRoles] = useState<RoleSummary[] | null>(null);
-  const [rolesError, setRolesError] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { me, refresh } = useAuth();
+  const queryClient = useQueryClient();
+  const [actionError, setActionError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [username, setUsername] = useState("");
-  const [email, setEmail] = useState("");
-  const [displayName, setDisplayName] = useState("");
+  const [form] = Form.useForm<CreateUserDraft>();
+  /**
+   * 表单当前值的一份镜像，只用来决定「创建账号」按钮是否可用：用户名为空时不提交
+   * （与迁移前一致）。
+   *
+   * 用 `onValuesChange` 的同步回调而不是 `Form.useWatch`：后者的通知由
+   * rc-field-form 的 WatcherCenter 用 MessageChannel 批处理成宏任务，字段值到
+   * 按钮状态之间会差一拍，紧接着 change 的点击会落在仍禁用的按钮上。
+   */
+  const [createDraft, setCreateDraft] = useState<CreateUserDraft>(EMPTY_CREATE);
 
   const canManageUsers = me?.permissions.includes("user.manage") ?? false;
   const canManageRoles = me?.permissions.includes("role.manage") ?? false;
   const canOwnership = me?.permissions.includes("ownership.manage") ?? false;
   const canAdminister = canManageUsers || canManageRoles;
 
-  const load = useCallback(async () => {
-    setError(null);
-    try {
-      setUsers(await api.listUsers(USER_PAGE_LIMIT));
-    } catch (e) {
-      setUsers([]);
-      setError(messageOf(e));
-    }
-  }, []);
+  /**
+   * 账号列表与角色目录各走一个查询。
+   *
+   * - `enabled` 让**权限不足时不发请求**（无 user.manage/role.manage 的会话
+   *   不该用一次必然 403 的调用去试探后端）；
+   * - 角色目录失败不能退化成空列表：`roles.error` 单独可见、可重试，
+   *   否则一次网络故障会被误读成「没有可分配的角色」，静默阻断分配。
+   */
+  const users = useQuery({
+    queryKey: queryKeys.users(),
+    queryFn: () => api.listUsers(USER_PAGE_LIMIT),
+    enabled: canAdminister,
+  });
+  const roles = useQuery({
+    queryKey: queryKeys.roles(),
+    queryFn: () => api.listRoles(),
+    enabled: canManageRoles,
+  });
+  /** 取数失败与写操作失败分开：展示时动作错误优先。 */
+  const errorText = actionError ?? (users.error === null ? null : messageOf(users.error));
+  const rolesError = roles.error === null ? null : messageOf(roles.error);
+  // 屏内多处直接设置文案，沿用同一个 setter。
+  const setError = setActionError;
 
-  /** 角色目录单独加载：失败要可见、可重试，不能退化成空列表。 */
-  const loadRoles = useCallback(async () => {
-    setRolesError(null);
-    setRoles(null);
-    try {
-      setRoles(await api.listRoles());
-    } catch (e) {
-      setRolesError(messageOf(e));
-    }
-  }, []);
+  /** 写操作后让账号列表失效重取（替代手写的「再拉一次」）。 */
+  const load = () => queryClient.invalidateQueries({ queryKey: queryKeys.users() });
 
-  useEffect(() => {
-    if (!canAdminister) return;
-    void load();
-    if (canManageRoles) void loadRoles();
-  }, [canAdminister, canManageRoles, load, loadRoles]);
-
-  async function createUser(event: FormEvent<HTMLFormElement>): Promise<void> {
-    event.preventDefault();
+  async function createUser(draft: CreateUserDraft): Promise<void> {
+    const email = (draft.email ?? "").trim();
+    const displayName = (draft.displayName ?? "").trim();
     setError(null);
     setNotice(null);
     setBusy(true);
     try {
       const created = await api.createUser({
-        username: username.trim(),
-        email: email.trim() === "" ? undefined : email.trim(),
-        display_name: displayName.trim() === "" ? undefined : displayName.trim(),
+        username: (draft.username ?? "").trim(),
+        email: email === "" ? undefined : email,
+        display_name: displayName === "" ? undefined : displayName,
       });
-      setUsername("");
-      setEmail("");
-      setDisplayName("");
+      form.resetFields();
+      setCreateDraft(EMPTY_CREATE);
       setNotice(`已创建账号 ${created.username}；请为其分配角色并绑定登录方式。`);
       await load();
     } catch (e) {
@@ -143,24 +179,125 @@ export function UserListScreen() {
     }
   }
 
+  const columns: TableProps<AdminUser>["columns"] = [
+    {
+      title: "用户名",
+      dataIndex: "username",
+      render: (_value, user) => (
+        <Space size={4}>
+          <Typography.Text code>{user.username}</Typography.Text>
+          {user.id === me?.user_id && <Tag color="blue">我</Tag>}
+        </Space>
+      ),
+    },
+    {
+      title: "展示名",
+      dataIndex: "display_name",
+      render: (displayName: string | null) => displayName ?? "（未设置）",
+    },
+    {
+      title: "邮箱",
+      dataIndex: "email",
+      render: (email: string | null) => (
+        <Typography.Text type="secondary">{email ?? "—"}</Typography.Text>
+      ),
+    },
+    {
+      title: "角色",
+      dataIndex: "roles",
+      render: (_value, user) => (
+        <Space size={[4, 4]} wrap>
+          {user.roles.length === 0 && (
+            <Typography.Text type="secondary">（无）</Typography.Text>
+          )}
+          {user.roles.map((role) => {
+            const lastOwner = role === "owner" && user.is_last_loginable_owner;
+            return (
+              <Tag key={role}>
+                {role}
+                {lastOwner && (
+                  <Typography.Text
+                    type="secondary"
+                    title="最后一个可登录的 Owner"
+                  >
+                    （最后 Owner）
+                  </Typography.Text>
+                )}
+                {canManageRoles && (
+                  <Button
+                    type="link"
+                    size="small"
+                    disabled={busy || lastOwner}
+                    title={
+                      lastOwner
+                        ? "这是最后一个可登录的 Owner，不能移除其 Owner 角色"
+                        : undefined
+                    }
+                    aria-label={`移除 ${user.username} 的角色 ${role}`}
+                    onClick={() => void mutateRole(user, role, "remove")}
+                  >
+                    移除
+                  </Button>
+                )}
+              </Tag>
+            );
+          })}
+        </Space>
+      ),
+    },
+    {
+      title: "登录方式",
+      key: "login",
+      render: (_value, user) => (
+        <Typography.Text type="secondary">{loginLabel(user)}</Typography.Text>
+      ),
+    },
+  ];
+  if (canManageRoles) {
+    columns.push({
+      title: "分配角色",
+      key: "assign",
+      render: (_value, user) => {
+        // 角色目录读取失败不能退化成「空目录」：否则一次网络故障会被误读为
+        // 「没有可分配的角色」，静默阻断分配。两种状态给出不同文案。
+        if (rolesError !== null) {
+          return <Typography.Text type="secondary">角色目录不可用</Typography.Text>;
+        }
+        if (roles.isPending) {
+          return <Typography.Text type="secondary">正在加载角色…</Typography.Text>;
+        }
+        const assignable = (roles.data ?? []).filter(
+          (role) =>
+            !user.roles.includes(role.slug) &&
+            // 授予 Owner 需要专门的所有权权限；没有就不展示该选项。
+            (role.slug !== "owner" || canOwnership),
+        );
+        if (assignable.length === 0) {
+          return <Typography.Text type="secondary">暂无可分配角色</Typography.Text>;
+        }
+        return (
+          <RoleAssigner
+            username={user.username}
+            roles={assignable}
+            busy={busy}
+            onAssign={(role) => void mutateRole(user, role, "assign")}
+          />
+        );
+      },
+    });
+  }
+
   if (!canAdminister) {
     return (
-      <div className="screen">
-        <header className="topbar">
-          <h1>用户与角色</h1>
-          <div className="topbar-actions">
-            <button type="button" className="button ghost" onClick={() => navigate(paths.list)}>
-              我的文章
-            </button>
-            <button type="button" className="button ghost" onClick={() => void logout()}>
-              退出
-            </button>
-          </div>
-        </header>
-        <p className="warning">
-          当前账号没有 user.manage 或 role.manage 权限，无法查看或管理账号。
-        </p>
-      </div>
+      <>
+        <Typography.Title level={3}>用户与角色</Typography.Title>
+        {/* 无权限时不调用任何账号接口，只说明原因（后端才是权限边界）。 */}
+        <Alert
+          type="warning"
+          showIcon
+          title="当前账号没有 user.manage 或 role.manage 权限，无法查看或管理账号。"
+        />
+      </>
     );
   }
 
@@ -168,169 +305,82 @@ export function UserListScreen() {
   // 不看当前页：另一个可登录 Owner 落在后续页时，按页推断会把它误判成最后 Owner。
   // 界面据此提前禁用移除，后端执行时仍会在排他锁下复核（前端不是安全边界）。
   return (
-    <div className="screen">
-      <header className="topbar">
-        <h1>用户与角色</h1>
-        <div className="topbar-actions">
-          <button type="button" className="button ghost" onClick={() => navigate(paths.list)}>
-            我的文章
-          </button>
-          {me?.permissions.includes("page.read") === true && (
-            <button type="button" className="button ghost" onClick={() => navigate(paths.pages)}>
-              独立页面
-            </button>
-          )}
-          {canManageRoles && (
-            <button type="button" className="button ghost" onClick={() => navigate(paths.roles)}>
-              角色目录
-            </button>
-          )}
-          <button type="button" className="button ghost" onClick={() => void logout()}>
-            退出
-          </button>
-        </div>
-      </header>
+    <>
+      <Typography.Title level={3}>用户与角色</Typography.Title>
+
+      {errorText !== null && (
+        <Alert type="error" showIcon title={errorText} style={{ marginBottom: 16 }} />
+      )}
+      {notice !== null && (
+        <Alert type="success" showIcon title={notice} style={{ marginBottom: 16 }} />
+      )}
+      {canManageRoles && rolesError !== null && (
+        <Alert
+          type="error"
+          showIcon
+          style={{ marginBottom: 16 }}
+          title={`角色目录加载失败：${rolesError}`}
+          action={
+            <Button size="small" onClick={() => void roles.refetch()}>
+              重试
+            </Button>
+          }
+        />
+      )}
 
       {canManageUsers && (
-        <form className="editor" onSubmit={(event) => void createUser(event)}>
-          <h2>创建账号</h2>
-          <label>
-            用户名
-            <input
-              value={username}
-              onChange={(event) => setUsername(event.target.value)}
-              autoComplete="off"
-            />
-          </label>
-          <label>
-            邮箱（可选）
-            <input value={email} onChange={(event) => setEmail(event.target.value)} />
-          </label>
-          <label>
-            展示名（可选）
-            <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} />
-          </label>
-          <div className="editor-actions">
-            <button type="submit" className="button" disabled={busy || username.trim() === ""}>
-              创建账号
-            </button>
-          </div>
-        </form>
+        <>
+          <Typography.Title level={5} style={{ marginTop: 0 }}>
+            创建账号
+          </Typography.Title>
+          <Form
+            form={form}
+            layout="inline"
+            initialValues={EMPTY_CREATE}
+            onValuesChange={(_changed, values) => setCreateDraft(values)}
+            onFinish={(values) => void createUser(values)}
+            style={{ marginBottom: 24 }}
+          >
+            <Form.Item label="用户名" name="username">
+              <Input autoComplete="off" />
+            </Form.Item>
+            <Form.Item label="邮箱（可选）" name="email">
+              <Input />
+            </Form.Item>
+            <Form.Item label="展示名（可选）" name="displayName">
+              <Input />
+            </Form.Item>
+            <Form.Item>
+              <Button
+                type="primary"
+                htmlType="submit"
+                disabled={busy || createDraft.username.trim() === ""}
+              >
+                创建账号
+              </Button>
+            </Form.Item>
+          </Form>
+        </>
       )}
 
-      {error !== null && <p className="error">{error}</p>}
-      {notice !== null && <p className="notice">{notice}</p>}
-      {logoutError !== null && <p className="error">{logoutError}</p>}
-      {canManageRoles && rolesError !== null && (
-        <p className="error">
-          角色目录加载失败：{rolesError}
-          <button type="button" className="link" onClick={() => void loadRoles()}>
-            重试
-          </button>
-        </p>
-      )}
-      {users === null && <p className="muted">正在加载…</p>}
-      {users !== null && users.length === 0 && error === null && (
-        <p className="muted">还没有账号。</p>
-      )}
-      {users !== null && users.length >= USER_PAGE_LIMIT && (
-        <p className="muted">
+      {users.data !== undefined && users.data.length >= USER_PAGE_LIMIT && (
+        <Typography.Paragraph type="secondary">
           仅显示前 {USER_PAGE_LIMIT} 个账号；更多账号请用受控 CLI 管理。
-        </p>
+        </Typography.Paragraph>
       )}
 
-      {users !== null && users.length > 0 && (
-        <table className="posts users">
-          <thead>
-            <tr>
-              <th>用户名</th>
-              <th>展示名</th>
-              <th>邮箱</th>
-              <th>角色</th>
-              <th>登录方式</th>
-              {canManageRoles && <th>分配角色</th>}
-            </tr>
-          </thead>
-          <tbody>
-            {users.map((user) => {
-              const assignable = (roles ?? []).filter(
-                (role) =>
-                  !user.roles.includes(role.slug) &&
-                  // 授予 Owner 需要专门的所有权权限；没有就不展示该选项。
-                  (role.slug !== "owner" || canOwnership),
-              );
-              return (
-                <tr key={user.id}>
-                  <td>
-                    <code>{user.username}</code>
-                    {user.id === me?.user_id && <span className="badge"> 我</span>}
-                  </td>
-                  <td>{user.display_name ?? "（未设置）"}</td>
-                  <td className="muted">{user.email ?? "—"}</td>
-                  <td>
-                    {user.roles.length === 0 && <span className="muted">（无）</span>}
-                    {user.roles.map((role) => {
-                      const lastOwner = role === "owner" && user.is_last_loginable_owner;
-                      return (
-                        <span key={role} className="badge">
-                          {role}
-                          {lastOwner && <span title="最后一个可登录的 Owner">（最后 Owner）</span>}
-                          {canManageRoles && (
-                            <button
-                              type="button"
-                              className="link"
-                              disabled={busy || lastOwner}
-                              title={
-                                lastOwner
-                                  ? "这是最后一个可登录的 Owner，不能移除其 Owner 角色"
-                                  : undefined
-                              }
-                              aria-label={`移除 ${user.username} 的角色 ${role}`}
-                              onClick={() => void mutateRole(user, role, "remove")}
-                            >
-                              移除
-                            </button>
-                          )}
-                        </span>
-                      );
-                    })}
-                  </td>
-                  <td className="muted">
-                    {user.deleted
-                      ? "已停用"
-                      : user.can_login
-                        ? user.password_enabled && user.external_identities > 0
-                          ? "密码 + 外部身份"
-                          : user.password_enabled
-                            ? "本地密码"
-                            : "外部身份"
-                        : "无（无法登录）"}
-                  </td>
-                  {canManageRoles && (
-                    <td>
-                      {rolesError !== null ? (
-                        <span className="muted">角色目录不可用</span>
-                      ) : roles === null ? (
-                        <span className="muted">正在加载角色…</span>
-                      ) : assignable.length === 0 ? (
-                        <span className="muted">暂无可分配角色</span>
-                      ) : (
-                        <RoleAssigner
-                          username={user.username}
-                          roles={assignable}
-                          busy={busy}
-                          onAssign={(role) => void mutateRole(user, role, "assign")}
-                        />
-                      )}
-                    </td>
-                  )}
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      )}
-    </div>
+      <Table<AdminUser>
+        rowKey="id"
+        size="middle"
+        loading={users.isPending}
+        dataSource={users.data ?? []}
+        columns={columns}
+        pagination={false}
+        locale={{
+          emptyText: errorText !== null ? "账号列表加载失败。" : "还没有账号。",
+        }}
+      />
+    </>
   );
 }
 
@@ -346,33 +396,30 @@ function RoleAssigner({
   busy: boolean;
   onAssign: (role: string) => void;
 }) {
-  const [selected, setSelected] = useState("");
+  const [selected, setSelected] = useState<string | undefined>(undefined);
   return (
-    <>
-      <select
+    <Space>
+      <Select
         aria-label={`为 ${username} 选择角色`}
         value={selected}
-        onChange={(event) => setSelected(event.target.value)}
-      >
-        <option value="">选择角色…</option>
-        {roles.map((role) => (
-          <option key={role.slug} value={role.slug}>
-            {role.name}（{role.slug}）
-          </option>
-        ))}
-      </select>
-      <button
-        type="button"
-        className="button"
-        disabled={busy || selected === ""}
+        placeholder="选择角色…"
+        style={{ minWidth: 160 }}
+        options={roles.map((role) => ({
+          value: role.slug,
+          label: `${role.name}（${role.slug}）`,
+        }))}
+        onChange={(value: string | undefined) => setSelected(value)}
+      />
+      <Button
+        disabled={busy || selected === undefined}
         aria-label={`为 ${username} 添加角色`}
         onClick={() => {
-          if (selected !== "") onAssign(selected);
-          setSelected("");
+          if (selected !== undefined) onAssign(selected);
+          setSelected(undefined);
         }}
       >
         添加角色
-      </button>
-    </>
+      </Button>
+    </Space>
   );
 }

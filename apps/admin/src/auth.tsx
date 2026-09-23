@@ -1,6 +1,15 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type { ReactNode } from "react";
-import { ApiError, api, loginUrl, setCsrfToken, setUnauthorizedHandler, withRequestId } from "./api";
+import { ApiError, api, loginUrl, setCsrfToken, setUnauthorizedHandler } from "./api";
+import { messageOf } from "./apiError";
 import type { Me, ProviderSummary } from "./types";
 
 type Status = "loading" | "anonymous" | "authenticated";
@@ -18,11 +27,6 @@ interface AuthValue {
 }
 
 const AuthContext = createContext<AuthValue | null>(null);
-
-function messageOf(error: unknown): string {
-  if (error instanceof ApiError) return withRequestId(error.message, error.requestId);
-  return error instanceof Error ? error.message : "未知错误";
-}
 
 /**
  * 会话与 CSRF 生命周期：应用启动读一次 `/me`（拿到内存 CSRF token），

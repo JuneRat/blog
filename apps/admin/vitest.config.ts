@@ -9,11 +9,15 @@ import { defineConfig } from "vitest/config";
  *
  * `include` 必须同时覆盖 `src/` 与 `tests/`：只留一个会让另一处的用例静默不被
  * 收集，CI 照样全绿（`tests/editor.test.tsx` 就曾因此被吞掉）。
+ *
+ * `setupFiles` 补 jsdom 缺失的 matchMedia / ResizeObserver：antd 组件在渲染期
+ * 就会用到它们，缺了会让所有用例失败在与业务无关的地方。
  */
 export default defineConfig({
   plugins: [react()],
   test: {
     environment: "jsdom",
+    setupFiles: ["src/testSetup.ts"],
     include: ["src/**/*.test.{ts,tsx}", "tests/**/*.test.{ts,tsx}"],
   },
 });

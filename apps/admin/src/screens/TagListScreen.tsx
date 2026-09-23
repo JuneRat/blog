@@ -1,16 +1,12 @@
-import { useCallback, useEffect, useState } from "react";
-import { ApiError, api, withRequestId } from "../api";
+import { Alert, App as AntdApp, Button, Form, Input, Space, Table, Typography } from "antd";
+import type { TableProps } from "antd";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
+import { api } from "../api";
+import { permissionMessageOf } from "../apiError";
 import { useAuth } from "../auth";
-import { navigate, paths } from "../router";
+import { queryKeys } from "../queryClient";
 import type { TagSummary } from "../types";
-
-function messageOf(error: unknown): string {
-  if (error instanceof ApiError) {
-    const base = error.status === 403 ? `没有权限：${error.message}` : error.message;
-    return withRequestId(base, error.requestId);
-  }
-  return error instanceof Error ? error.message : "未知错误";
-}
 
 interface Draft {
   name: string;
@@ -26,37 +22,41 @@ const EMPTY_DRAFT: Draft = { name: "", slug: "" };
  * - 创建/改名/删除需 `tag.manage`（后端判定；无权限时界面隐藏管理入口）；
  * - 删除被引用的标签会被后端拒绝（409 `tag_in_use`，含草稿/私密引用），
  *   错误文案直接来自服务端（带引用规模），不前端猜测。
+ *
+ * 提示沿用**内联 Alert 而不是 message 吐司**：冲突与权限文案需要停留在屏幕上
+ * （例如「标签仍被 3 篇引用」），3 秒后自动消失会让人来不及看清。
  */
 export function TagListScreen() {
   const { me } = useAuth();
-  const [tags, setTags] = useState<TagSummary[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { modal } = AntdApp.useApp();
+  /**
+   * 目录走 React Query：跨屏共享缓存，写操作后用失效重取而不是自己管重载。
+   *
+   * 错误分两处：`tags.error` 是**取数失败**（含权限口径文案），
+   * `actionError` 是前端校验与写操作失败；展示时动作错误优先。
+   */
+  const tags = useQuery({ queryKey: queryKeys.tags(), queryFn: () => api.listTags() });
+  const queryClient = useQueryClient();
+  const [actionError, setActionError] = useState<string | null>(null);
+  const errorText =
+    actionError ?? (tags.error === null ? null : permissionMessageOf(tags.error));
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
+  const [form] = Form.useForm<Draft>();
   /** 正在改名的标签：editingId + 编辑值。 */
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState("");
 
   const canManage = me?.permissions.includes("tag.manage") ?? false;
+  const setError = setActionError;
 
-  const load = useCallback(async () => {
-    setError(null);
-    try {
-      setTags(await api.listTags());
-    } catch (e) {
-      setTags([]);
-      setError(messageOf(e));
-    }
-  }, []);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
+  /** 写操作后让目录失效重取（替代手写的「再拉一次」）。 */
+  const load = () => queryClient.invalidateQueries({ queryKey: queryKeys.tags() });
 
   async function create(): Promise<void> {
-    const name = draft.name.trim();
-    const slug = draft.slug.trim();
+    const draft = form.getFieldsValue();
+    const name = (draft.name ?? "").trim();
+    const slug = (draft.slug ?? "").trim();
     if (name.length === 0 || slug.length === 0) {
       setError("名称与 slug 都不能为空。");
       return;
@@ -66,11 +66,11 @@ export function TagListScreen() {
     setBusy(true);
     try {
       await api.createTag({ name, slug });
-      setDraft(EMPTY_DRAFT);
+      form.setFieldsValue(EMPTY_DRAFT);
       setNotice(`已创建标签 ${name}。slug 创建后不可修改。`);
       await load();
     } catch (e) {
-      setError(messageOf(e));
+      setError(permissionMessageOf(e));
     } finally {
       setBusy(false);
     }
@@ -101,164 +101,152 @@ export function TagListScreen() {
       // 版本冲突：目录已在别处被改。先重载目录（load 会清错误位），再展示冲突。
       setEditingId(null);
       await load();
-      setError(messageOf(e));
+      setError(permissionMessageOf(e));
     } finally {
       setBusy(false);
     }
   }
 
-  async function remove(tag: TagSummary): Promise<void> {
-    if (!window.confirm(`删除标签「${tag.name}」（/tags/${tag.slug}）？`)) return;
-    setError(null);
-    setNotice(null);
-    setBusy(true);
-    try {
-      await api.deleteTag(tag.slug, tag.version);
-      setNotice(`已删除标签 ${tag.name}。`);
-      await load();
-    } catch (e) {
-      // tag_in_use 的服务端文案自带引用规模；直接展示，不掩盖为通用错误。
-      setError(messageOf(e));
-    } finally {
-      setBusy(false);
-    }
+  function remove(tag: TagSummary): void {
+    // 确认按钮用默认文案「确定」：行内已有「删除」按钮，同名会让定位产生歧义。
+    modal.confirm({
+      title: `删除标签「${tag.name}」？`,
+      content: `地址 /tags/${tag.slug} 将不再可用，且不可恢复。`,
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        setError(null);
+        setNotice(null);
+        setBusy(true);
+        try {
+          await api.deleteTag(tag.slug, tag.version);
+          setNotice(`已删除标签 ${tag.name}。`);
+          await load();
+        } catch (e) {
+          // tag_in_use 的服务端文案自带引用规模；直接展示，不掩盖为通用错误。
+          setError(permissionMessageOf(e));
+        } finally {
+          setBusy(false);
+        }
+      },
+    });
+  }
+
+  const columns: TableProps<TagSummary>["columns"] = [
+    {
+      title: "名称",
+      dataIndex: "name",
+      render: (_value, tag) =>
+        editingId === tag.id ? (
+          <Input
+            value={editingName}
+            autoFocus
+            onChange={(event) => setEditingName(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") void rename(tag);
+              if (event.key === "Escape") setEditingId(null);
+            }}
+          />
+        ) : (
+          <Typography.Link href={`/tags/${encodeURIComponent(tag.slug)}`} target="_blank">
+            {tag.name}
+          </Typography.Link>
+        ),
+    },
+    {
+      title: "slug",
+      dataIndex: "slug",
+      render: (slug: string) => <Typography.Text code>{slug}</Typography.Text>,
+    },
+    { title: "公开文章", dataIndex: "public_post_count" },
+    {
+      title: "版本",
+      dataIndex: "version",
+      render: (version: number) => <Typography.Text type="secondary">v{version}</Typography.Text>,
+    },
+  ];
+  if (canManage) {
+    columns.push({
+      title: "操作",
+      key: "actions",
+      render: (_value, tag) =>
+        editingId === tag.id ? (
+          <Space>
+            <Button disabled={busy} onClick={() => void rename(tag)}>
+              保存
+            </Button>
+            <Button type="text" disabled={busy} onClick={() => setEditingId(null)}>
+              取消
+            </Button>
+          </Space>
+        ) : (
+          <Space>
+            <Button
+              type="text"
+              disabled={busy}
+              onClick={() => {
+                setEditingId(tag.id);
+                setEditingName(tag.name);
+              }}
+            >
+              改名
+            </Button>
+            <Button type="text" danger disabled={busy} onClick={() => remove(tag)}>
+              删除
+            </Button>
+          </Space>
+        ),
+    });
   }
 
   return (
-    <div className="screen">
-      <header className="topbar">
-        <h1>标签</h1>
-        <div className="topbar-actions">
-          <button type="button" className="button ghost" onClick={() => navigate(paths.list)}>
-            ← 返回列表
-          </button>
-        </div>
-      </header>
+    <>
+      <Typography.Title level={3}>标签</Typography.Title>
 
-      {error !== null && <p className="error">{error}</p>}
-      {notice !== null && <p className="notice">{notice}</p>}
-      {tags === null && <p className="muted">正在加载…</p>}
-      {tags !== null && tags.length === 0 && error === null && (
-        <p className="muted">还没有标签。{canManage ? "在下方创建第一个。" : "需要持有标签管理权限的用户创建。"}</p>
+      {errorText !== null && (
+        <Alert type="error" showIcon title={errorText} style={{ marginBottom: 16 }} />
+      )}
+      {notice !== null && (
+        <Alert type="success" showIcon title={notice} style={{ marginBottom: 16 }} />
       )}
 
       {canManage && (
-        <form
-          className="tag-create"
-          onSubmit={(event) => {
-            event.preventDefault();
-            void create();
-          }}
+        <Form
+          form={form}
+          layout="inline"
+          initialValues={EMPTY_DRAFT}
+          onFinish={() => void create()}
+          style={{ marginBottom: 24 }}
         >
-          <label>
-            名称
-            <input
-              value={draft.name}
-              onChange={(event) => setDraft({ ...draft, name: event.target.value })}
-              placeholder="如：Rust"
-            />
-          </label>
-          <label>
-            slug
-            <input
-              value={draft.slug}
-              onChange={(event) => setDraft({ ...draft, slug: event.target.value })}
-              placeholder="如：rust（创建后不可改）"
-            />
-          </label>
-          <button type="submit" className="button" disabled={busy}>
-            创建标签
-          </button>
-        </form>
+          <Form.Item label="名称" name="name">
+            <Input placeholder="如：Rust" />
+          </Form.Item>
+          <Form.Item label="slug" name="slug">
+            <Input placeholder="如：rust（创建后不可改）" />
+          </Form.Item>
+          <Form.Item>
+            <Button type="primary" htmlType="submit" disabled={busy}>
+              创建标签
+            </Button>
+          </Form.Item>
+        </Form>
       )}
 
-      {tags !== null && tags.length > 0 && (
-        <table className="tags">
-          <thead>
-            <tr>
-              <th>名称</th>
-              <th>slug</th>
-              <th>公开文章</th>
-              <th>版本</th>
-              {canManage && <th>操作</th>}
-            </tr>
-          </thead>
-          <tbody>
-            {tags.map((tag) => (
-              <tr key={tag.id}>
-                <td>
-                  {editingId === tag.id ? (
-                    <input
-                      value={editingName}
-                      autoFocus
-                      onChange={(event) => setEditingName(event.target.value)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") void rename(tag);
-                        if (event.key === "Escape") setEditingId(null);
-                      }}
-                    />
-                  ) : (
-                    <a href={`/tags/${encodeURIComponent(tag.slug)}`} target="_blank" rel="noreferrer">
-                      {tag.name}
-                    </a>
-                  )}
-                </td>
-                <td>
-                  <code>{tag.slug}</code>
-                </td>
-                <td>{tag.public_post_count}</td>
-                <td className="muted">v{tag.version}</td>
-                {canManage && (
-                  <td>
-                    {editingId === tag.id ? (
-                      <>
-                        <button
-                          type="button"
-                          className="button ghost"
-                          disabled={busy}
-                          onClick={() => void rename(tag)}
-                        >
-                          保存
-                        </button>
-                        <button
-                          type="button"
-                          className="button ghost"
-                          disabled={busy}
-                          onClick={() => setEditingId(null)}
-                        >
-                          取消
-                        </button>
-                      </>
-                    ) : (
-                      <>
-                        <button
-                          type="button"
-                          className="button ghost"
-                          disabled={busy}
-                          onClick={() => {
-                            setEditingId(tag.id);
-                            setEditingName(tag.name);
-                          }}
-                        >
-                          改名
-                        </button>
-                        <button
-                          type="button"
-                          className="button danger ghost"
-                          disabled={busy}
-                          onClick={() => void remove(tag)}
-                        >
-                          删除
-                        </button>
-                      </>
-                    )}
-                  </td>
-                )}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-    </div>
+      <Table<TagSummary>
+        rowKey="id"
+        size="middle"
+        loading={tags.isPending}
+        dataSource={tags.data ?? []}
+        columns={columns}
+        pagination={false}
+        locale={{
+          emptyText:
+            errorText !== null
+              ? "目录加载失败。"
+              : canManage
+                ? "还没有标签，在上方创建第一个。"
+                : "还没有标签。需要持有标签管理权限的用户创建。",
+        }}
+      />
+    </>
   );
 }

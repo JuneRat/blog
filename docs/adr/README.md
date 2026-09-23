@@ -20,5 +20,8 @@
 | [0008 用户确认的 13 表核心](0008-thirteen-table-blog-core.md) | 已采纳，待实施 | 用户提供 Series、RBAC、OAuth 的具体表设计并要求采用 |
 | [0009 启用本地密码认证](0009-local-password-authentication.md) | 已采纳并实现 | 用户要求优先启用 `users.password_hash`，并明确要 Argon2id、限流、重置与泄露处置 |
 | [0010 会话持久化到 PostgreSQL](0010-persistent-postgres-sessions.md) | 已采纳并实现 | 用户要求保留认证流程、自研 PostgreSQL `SessionStore`，实现重启后仍登录 |
+| [0011 后台 UI 迁移到 Ant Design v6](0011-admin-ui-library.md) | 已采纳并实现 | 用户明确不保留既有手写 CSS，要求迁到成熟组件库 |
+| [0012 前端取数层：抽公共 hook，暂不引入 TanStack Query](0012-admin-data-layer.md) | 被替代 | 由 ADR-0013 替代；保留原「先用公共 hook」的推理作为历史 |
+| [0013 引入 TanStack Query](0013-tanstack-query.md) | 已采纳并实现 | 用户明确 Query 可用，并要求同时去掉不必要、过度防御的测试 |
 
 内容修订、URL、Owner 引导、授权变更、媒体/分类规则和会话存储的建议状态集中记录于 [决策登记表](../product-roadmap.md)；重大取舍可先以“提议”记录，确认后更新状态，避免把草案回填为历史事实。
