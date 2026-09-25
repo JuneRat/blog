@@ -96,7 +96,12 @@ async fn fresh_stack_with(throttle_config: ThrottleConfig) -> Stack {
     let rbac = Arc::new(PostgresRbacStore::new(pool.clone()));
     let roles = Arc::new(RoleInteractor::new(rbac.clone(), user_repo.clone()));
     roles.sync_registry().await.expect("同步权限目录失败");
-    let users = Arc::new(UserInteractor::new(user_repo.clone(), rbac, clock.clone()));
+    let users = Arc::new(UserInteractor::new(
+        user_repo.clone(),
+        rbac,
+        clock.clone(),
+        common::media_guard(pool.clone()),
+    ));
 
     let member = users
         .create_user(
@@ -172,6 +177,7 @@ async fn fresh_stack_with(throttle_config: ThrottleConfig) -> Stack {
         Arc::new(PostgresCategoryRepository::new(pool.clone())),
         Arc::new(infrastructure::PostgresSeriesRepository::new(pool.clone())),
         Arc::new(SystemClock),
+        common::media_guard(pool.clone()),
     ));
     let pages = Arc::new(PageInteractor::new(
         Arc::new(PostgresPageRepository::new(pool.clone())),
@@ -200,6 +206,7 @@ async fn fresh_stack_with(throttle_config: ThrottleConfig) -> Stack {
         series: Arc::new(application::series::SeriesInteractor::new(
             Arc::new(infrastructure::PostgresSeriesRepository::new(pool.clone())),
             Arc::new(SystemClock),
+            common::media_guard(pool.clone()),
         )),
         settings: Arc::new(application::settings::SettingsInteractor::new(
             Arc::new(infrastructure::PostgresSettingsStore::new(pool.clone())),
@@ -209,6 +216,7 @@ async fn fresh_stack_with(throttle_config: ThrottleConfig) -> Stack {
                 description: "测试描述".into(),
                 logo_url: None,
             },
+            common::media_guard(pool.clone()),
         )),
         roles: roles.clone(),
         media: common::media_interactor(pool.clone(), common::media_dir("password")),

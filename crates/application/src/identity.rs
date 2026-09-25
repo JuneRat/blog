@@ -430,6 +430,8 @@ pub struct UserInteractor {
     users: Arc<dyn UserRepository>,
     rbac: Arc<dyn RbacStore>,
     clock: Arc<dyn Clock>,
+    /// 头像附着的归属校验（`ensure_attachable`）：头像引用是无条件公开来源。
+    media_guard: Arc<dyn crate::ports::MediaRefGuard>,
 }
 
 impl UserInteractor {
@@ -437,8 +439,14 @@ impl UserInteractor {
         users: Arc<dyn UserRepository>,
         rbac: Arc<dyn RbacStore>,
         clock: Arc<dyn Clock>,
+        media_guard: Arc<dyn crate::ports::MediaRefGuard>,
     ) -> Self {
-        Self { users, rbac, clock }
+        Self {
+            users,
+            rbac,
+            clock,
+            media_guard,
+        }
     }
 
     /// 受控创建用户。username 统一规范化（trim + 小写）后写入，
@@ -483,6 +491,10 @@ impl UserInteractor {
     ///
     /// 引用关系在仓储的同一事务内整体替换；`Some(id)` 要求资产存在且 `ready`。
     /// 有意**不**递增 `users.version`（那是会话绑定版本，递增会把本人全部会话踢下线）。
+    ///
+    /// 归属校验：头像引用是无条件公开来源，只能附着本人上传、已公开或
+    /// 持 `media.read` 可见的资产（`ensure_attachable`）；重复保存当前头像
+    /// 不重新授权——历史引用（例如曾经公开后来转私有的图片）不因此卡死。
     pub async fn set_own_avatar(
         &self,
         actor: &Actor,
@@ -495,6 +507,11 @@ impl UserInteractor {
             .await?
             .filter(|snapshot| snapshot.deleted_at.is_none())
             .ok_or_else(|| UseCaseError::NotFound("用户".into()))?;
+        if let Some(id) = avatar_media_id
+            && snapshot.avatar_media_id != Some(id)
+        {
+            crate::media::ensure_attachable(&*self.media_guard, actor, id).await?;
+        }
         self.users
             .set_avatar(snapshot.id, avatar_media_id, self.clock.now())
             .await?;

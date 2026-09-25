@@ -31,6 +31,11 @@ pub fn media_interactor(
     ))
 }
 
+/// 测试装配的媒体附着授权：与生产同构（Postgres 仓储实现窄端口）。
+pub fn media_guard(pool: sqlx::PgPool) -> Arc<dyn application::ports::MediaRefGuard> {
+    Arc::new(infrastructure::PostgresMediaRepository::new(pool))
+}
+
 /// 测试装配的本地密码用例：真实 Argon2id（生产参数）+ 默认限流。
 ///
 /// 会话存储由调用方注入，保证与认证用例看到同一份状态。

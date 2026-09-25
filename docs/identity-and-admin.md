@@ -224,7 +224,7 @@ OAuth 是授权协议；仅 OAuth 平台必须通过受信身份接口适配，�
 | DELETE | `/media/{id}` | `media.delete`（本人上传）或 `media.delete_any` | 请求体需 `expected_version`；成功 204 |
 | GET | `/media/{id}`（无 `/api` 前缀） | 匿名或 `media.read` | **公开读取**：匿名只在存在公开来源引用时返回文件；否则 404 |
 
-错误语义：仍被任何内容引用（含草稿/私密/回收站）时 409 `media_in_use`，界面据此展示使用位置；版本过期 409 `version_conflict`；格式/尺寸/大小不合法 400 `invalid_request`。
+错误语义：仍被任何内容引用（含草稿/私密/回收站）时 409 `media_in_use`，界面据此展示使用位置；版本过期 409 `version_conflict`；格式/尺寸/大小不合法 400 `invalid_request`。头像/封面/logo 附着他人私有图片（非本人上传、无公开来源引用且调用者不持 `media.read`）时 403 `media_not_attachable`——这类引用是无条件公开来源，放行会把私有图片变成匿名可读；重复提交当前值不重新校验。
 
 ### 9.2 权限与角色
 

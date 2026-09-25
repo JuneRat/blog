@@ -24,10 +24,16 @@ export function messageOf(error: unknown): string {
  * 管理界面用的文案：403 额外标出「没有权限：」。
  *
  * 只用于**本该有权限**的管理屏幕。别用在登录或公开入口上——那里的 403 不是权限问题。
+ *
+ * 例外 `media_not_attachable`：那是归属校验（引用了他人私有图片），不是权限配置
+ * 问题，换一张自己上传的图片即可解决；服务端文案已自解释，套「没有权限」反而误导。
  */
 export function permissionMessageOf(error: unknown): string {
   if (error instanceof ApiError) {
-    const base = error.status === 403 ? `没有权限：${error.message}` : error.message;
+    const base =
+      error.status === 403 && error.code !== "media_not_attachable"
+        ? `没有权限：${error.message}`
+        : error.message;
     return withRequestId(base, error.requestId);
   }
   return error instanceof Error ? error.message : "未知错误";

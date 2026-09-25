@@ -79,6 +79,17 @@ pub struct InMemoryLoginThrottle {
 }
 
 impl InMemoryLoginThrottle {
+    /// 取共享状态；锁中毒时恢复数据继续使用。
+    ///
+    /// 中毒只说明某线程持锁时 panic——限流状态是启发式计数而非不变量数据，
+    /// 最坏情况是某个计数偏差一位，随窗口滚动自愈。这里**不**向上传播 panic：
+    /// 登录限流路径上崩溃会把所有后来登录一起拖死，比计数偏差严重得多。
+    fn locked_state(&self) -> std::sync::MutexGuard<'_, HashMap<ThrottleSubject, FailureState>> {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     pub fn new(
         config: ThrottleConfig,
         clock: Box<dyn Fn() -> OffsetDateTime + Send + Sync>,
@@ -189,7 +200,7 @@ impl LoginThrottle for InMemoryLoginThrottle {
     fn reserve(&self, subject: &ThrottleSubject) -> Result<ThrottleDecision, UseCaseError> {
         let now = self.now();
         let (max_attempts, _) = self.policy(subject);
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.locked_state();
         self.prune_expired(&mut state, now);
         let Some(entry) = self.entry_mut(&mut state, subject, now) else {
             return Ok(ThrottleDecision {
@@ -222,7 +233,7 @@ impl LoginThrottle for InMemoryLoginThrottle {
 
     fn release(&self, subject: &ThrottleSubject) -> Result<(), UseCaseError> {
         let now = self.now();
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.locked_state();
         self.prune_expired(&mut state, now);
         if let Some(entry) = state.get_mut(subject) {
             entry.in_flight = entry.in_flight.saturating_sub(1);
@@ -233,7 +244,7 @@ impl LoginThrottle for InMemoryLoginThrottle {
     fn record_failure(&self, subject: &ThrottleSubject) -> Result<(), UseCaseError> {
         let now = self.now();
         let (max_attempts, lock_secs) = self.policy(subject);
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.locked_state();
         self.prune_expired(&mut state, now);
         // 落账只处理实际预占，不能绕过容量上限创建新主体。
         let Some(entry) = state.get_mut(subject) else {
@@ -251,7 +262,7 @@ impl LoginThrottle for InMemoryLoginThrottle {
 
     fn record_success(&self, subject: &ThrottleSubject) -> Result<(), UseCaseError> {
         let now = self.now();
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.locked_state();
         self.prune_expired(&mut state, now);
         match subject {
             // 成功只结算本次请求，不能抹掉其他请求持有的预占。

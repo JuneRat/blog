@@ -115,7 +115,12 @@ async fn build(pool: PgPool) -> Stack {
     let rbac = Arc::new(PostgresRbacStore::new(pool.clone()));
     let roles = Arc::new(RoleInteractor::new(rbac.clone(), user_repo.clone()));
     roles.sync_registry().await.expect("同步权限目录失败");
-    let users = Arc::new(UserInteractor::new(user_repo.clone(), rbac, clock.clone()));
+    let users = Arc::new(UserInteractor::new(
+        user_repo.clone(),
+        rbac,
+        clock.clone(),
+        common::media_guard(pool.clone()),
+    ));
 
     // admin 持有 settings.manage；editor/author 不持有（内容权限集）。
     let mut ids = std::collections::HashMap::new();
@@ -200,6 +205,7 @@ async fn build(pool: PgPool) -> Stack {
         category_repo.clone(),
         series_repo.clone(),
         clock.clone(),
+        common::media_guard(pool.clone()),
     ));
     let pages = Arc::new(PageInteractor::new(
         Arc::new(PostgresPageRepository::new(pool.clone())),
@@ -216,6 +222,7 @@ async fn build(pool: PgPool) -> Stack {
     let series = Arc::new(application::series::SeriesInteractor::new(
         series_repo,
         clock.clone(),
+        common::media_guard(pool.clone()),
     ));
 
     let settings_store: Arc<dyn SettingsStore> = Arc::new(PostgresSettingsStore::new(pool.clone()));
@@ -241,8 +248,13 @@ async fn build(pool: PgPool) -> Stack {
         .unwrap();
     let registry = Arc::new(registry);
     let settings = Arc::new(
-        SettingsInteractor::new(settings_store.clone(), clock, site_fallback())
-            .with_themes(theme_store.clone(), registry.clone()),
+        SettingsInteractor::new(
+            settings_store.clone(),
+            clock,
+            site_fallback(),
+            common::media_guard(pool.clone()),
+        )
+        .with_themes(theme_store.clone(), registry.clone()),
     );
 
     // 公开站点：真实主题 + settings 解析（数据库 site 行 > 装配回退值）。

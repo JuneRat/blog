@@ -160,6 +160,22 @@ pub fn oauth_state_cookie_name(secure: bool) -> &'static str {
     }
 }
 
+/// CSRF token 的常量时间相等比较。
+///
+/// `==` 在首个不匹配字节处短路，理论上可经计时逐字节猜 token。这里的
+/// token 是 256 位随机值的十六进制，叠加网络抖动实际不可利用；但与其余
+/// 密码学谨慎度（会话只存摘要、口令常量时间比较）对齐：折叠异或不因
+/// 输入内容提前退出。长度不同直接判否——长度本身不是秘密。
+pub fn csrf_token_matches(provided: &str, expected: &str) -> bool {
+    let (provided, expected) = (provided.as_bytes(), expected.as_bytes());
+    provided.len() == expected.len()
+        && provided
+            .iter()
+            .zip(expected)
+            .fold(0u8, |acc, (x, y)| acc | (x ^ y))
+            == 0
+}
+
 /// 写请求 Origin 校验：Origin 存在时必须与 Host 同源。
 /// 缺失 Origin 视为非浏览器客户端（CSRF token 仍必须校验），与 docs §5 的
 /// “写请求校验 CSRF token 和 Origin”一致。
@@ -202,6 +218,7 @@ pub const ADMIN_ERROR_CODES: &[&str] = &[
     "category_in_use",
     "series_in_use",
     "media_in_use",
+    "media_not_attachable",
     "last_owner",
     "not_found",
     "forbidden",
@@ -240,6 +257,7 @@ pub fn admin_error_code(e: &UseCaseError) -> &'static str {
         UseCaseError::CategoryInUse { .. } => "category_in_use",
         UseCaseError::SeriesInUse(_) => "series_in_use",
         UseCaseError::MediaInUse(_) => "media_in_use",
+        UseCaseError::MediaNotAttachable => "media_not_attachable",
         UseCaseError::LastOwnerProtected => "last_owner",
         UseCaseError::NotFound(_) => "not_found",
         UseCaseError::Forbidden => "forbidden",
@@ -267,6 +285,7 @@ pub fn admin_error_status(e: &UseCaseError) -> StatusCode {
         | UseCaseError::SeriesInUse(_)
         | UseCaseError::MediaInUse(_) => StatusCode::CONFLICT,
         UseCaseError::LastOwnerProtected => StatusCode::FORBIDDEN,
+        UseCaseError::MediaNotAttachable => StatusCode::FORBIDDEN,
         UseCaseError::NotFound(_) => StatusCode::NOT_FOUND,
         UseCaseError::Forbidden => StatusCode::FORBIDDEN,
         UseCaseError::External(_) => StatusCode::BAD_GATEWAY,
@@ -354,6 +373,7 @@ mod tests {
             ),
             (UseCaseError::SeriesInUse(4), "series_in_use"),
             (UseCaseError::MediaInUse(2), "media_in_use"),
+            (UseCaseError::MediaNotAttachable, "media_not_attachable"),
             (UseCaseError::LastOwnerProtected, "last_owner"),
             (UseCaseError::NotFound("x".into()), "not_found"),
             (UseCaseError::Forbidden, "forbidden"),
@@ -376,6 +396,7 @@ mod tests {
             ),
             (UseCaseError::Forbidden, StatusCode::FORBIDDEN),
             (UseCaseError::LastOwnerProtected, StatusCode::FORBIDDEN),
+            (UseCaseError::MediaNotAttachable, StatusCode::FORBIDDEN),
             (
                 UseCaseError::Repository("x".into()),
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -388,6 +409,16 @@ mod tests {
         for (error, expected) in status_samples() {
             assert_eq!(admin_error_status(&error), expected, "{error:?}");
         }
+    }
+
+    #[test]
+    fn csrf_token_compare_is_exact_and_rejects_length_mismatch() {
+        assert!(csrf_token_matches("abcdef", "abcdef"));
+        assert!(!csrf_token_matches("abcdef", "abcdeg"));
+        // 前缀相同但长度不同：长度不是秘密，直接判否。
+        assert!(!csrf_token_matches("abcdef", "abcdef0"));
+        assert!(!csrf_token_matches("", "abcdef"));
+        assert!(csrf_token_matches("", ""));
     }
 
     #[test]

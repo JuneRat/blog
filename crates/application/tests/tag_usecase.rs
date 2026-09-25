@@ -15,6 +15,8 @@ use domain::identity::{PermissionSet, UserSnapshot};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+mod common;
+
 // ---------------------------------------------------------------------------
 // Fakes
 // ---------------------------------------------------------------------------
@@ -340,6 +342,7 @@ async fn fixture() -> Fixture {
         user_repo.clone(),
         rbac.clone(),
         clock.clone(),
+        Arc::new(common::FakeMediaGuard::new()),
     ));
     let roles = Arc::new(RoleInteractor::new(rbac.clone(), user_repo));
 

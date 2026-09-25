@@ -131,7 +131,12 @@ async fn fresh_stack() -> Stack {
     let rbac = Arc::new(PostgresRbacStore::new(pool.clone()));
     let roles = Arc::new(RoleInteractor::new(rbac.clone(), user_repo.clone()));
     roles.sync_registry().await.expect("同步权限目录失败");
-    let users = Arc::new(UserInteractor::new(user_repo.clone(), rbac, clock.clone()));
+    let users = Arc::new(UserInteractor::new(
+        user_repo.clone(),
+        rbac,
+        clock.clone(),
+        common::media_guard(pool.clone()),
+    ));
 
     // author / author2 / editor / stranger / admin / owner：覆盖内容 own/any、
     // 账号管理（user.manage + role.manage）与所有权（ownership.manage）三类边界。
@@ -203,6 +208,7 @@ async fn fresh_stack() -> Stack {
         category_repo.clone(),
         series_repo.clone(),
         clock.clone(),
+        common::media_guard(pool.clone()),
     ));
     let pages = Arc::new(PageInteractor::new(
         Arc::new(PostgresPageRepository::new(pool.clone())),
@@ -219,6 +225,7 @@ async fn fresh_stack() -> Stack {
     let series = Arc::new(application::series::SeriesInteractor::new(
         series_repo,
         clock.clone(),
+        common::media_guard(pool.clone()),
     ));
     let settings = Arc::new(application::settings::SettingsInteractor::new(
         Arc::new(infrastructure::PostgresSettingsStore::new(pool.clone())),
@@ -228,6 +235,7 @@ async fn fresh_stack() -> Stack {
             description: "集成测试".into(),
             logo_url: None,
         },
+        common::media_guard(pool.clone()),
     ));
 
     let session_validates = Arc::new(AtomicUsize::new(0));

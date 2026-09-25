@@ -98,6 +98,17 @@ pub enum UseCaseError {
     #[error("图片仍被 {0} 处内容引用，先移除引用再删除")]
     MediaInUse(i64),
 
+    /// 把他人的私有图片附着为头像/封面/logo 被拒绝（归属校验）。
+    ///
+    /// 用户头像、系列封面与站点 logo 的引用是**无条件**的公开来源：行落库
+    /// 即匿名可读。放行任意 id 会让任何拿到 UUID 的认证用户把他人私有图片
+    /// 变成公开图片。放行范围（本人上传、已有公开来源引用、持 `media.read`）
+    /// 见 `application::media::ensure_attachable`。
+    /// HTTP 层映射 403 + `media_not_attachable`：与角色权限不足的 `forbidden`
+    /// 区分开——这不是权限配置问题，换一张自己上传的图片即可解决。
+    #[error("不能引用他人的私有图片：请改用自己上传或已经公开的图片")]
+    MediaNotAttachable,
+
     #[error("无权执行该操作")]
     Forbidden,
 

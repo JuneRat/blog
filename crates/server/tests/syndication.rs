@@ -91,7 +91,12 @@ async fn stack() -> Stack {
         PublicBaseUrl::parse(BASE).unwrap(),
     ));
 
-    let users = Arc::new(UserInteractor::new(user_repo, rbac, clock.clone()));
+    let users = Arc::new(UserInteractor::new(
+        user_repo,
+        rbac,
+        clock.clone(),
+        common::media_guard(pool.clone()),
+    ));
     for username in ["author", "editor"] {
         users
             .create_user(
@@ -122,6 +127,7 @@ async fn stack() -> Stack {
         category_repo.clone(),
         series_repo.clone(),
         clock.clone(),
+        common::media_guard(pool.clone()),
     ));
     let pages = Arc::new(PageInteractor::new(page_repo, clock));
 

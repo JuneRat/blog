@@ -130,6 +130,10 @@ async fn main() {
                 Arc::new(PostgresSeriesRepository::new(pool.clone()));
             let public_series_query: Arc<dyn PublishedSeriesQuery> =
                 Arc::new(PostgresPublishedSeriesQuery::new(pool.clone()));
+            // 媒体仓储同时实现完整媒体库端口与附着授权窄端口：同一实例共享，
+            // 归属校验与库操作读同一份数据。放在各用例装配之前创建。
+            let media_repo = Arc::new(infrastructure::PostgresMediaRepository::new(pool.clone()));
+            let media_guard: Arc<dyn application::ports::MediaRefGuard> = media_repo.clone();
 
             let theme_data = Arc::new(application::theme_data::ThemeData::new(
                 public_query.clone(),
@@ -202,6 +206,7 @@ async fn main() {
                 user_repo.clone(),
                 rbac_store.clone(),
                 clock.clone(),
+                media_guard.clone(),
             ));
 
             // 认证装配：会话落 PostgreSQL（重启后仍登录、跨进程共享撤销），
@@ -263,14 +268,17 @@ async fn main() {
                 category_repo.clone(),
                 series_repo.clone(),
                 clock.clone(),
+                media_guard.clone(),
             ));
             let pages = Arc::new(PageInteractor::new(page_repo, clock.clone()));
             let tags = Arc::new(TagInteractor::new(tag_repo, clock.clone()));
             let categories = Arc::new(CategoryInteractor::new(category_repo, clock.clone()));
-            let series = Arc::new(SeriesInteractor::new(series_repo, clock.clone()));
+            let series = Arc::new(SeriesInteractor::new(
+                series_repo,
+                clock.clone(),
+                media_guard.clone(),
+            ));
             // 媒体库：文件在本地随机 id 路径下，元数据与引用关系在 PostgreSQL。
-            let media_repo: Arc<dyn application::ports::MediaRepository> =
-                Arc::new(infrastructure::PostgresMediaRepository::new(pool.clone()));
             let media_storage: Arc<dyn application::ports::MediaStorage> = Arc::new(
                 infrastructure::LocalMediaStorage::new(config.media_dir.clone()),
             );
@@ -293,6 +301,7 @@ async fn main() {
                     settings_store.clone(),
                     clock.clone(),
                     site_fallback.clone(),
+                    media_guard.clone(),
                 )
                 .with_themes(theme_store.clone(), registry.clone()),
             );

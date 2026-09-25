@@ -875,6 +875,29 @@ pub enum MediaDeleteOutcome {
     Gone,
 }
 
+/// [`MediaRefGuard::attachable_status`] 的结论：只回答授权问题，不携带内容。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MediaAttachStatus {
+    /// 上传者；「本人上传」的判据。
+    pub owner_id: Uuid,
+    /// 是否已有公开来源引用：匿名本就可读，再附着一处不产生新的暴露面。
+    pub publicly_referenced: bool,
+}
+
+/// 附着媒体引用前的归属授权读取面（头像/封面/logo）。
+///
+/// 完整的媒体库操作在 [`MediaRepository`]；这个窄端口只回答一个问题：
+/// 「这个资产现在处于什么归属与公开状态」。用例层据此执行不变量
+/// 「不得把他人私有的图片经引用变成匿名可读」——用户头像、系列封面与
+/// 站点 logo 的引用是无条件公开来源，这正是归属校验必须发生在写入前的
+/// 原因。做成独立端口而不是塞进 MediaRepository，是为了让只做附着检查的
+/// 用例（内容/身份/设置）不必背上整个媒体库的读写面。
+#[async_trait]
+pub trait MediaRefGuard: Send + Sync {
+    /// 资产的归属与公开性；None = 不存在或不是 `ready`（不可引用）。
+    async fn attachable_status(&self, id: Uuid) -> Result<Option<MediaAttachStatus>, UseCaseError>;
+}
+
 /// 媒体元数据仓储。
 ///
 /// 引用关系（`content_media_refs`）由 Post/Page 仓储在保存的同一事务内整体替换，

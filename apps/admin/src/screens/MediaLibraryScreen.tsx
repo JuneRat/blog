@@ -145,9 +145,9 @@ export function MediaLibraryScreen() {
       const uploaded = await uploadImages(files);
       setNotice(`已上传 ${uploaded.length} 张图片；默认可被你自己引用，公开后匿名才可读取。`);
       setPage(1);
-      // 上传会改变第 1 页内容（新资产排在最前）；当前不在第 1 页时该查询是
-      // 非活跃的，失效标记会在切回第 1 页时触发重取。
-      await queryClient.invalidateQueries({ queryKey: queryKeys.media(1) });
+      // 上传使全部页内容移位（新资产排在最前）：整族失效，与回收站 trashAll 同理；
+      // 非活跃页的失效标记会在切回该页时触发重取，不会留下陈旧列表。
+      await queryClient.invalidateQueries({ queryKey: queryKeys.mediaAll() });
     } catch (e) {
       setActionError(permissionMessageOf(e));
     } finally {
@@ -189,7 +189,8 @@ export function MediaLibraryScreen() {
         try {
           await mediaApi.remove(asset.id, asset.version);
           setNotice(`已删除 ${asset.original_name}。`);
-          await queryClient.invalidateQueries({ queryKey: queryKeys.media(page) });
+          // 删除使后续页内容前移：整族失效，只失效当前页会留下兄弟页的陈旧列表。
+          await queryClient.invalidateQueries({ queryKey: queryKeys.mediaAll() });
         } catch (e) {
           setActionError(permissionMessageOf(e));
           // 引用保护被触发时把使用位置摊开，让用户知道该去哪里解除引用。

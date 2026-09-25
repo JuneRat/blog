@@ -29,8 +29,8 @@ use serde_json::json;
 
 use crate::http_admin::AdminAuth;
 use crate::http_support::{
-    RequestId, admin_error, admin_error_with_status, cookie_value, ensure_same_origin, no_store,
-    oauth_state_cookie_name,
+    RequestId, admin_error, admin_error_with_status, cookie_value, csrf_token_matches,
+    ensure_same_origin, no_store, oauth_state_cookie_name,
 };
 
 #[derive(Clone)]
@@ -274,7 +274,7 @@ async fn logout(
         .get("x-csrf-token")
         .and_then(|v| v.to_str().ok())
         .unwrap_or_default();
-    if provided.is_empty() || provided != record.csrf_token {
+    if provided.is_empty() || !csrf_token_matches(provided, &record.csrf_token) {
         return admin_error(UseCaseError::Forbidden, &request_id);
     }
     // 会话校验通过即视为已验证身份：补录 actor，退出请求的完成日志也能归属到人。
@@ -379,7 +379,7 @@ async fn change_password(
         .get("x-csrf-token")
         .and_then(|v| v.to_str().ok())
         .unwrap_or_default();
-    if provided.is_empty() || provided != record.csrf_token {
+    if provided.is_empty() || !csrf_token_matches(provided, &record.csrf_token) {
         return admin_error(UseCaseError::Forbidden, &request_id);
     }
     request_id.set_actor(actor.user_id.0);
@@ -474,6 +474,8 @@ fn auth_error(e: UseCaseError) -> Response {
         | UseCaseError::MediaInUse(_) => StatusCode::BAD_REQUEST,
         UseCaseError::NotFound(_) => StatusCode::NOT_FOUND,
         UseCaseError::Forbidden | UseCaseError::LastOwnerProtected => StatusCode::FORBIDDEN,
+        // 认证路由不涉及媒体附着；与 admin 端映射保持同码，防御未来复用。
+        UseCaseError::MediaNotAttachable => StatusCode::FORBIDDEN,
         UseCaseError::External(_) => StatusCode::BAD_GATEWAY,
         UseCaseError::VersionConflict => StatusCode::CONFLICT,
         UseCaseError::Repository(_) | UseCaseError::Render(_) => {

@@ -12,8 +12,8 @@ use std::sync::Arc;
 use application::error::UseCaseError;
 use application::media::{MediaInteractor, RECLAIM_BATCH, STAGED_GRACE_SECS, UploadMediaCmd};
 use application::ports::{
-    MediaDeleteOutcome, MediaRepository, MediaStorage, PageRepository, PostRepository, SaveOutcome,
-    UserRepository,
+    MediaDeleteOutcome, MediaRefGuard, MediaRepository, MediaStorage, PageRepository,
+    PostRepository, SaveOutcome, UserRepository,
 };
 use domain::content::page::Page;
 use domain::content::post::{Post, Slug, Visibility};
@@ -1414,4 +1414,56 @@ async fn avatar_public_source_follows_user_soft_deletion() {
             .unwrap(),
         MediaDeleteOutcome::Marked
     );
+}
+
+/// `attachable_status`：附着授权的数据面（归属 + 公开性）。
+/// ready 资产给出 owner 与公开引用判定；草稿引用不算公开来源，
+/// 随文章发布转为公开——与匿名读取同一谓词。
+#[tokio::test]
+async fn attachable_status_reports_owner_and_publicity() {
+    let _g = SERIAL.lock().await;
+    let pool = fresh_pool().await;
+    let owner = seed_user(&pool, "attach-owner").await;
+    let media = ready_media(&pool, owner, 10, 10).await;
+
+    // ready 且无引用：归属可见，尚未公开。
+    let status = MediaRefGuard::attachable_status(&repo(&pool), media.id)
+        .await
+        .unwrap()
+        .expect("ready 资产应可附着");
+    assert_eq!(status.owner_id, owner);
+    assert!(!status.publicly_referenced);
+
+    // 不存在的资产：None（调用方按「不存在或已不可用」处理）。
+    assert!(
+        repo(&pool)
+            .attachable_status(Uuid::now_v7())
+            .await
+            .unwrap()
+            .is_none(),
+        "不存在的 id 不得给出附着状态"
+    );
+
+    // 被草稿文章引用：引用存在但不是公开来源。
+    let author = seed_user(&pool, "attach-author").await;
+    let row = seeded_post(
+        &pool,
+        author,
+        "attach-status-post",
+        markdown_with(&[media.id]),
+    )
+    .await;
+    let status = MediaRefGuard::attachable_status(&repo(&pool), media.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!status.publicly_referenced, "草稿引用不是公开来源");
+
+    // 文章发布后成为公开来源。
+    set_post_status(&pool, row.id, "published", "public", false).await;
+    let status = MediaRefGuard::attachable_status(&repo(&pool), media.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(status.publicly_referenced, "公开文章的引用是公开来源");
 }

@@ -244,7 +244,8 @@ impl UserRepository for PostgresUserRepository {
         .await
         .map_err(map_sqlx_error)?;
         if updated.is_none() {
-            tx.commit().await.map_err(map_sqlx_error)?;
+            // 用户不存在/已软删除：回滚而不是提交空事务——语义上是失败的写入。
+            tx.rollback().await.map_err(map_sqlx_error)?;
             return Err(UseCaseError::NotFound("用户".into()));
         }
         // 引用集合由新头像推导；资产不可用则整次回滚（列与引用都不落库）。
@@ -2855,5 +2856,31 @@ impl MediaRepository for PostgresMediaRepository {
         .await
         .map_err(map_sqlx_error)?;
         rows.iter().map(media_from_row).collect()
+    }
+}
+
+/// 附着授权读取面：归属与公开性一条 SQL 得出，公开谓词与匿名读取同一份
+/// （`REF_IS_PUBLIC`）。只看 `ready` 资产——其余状态本就不可被引用。
+#[async_trait]
+impl application::ports::MediaRefGuard for PostgresMediaRepository {
+    async fn attachable_status(
+        &self,
+        id: Uuid,
+    ) -> Result<Option<application::ports::MediaAttachStatus>, UseCaseError> {
+        let row: Option<(Uuid, bool)> = sqlx::query_as(&format!(
+            "SELECT m.owner_id, EXISTS (SELECT 1 FROM content_media_refs refs \
+             WHERE refs.media_id = m.id AND {REF_IS_PUBLIC}) \
+             FROM media_assets m WHERE m.id = $1 AND m.status = 'ready'"
+        ))
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(map_sqlx_error)?;
+        Ok(row.map(
+            |(owner_id, publicly_referenced)| application::ports::MediaAttachStatus {
+                owner_id,
+                publicly_referenced,
+            },
+        ))
     }
 }

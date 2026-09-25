@@ -89,7 +89,12 @@ async fn fresh_stack_with(secure_cookies: bool) -> Stack {
     let rbac = Arc::new(PostgresRbacStore::new(pool.clone()));
     let roles = Arc::new(RoleInteractor::new(rbac.clone(), user_repo.clone()));
     roles.sync_registry().await.expect("同步权限目录失败");
-    let users = Arc::new(UserInteractor::new(user_repo.clone(), rbac, clock.clone()));
+    let users = Arc::new(UserInteractor::new(
+        user_repo.clone(),
+        rbac,
+        clock.clone(),
+        common::media_guard(pool.clone()),
+    ));
 
     // 用户 + author 角色 + 外部身份绑定。
     let member = users
@@ -146,6 +151,7 @@ async fn fresh_stack_with(secure_cookies: bool) -> Stack {
         )),
         std::sync::Arc::new(infrastructure::PostgresSeriesRepository::new(pool.clone())),
         std::sync::Arc::new(infrastructure::SystemClock),
+        common::media_guard(pool.clone()),
     ));
     let pages = Arc::new(application::page::PageInteractor::new(
         Arc::new(infrastructure::PostgresPageRepository::new(pool.clone())),
@@ -191,6 +197,7 @@ async fn fresh_stack_with(secure_cookies: bool) -> Stack {
         series: Arc::new(application::series::SeriesInteractor::new(
             std::sync::Arc::new(infrastructure::PostgresSeriesRepository::new(pool.clone())),
             std::sync::Arc::new(infrastructure::SystemClock),
+            common::media_guard(pool.clone()),
         )),
         settings: Arc::new(application::settings::SettingsInteractor::new(
             std::sync::Arc::new(infrastructure::PostgresSettingsStore::new(pool.clone())),
@@ -200,6 +207,7 @@ async fn fresh_stack_with(secure_cookies: bool) -> Stack {
                 description: "测试描述".into(),
                 logo_url: None,
             },
+            common::media_guard(pool.clone()),
         )),
         roles,
         media: common::media_interactor(pool.clone(), common::media_dir("auth")),

@@ -74,7 +74,12 @@ async fn stack_with_theme(theme_dir: &str) -> Stack {
 
     let markdown = Arc::new(SanitizingMarkdownRenderer::new());
 
-    let users = Arc::new(UserInteractor::new(user_repo, rbac, clock.clone()));
+    let users = Arc::new(UserInteractor::new(
+        user_repo,
+        rbac,
+        clock.clone(),
+        common::media_guard(pool.clone()),
+    ));
     let tag_repo: Arc<dyn TagRepository> = Arc::new(PostgresTagRepository::new(pool.clone()));
     let public_tag_query: Arc<dyn PublishedTagQuery> =
         Arc::new(PostgresPublishedTagQuery::new(pool.clone()));
@@ -102,6 +107,7 @@ async fn stack_with_theme(theme_dir: &str) -> Stack {
         category_repo.clone(),
         series_repo.clone(),
         clock.clone(),
+        common::media_guard(pool.clone()),
     ));
     let pages = Arc::new(PageInteractor::new(page_repo, clock));
     let fallback = SiteInfo {

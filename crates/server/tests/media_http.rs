@@ -103,7 +103,12 @@ async fn fresh_stack() -> Stack {
     let rbac = Arc::new(PostgresRbacStore::new(pool.clone()));
     let roles = Arc::new(RoleInteractor::new(rbac.clone(), user_repo.clone()));
     roles.sync_registry().await.expect("同步权限目录失败");
-    let users = Arc::new(UserInteractor::new(user_repo.clone(), rbac, clock.clone()));
+    let users = Arc::new(UserInteractor::new(
+        user_repo.clone(),
+        rbac,
+        clock.clone(),
+        common::media_guard(pool.clone()),
+    ));
 
     // author 有 media.read/upload/delete；editor 另有 media.delete_any；stranger 无任何角色。
     for (username, role) in [
@@ -181,6 +186,7 @@ async fn fresh_stack() -> Stack {
         category_repo,
         series_repo,
         clock.clone(),
+        common::media_guard(pool.clone()),
     ));
     let pages = Arc::new(application::page::PageInteractor::new(
         Arc::new(PostgresPageRepository::new(pool.clone())),
@@ -227,6 +233,7 @@ async fn fresh_stack() -> Stack {
         series: Arc::new(application::series::SeriesInteractor::new(
             Arc::new(PostgresSeriesRepository::new(pool.clone())),
             Arc::new(SystemClock),
+            common::media_guard(pool.clone()),
         )),
         settings: Arc::new(application::settings::SettingsInteractor::new(
             Arc::new(infrastructure::PostgresSettingsStore::new(pool.clone())),
@@ -236,6 +243,7 @@ async fn fresh_stack() -> Stack {
                 description: "集成测试".into(),
                 logo_url: None,
             },
+            common::media_guard(pool.clone()),
         )),
         roles,
         media: media.clone(),
@@ -1841,6 +1849,79 @@ async fn self_avatar_is_public_and_does_not_invalidate_the_session() {
     )
     .await;
     assert_eq!(status, StatusCode::NO_CONTENT, "清除头像后应可删除");
+}
+
+/// 归属校验：无 `media.read` 的用户不能把他人**私有**图片附着为头像
+/// （403 `media_not_attachable`）；同一图片随公开文章发布成为公开来源后，
+/// 附着不再产生新的暴露面，放行。
+#[tokio::test]
+async fn avatar_cannot_expose_another_users_private_image() {
+    let _g = SERIAL.lock().await;
+    let stack = fresh_stack().await;
+    let (author, author_csrf) = login_as(&stack.router, &stack.idp, "author").await;
+    let (image, _version) = upload(&stack, &author, &author_csrf, 24).await;
+    let (stranger, csrf) = login_as(&stack.router, &stack.idp, "stranger").await;
+
+    // 私有图片：附着被拒，且不泄漏更多细节。
+    let (status, _, body) = send(
+        &stack.router,
+        "PUT",
+        "/api/admin/v1/me/avatar",
+        Some(&stranger),
+        Some(&csrf),
+        Some(&serde_json::json!({"avatar_media_id": image})),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(body["code"], "media_not_attachable");
+
+    // 图片仍是私有的：匿名不可读。
+    let (status, _, _) = send(
+        &stack.router,
+        "GET",
+        &format!("/media/{image}"),
+        None,
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "私有图片不得经头像变成公开");
+
+    // 同一图片被公开文章引用后成为公开来源：附着放行（本就匿名可读）。
+    publish_post_referencing(
+        &stack,
+        &author,
+        &author_csrf,
+        "avatar-attach-public",
+        &image,
+    )
+    .await;
+    let (status, _, body) = send(
+        &stack.router,
+        "PUT",
+        "/api/admin/v1/me/avatar",
+        Some(&stranger),
+        Some(&csrf),
+        Some(&serde_json::json!({"avatar_media_id": image})),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["avatar_media_id"], image.as_str());
+
+    let (status, _, _) = send(
+        &stack.router,
+        "GET",
+        &format!("/media/{image}"),
+        None,
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "公开来源图片匿名可读");
 }
 
 /// 站点 logo：与 settings.site 整组保存同事务写入引用；站点配置公开，

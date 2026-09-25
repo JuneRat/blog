@@ -193,6 +193,54 @@ describe("媒体库屏", () => {
     expect(mediaApi.upload).not.toHaveBeenCalled();
   });
 
+  it("上传后整族失效：翻回看过的页不展示陈旧缓存", async () => {
+    // 上传让全部页内容移位（新资产排在最前）。若只失效第 1 页，
+    // 已看过的第 2 页在 30s staleTime 内会展示旧缓存（条目丢失）。
+    // mock 按页路由而不是按调用顺序排队：失效重取与 setPage 的先后
+    // 存在竞态，顺序队列会让断言偶发错位。
+    let uploaded = false;
+    vi.mocked(mediaApi.upload).mockImplementation(async () => {
+      uploaded = true;
+      return asset({ id: "new-media" });
+    });
+    vi.mocked(mediaApi.list).mockImplementation(async (p: number) => {
+      if (p === 1) {
+        return uploaded
+          ? { items: [asset({ id: "new-media", original_name: "new.png" })], total: 61, page: 1, per_page: 24 }
+          : { items: [asset()], total: 60, page: 1, per_page: 24 };
+      }
+      if (p === 2) {
+        return uploaded
+          ? { items: [asset({ id: "p2-shifted", original_name: "shifted.png" })], total: 61, page: 2, per_page: 24 }
+          : { items: [asset({ id: "p2", original_name: "second-page.png" })], total: 60, page: 2, per_page: 24 };
+      }
+      return { items: [asset({ id: "p3", original_name: "third-page.png" })], total: 60, page: 3, per_page: 24 };
+    });
+
+    render(<App />);
+    await waitFor(() => expect(screen.getByText("photo.png")).toBeTruthy());
+    fireEvent.click(screen.getByTitle("下一页"));
+    await waitFor(() => expect(screen.getByText("second-page.png")).toBeTruthy());
+    fireEvent.click(screen.getByTitle("下一页"));
+    await waitFor(() => expect(screen.getByText("third-page.png")).toBeTruthy());
+
+    const input = document.querySelector<HTMLInputElement>('input[type="file"]')!;
+    const file = new File([new Uint8Array(16)], "new.png", { type: "image/png" });
+    fireEvent.change(input, { target: { files: [file] } });
+    // 上传成功后自动回到第 1 页并展示新资产。
+    await waitFor(() => expect(screen.getByText(/已上传 1 张图片/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("new.png")).toBeTruthy());
+
+    // 翻回第 2 页：必须看到重取后的移位内容；陈旧缓存会停留在 second-page.png。
+    fireEvent.click(screen.getByTitle("下一页"));
+    expect(await screen.findByText("shifted.png")).toBeTruthy();
+    expect(screen.queryByText("second-page.png")).toBeNull();
+    // 第 2 页确实重新请求过（共两次：首次翻页 + 失效后重取）。
+    expect(
+      mediaApi.list.mock.calls.filter(([p]) => p === 2).length,
+    ).toBe(2);
+  });
+
   it("分页信息与翻页", async () => {
     vi.mocked(mediaApi.list).mockResolvedValue({
       items: [asset()],

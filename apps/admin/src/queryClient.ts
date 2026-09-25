@@ -23,6 +23,14 @@ export const queryKeys = {
   users: () => ["users"] as const,
   roles: () => ["roles"] as const,
   media: (page: number) => ["media", page] as const,
+  /**
+   * 媒体库**整族**前缀。
+   *
+   * 与回收站同理：上传/删除改变的是总数与其他页的内容，只失效当前页
+   * （上传后只失效第 1 页）会在 30s staleTime 内留下兄弟页的陈旧列表。
+   * 失效族用 `queryKeys.mediaAll()`，取具体页用 `queryKeys.media(page)`。
+   */
+  mediaAll: () => ["media"] as const,
   mediaUsage: (id: string) => ["media", "usage", id] as const,
   siteSettings: () => ["settings", "site"] as const,
   themeSettings: () => ["settings", "theme"] as const,

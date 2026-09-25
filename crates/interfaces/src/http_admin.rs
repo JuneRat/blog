@@ -27,7 +27,9 @@ use axum::{Json, Router};
 use serde::Deserialize;
 
 use crate::http_auth::AdminState;
-use crate::http_support::{RequestId, admin_error, cookie_value, ensure_same_origin, no_store};
+use crate::http_support::{
+    RequestId, admin_error, cookie_value, csrf_token_matches, ensure_same_origin, no_store,
+};
 
 /// 请求体上限（Markdown 正文足够）。
 pub const ADMIN_BODY_LIMIT: usize = 2 * 1024 * 1024;
@@ -150,7 +152,7 @@ where
                 .get("x-csrf-token")
                 .and_then(|v| v.to_str().ok())
                 .unwrap_or_default();
-            if provided.is_empty() || provided != record.csrf_token {
+            if provided.is_empty() || !csrf_token_matches(provided, &record.csrf_token) {
                 return Err(admin_error(
                     UseCaseError::Invalid("CSRF 校验失败".into()),
                     &request_id,

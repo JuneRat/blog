@@ -18,6 +18,8 @@ use domain::identity::{PermissionSet, UserSnapshot};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+mod common;
+
 // ---------------------------------------------------------------------------
 // Fakes
 // ---------------------------------------------------------------------------
@@ -247,14 +249,19 @@ impl FakeUserRepo {
 
 #[async_trait::async_trait]
 impl UserRepository for FakeUserRepo {
-    /// 头像只走真实认证 HTTP 用例（server/tests）；本 fake 不实现，误用即失败。
     async fn set_avatar(
         &self,
-        _user_id: uuid::Uuid,
-        _avatar_media_id: Option<uuid::Uuid>,
-        _now: time::OffsetDateTime,
+        user_id: uuid::Uuid,
+        avatar_media_id: Option<uuid::Uuid>,
+        now: time::OffsetDateTime,
     ) -> Result<(), UseCaseError> {
-        unimplemented!("该用例不使用头像")
+        let mut users = self.users.lock().unwrap();
+        let Some(user) = users.values_mut().find(|u| u.id == user_id) else {
+            return Err(UseCaseError::NotFound("用户".into()));
+        };
+        user.avatar_media_id = avatar_media_id;
+        user.updated_at = now;
+        Ok(())
     }
 
     async fn insert(&self, snapshot: &UserSnapshot) -> Result<(), UseCaseError> {
@@ -694,6 +701,8 @@ struct Fixture {
     tags: Arc<FakeTagRepo>,
     users: Arc<UserInteractor>,
     roles: Arc<RoleInteractor>,
+    /// 媒体附着授权 fake：测试登记资产的归属与公开性。
+    media_guard: Arc<common::FakeMediaGuard>,
     author: Actor,
     author2: Actor,
     other: Actor,
@@ -707,10 +716,12 @@ async fn fixture() -> Fixture {
     let rbac = Arc::new(FakeRbacStore::new());
     let clock = Arc::new(FixedClock);
 
+    let media_guard = Arc::new(common::FakeMediaGuard::new());
     let users = Arc::new(UserInteractor::new(
         user_repo.clone(),
         rbac.clone(),
         clock.clone(),
+        media_guard.clone(),
     ));
     let roles = Arc::new(RoleInteractor::new(rbac.clone(), user_repo));
     let posts = Arc::new(PostInteractor::new(
@@ -719,6 +730,7 @@ async fn fixture() -> Fixture {
         Arc::new(FakeCategoryRepo),
         Arc::new(FakeSeriesRepo),
         clock,
+        media_guard.clone(),
     ));
 
     roles.sync_registry().await.unwrap();
@@ -761,6 +773,7 @@ async fn fixture() -> Fixture {
         tags: tag_repo,
         users,
         roles,
+        media_guard,
         author,
         author2,
         other,
@@ -1732,4 +1745,162 @@ async fn trash_scope_versions_restore_and_purge_permissions() {
             .await,
         Err(UseCaseError::Forbidden)
     ));
+}
+
+// ---------------------------------------------------------------------------
+// 媒体附着归属校验（头像/封面共用 ensure_attachable）
+// ---------------------------------------------------------------------------
+
+/// 他人私有图片不能附着为头像：头像引用是无条件公开来源，
+/// 放行会把私有图片变成匿名可读。内置 author/editor 都持 media.read
+/// （本就可读全库），因此用**无任何角色**的会话身份验证拒绝路径。
+#[tokio::test]
+async fn avatar_of_another_users_private_image_is_rejected() {
+    let f = fixture().await;
+    let foreign = Uuid::now_v7();
+    f.media_guard.allow_private(foreign, f.author2.user_id.0);
+
+    let err = f
+        .users
+        .set_own_avatar(&f.other, Some(foreign))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, UseCaseError::MediaNotAttachable), "{err:?}");
+
+    // 现有头像未被改写。
+    let profile = f.users.profile_of(&f.other).await.unwrap();
+    assert_eq!(profile.avatar_media_id, None);
+}
+
+/// 本人私有图片与**已有公开来源**的他人图片都可附着：
+/// 后者匿名本就可读，再附着一处不产生新的暴露面。
+#[tokio::test]
+async fn avatar_accepts_own_private_and_foreign_public_images() {
+    let f = fixture().await;
+    let own = Uuid::now_v7();
+    f.media_guard.allow_private(own, f.author.user_id.0);
+    let foreign_public = Uuid::now_v7();
+    f.media_guard
+        .allow_public(foreign_public, f.author2.user_id.0);
+
+    let profile = f.users.set_own_avatar(&f.author, Some(own)).await.unwrap();
+    assert_eq!(profile.avatar_media_id, Some(own));
+
+    let profile = f
+        .users
+        .set_own_avatar(&f.author, Some(foreign_public))
+        .await
+        .unwrap();
+    assert_eq!(profile.avatar_media_id, Some(foreign_public));
+}
+
+/// 重复保存**当前头像**不重新授权：历史引用（如曾经公开后来转私有）
+/// 不应卡死正常的资料保存。
+#[tokio::test]
+async fn resubmitting_the_current_avatar_skips_reauthorization() {
+    let f = fixture().await;
+    let own = Uuid::now_v7();
+    f.media_guard.allow_private(own, f.author.user_id.0);
+    f.users.set_own_avatar(&f.author, Some(own)).await.unwrap();
+
+    // 模拟资产后来转为不可附着（登记消失）：同一头像仍可保存。
+    f.media_guard.allow(own, f.author2.user_id.0, false);
+    let profile = f.users.set_own_avatar(&f.author, Some(own)).await.unwrap();
+    assert_eq!(profile.avatar_media_id, Some(own));
+}
+
+/// 未知资产按「不存在或已不可用」拒绝，与存储层 sync 的口径一致。
+#[tokio::test]
+async fn avatar_of_an_unknown_image_reports_invalid() {
+    let f = fixture().await;
+    let err = f
+        .users
+        .set_own_avatar(&f.author, Some(Uuid::now_v7()))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, UseCaseError::Invalid(_)), "{err:?}");
+}
+
+/// 文章封面同理：换成他人私有图片被拒，创建与编辑共用同一校验。
+/// author 角色持 media.read（允许），这里构造「能写文章但无 media.read」的身份
+/// （对应自定义最小角色）验证拒绝路径。
+#[tokio::test]
+async fn post_cover_of_another_users_private_image_is_rejected() {
+    let f = fixture().await;
+    let writer = Actor::new(
+        f.other.user_id,
+        application::identity::ActorChannel::Session,
+        PermissionSet::from_keys(["post.create", "post.update"]),
+    );
+    let foreign = Uuid::now_v7();
+    f.media_guard.allow_private(foreign, f.author2.user_id.0);
+
+    let mut cmd = draft_cmd("cover-foreign");
+    cmd.cover_media_id = Some(foreign);
+    let err = f.posts.create(&writer, cmd).await.unwrap_err();
+    assert!(matches!(err, UseCaseError::MediaNotAttachable), "{err:?}");
+
+    // 编辑换封面同路：先建一篇无封面文章，再换成他人私有图片。
+    let created = f
+        .posts
+        .create(&writer, draft_cmd("cover-edit"))
+        .await
+        .unwrap();
+    let err = f
+        .posts
+        .edit(
+            &writer,
+            EditPostCmd {
+                target_slug: "cover-edit".into(),
+                expected_version: Some(created.version),
+                cover_media_id: Some(Some(foreign)),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, UseCaseError::MediaNotAttachable), "{err:?}");
+}
+
+/// 重复提交**当前封面**不重新授权：编辑者保存正文不该被历史封面卡住。
+#[tokio::test]
+async fn resubmitting_the_current_post_cover_skips_reauthorization() {
+    let f = fixture().await;
+    let own = Uuid::now_v7();
+    f.media_guard.allow_private(own, f.author.user_id.0);
+    let mut cmd = draft_cmd("cover-keep");
+    cmd.cover_media_id = Some(own);
+    let created = f.posts.create(&f.author, cmd).await.unwrap();
+
+    // 登记转为不利（owner 改成他人）：同一封面仍随正文一起保存成功。
+    f.media_guard.allow(own, f.author2.user_id.0, false);
+    let edited = f
+        .posts
+        .edit(
+            &f.author,
+            EditPostCmd {
+                target_slug: "cover-keep".into(),
+                expected_version: Some(created.version),
+                cover_media_id: Some(Some(own)),
+                content: Some("# 改动正文".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(edited.cover_media_id, Some(own));
+    assert_eq!(edited.version, created.version + 1);
+}
+
+/// 已有公开来源的他人图片可作封面（媒体库本就是共享资源）。
+#[tokio::test]
+async fn post_cover_accepts_foreign_public_image() {
+    let f = fixture().await;
+    let foreign_public = Uuid::now_v7();
+    f.media_guard
+        .allow_public(foreign_public, f.author2.user_id.0);
+    let mut cmd = draft_cmd("cover-public");
+    cmd.cover_media_id = Some(foreign_public);
+    let created = f.posts.create(&f.author, cmd).await.unwrap();
+    assert_eq!(created.cover_media_id, Some(foreign_public));
 }

@@ -243,7 +243,7 @@ docs/               # 设计文档与 ADR
 - RSS/sitemap 与基础 SEO（M3 第五段）：`/feed.xml`（RSS 2.0，`guid` = canonical URL）、`/sitemap.xml`（首页/公开文章/公开 Page + 非空目录页，带 lastmod）、`/robots.txt`（声明 sitemap）；HTML 统一输出 title/description/canonical/og 与 RSS 自动发现；绝对链接取自 `BLOG_PUBLIC_BASE_URL`（装配期校验）；Unicode slug 百分号编码；XML 转义与控制字符、可见性边界（草稿/私密/撤回/软删除）与「更新后立即变化」均有单元与真实库集成测试。
 - 媒体库第一版：正文引用 `![alt](/media/{id})` 的服务端解析与同事务固化；匿名可见性随内容发布/撤回/改 private/进回收站逐次变化；图片内容校验（格式/尺寸/大小，SVG 与非图片被拒）；引用保护删除与使用位置；回收幂等（重复执行、文件已缺失、上传中断的补偿）与删除失败重试；上传/浏览/删除权限边界、公开文件缓存头与条件请求均有用例（`crates/domain`、`crates/application/tests/media_usecase.rs`、`crates/infrastructure/tests/media.rs`、`crates/server/tests/media_http.rs`、`apps/admin/src/media.test.ts`、`apps/admin/tests/media*.test.tsx`）。
 - 媒体库第二段（Post/Series 封面）：`cover_media_id` 真外键与「正文图片 ∪ 封面」同事务引用；替换/移除释放旧引用；仍被引用时删除受保护；匿名访问随文章撤回/private/回收站与系列删除变化；公开详情页与公开系列页渲染封面；封面写入的版本冲突与「替换封面 vs 删除候选图片」真并发串行化均有真实库用例。
-- 媒体库第三段（用户头像与站点 logo）：`users.avatar_media_id` 真外键 + 本人自助 `PUT /me/avatar`（不递增 `users.version`，会话不被清理）；匿名可读性 = 账号未软删除，软删除后立即失效而引用仍占用；站点 logo 随 `settings.site` 整组保存、同事务写引用、受 `ready` 校验与版本 CAS；公开页渲染站点 logo 与作者头像；以上均有真实库与 SPA 用例。
+- 媒体库第三段（用户头像与站点 logo）：`users.avatar_media_id` 真外键 + 本人自助 `PUT /me/avatar`（不递增 `users.version`，会话不被清理）；匿名可读性 = 账号未软删除，软删除后立即失效而引用仍占用；站点 logo 随 `settings.site` 整组保存、同事务写引用、受 `ready` 校验与版本 CAS；公开页渲染站点 logo 与作者头像；头像/封面/logo 附着他人私有图片被 403 `media_not_attachable` 拒绝（放行本人上传、已有公开来源与 `media.read` 三种，重复提交当前值不重新校验）；以上均有真实库与 SPA 用例。
 - M0 主题桥接原型（`spikes/template-bridge`）：同步模板函数 ↔ 异步 SQL 查询桥接验证可行，预算/隔离/失败场景 17 项集成测试；结论见原型 README 与 ADR-0002。
 
 ## 下一步

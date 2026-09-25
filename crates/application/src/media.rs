@@ -41,6 +41,41 @@ pub fn media_url(id: Uuid) -> String {
     format!("{MEDIA_URL_PREFIX}{id}")
 }
 
+/// 显式附着媒体引用的归属授权（头像/封面/logo 共用）。
+///
+/// 这些字段与正文图片不同：调用者直接提交外部资产 id，而头像、系列封面与
+/// 站点 logo 的引用是**无条件**的公开来源——行落库即匿名可读。因此必须防止
+/// 「拿到他人图片 UUID → 附着为头像」把私有图片变成公开图片。
+///
+/// 放行三种情况（任一满足即可）：
+/// - 本人上传：`owner_id` 与调用者一致；
+/// - 已有公开来源引用：匿名本就可读，再附着一处不产生新的暴露面；
+/// - 持 `media.read`：本就可预览库内全部资产，附着不扩大其可见范围。
+///
+/// 资产不存在或未就绪按「引用了不存在或已不可用的图片」报 Invalid——
+/// 与存储层 `sync_media_refs` 的既有口径一致；归属不满足才报
+/// [`UseCaseError::MediaNotAttachable`]。调用方只在**值发生变化**时调用
+/// （重复保存当前值不重新授权），避免编辑他人内容时被历史引用卡住。
+pub async fn ensure_attachable(
+    guard: &dyn crate::ports::MediaRefGuard,
+    actor: &Actor,
+    id: Uuid,
+) -> Result<(), UseCaseError> {
+    match guard.attachable_status(id).await? {
+        None => Err(UseCaseError::Invalid("引用了不存在或已不可用的图片".into())),
+        Some(status) => {
+            let allowed = status.owner_id == actor.user_id.0
+                || status.publicly_referenced
+                || actor.has_permission("media.read");
+            if allowed {
+                Ok(())
+            } else {
+                Err(UseCaseError::MediaNotAttachable)
+            }
+        }
+    }
+}
+
 /// 由随机 id 与格式后缀生成存储路径；文件永远不按原始文件名落盘。
 ///
 /// `objects/` 前缀把「正式对象」与存储根目录下的 `staging/`（飞行中的上传）分开，

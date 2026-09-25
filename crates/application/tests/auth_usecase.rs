@@ -17,6 +17,8 @@ use domain::identity::UserSnapshot;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+mod common;
+
 struct FixedClock;
 
 impl Clock for FixedClock {
@@ -243,6 +245,7 @@ async fn fixture() -> Fixture {
         user_repo.clone(),
         rbac.clone(),
         clock.clone(),
+        Arc::new(common::FakeMediaGuard::new()),
     ));
     let _roles = Arc::new(RoleInteractor::new(rbac, user_repo));
 
