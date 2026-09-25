@@ -20,6 +20,7 @@ import { queryKeys } from "../queryClient";
 import { navigate, paths } from "../router";
 import { useLeaveConfirmation, useUnsavedGuard } from "../unsaved";
 import { MediaInsertPanel } from "../components/MediaInsertPanel";
+import { CoverPicker } from "../components/CoverPicker";
 import { useImageInsertion } from "../components/useImageInsertion";
 import type { EditPostInput } from "../api";
 import type { PostDetail, Visibility } from "../types";
@@ -38,6 +39,13 @@ interface FormState {
   seriesId: string | null;
   /** 系列内序号（seriesId 非空时为正整数）。 */
   seriesOrder: string;
+  /**
+   * 封面媒体 id（null = 无封面）。
+   *
+   * 表单里只存一个可空值——「移除封面」就是把它设为 null；提交时再按后端
+   * PATCH 的三态语义始终显式带上该字段（见 `editPayload`）。
+   */
+  coverMediaId: string | null;
 }
 
 const EMPTY_FORM: FormState = {
@@ -50,6 +58,7 @@ const EMPTY_FORM: FormState = {
   categoryId: null,
   seriesId: null,
   seriesOrder: "",
+  coverMediaId: null,
 };
 
 function toForm(post: PostDetail): FormState {
@@ -63,6 +72,7 @@ function toForm(post: PostDetail): FormState {
     categoryId: post.category_id,
     seriesId: post.series_id,
     seriesOrder: post.series_order === null ? "" : String(post.series_order),
+    coverMediaId: post.cover_media_id,
   };
 }
 
@@ -74,10 +84,14 @@ function toForm(post: PostDetail): FormState {
 function normalizeForm(raw: FormState): FormState {
   const categoryId = raw.categoryId;
   const seriesId = raw.seriesId;
+  const coverMediaId = raw.coverMediaId;
   return {
     ...raw,
     categoryId: typeof categoryId === "string" && categoryId.length > 0 ? categoryId : null,
     seriesId: typeof seriesId === "string" && seriesId.length > 0 ? seriesId : null,
+    // 封面选择器只上报 id 或 null；这里同样收敛 `""`/`undefined`，保持单值语义。
+    coverMediaId:
+      typeof coverMediaId === "string" && coverMediaId.length > 0 ? coverMediaId : null,
   };
 }
 
@@ -98,7 +112,8 @@ function formEquals(left: FormState, right: FormState): boolean {
     sameTags(left.tagIds, right.tagIds) &&
     left.categoryId === right.categoryId &&
     left.seriesId === right.seriesId &&
-    left.seriesOrder.trim() === right.seriesOrder.trim()
+    left.seriesOrder.trim() === right.seriesOrder.trim() &&
+    left.coverMediaId === right.coverMediaId
   );
 }
 
@@ -137,6 +152,8 @@ function mergeServer(current: FormState, sent: FormState, server: FormState): Fo
     categoryId,
     seriesId,
     seriesOrder,
+    // 封面与分类一样是单值字段：用户没在请求飞行期间改过才接受服务器值。
+    coverMediaId: pickServer("coverMediaId", current, sent, server),
   };
 }
 
@@ -356,6 +373,9 @@ export function PostEditScreen({ slug }: { slug: string | null }) {
       visibility: current.visibility,
       tag_ids: current.tagIds,
       category_id: current.categoryId,
+      // 封面始终显式提交：后端按绝对值处理（null = 移除，id = 设置），
+      // 表单里没有「缺省不触碰」这一态，整表保存正好覆盖它。
+      cover_media_id: current.coverMediaId,
       series: seriesPayload(current),
     };
   }
@@ -399,6 +419,8 @@ export function PostEditScreen({ slug }: { slug: string | null }) {
           visibility: sent.visibility,
           tag_ids: sent.tagIds,
           category_id: sent.categoryId ?? undefined,
+          // 新建时只在确实选了封面才发送；未选 = 不设封面。
+          cover_media_id: sent.coverMediaId ?? undefined,
           series: seriesPayload(sent) ?? undefined,
         });
         // 先本地同步（含创建期间的新输入），再更新地址；效果钩子会跳过重载。
@@ -654,6 +676,21 @@ export function PostEditScreen({ slug }: { slug: string | null }) {
         <Form.Item label="摘要" name="excerpt">
           <Input />
         </Form.Item>
+        {/*
+          封面：隐藏的 Form.Item 负责把 coverMediaId 注册进表单 store，
+          readForm/mergeServer/pickServer 才能像 categoryId 一样按字段读写；
+          真正的控件是下面的 CoverPicker，值由 view 驱动、变化经 writeForm 回写。
+          这样选择器不必依赖 Form.Item 的 value/onChange 注入，独立使用时也是同一套契约。
+        */}
+        <Form.Item name="coverMediaId" hidden>
+          <Input />
+        </Form.Item>
+        <CoverPicker
+          value={view.coverMediaId}
+          onChange={(id) => writeForm({ ...readForm(), coverMediaId: id })}
+          canReadMedia={canReadMedia}
+          canUploadMedia={canUploadMedia}
+        />
         <Form.Item label="可见性" name="visibility">
           <Select
             options={[

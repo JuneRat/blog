@@ -39,6 +39,10 @@ pub enum SiteSettingsSource {
 pub struct SiteSettingsView {
     pub title: String,
     pub description: String,
+    /// 站点 logo 的媒体资产 id（None = 无 logo）。
+    pub logo_media_id: Option<uuid::Uuid>,
+    /// 站点 logo 的站内地址（None = 无 logo）。
+    pub logo_url: Option<String>,
     pub source: SiteSettingsSource,
     /// site 行当前版本；行不存在时为 0（首次保存以 0 为 expected_version）。
     pub version: i64,
@@ -47,6 +51,8 @@ pub struct SiteSettingsView {
 pub struct SaveSiteSettingsCmd {
     pub title: String,
     pub description: String,
+    /// 站点 logo 的媒体资产 id；None = 无 logo（PUT 是整组替换）。
+    pub logo_media_id: Option<uuid::Uuid>,
     pub expected_version: Option<i64>,
 }
 
@@ -90,7 +96,13 @@ pub fn effective_site(value: &SiteSettingsValue, fallback: &SiteInfo) -> SiteInf
         .as_deref()
         .map(|d| d.trim().to_string())
         .unwrap_or_else(|| fallback.description.clone());
-    SiteInfo { title, description }
+    // logo 只来自数据库（装配回退值没有 logo）：指向失效资产时按无 logo 处理，
+    // 公开页不会输出一个必然 404 的地址。
+    SiteInfo {
+        title,
+        description,
+        logo_url: value.logo_media_id.map(crate::media::media_url),
+    }
 }
 
 impl SettingsInteractor {
@@ -223,12 +235,14 @@ impl SettingsInteractor {
         if !actor.has_permission("settings.manage") {
             return Err(UseCaseError::Forbidden);
         }
-        let (title, description) = SiteSettings::new(cmd.title, cmd.description)
-            .map_err(|e| UseCaseError::Invalid(e.to_string()))?
-            .into_parts();
+        let (title, description, logo_media_id) =
+            SiteSettings::new(cmd.title, cmd.description, cmd.logo_media_id)
+                .map_err(|e| UseCaseError::Invalid(e.to_string()))?
+                .into_parts();
         let value = SiteSettingsValue {
             title: Some(title),
             description: Some(description),
+            logo_media_id,
         };
 
         let current = self.store.find_site().await?;
@@ -240,6 +254,7 @@ impl SettingsInteractor {
         if let Some(record) = &current
             && record.value.title == value.title
             && record.value.description == value.description
+            && record.value.logo_media_id == value.logo_media_id
         {
             return Ok(self.view_of(record.value.clone(), record.version));
         }
@@ -261,6 +276,8 @@ impl SettingsInteractor {
             None => Ok(SiteSettingsView {
                 title: self.fallback.title.clone(),
                 description: self.fallback.description.clone(),
+                logo_media_id: None,
+                logo_url: None,
                 source: SiteSettingsSource::Fallback,
                 version: 0,
             }),
@@ -272,6 +289,8 @@ impl SettingsInteractor {
         SiteSettingsView {
             title: info.title,
             description: info.description,
+            logo_media_id: value.logo_media_id,
+            logo_url: info.logo_url,
             source: SiteSettingsSource::Database,
             version,
         }
@@ -286,6 +305,7 @@ mod tests {
         SiteInfo {
             title: "环境变量标题".into(),
             description: "环境变量描述".into(),
+            logo_url: None,
         }
     }
 
@@ -293,7 +313,25 @@ mod tests {
         SiteSettingsValue {
             title: title.map(str::to_string),
             description: description.map(str::to_string),
+            logo_media_id: None,
         }
+    }
+
+    #[test]
+    fn logo_media_id_becomes_a_public_url() {
+        let logo = uuid::Uuid::now_v7();
+        let value = SiteSettingsValue {
+            title: Some("t".into()),
+            description: Some("d".into()),
+            logo_media_id: Some(logo),
+        };
+        let info = effective_site(&value, &fallback());
+        assert_eq!(info.logo_url, Some(format!("/media/{logo}")));
+        // 没有 logo 时不输出地址（公开页不会渲染一个必然 404 的 img）。
+        assert_eq!(
+            effective_site(&stored(Some("t"), Some("d")), &fallback()).logo_url,
+            None
+        );
     }
 
     #[test]

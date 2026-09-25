@@ -247,6 +247,16 @@ impl FakeUserRepo {
 
 #[async_trait::async_trait]
 impl UserRepository for FakeUserRepo {
+    /// 头像只走真实认证 HTTP 用例（server/tests）；本 fake 不实现，误用即失败。
+    async fn set_avatar(
+        &self,
+        _user_id: uuid::Uuid,
+        _avatar_media_id: Option<uuid::Uuid>,
+        _now: time::OffsetDateTime,
+    ) -> Result<(), UseCaseError> {
+        unimplemented!("该用例不使用头像")
+    }
+
     async fn insert(&self, snapshot: &UserSnapshot) -> Result<(), UseCaseError> {
         let mut users = self.users.lock().unwrap();
         if users.contains_key(&snapshot.username) {
@@ -467,6 +477,7 @@ impl application::ports::SeriesRepository for FakeSeriesRepo {
         _id: uuid::Uuid,
         _name: &str,
         _description: Option<&str>,
+        _cover_media_id: Option<uuid::Uuid>,
         _expected_version: i64,
     ) -> Result<Option<domain::content::SeriesSnapshot>, UseCaseError> {
         Ok(None)
@@ -767,6 +778,7 @@ fn draft_cmd(slug: &str) -> CreatePostCmd {
         tag_ids: Vec::new(),
         category_id: None,
         series: None,
+        cover_media_id: None,
     }
 }
 
@@ -1016,6 +1028,7 @@ async fn publish_requires_content() {
                 tag_ids: Vec::new(),
                 category_id: None,
                 series: None,
+                cover_media_id: None,
             },
         )
         .await
@@ -1056,6 +1069,7 @@ async fn generated_slug_occupied_at_creation() {
                 tag_ids: Vec::new(),
                 category_id: None,
                 series: None,
+                cover_media_id: None,
             },
         )
         .await

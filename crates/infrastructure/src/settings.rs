@@ -5,12 +5,14 @@
 
 use application::error::UseCaseError;
 use application::ports::{
-    SaveOutcome, SettingsStore, SiteSettingsRecord, SiteSettingsValue, ThemeSettingsRecord,
-    ThemeSettingsStore,
+    MediaContentKind, SITE_MEDIA_CONTENT_ID, SaveOutcome, SettingsStore, SiteSettingsRecord,
+    SiteSettingsValue, ThemeSettingsRecord, ThemeSettingsStore,
 };
 use async_trait::async_trait;
 use sqlx::PgPool;
 use time::OffsetDateTime;
+
+use crate::persistence::{media_ids_for, sync_media_refs};
 
 /// site 配置存 settings（key='site'，value 为 JSONB 对象，含 schema_version）。
 pub struct PostgresSettingsStore {
@@ -39,6 +41,11 @@ impl SettingsStore for PostgresSettingsStore {
 
     /// UPSERT + 版本 CAS：插入路径带出版本 1；更新路径要求版本匹配，
     /// 否则 0 行受影响（StaleConflict），不覆盖并发写入。
+    ///
+    /// 站点 logo 的 id 存在 `site` 值的 JSONB 里（用户确认的取舍），但引用关系
+    /// 仍写进 `content_media_refs`，且与配置行**同一事务**：删除保护与公开来源
+    /// 继续以引用表为唯一判据。JSON 里的 id 没有 FK 兜底，`ready` 校验由
+    /// `sync_media_refs` 在锁内完成——指向不可用资产的保存整次回滚。
     async fn save_site(
         &self,
         value: &SiteSettingsValue,
@@ -49,7 +56,9 @@ impl SettingsStore for PostgresSettingsStore {
             "schema_version": 1,
             "title": value.title,
             "description": value.description,
+            "logo_media_id": value.logo_media_id,
         });
+        let mut tx = self.pool.begin().await.map_err(map_repo_error)?;
         let new_version: Option<i64> = sqlx::query_scalar(
             r#"
             INSERT INTO settings (key, value, version, updated_at)
@@ -65,17 +74,31 @@ impl SettingsStore for PostgresSettingsStore {
         .bind(stored)
         .bind(now)
         .bind(expected_version)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *tx)
         .await
-        .map_err(|e| UseCaseError::Repository(e.to_string()))?;
+        .map_err(map_repo_error)?;
 
-        match new_version {
-            Some(version) => Ok(SaveOutcome::Saved {
-                new_version: version,
-            }),
-            None => Ok(SaveOutcome::StaleConflict),
-        }
+        let Some(version) = new_version else {
+            tx.commit().await.map_err(map_repo_error)?;
+            return Ok(SaveOutcome::StaleConflict);
+        };
+        // 站点 logo 的引用行与配置行同事务整体替换（None 时清空引用）。
+        sync_media_refs(
+            &mut tx,
+            MediaContentKind::Site,
+            SITE_MEDIA_CONTENT_ID,
+            &media_ids_for("", value.logo_media_id),
+        )
+        .await?;
+        tx.commit().await.map_err(map_repo_error)?;
+        Ok(SaveOutcome::Saved {
+            new_version: version,
+        })
     }
+}
+
+fn map_repo_error(e: sqlx::Error) -> UseCaseError {
+    UseCaseError::Repository(e.to_string())
 }
 
 #[async_trait]

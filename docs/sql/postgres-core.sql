@@ -12,7 +12,7 @@ CREATE TABLE users (
     email varchar(320) COLLATE "C" UNIQUE,
     password_hash text,
     display_name varchar(100),
-    avatar text,
+    -- avatar_media_id 由 0007_media_avatar_logo.sql 在 media_assets 建表后追加（见文末）。
     version bigint NOT NULL DEFAULT 1 CHECK (version > 0),
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
@@ -91,7 +91,7 @@ CREATE TABLE series (
     slug varchar(200) COLLATE "C" NOT NULL UNIQUE
         CHECK (octet_length(slug) BETWEEN 1 AND 200),
     description text,
-    cover text,
+    -- cover_media_id 由 0006_media_covers.sql 在 media_assets 建表后追加（见文末）。
     version bigint NOT NULL DEFAULT 1 CHECK (version > 0),
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now()
@@ -109,7 +109,7 @@ CREATE TABLE posts (
     excerpt text CHECK (char_length(excerpt) <= 1000),
     content text NOT NULL DEFAULT '',
     content_type varchar(16) NOT NULL DEFAULT 'markdown' CHECK (content_type = 'markdown'),
-    cover text,
+    -- cover_media_id 由 0006_media_covers.sql 在 media_assets 建表后追加（见文末）。
     series_order integer,
     status varchar(16) NOT NULL DEFAULT 'draft'
         CHECK (status IN ('draft', 'published', 'archived')),
@@ -179,7 +179,7 @@ CREATE TABLE settings (
     updated_at timestamptz NOT NULL DEFAULT now()
 );
 
--- 14. 媒体资产元数据（第一版只服务 Post/Page 正文图片）。
+-- 14. 媒体资产元数据（第一段服务 Post/Page 正文图片与 Post/Series 封面）。
 -- 文件用随机标识存储，本行是唯一权威；状态机让跨系统删除可幂等重试。
 CREATE TABLE media_assets (
     id uuid PRIMARY KEY,
@@ -206,16 +206,28 @@ CREATE INDEX media_assets_by_owner ON media_assets(owner_id, created_at DESC, id
 CREATE INDEX media_assets_by_status ON media_assets(status) WHERE status <> 'ready';
 
 -- 15. 内容 → 媒体的真实引用关系；删除保护的唯一判据。
--- content_id 是指向 posts/pages 的多态引用（无法建 FK），
--- 内容物理删除必须在同一事务清理对应行。
+-- content_id 是指向 posts/pages/series/users 的多态引用（无法建 FK），
+-- 内容物理删除必须在同一事务清理对应行；content_type='site' 用固定 nil UUID 占位。
 CREATE TABLE content_media_refs (
     media_id uuid NOT NULL REFERENCES media_assets(id) ON DELETE RESTRICT,
     content_type varchar(16) COLLATE "C" NOT NULL
-        CHECK (content_type IN ('post', 'page')),
+        CHECK (content_type IN ('post', 'page', 'series', 'user', 'site')),
     content_id uuid NOT NULL,
     PRIMARY KEY (media_id, content_type, content_id)
 );
 CREATE INDEX content_media_refs_by_content ON content_media_refs(content_type, content_id);
+
+-- 封面外键：由 0006_media_covers.sql 追加（media_assets 之后才能建 FK）。
+-- 封面与正文图片共用 content_media_refs，替换/移除封面会在同一事务释放旧引用。
+ALTER TABLE posts ADD COLUMN cover_media_id uuid REFERENCES media_assets(id) ON DELETE RESTRICT;
+ALTER TABLE series ADD COLUMN cover_media_id uuid REFERENCES media_assets(id) ON DELETE RESTRICT;
+CREATE INDEX posts_cover_media ON posts(cover_media_id) WHERE cover_media_id IS NOT NULL;
+CREATE INDEX series_cover_media ON series(cover_media_id) WHERE cover_media_id IS NOT NULL;
+
+-- 头像外键：由 0007_media_avatar_logo.sql 追加（同 0006 的原因）。
+-- 站点 logo 的 id 存在 settings.site 的值里，引用行仍写 content_media_refs(content_type='site')。
+ALTER TABLE users ADD COLUMN avatar_media_id uuid REFERENCES media_assets(id) ON DELETE RESTRICT;
+CREATE INDEX users_avatar_media ON users(avatar_media_id) WHERE avatar_media_id IS NOT NULL;
 
 -- 16. 持久会话；服务端只存令牌的 SHA-256 摘要，明文仅在签发时返回一次。
 -- 随持久会话交付（migrations/postgres/0005_sessions.sql），此处同步维护。

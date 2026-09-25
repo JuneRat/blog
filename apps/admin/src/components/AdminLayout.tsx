@@ -1,9 +1,12 @@
-import { Alert, Breadcrumb, Button, Flex, Layout, Menu, Typography } from "antd";
+import { Alert, Avatar, Breadcrumb, Button, Flex, Layout, Menu, Modal, Typography } from "antd";
 import type { MenuProps } from "antd";
 import type { ReactNode } from "react";
 import { useState } from "react";
+import { api } from "../api";
+import { permissionMessageOf } from "../apiError";
 import { useAuth } from "../auth";
 import { PasswordChangeModal } from "./PasswordChangeModal";
+import { CoverPicker } from "./CoverPicker";
 import { navigate, paths, useRoute } from "../router";
 import type { Route } from "../router";
 import { useLeaveConfirmation } from "../unsaved";
@@ -105,9 +108,38 @@ export function AdminLayout({ children }: { children: ReactNode }) {
   const route = useRoute();
   // 测试里 mock 的 auth 只给 status/me，缺少的字段用可选调用兜住，
   // 免得外壳把整屏带崩（真实 AuthProvider 一定提供这些方法）。
-  const { logout, logoutError } = useAuth();
+  const { me, refresh, logout, logoutError } = useAuth();
   const confirmLeave = useLeaveConfirmation();
   const [passwordOpen, setPasswordOpen] = useState(false);
+  /** 头像弹窗：选择值单独存一份，点「保存」前不影响头部显示。 */
+  const [avatarOpen, setAvatarOpen] = useState(false);
+  const [avatarValue, setAvatarValue] = useState<string | null>(null);
+  const [avatarBusy, setAvatarBusy] = useState(false);
+  const [avatarError, setAvatarError] = useState<string | null>(null);
+  const canReadMedia = me?.permissions.includes("media.read") ?? false;
+  const canUploadMedia = me?.permissions.includes("media.upload") ?? false;
+
+  /** 打开头像弹窗：以当前头像为起点，取消不改动任何数据。 */
+  function openAvatar(): void {
+    setAvatarValue(me?.avatar_media_id ?? null);
+    setAvatarError(null);
+    setAvatarOpen(true);
+  }
+
+  /** 保存头像：本人自助接口；成功后刷新 `/me` 让头部立即更新。 */
+  async function saveAvatar(): Promise<void> {
+    setAvatarBusy(true);
+    setAvatarError(null);
+    try {
+      await api.setOwnAvatar(avatarValue);
+      await refresh?.();
+      setAvatarOpen(false);
+    } catch (e) {
+      setAvatarError(permissionMessageOf(e));
+    } finally {
+      setAvatarBusy(false);
+    }
+  }
 
   /**
    * 菜单导航：离开前先过统一的确认口径。
@@ -149,6 +181,15 @@ export function AdminLayout({ children }: { children: ReactNode }) {
             <Button type="link" href="/" target="_blank">
               查看站点
             </Button>
+            {/* 头像入口：显示当前头像，点击打开自助更换弹窗。 */}
+            <Button type="text" onClick={openAvatar} style={{ paddingInline: 4 }}>
+              <Flex gap={8} align="center">
+                <Avatar size={28} src={me?.avatar_url ?? undefined}>
+                  {(me?.display_name ?? me?.username ?? "?").slice(0, 1)}
+                </Avatar>
+                <span>更换头像</span>
+              </Flex>
+            </Button>
             <Button onClick={() => setPasswordOpen(true)}>修改密码</Button>
             <Button onClick={() => confirmLeave(() => void logout?.(), "放弃修改并退出")}>
               退出登录
@@ -166,6 +207,36 @@ export function AdminLayout({ children }: { children: ReactNode }) {
         </Content>
       </Layout>
       <PasswordChangeModal open={passwordOpen} onClose={() => setPasswordOpen(false)} />
+      {/* 只挂载打开的弹窗：关闭即卸载，避免残留列表/文件输入。 */}
+      {avatarOpen && (
+        <Modal
+          title="更换头像"
+          open
+          okText="保存"
+          cancelText="取消"
+          confirmLoading={avatarBusy}
+          onOk={() => void saveAvatar()}
+          onCancel={() => setAvatarOpen(false)}
+          destroyOnHidden
+        >
+          <CoverPicker
+            value={avatarValue}
+            onChange={setAvatarValue}
+            // 服务端下发的地址只对「当前头像 id」有效：一旦在弹窗里换了图，
+            // 必须回退到 mediaUrl(value) 显示新图，否则预览停在旧头像上。
+            currentUrl={
+              avatarValue === (me?.avatar_media_id ?? null) ? (me?.avatar_url ?? null) : null
+            }
+            canReadMedia={canReadMedia}
+            canUploadMedia={canUploadMedia}
+            disabled={avatarBusy}
+            label="头像"
+          />
+          {avatarError !== null && (
+            <Alert type="error" showIcon title={avatarError} style={{ marginTop: 12 }} />
+          )}
+        </Modal>
+      )}
     </Layout>
   );
 }

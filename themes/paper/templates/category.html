@@ -10,7 +10,7 @@
       {% if post.excerpt %}<p class="excerpt">{{ post.excerpt }}</p>{% endif %}
       <p class="meta">
         <time>{{ post.published_at }}</time>
-        <span class="author">{{ post.author_display }}</span>
+        <span class="author">{% if post.author_avatar_url %}<img class="avatar" src="{{ post.author_avatar_url | url }}" alt="">{% endif %}{{ post.author_display }}</span>
       </p>
     </li>
     {% endfor %}

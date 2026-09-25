@@ -93,6 +93,7 @@ fn site_fallback() -> SiteInfo {
     SiteInfo {
         title: FALLBACK_TITLE.into(),
         description: FALLBACK_DESCRIPTION.into(),
+        logo_url: None,
     }
 }
 

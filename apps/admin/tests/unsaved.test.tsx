@@ -47,6 +47,7 @@ const post: PostDetail = {
   excerpt: null, status: "draft", visibility: "public", version: 1,
   published_at: null, updated_at: "2026-09-22T00:00:00Z", author_id: "author-id",
   tag_ids: [], category_id: null, series_id: null, series_order: null,
+  cover_media_id: null, cover_url: null,
 };
 
 function titleInput(): HTMLInputElement {

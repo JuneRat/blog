@@ -2204,6 +2204,7 @@ fn site_value(title: &str, description: &str) -> application::ports::SiteSetting
     application::ports::SiteSettingsValue {
         title: Some(title.into()),
         description: Some(description.into()),
+        logo_media_id: None,
     }
 }
 
@@ -2275,7 +2276,11 @@ async fn settings_site_upsert_and_version_cas() {
     .fetch_all(&pool)
     .await
     .unwrap();
-    assert_eq!(keys, vec!["description", "schema_version", "title"]);
+    // site 分组的写入形态固定：schema_version + 标题/描述 + logo 占位（null = 无 logo）。
+    assert_eq!(
+        keys,
+        vec!["description", "logo_media_id", "schema_version", "title"]
+    );
 
     // 旧版本前提再次写入：冲突，版本停在 2。
     assert_eq!(

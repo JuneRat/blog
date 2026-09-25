@@ -71,6 +71,8 @@ function summary(overrides: Partial<PostSummary> = {}): PostSummary {
     category_id: null,
     series_id: null,
     series_order: null,
+    cover_media_id: null,
+    cover_url: null,
     ...overrides,
   };
 }

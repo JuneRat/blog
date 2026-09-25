@@ -130,6 +130,12 @@ async fn fresh_stack() -> Stack {
                 .unwrap();
         }
     }
+    // 站点设置（logo）需要 settings.manage：给 editor 追加 admin 角色，
+    // 让它同时具备 media.upload 与 settings.manage。
+    roles
+        .assign_to_username(&Actor::bootstrap_cli(), "editor", "admin")
+        .await
+        .unwrap();
 
     let configs = Arc::new(PostgresOAuthConfigStore::new(pool.clone()));
     configs
@@ -228,6 +234,7 @@ async fn fresh_stack() -> Stack {
             application::public_site::SiteInfo {
                 title: "测试站点".into(),
                 description: "集成测试".into(),
+                logo_url: None,
             },
         )),
         roles,
@@ -238,6 +245,8 @@ async fn fresh_stack() -> Stack {
     let router = auth_router(auth_state)
         .merge(admin_router(admin_state.clone()))
         .merge(interfaces::http_admin::posts_router(admin_state.clone()))
+        .merge(interfaces::http_admin::series_router(admin_state.clone()))
+        .merge(interfaces::http_admin::settings_router(admin_state.clone()))
         .merge(media_admin_router(admin_state))
         .merge(media_read_router(MediaReadState {
             media,
@@ -420,10 +429,49 @@ async fn publish_post_referencing(
     assert_eq!(status, StatusCode::OK, "发布失败：{body}");
 }
 
+/// 创建一篇**只以封面**引用图片的文章并发布，返回发布后的 version。
+///
+/// 封面引用与正文图片同源：保存时把 `{封面} ∪ 正文图片` 固化进引用表。
+async fn publish_post_with_cover(
+    stack: &Stack,
+    cookie: &str,
+    csrf: &str,
+    slug: &str,
+    cover_id: &str,
+) -> i64 {
+    let (status, _, body) = send(
+        &stack.router,
+        "POST",
+        "/api/admin/v1/posts",
+        Some(cookie),
+        Some(csrf),
+        Some(&serde_json::json!({
+            "slug": slug,
+            "title": "带封面的文章",
+            "content": "正文本身没有图片，封面是唯一引用。",
+            "cover_media_id": cover_id,
+        })),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "创建带封面文章失败：{body}");
+    let (status, _, body) = send(
+        &stack.router,
+        "POST",
+        &format!("/api/admin/v1/posts/{slug}/publish"),
+        Some(cookie),
+        Some(csrf),
+        Some(&serde_json::json!({})),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "发布失败：{body}");
+    body["version"].as_i64().unwrap()
+}
+
 // ---------------------------------------------------------------------------
 // 权限与内容校验
 // ---------------------------------------------------------------------------
-
 #[tokio::test]
 async fn upload_requires_permission_and_validates_file_content() {
     let _g = SERIAL.lock().await;
@@ -989,4 +1037,960 @@ async fn usage_locations_are_filtered_by_the_callers_content_permissions() {
         "此刻该文章已公开发布"
     );
     assert_eq!(body["hidden_references"], 0);
+}
+
+// ---------------------------------------------------------------------------
+// 封面：随内容保存提交、匿名边界、删除保护、替换与移除
+// ---------------------------------------------------------------------------
+
+/// 封面引用走与正文图片**同一张引用表**：创建/保存即提交，并被删除保护与
+/// 公开来源判定共同使用；替换或移除封面会在同一事务里释放旧引用。
+#[tokio::test]
+async fn post_cover_is_saved_with_content_and_protects_the_image() {
+    let _g = SERIAL.lock().await;
+    let stack = fresh_stack().await;
+    let (author, csrf) = login_as(&stack.router, &stack.idp, "author").await;
+    let (cover, cover_version) = upload(&stack, &author, &csrf, 32).await;
+    let (cover2, cover2_version) = upload(&stack, &author, &csrf, 30).await;
+
+    let version = publish_post_with_cover(&stack, &author, &csrf, "cover-post", &cover).await;
+
+    // 后台读取封面：id 与站内地址都在，界面无需自己拼前缀。
+    let (status, _, body) = send(
+        &stack.router,
+        "GET",
+        "/api/admin/v1/posts/cover-post",
+        Some(&author),
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["cover_media_id"], cover.as_str());
+    assert_eq!(body["cover_url"], format!("/media/{cover}"));
+
+    // 公开 + 被封面引用：匿名可读，且删除被引用保护拒绝。
+    let (status, headers, _) = send(
+        &stack.router,
+        "GET",
+        &format!("/media/{cover}"),
+        None,
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers.get(header::CACHE_CONTROL).unwrap(), "no-cache");
+    let (status, _, body) = send(
+        &stack.router,
+        "DELETE",
+        &format!("/api/admin/v1/media/{cover}"),
+        Some(&author),
+        Some(&csrf),
+        Some(&serde_json::json!({"expected_version": cover_version})),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "封面引用必须阻止删除：{body}");
+    assert_eq!(body["code"], "media_in_use");
+
+    // 使用位置把这条封面引用展示出来。
+    let (status, _, body) = send(
+        &stack.router,
+        "GET",
+        &format!("/api/admin/v1/media/{cover}"),
+        Some(&author),
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["media"]["reference_count"], 1);
+    assert_eq!(body["media"]["public_reference_count"], 1);
+    assert_eq!(body["references"][0]["kind"], "post");
+    assert_eq!(body["references"][0]["slug"], "cover-post");
+    assert_eq!(body["references"][0]["public"], true);
+
+    // 替换封面：新图受保护，旧图在同一事务被释放。
+    let (status, _, body) = send(
+        &stack.router,
+        "PATCH",
+        "/api/admin/v1/posts/cover-post",
+        Some(&author),
+        Some(&csrf),
+        Some(&serde_json::json!({"cover_media_id": cover2, "expected_version": version})),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "替换封面失败：{body}");
+    assert_eq!(body["cover_media_id"], cover2.as_str());
+    let (status, _, _) = send(
+        &stack.router,
+        "DELETE",
+        &format!("/api/admin/v1/media/{cover}"),
+        Some(&author),
+        Some(&csrf),
+        Some(&serde_json::json!({"expected_version": cover_version})),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "旧封面已无引用，应可删除");
+    let (status, _, _) = send(
+        &stack.router,
+        "DELETE",
+        &format!("/api/admin/v1/media/{cover2}"),
+        Some(&author),
+        Some(&csrf),
+        Some(&serde_json::json!({"expected_version": cover2_version})),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "新封面仍被引用");
+
+    // 移除封面：引用随保存一起消失，图片立即可删。
+    let current = send(
+        &stack.router,
+        "GET",
+        "/api/admin/v1/posts/cover-post",
+        Some(&author),
+        None,
+        None,
+        None,
+    )
+    .await
+    .2;
+    let (status, _, body) = send(
+        &stack.router,
+        "PATCH",
+        "/api/admin/v1/posts/cover-post",
+        Some(&author),
+        Some(&csrf),
+        Some(&serde_json::json!({
+            "cover_media_id": null,
+            "expected_version": current["version"],
+        })),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "移除封面失败：{body}");
+    assert!(body["cover_media_id"].is_null());
+    assert!(body["cover_url"].is_null());
+    let (status, _, _) = send(
+        &stack.router,
+        "DELETE",
+        &format!("/api/admin/v1/media/{cover2}"),
+        Some(&author),
+        Some(&csrf),
+        Some(&serde_json::json!({"expected_version": cover2_version})),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "移除封面后应可删除");
+}
+
+/// 封面的匿名访问跟随文章公开状态：草稿/撤回/private/回收站都立即失效，
+/// 后台预览不受影响。
+#[tokio::test]
+async fn cover_anonymous_access_follows_post_visibility() {
+    let _g = SERIAL.lock().await;
+    let stack = fresh_stack().await;
+    let (author, csrf) = login_as(&stack.router, &stack.idp, "author").await;
+    let (cover, _) = upload(&stack, &author, &csrf, 22).await;
+
+    // 先建草稿（带封面）：不公开。
+    let (status, _, body) = send(
+        &stack.router,
+        "POST",
+        "/api/admin/v1/posts",
+        Some(&author),
+        Some(&csrf),
+        Some(&serde_json::json!({
+            "slug": "cover-visibility",
+            "title": "封面可见性",
+            "content": "正文",
+            "cover_media_id": cover,
+        })),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let (status, _, _) = send(
+        &stack.router,
+        "GET",
+        &format!("/media/{cover}"),
+        None,
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "草稿封面不公开");
+
+    // 发布：匿名可读。
+    let (status, _, body) = send(
+        &stack.router,
+        "POST",
+        "/api/admin/v1/posts/cover-visibility/publish",
+        Some(&author),
+        Some(&csrf),
+        Some(&serde_json::json!({})),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let mut version = body["version"].as_i64().unwrap();
+    let (status, _, _) = send(
+        &stack.router,
+        "GET",
+        &format!("/media/{cover}"),
+        None,
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // 撤回：匿名立即失效，后台预览仍在。
+    let (status, _, body) = send(
+        &stack.router,
+        "POST",
+        "/api/admin/v1/posts/cover-visibility/unpublish",
+        Some(&author),
+        Some(&csrf),
+        Some(&serde_json::json!({"expected_version": version})),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    version = body["version"].as_i64().unwrap();
+    let (status, _, _) = send(
+        &stack.router,
+        "GET",
+        &format!("/media/{cover}"),
+        None,
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "撤回后立即停止匿名读取");
+    let (status, _, _) = send(
+        &stack.router,
+        "GET",
+        &format!("/media/{cover}"),
+        Some(&author),
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "后台预览不受影响");
+
+    // 重新发布后改为 private：匿名失效。
+    let (status, _, body) = send(
+        &stack.router,
+        "POST",
+        "/api/admin/v1/posts/cover-visibility/publish",
+        Some(&author),
+        Some(&csrf),
+        Some(&serde_json::json!({"expected_version": version})),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    version = body["version"].as_i64().unwrap();
+    let (status, _, body) = send(
+        &stack.router,
+        "PATCH",
+        "/api/admin/v1/posts/cover-visibility",
+        Some(&author),
+        Some(&csrf),
+        Some(&serde_json::json!({"visibility": "private", "expected_version": version})),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    version = body["version"].as_i64().unwrap();
+    let (status, _, _) = send(
+        &stack.router,
+        "GET",
+        &format!("/media/{cover}"),
+        None,
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "private 后立即停止匿名读取");
+
+    // 改回 public 并入回收站：匿名再次失效，且引用仍占用（不得被删除）。
+    let (status, _, body) = send(
+        &stack.router,
+        "PATCH",
+        "/api/admin/v1/posts/cover-visibility",
+        Some(&author),
+        Some(&csrf),
+        Some(&serde_json::json!({"visibility": "public", "expected_version": version})),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    version = body["version"].as_i64().unwrap();
+    let (status, _, body) = send(
+        &stack.router,
+        "POST",
+        "/api/admin/v1/posts/cover-visibility/trash",
+        Some(&author),
+        Some(&csrf),
+        Some(&serde_json::json!({"expected_version": version})),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, _, _) = send(
+        &stack.router,
+        "GET",
+        &format!("/media/{cover}"),
+        None,
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "回收站文章封面立即失效");
+}
+
+/// 封面写入同样受 expected_version 约束：旧版本请求一律 409，且不改动服务器内容。
+#[tokio::test]
+async fn stale_cover_save_is_a_version_conflict() {
+    let _g = SERIAL.lock().await;
+    let stack = fresh_stack().await;
+    let (author, csrf) = login_as(&stack.router, &stack.idp, "author").await;
+    let (a, _) = upload(&stack, &author, &csrf, 26).await;
+    let (b, _) = upload(&stack, &author, &csrf, 25).await;
+    let version = publish_post_with_cover(&stack, &author, &csrf, "cover-conflict", &a).await;
+
+    let (status, _, body) = send(
+        &stack.router,
+        "PATCH",
+        "/api/admin/v1/posts/cover-conflict",
+        Some(&author),
+        Some(&csrf),
+        Some(&serde_json::json!({"cover_media_id": b, "expected_version": version})),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "首次替换应成功：{body}");
+
+    // 旧 version 再提交一次（即使只是移除封面）也必须冲突，而不是静默成功。
+    let (status, _, body) = send(
+        &stack.router,
+        "PATCH",
+        "/api/admin/v1/posts/cover-conflict",
+        Some(&author),
+        Some(&csrf),
+        Some(&serde_json::json!({"cover_media_id": null, "expected_version": version})),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "旧版本必须 409：{body}");
+    assert_eq!(body["code"], "version_conflict");
+
+    let post = send(
+        &stack.router,
+        "GET",
+        "/api/admin/v1/posts/cover-conflict",
+        Some(&author),
+        None,
+        None,
+        None,
+    )
+    .await
+    .2;
+    assert_eq!(
+        post["cover_media_id"],
+        b.as_str(),
+        "失败请求不得改动服务器内容"
+    );
+}
+
+/// 真并发：替换封面（把封面指向候选图）与删除该候选图只有一个能赢。
+///
+/// 锁序保证两种结果都安全：要么封面写入先落地（图片随即被引用，删除被拒），
+/// 要么删除先落地（图片不再 `ready`，整次封面保存回滚，封面保持旧图）。
+/// 不存在「引用已写入、文件已回收」的破图中间态。
+#[tokio::test]
+async fn concurrent_cover_replacement_and_image_deletion_are_serialized() {
+    let _g = SERIAL.lock().await;
+    let stack = fresh_stack().await;
+    let (author, csrf) = login_as(&stack.router, &stack.idp, "author").await;
+    let (old_cover, _) = upload(&stack, &author, &csrf, 26).await;
+    let (candidate, candidate_version) = upload(&stack, &author, &csrf, 25).await;
+    let version = publish_post_with_cover(&stack, &author, &csrf, "cover-race", &old_cover).await;
+
+    // 两个 JSON 体必须活到 join 之后：future 借用了它们。
+    let patch_json = serde_json::json!({"cover_media_id": candidate, "expected_version": version});
+    let delete_json = serde_json::json!({"expected_version": candidate_version});
+    let delete_uri = format!("/api/admin/v1/media/{candidate}");
+    let patch = send(
+        &stack.router,
+        "PATCH",
+        "/api/admin/v1/posts/cover-race",
+        Some(&author),
+        Some(&csrf),
+        Some(&patch_json),
+        None,
+    );
+    let delete = send(
+        &stack.router,
+        "DELETE",
+        &delete_uri,
+        Some(&author),
+        Some(&csrf),
+        Some(&delete_json),
+        None,
+    );
+    let ((patch_status, _, patch_body), (delete_status, _, delete_body)) =
+        tokio::join!(patch, delete);
+
+    let post = send(
+        &stack.router,
+        "GET",
+        "/api/admin/v1/posts/cover-race",
+        Some(&author),
+        None,
+        None,
+        None,
+    )
+    .await
+    .2;
+
+    match (patch_status, delete_status) {
+        (StatusCode::OK, StatusCode::CONFLICT) => {
+            assert_eq!(delete_body["code"], "media_in_use");
+            assert_eq!(
+                post["cover_media_id"],
+                candidate.as_str(),
+                "封面写入先落地：新图成为引用，删除被引用保护拒绝"
+            );
+        }
+        (StatusCode::BAD_REQUEST, StatusCode::NO_CONTENT) => {
+            assert_eq!(patch_body["code"], "invalid_request");
+            assert_eq!(
+                post["cover_media_id"],
+                old_cover.as_str(),
+                "删除先落地：整次封面保存回滚，封面保持旧图"
+            );
+        }
+        other => panic!("只应出现上述两种次序，实际 {other:?}"),
+    }
+}
+
+/// 系列封面与文章封面同一套规则：系列目录页公开可达，因此系列封面即公开来源；
+/// 删除系列必须在同一事务清理引用，之后图片才可删除。
+#[tokio::test]
+async fn series_cover_is_public_and_protects_the_image() {
+    let _g = SERIAL.lock().await;
+    let stack = fresh_stack().await;
+    // series.manage 属于 Editor（Author 没有）。
+    let (editor, csrf) = login_as(&stack.router, &stack.idp, "editor").await;
+    let (cover, cover_version) = upload(&stack, &editor, &csrf, 28).await;
+
+    let (status, _, body) = send(
+        &stack.router,
+        "POST",
+        "/api/admin/v1/series",
+        Some(&editor),
+        Some(&csrf),
+        Some(&serde_json::json!({"name": "封面系列", "slug": "cover-series"})),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert!(body["cover_media_id"].is_null());
+    let version = body["version"].as_i64().unwrap();
+
+    let (status, _, body) = send(
+        &stack.router,
+        "PATCH",
+        "/api/admin/v1/series/cover-series",
+        Some(&editor),
+        Some(&csrf),
+        Some(&serde_json::json!({
+            "name": "封面系列",
+            "cover_media_id": cover,
+            "expected_version": version,
+        })),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "设置系列封面失败：{body}");
+    assert_eq!(body["cover_media_id"], cover.as_str());
+    assert_eq!(body["cover_url"], format!("/media/{cover}"));
+
+    // 系列存在即公开可达：封面构成公开来源。
+    let (status, _, _) = send(
+        &stack.router,
+        "GET",
+        &format!("/media/{cover}"),
+        None,
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "系列封面是公开来源");
+
+    let (status, _, body) = send(
+        &stack.router,
+        "DELETE",
+        &format!("/api/admin/v1/media/{cover}"),
+        Some(&editor),
+        Some(&csrf),
+        Some(&serde_json::json!({"expected_version": cover_version})),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "系列封面必须阻止删除：{body}");
+    let (status, _, body) = send(
+        &stack.router,
+        "GET",
+        &format!("/api/admin/v1/media/{cover}"),
+        Some(&editor),
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["references"][0]["kind"], "series");
+    assert_eq!(body["references"][0]["slug"], "cover-series");
+    assert_eq!(body["references"][0]["public"], true);
+
+    // 旧版本再次提交必须 409。
+    let (status, _, body) = send(
+        &stack.router,
+        "PATCH",
+        "/api/admin/v1/series/cover-series",
+        Some(&editor),
+        Some(&csrf),
+        Some(&serde_json::json!({
+            "name": "封面系列",
+            "cover_media_id": null,
+            "expected_version": version,
+        })),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "旧版本必须 409：{body}");
+    assert_eq!(body["code"], "version_conflict");
+
+    // 删除系列（无成员）清理引用后，图片才能删除。
+    let (status, _, body) = send(
+        &stack.router,
+        "DELETE",
+        "/api/admin/v1/series/cover-series",
+        Some(&editor),
+        Some(&csrf),
+        Some(&serde_json::json!({"expected_version": version + 1})),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "删除系列失败：{body}");
+    let (status, _, _) = send(
+        &stack.router,
+        "GET",
+        &format!("/media/{cover}"),
+        None,
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "系列删除后封面不再是公开来源"
+    );
+    let (status, _, _) = send(
+        &stack.router,
+        "DELETE",
+        &format!("/api/admin/v1/media/{cover}"),
+        Some(&editor),
+        Some(&csrf),
+        Some(&serde_json::json!({"expected_version": cover_version})),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "引用随系列删除被清理");
+}
+
+/// 正文与封面引用同一张图时只算一处引用（复合主键去重），
+/// 移除封面后正文引用仍然占用。
+#[tokio::test]
+async fn cover_and_body_referencing_the_same_image_is_one_reference() {
+    let _g = SERIAL.lock().await;
+    let stack = fresh_stack().await;
+    let (author, csrf) = login_as(&stack.router, &stack.idp, "author").await;
+    let (id, version) = upload(&stack, &author, &csrf, 24).await;
+
+    let (status, _, body) = send(
+        &stack.router,
+        "POST",
+        "/api/admin/v1/posts",
+        Some(&author),
+        Some(&csrf),
+        Some(&serde_json::json!({
+            "slug": "shared-image",
+            "title": "同一张图既是封面也是正文图片",
+            "content": format!("![正文里的同一张图](/media/{id})"),
+            "cover_media_id": id,
+        })),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+
+    let (status, _, body) = send(
+        &stack.router,
+        "GET",
+        &format!("/api/admin/v1/media/{id}"),
+        Some(&author),
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body["media"]["reference_count"], 1,
+        "正文与封面同一张图必须只计一处引用：{body}"
+    );
+
+    // 移除封面：正文仍引用，图片继续受保护。
+    let post = send(
+        &stack.router,
+        "GET",
+        "/api/admin/v1/posts/shared-image",
+        Some(&author),
+        None,
+        None,
+        None,
+    )
+    .await
+    .2;
+    let (status, _, body) = send(
+        &stack.router,
+        "PATCH",
+        "/api/admin/v1/posts/shared-image",
+        Some(&author),
+        Some(&csrf),
+        Some(&serde_json::json!({
+            "cover_media_id": null,
+            "expected_version": post["version"],
+        })),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "移除封面失败：{body}");
+    let (status, _, _) = send(
+        &stack.router,
+        "DELETE",
+        &format!("/api/admin/v1/media/{id}"),
+        Some(&author),
+        Some(&csrf),
+        Some(&serde_json::json!({"expected_version": version})),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "正文引用仍在，删除应被拒绝");
+}
+
+// ---------------------------------------------------------------------------
+// 媒体库第三段：用户头像与站点 logo
+// ---------------------------------------------------------------------------
+
+/// 自助头像：本人即可设置（无需额外权限），匿名可读（账号未软删除），
+/// 并阻止删除被引用的图片；换头像**不**递增 users.version，当前会话不被踢下线。
+#[tokio::test]
+async fn self_avatar_is_public_and_does_not_invalidate_the_session() {
+    let _g = SERIAL.lock().await;
+    let stack = fresh_stack().await;
+    let (author, csrf) = login_as(&stack.router, &stack.idp, "author").await;
+    let (avatar, avatar_version) = upload(&stack, &author, &csrf, 20).await;
+
+    // 缺 CSRF 的写请求必须被拒。
+    let (status, _, _) = send(
+        &stack.router,
+        "PUT",
+        "/api/admin/v1/me/avatar",
+        Some(&author),
+        None,
+        Some(&serde_json::json!({"avatar_media_id": avatar})),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    let (status, _, body) = send(
+        &stack.router,
+        "PUT",
+        "/api/admin/v1/me/avatar",
+        Some(&author),
+        Some(&csrf),
+        Some(&serde_json::json!({"avatar_media_id": avatar})),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["avatar_media_id"], avatar.as_str());
+    assert_eq!(body["avatar_url"], format!("/media/{avatar}"));
+
+    // 同一会话仍然有效：换头像不递增 users.version（那是会话绑定版本）。
+    let (status, _, me) = send(
+        &stack.router,
+        "GET",
+        "/api/admin/v1/me",
+        Some(&author),
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "换头像不得让会话失效：{me}");
+    assert_eq!(me["avatar_media_id"], avatar.as_str());
+    assert_eq!(me["username"], "author");
+
+    // 账号未软删除 → 头像匿名可读。
+    let (status, headers, _) = send(
+        &stack.router,
+        "GET",
+        &format!("/media/{avatar}"),
+        None,
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "未软删除账号的头像应匿名可读");
+    assert_eq!(headers.get(header::CACHE_CONTROL).unwrap(), "no-cache");
+
+    // 删除保护与使用位置。
+    let (status, _, body) = send(
+        &stack.router,
+        "DELETE",
+        &format!("/api/admin/v1/media/{avatar}"),
+        Some(&author),
+        Some(&csrf),
+        Some(&serde_json::json!({"expected_version": avatar_version})),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "头像引用必须阻止删除：{body}");
+    let (status, _, body) = send(
+        &stack.router,
+        "GET",
+        &format!("/api/admin/v1/media/{avatar}"),
+        Some(&author),
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["references"][0]["kind"], "user");
+    assert_eq!(body["references"][0]["slug"], "author");
+    assert_eq!(body["references"][0]["public"], true);
+
+    // 清除头像后引用释放，图片可删。
+    let (status, _, body) = send(
+        &stack.router,
+        "PUT",
+        "/api/admin/v1/me/avatar",
+        Some(&author),
+        Some(&csrf),
+        Some(&serde_json::json!({"avatar_media_id": null})),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body["avatar_media_id"].is_null());
+    let (status, _, _) = send(
+        &stack.router,
+        "GET",
+        &format!("/media/{avatar}"),
+        None,
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "清除头像后不再是公开来源");
+    let (status, _, _) = send(
+        &stack.router,
+        "DELETE",
+        &format!("/api/admin/v1/media/{avatar}"),
+        Some(&author),
+        Some(&csrf),
+        Some(&serde_json::json!({"expected_version": avatar_version})),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "清除头像后应可删除");
+}
+
+/// 站点 logo：与 settings.site 整组保存同事务写入引用；站点配置公开，
+/// 因此 logo 只要有引用即匿名可读；删除受保护，版本 CAS 照常。
+#[tokio::test]
+async fn site_logo_is_saved_with_settings_and_protects_the_image() {
+    let _g = SERIAL.lock().await;
+    let stack = fresh_stack().await;
+    // settings.manage 来自追加的 admin 角色；media.upload 来自 editor 角色。
+    let (editor, csrf) = login_as(&stack.router, &stack.idp, "editor").await;
+    let (logo, logo_version) = upload(&stack, &editor, &csrf, 30).await;
+
+    // 初始未配置：无 logo，版本 0。
+    let (status, _, body) = send(
+        &stack.router,
+        "GET",
+        "/api/admin/v1/settings/site",
+        Some(&editor),
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body["logo_media_id"].is_null());
+    assert_eq!(body["version"], 0);
+
+    // 保存 logo（整组 PUT）。
+    let (status, _, body) = send(
+        &stack.router,
+        "PUT",
+        "/api/admin/v1/settings/site",
+        Some(&editor),
+        Some(&csrf),
+        Some(&serde_json::json!({
+            "title": "测试站点",
+            "description": "站点描述",
+            "logo_media_id": logo,
+            "expected_version": 0,
+        })),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["logo_media_id"], logo.as_str());
+    assert_eq!(body["logo_url"], format!("/media/{logo}"));
+    assert_eq!(body["version"], 1);
+    assert_eq!(body["source"], "database");
+
+    // 站点配置公开 → logo 是公开来源。
+    let (status, headers, _) = send(
+        &stack.router,
+        "GET",
+        &format!("/media/{logo}"),
+        None,
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "站点 logo 应匿名可读");
+    assert_eq!(headers.get(header::CACHE_CONTROL).unwrap(), "no-cache");
+
+    // 删除保护与使用位置。
+    let (status, _, body) = send(
+        &stack.router,
+        "DELETE",
+        &format!("/api/admin/v1/media/{logo}"),
+        Some(&editor),
+        Some(&csrf),
+        Some(&serde_json::json!({"expected_version": logo_version})),
+        None,
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::CONFLICT,
+        "站点 logo 必须阻止删除：{body}"
+    );
+    let (status, _, body) = send(
+        &stack.router,
+        "GET",
+        &format!("/api/admin/v1/media/{logo}"),
+        Some(&editor),
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["references"][0]["kind"], "site");
+    assert_eq!(body["references"][0]["public"], true);
+
+    // 旧版本再次提交必须 409。
+    let (status, _, body) = send(
+        &stack.router,
+        "PUT",
+        "/api/admin/v1/settings/site",
+        Some(&editor),
+        Some(&csrf),
+        Some(&serde_json::json!({
+            "title": "测试站点",
+            "description": "站点描述",
+            "logo_media_id": logo,
+            "expected_version": 0,
+        })),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "旧版本必须 409：{body}");
+    assert_eq!(body["code"], "version_conflict");
+
+    // 移除 logo：引用释放，图片可删。
+    let (status, _, body) = send(
+        &stack.router,
+        "PUT",
+        "/api/admin/v1/settings/site",
+        Some(&editor),
+        Some(&csrf),
+        Some(&serde_json::json!({
+            "title": "测试站点",
+            "description": "站点描述",
+            "logo_media_id": null,
+            "expected_version": 1,
+        })),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body["logo_media_id"].is_null());
+    let (status, _, _) = send(
+        &stack.router,
+        "GET",
+        &format!("/media/{logo}"),
+        None,
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "移除 logo 后不再是公开来源");
+    let (status, _, _) = send(
+        &stack.router,
+        "DELETE",
+        &format!("/api/admin/v1/media/{logo}"),
+        Some(&editor),
+        Some(&csrf),
+        Some(&serde_json::json!({"expected_version": logo_version})),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "移除 logo 后应可删除");
 }

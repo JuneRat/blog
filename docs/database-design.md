@@ -66,7 +66,7 @@ users、roles、categories、series、posts、tags、pages、media_assets、sett
 
 | 表 | 字段 | 说明 |
 |---|---|---|
-| users | id、username、email、password_hash、display_name、avatar、created_at、updated_at、deleted_at | username 唯一；email 可空且唯一；password_hash 可空；deleted_at 非空即禁止认证及后台操作 |
+| users | id、username、email、password_hash、display_name、avatar_media_id、created_at、updated_at、deleted_at | username 唯一；email 可空且唯一；password_hash 可空；`avatar_media_id` 外键指向 media_assets；deleted_at 非空即禁止认证及后台操作 |
 | oauth_accounts | id、user_id、provider、provider_user_id、email、created_at、updated_at | user_id 为 FK；唯一 (provider, provider_user_id)，不保存第三方 token |
 
 username 和用户主邮箱在写入前采用固定规范化策略，软删除后仍占用唯一值；OAuth email 只是资料快照，不唯一，也不用于自动合并账号。OAuth 返回同邮箱时不能直接绑定到已有用户，绑定必须由已登录且重新认证的用户明确发起。
@@ -75,7 +75,7 @@ provider 表示稳定的提供商实例，而不只是任意的“oidc”字符�
 
 `password_hash` 存 Argon2id 的 PHC 字符串（算法与参数自描述，可透明升级），OAuth-only 用户为空。本地密码登录、限流、重置与泄露处置契约见 [身份与后台 §7](identity-and-admin.md)；自助找回需要一次性令牌存储与邮件投递，本版未交付。只做登录时不长期保存 access_token/refresh_token；以后调用第三方 API 再单独设计加密凭据存储。
 
-users 的业务引用默认 RESTRICT；账号优先软删除/匿名化，不能级联删除其文章。avatar、cover 仍是 URL/受控静态资源路径：媒体库（§8）第一版只覆盖 Post/Page 正文图片，头像与封面接入同一媒体库属于下一段。
+users 的业务引用默认 RESTRICT；账号优先软删除/匿名化，不能级联删除其文章。头像已随媒体库第三段接入：`users.avatar_media_id` 是真外键（公开来源 = 账号未软删除）；站点 logo 的 id 按用户确认的取舍存在 `settings.site` 的 JSONB 值里，引用关系仍写入 `content_media_refs`（见 §8）。
 
 ## 3. RBAC
 
@@ -101,7 +101,7 @@ Owner 保留为受保护的内置角色 slug；普通角色 API 不能创建、�
 | 表 | 字段 | 规则 |
 |---|---|---|
 | categories | id、name、slug、parent_id、description、created_at、updated_at | slug 唯一；parent_id 自引用，可空；不允许自身或祖先形成环 |
-| series | id、name、slug、description、cover、created_at、updated_at | slug 唯一；顺序在 posts 中维护 |
+| series | id、name、slug、description、cover_media_id、created_at、updated_at | slug 唯一；顺序在 posts 中维护；`cover_media_id` 外键指向 media_assets |
 | tags | id、name、slug、created_at | slug 唯一 |
 | post_tags | post_id、tag_id | 复合主键，避免重复标签 |
 
@@ -121,7 +121,7 @@ posts.series_id 与 series_order 必须同时为空或同时非空；序号为�
 
 | 表 | 业务字段 |
 |---|---|
-| posts | id、author_id、category_id、series_id、title、slug、excerpt、content、content_type、cover、series_order、status、visibility、published_at、created_at、updated_at、deleted_at |
+| posts | id、author_id、category_id、series_id、title、slug、excerpt、content、content_type、cover_media_id、series_order、status、visibility、published_at、created_at、updated_at、deleted_at |
 | pages | id、title、slug、content、content_type、status、visibility、published_at、created_at、updated_at |
 
 content_type 首期仅允许 markdown；不接受未经处理的 HTML 作为另一种存储格式。status 为 draft/published/archived，visibility 为 public/private；后续确需定时、密码访问或 unlisted 时再扩展。published_at 表示第一次发布的时间，重新发布不重置。
@@ -145,7 +145,7 @@ settings 保存 `key、value、updated_at`，附并发 version。key 为 site/th
   "schema_version": 1,
   "title": "Sun's Blog",
   "description": "一个 Rust 博客",
-  "logo": "/logo.svg"
+  "logo_media_id": null
 }
 ```
 
@@ -170,29 +170,30 @@ site 分组（标题/描述）已随 M3 第一段交付，语义冻结为：
 
 DDL 不含种子账号、内置角色或权限数据；实施时由受控迁移/初始化命令同步注册权限和内置角色。创建、保存、关系更新与版本递增须在同一事务；不在数据库锁内调用身份提供商或其他网络接口。
 
-实施时须验证：16 表空库建立、重复 slug/外部身份拒绝、系列位置冲突与交换、分类树并发防环、标签关系/删除保护、版本冲突、草稿和私有内容隔离、Page 保留路由冲突、作者 own/any、角色编辑防提权、最后 Owner、OAuth 重放与账号绑定、媒体引用同事务写入与引用保护删除、会话跨进程读取与撤销、并发创建/撤销与空闲/绝对过期。上述检查已在真实 PostgreSQL 上执行（`crates/infrastructure/tests/`、`crates/server/tests/`）。
+实施时须验证：16 表空库建立、重复 slug/外部身份拒绝、系列位置冲突与交换、分类树并发防环、标签关系/删除保护、版本冲突、草稿和私有内容隔离、Page 保留路由冲突、作者 own/any、角色编辑防提权、最后 Owner、OAuth 重放与账号绑定、媒体引用同事务写入与引用保护删除、封面/头像引用随内容保存与「替换封面 vs 删除图片」并发、头像软删除后公开来源失效而引用仍占用、站点 logo 的 settings CAS 与引用同事务、会话跨进程读取与撤销、并发创建/撤销与空闲/绝对过期。上述检查已在真实 PostgreSQL 上执行（`crates/infrastructure/tests/`、`crates/server/tests/`）。
 
-## 8. 媒体（第一版已交付）
+## 8. 媒体（第一段正文图片/封面、第三段头像/logo 均已交付）
 
-媒体库第一版只服务 Post/Page **正文图片**，两张表：
+媒体库服务 Post/Page **正文图片**、Post/Series **封面**、**用户头像**与**站点 logo**，两张表：
 
 | 表 | 字段 | 规则 |
 |---|---|---|
 | media_assets | id、owner_id、storage_key、original_name、mime、byte_size、width、height、checksum_sha256、status、version、created_at、updated_at | `storage_key` 由随机 id 与格式后缀组成且唯一；`mime` 只允许四类位图；`status` ∈ staged/ready/pending_deletion/deleted |
-| content_media_refs | media_id、content_type、content_id | 复合主键去重；`media_id` 对资产 RESTRICT；`content_type` ∈ post/page |
+| content_media_refs | media_id、content_type、content_id | 复合主键去重；`media_id` 对资产 RESTRICT；`content_type` ∈ post/page/series/user/site |
 
 设计要点：
 
 - **文件与行一一对应**：文件落在 `BLOG_MEDIA_DIR` 下的随机路径，行是唯一权威；`storage_key` 是相对路径（`objects/<uuid>.<ext>`，上传暂存在 `staging/`），从不使用用户提供的文件名。
-- **引用不是文本搜索**：保存内容时把正文走一遍渲染 + 清洗管线，再用 HTML5 分词器读出其中所有 `<img src>`（即「真正会渲染出来的图片」），得到的集合在事务内整体替换引用行。删除判据只看这张表。
-- **多态引用无外键**：`content_id` 指向 posts 或 pages，无法建 FK，因此 `post.purge` 与 `page.delete` 必须在同一事务清理引用行（实现见 `PostgresPostRepository::purge` / `PostgresPageRepository::delete`）。
-- **公开可见性由内容决定**：`has_public_reference` 用一条与公开文章/页面谓词逐字一致的 EXISTS 查询实时判定，因此撤回、改 private、移入回收站后匿名读取立刻停止；不缓存判定结果。
+- **引用不是文本搜索**：保存内容时把正文走一遍渲染 + 清洗管线，再用 HTML5 分词器读出其中所有 `<img src>`（即「真正会渲染出来的图片」），与封面/头像 id 求并集，在事务内整体替换引用行。删除判据只看这张表。
+- **封面与头像是外键而非文本**：`posts.cover_media_id` / `series.cover_media_id` / `users.avatar_media_id` 引用 `media_assets(id)`（迁移 `0006_media_covers.sql` 与 `0007_media_avatar_logo.sql`），数据库拒绝悬空引用。**站点 logo 是明确的例外**：id 存在 `settings.site` 的 JSONB 值里，同一事务写引用行；JSON 里的 id 没有 FK 兜底，读取侧对失效 id 按「无 logo」处理。`set_avatar` 有意不递增 `users.version`（会话绑定版本）。
+- **多态引用无外键**：`content_id` 指向 posts/pages/series/users，无法建 FK，因此 `post.purge`、`page.delete` 与系列删除必须在同一事务清理引用行（实现见 `PostgresPostRepository::purge` / `PostgresPageRepository::delete` / `PostgresSeriesRepository::delete` / `PostgresUserRepository::set_avatar`）。站点是单例、`settings` 行没有 uuid，`content_type='site'` 用固定 nil UUID 占位。
+- **公开可见性由内容决定**：`has_public_reference` 用一条与公开文章/页面/系列/账号谓词逐字一致的 EXISTS 查询实时判定，因此撤回、改 private、移入回收站、账号软删除后匿名读取立刻停止；系列目录页对任何已存在系列公开可达、站点配置本身公开，因此系列封面与站点 logo 即公开来源。不缓存判定结果。
 - **回收与上传就绪互斥**：`claim_abandoned_staged` 是带「创建时间早于宽限期」谓词的**单语句条件更新**（`WHERE status = 'staged' … RETURNING`），与 `mark_ready` 只有一个能命中；认领后停在 `pending_deletion`，文件删除失败可重试。不用「先查后改」，否则两个进程会同时认为自己是赢家。
-- **使用位置过滤在应用层**：`usage_of` 返回 `author_id` 等原始字段，由应用层按 Post own/any 与 Page 站点权限过滤，引用计数保持全局。授权判断不写进 SQL 适配器。
-- **删除并发保护**：内容保存对涉及媒体行取 `FOR SHARE` 并校验 `status='ready'`；删除对同一行取 `FOR UPDATE` 并在锁内校验引用。锁序一致，不会交错出「引用已写入、文件已回收」的破图状态。
+- **使用位置过滤在应用层**：`usage_of` 返回 `author_id` 等原始字段，由应用层按 Post own/any、Page 站点权限、Series 目录权限、软删除头像的 `user.manage` 与站点 logo 的 `settings.manage` 过滤，引用计数保持全局。授权判断不写进 SQL 适配器。
+- **删除并发保护**：内容保存对涉及媒体行（正文图片 ∪ 封面/头像/logo）取 `FOR SHARE` 并校验 `status='ready'`；删除对同一行取 `FOR UPDATE` 并在锁内校验引用。锁序一致，不会交错出「引用已写入、文件已回收」的破图状态。
 - **备份单元**：媒体文件与数据库同属一份备份清单；`PendingDeletion` 对象若已不存在，只有在确认无引用且状态符合幂等删除规则时才可记为预期缺失（见 [备份与恢复](operations-and-recovery.md)）。
 
-媒体不写进 settings JSON：引用关系需要真实外键与事务保护，塞进配置对象既无法保证一致性，也无法安全回收文件。
+**关于「媒体不写进 settings JSON」**：一般规则仍然成立——引用关系需要真实外键与事务保护。站点 logo 是用户确认的例外：单例站点没有可承载 FK 的行，logo id 存进 `settings.site` 的值，但引用行仍在同一事务写入 `content_media_refs`，删除保护与公开来源以引用表为准；代价是 JSON 里的 id 缺失 FK 兜底，读取侧对失效 id 按无 logo 处理。
 
 ## 9. 会话（已交付）
 

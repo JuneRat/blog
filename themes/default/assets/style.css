@@ -103,3 +103,31 @@ a {
   color: var(--muted, inherit);
   font-size: 0.9em;
 }
+
+/* 封面：单列、限高，避免原图尺寸撑破版心。 */
+.cover,
+.series-cover {
+  display: block;
+  width: 100%;
+  max-height: 420px;
+  object-fit: cover;
+  border-radius: 4px;
+  margin: 1rem 0;
+}
+
+/* 站点 logo 与作者头像：后者跟随署名行，尺寸用 em 以随字号缩放。 */
+.site-logo {
+  display: block;
+  max-height: 64px;
+  width: auto;
+  margin-bottom: 0.5rem;
+}
+
+.avatar {
+  width: 1.5em;
+  height: 1.5em;
+  border-radius: 50%;
+  object-fit: cover;
+  vertical-align: -0.4em;
+  margin-right: 0.35em;
+}

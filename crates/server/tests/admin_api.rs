@@ -226,6 +226,7 @@ async fn fresh_stack() -> Stack {
         application::public_site::SiteInfo {
             title: "测试站点".into(),
             description: "集成测试".into(),
+            logo_url: None,
         },
     ));
 

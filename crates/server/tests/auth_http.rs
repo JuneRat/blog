@@ -198,6 +198,7 @@ async fn fresh_stack_with(secure_cookies: bool) -> Stack {
             application::public_site::SiteInfo {
                 title: "测试站点".into(),
                 description: "测试描述".into(),
+                logo_url: None,
             },
         )),
         roles,

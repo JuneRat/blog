@@ -174,6 +174,18 @@ pub trait UserRepository: Send + Sync {
     async fn find_by_id(&self, id: Uuid) -> Result<Option<UserSnapshot>, UseCaseError>;
     async fn find_by_username(&self, username: &str) -> Result<Option<UserSnapshot>, UseCaseError>;
 
+    /// 设置/清除头像（自助；仅本人）。
+    ///
+    /// **不递增 `users.version`**：该版本是会话绑定版本，递增会让该用户的所有
+    /// 会话立即失效——换个头像不该把人踢下线。头像因此是后写覆盖，没有 CAS。
+    /// 头像的媒体引用在同一事务内整体替换；`Some(id)` 时资产必须存在且 `ready`。
+    async fn set_avatar(
+        &self,
+        user_id: Uuid,
+        avatar_media_id: Option<Uuid>,
+        now: OffsetDateTime,
+    ) -> Result<(), UseCaseError>;
+
     /// 管理列表：按用户名排序的分页读取（含软删除账号，供界面标注）。
     ///
     /// 调用方负责给出已收敛的 `limit`/`offset`；实现方不再做范围裁剪。
@@ -365,12 +377,13 @@ pub trait SeriesRepository: Send + Sync {
     ) -> Result<Option<domain::content::SeriesSnapshot>, UseCaseError>;
     async fn list(&self) -> Result<Vec<SeriesWithUsage>, UseCaseError>;
 
-    /// 条件更新（CAS）：name/描述一次提交；命中返回新快照，未命中 None。
+    /// 条件更新（CAS）：name/描述/封面一次提交；命中返回新快照，未命中 None。
     async fn update(
         &self,
         id: Uuid,
         name: &str,
         description: Option<&str>,
+        cover_media_id: Option<Uuid>,
         expected_version: i64,
     ) -> Result<Option<domain::content::SeriesSnapshot>, UseCaseError>;
 
@@ -450,6 +463,10 @@ pub struct SiteSettingsValue {
     pub title: Option<String>,
     #[serde(default)]
     pub description: Option<String>,
+    /// 站点 logo 的媒体资产 id；按用户确认的取舍存在 JSONB 值里。
+    /// 读取侧对缺失/失效 id 按「无 logo」处理；写入侧由引用表校验资产可用。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logo_media_id: Option<Uuid>,
 }
 
 /// site 分组当前行：值 + 并发版本；行不存在时整体为 None（版本视为 0）。
@@ -570,6 +587,8 @@ pub struct PublicPostSummary {
     pub excerpt: Option<String>,
     pub published_at: Option<OffsetDateTime>,
     pub author_display: String,
+    /// 作者头像媒体 id（None = 无头像）；公开页 URL 由应用层生成。
+    pub author_avatar_media_id: Option<Uuid>,
 }
 
 /// sitemap 用条目：路径片段 + 最近修改时间。
@@ -614,7 +633,11 @@ pub struct PublicPostDetail {
     pub updated_at: OffsetDateTime,
     pub author_display: String,
     pub author_username: String,
+    /// 作者头像媒体 id（None = 无头像）；公开页 URL 由应用层生成。
+    pub author_avatar_media_id: Option<Uuid>,
     pub content: String,
+    /// 封面媒体资产 id（None = 无封面）；公开页 URL 由应用层生成。
+    pub cover_media_id: Option<Uuid>,
     /// 当前关联标签（仅取存在于 tags 表的行；无可见性过滤——标签目录本身公开）。
     pub tags: Vec<PublicTagRef>,
     /// 所属分类（至多一个；分类目录本身公开）。
@@ -661,6 +684,8 @@ pub struct PublicCategorySummary {
 pub struct PublicSeriesSummary {
     pub slug: String,
     pub name: String,
+    /// 封面媒体资产 id（None = 无封面）；公开页 URL 由应用层生成。
+    pub cover_media_id: Option<Uuid>,
 }
 
 #[async_trait]
@@ -762,13 +787,29 @@ pub trait PublishedPageQuery: Send + Sync {
 pub enum MediaContentKind {
     Post,
     Page,
+    /// 系列封面。系列目录页对任何已存在系列公开可达，因此系列封面即公开来源。
+    Series,
+    /// 用户头像。公开来源 = 账号未软删除（用户确认的规则）。
+    User,
+    /// 站点 logo。站点配置本身公开，因此 logo 只要有引用即公开来源。
+    Site,
 }
+
+/// `content_type = 'site'` 的占位内容 id。
+///
+/// settings 是单例、以 `key` 为主键且没有 uuid：站点 logo 的引用行需要
+/// `content_id`（复合主键的一部分），这里用固定的 nil UUID 占位。单例语义由
+/// 「站点设置保存时整体替换这组引用」保证，与其它内容类型互不干扰。
+pub const SITE_MEDIA_CONTENT_ID: Uuid = Uuid::from_bytes([0u8; 16]);
 
 impl MediaContentKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Post => "post",
             Self::Page => "page",
+            Self::Series => "series",
+            Self::User => "user",
+            Self::Site => "site",
         }
     }
 
@@ -776,6 +817,9 @@ impl MediaContentKind {
         match value {
             "post" => Some(Self::Post),
             "page" => Some(Self::Page),
+            "series" => Some(Self::Series),
+            "user" => Some(Self::User),
+            "site" => Some(Self::Site),
             _ => None,
         }
     }

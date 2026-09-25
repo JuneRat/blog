@@ -165,8 +165,7 @@ impl PostgresUserRepository {
     }
 }
 
-const USER_COLUMNS: &str =
-    "id, username, email, display_name, version, created_at, updated_at, deleted_at";
+const USER_COLUMNS: &str = "id, username, email, display_name, avatar_media_id, version, created_at, updated_at, deleted_at";
 
 fn user_from_row(row: &sqlx::postgres::PgRow) -> Result<UserSnapshot, UseCaseError> {
     Ok(UserSnapshot {
@@ -174,6 +173,7 @@ fn user_from_row(row: &sqlx::postgres::PgRow) -> Result<UserSnapshot, UseCaseErr
         username: row.try_get("username").map_err(map_row_error)?,
         email: row.try_get("email").map_err(map_row_error)?,
         display_name: row.try_get("display_name").map_err(map_row_error)?,
+        avatar_media_id: row.try_get("avatar_media_id").map_err(map_row_error)?,
         version: row.try_get("version").map_err(map_row_error)?,
         created_at: row.try_get("created_at").map_err(map_row_error)?,
         updated_at: row.try_get("updated_at").map_err(map_row_error)?,
@@ -221,6 +221,42 @@ impl UserRepository for PostgresUserRepository {
         .await
         .map_err(map_sqlx_error)?;
         row.as_ref().map(user_from_row).transpose()
+    }
+
+    /// 设置/清除头像：列与引用行在同一事务整体替换。
+    ///
+    /// 有意不动 `users.version`（会话绑定版本）：换头像不该让本人所有会话失效。
+    async fn set_avatar(
+        &self,
+        user_id: Uuid,
+        avatar_media_id: Option<Uuid>,
+        now: OffsetDateTime,
+    ) -> Result<(), UseCaseError> {
+        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        let updated = sqlx::query(
+            "UPDATE users SET avatar_media_id = $2, updated_at = $3 \
+             WHERE id = $1 AND deleted_at IS NULL RETURNING id",
+        )
+        .bind(user_id)
+        .bind(avatar_media_id)
+        .bind(now)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(map_sqlx_error)?;
+        if updated.is_none() {
+            tx.commit().await.map_err(map_sqlx_error)?;
+            return Err(UseCaseError::NotFound("用户".into()));
+        }
+        // 引用集合由新头像推导；资产不可用则整次回滚（列与引用都不落库）。
+        sync_media_refs(
+            &mut tx,
+            MediaContentKind::User,
+            user_id,
+            &media_ids_for("", avatar_media_id),
+        )
+        .await?;
+        tx.commit().await.map_err(map_sqlx_error)?;
+        Ok(())
     }
 
     async fn list_admin(&self, limit: i64, offset: i64) -> Result<Vec<AdminUserRow>, UseCaseError> {
@@ -412,7 +448,7 @@ impl PostgresPostRepository {
 }
 
 const POST_COLUMNS: &str = "id, author_id, category_id, series_id, title, slug, excerpt, content, \
-     cover, series_order, status, visibility, published_at, version, created_at, updated_at, deleted_at";
+     cover_media_id, series_order, status, visibility, published_at, version, created_at, updated_at, deleted_at";
 
 fn post_from_row(row: &sqlx::postgres::PgRow) -> Result<PostSnapshot, UseCaseError> {
     let status: String = row.try_get("status").map_err(map_row_error)?;
@@ -426,7 +462,7 @@ fn post_from_row(row: &sqlx::postgres::PgRow) -> Result<PostSnapshot, UseCaseErr
         slug: row.try_get("slug").map_err(map_row_error)?,
         excerpt: row.try_get("excerpt").map_err(map_row_error)?,
         content: row.try_get("content").map_err(map_row_error)?,
-        cover: row.try_get("cover").map_err(map_row_error)?,
+        cover_media_id: row.try_get("cover_media_id").map_err(map_row_error)?,
         series_order: row.try_get("series_order").map_err(map_row_error)?,
         status: PostStatus::parse(&status)
             .ok_or_else(|| UseCaseError::Repository(format!("未知文章状态 {status}")))?,
@@ -601,8 +637,9 @@ impl PostRepository for PostgresPostRepository {
     }
 
     async fn insert(&self, snapshot: &PostSnapshot, tag_ids: &[Uuid]) -> Result<(), UseCaseError> {
-        // 引用集合在事务外推导：提取要完整渲染 + 清洗正文，不应占用事务。
-        let media_ids = extract_media_ids(&snapshot.content);
+        // 引用集合在事务外推导：正文图片与封面求并集（提取要完整渲染 + 清洗正文，
+        // 不应占用事务）。
+        let media_ids = media_ids_for(&snapshot.content, snapshot.cover_media_id);
         // 正文与初始标签/系列关系同一事务：半套写入不应对外可见。
         let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
         // 创建即入系列：先锁系列行并递增其版本（加入即改变成员目录，
@@ -613,7 +650,7 @@ impl PostRepository for PostgresPostRepository {
         sqlx::query(
             r#"
             INSERT INTO posts (
-                id, author_id, category_id, series_id, title, slug, excerpt, content, cover,
+                id, author_id, category_id, series_id, title, slug, excerpt, content, cover_media_id,
                 series_order, status, visibility, published_at, version, created_at, updated_at
             ) VALUES (
                 $1, $2, $3, $4, $5, $6, $7, $8, $9,
@@ -629,7 +666,7 @@ impl PostRepository for PostgresPostRepository {
         .bind(&snapshot.slug)
         .bind(&snapshot.excerpt)
         .bind(&snapshot.content)
-        .bind(&snapshot.cover)
+        .bind(snapshot.cover_media_id)
         .bind(snapshot.series_order)
         .bind(snapshot.status.as_str())
         .bind(snapshot.visibility.as_str())
@@ -658,8 +695,9 @@ impl PostRepository for PostgresPostRepository {
         now: OffsetDateTime,
         tag_ids: Option<&[Uuid]>,
     ) -> Result<SaveOutcome, UseCaseError> {
-        // 引用集合在事务外推导（渲染 + 清洗是纯 CPU 工作，不应占用事务）。
-        let media_ids = extract_media_ids(&snapshot.content);
+        // 引用集合在事务外推导：正文图片与封面求并集（渲染 + 清洗是纯 CPU 工作，
+        // 不应占用事务）。封面变化同样反映到引用行，因此替换封面会释放旧图。
+        let media_ids = media_ids_for(&snapshot.content, snapshot.cover_media_id);
         // 正文（或仅标签/系列关系）与 version 递增在同一事务：
         // 观察者不会看到新正文配旧标签（或反之）的混合状态。
         //
@@ -706,7 +744,7 @@ impl PostRepository for PostgresPostRepository {
         let updated = sqlx::query(
             r#"
             UPDATE posts SET
-                title = $3, slug = $4, excerpt = $5, content = $6, cover = $7,
+                title = $3, slug = $4, excerpt = $5, content = $6, cover_media_id = $7,
                 series_id = $8, series_order = $9, status = $10, visibility = $11,
                 published_at = $12, updated_at = $13, category_id = $14,
                 version = version + 1
@@ -720,7 +758,7 @@ impl PostRepository for PostgresPostRepository {
         .bind(&snapshot.slug)
         .bind(&snapshot.excerpt)
         .bind(&snapshot.content)
-        .bind(&snapshot.cover)
+        .bind(snapshot.cover_media_id)
         .bind(snapshot.series_id)
         .bind(snapshot.series_order)
         .bind(snapshot.status.as_str())
@@ -812,17 +850,37 @@ async fn insert_post_tags(
     Ok(())
 }
 
-/// 用正文推导出的引用集合，在同一事务内整体替换某个内容的媒体引用。
+/// 某份内容真正引用的媒体集合：**正文渲染出的图片 ∪ 封面**。
 ///
-/// `media_ids` 由调用方在**开启事务之前**用 `extract_media_ids(&snapshot.content)`
+/// 封面是独立字段而不是正文的一部分，因此不能只靠 `extract_media_ids`；
+/// 但两者必须走同一张引用表——公开来源判定与删除保护都以 `content_media_refs`
+/// 为唯一判据，封面如果只存在列里，就会出现「正文引用受保护、封面引用可被删除」
+/// 的第二套规则。
+///
+/// 集合去重并按 id 排序：`sync_media_refs` 的 `FOR SHARE` 校验按 id 序加锁，
+/// 排序是锁序协议的一部分（防死锁），同时让重复引用（正文与封面同一张图）只计一次。
+pub(crate) fn media_ids_for(content: &str, cover_media_id: Option<Uuid>) -> Vec<Uuid> {
+    let mut ids = extract_media_ids(content);
+    if let Some(cover) = cover_media_id
+        && !ids.contains(&cover)
+    {
+        ids.push(cover);
+        ids.sort_unstable();
+    }
+    ids
+}
+
+/// 用内容推导出的引用集合，在同一事务内整体替换某个内容的媒体引用。
+///
+/// `media_ids` 由调用方在**开启事务之前**用 [`media_ids_for`]（正文渲染结果 ∪ 封面）
 /// 算好：提取要完整渲染并清洗正文，是纯 CPU 工作，不该占着数据库事务不放。
-/// 集合仍然只由即将写入的正文推导，因此不存在「正文与引用关系漂移」的写入路径。
+/// 集合仍然只由即将写入的内容推导，因此不存在「内容与引用关系漂移」的写入路径。
 ///
 /// 并发协议（与 `MediaRepository::begin_delete` 配对）：
 /// 先按 id 序对涉及媒体行取 `FOR SHARE` 并确认全部为 `ready`，再改引用行。
 /// 删除流程对同一媒体行取 `FOR UPDATE`，因此两者不会交错成
 /// 「引用已写入、文件已进入回收」的破图结果。
-async fn sync_media_refs(
+pub(crate) async fn sync_media_refs(
     tx: &mut sqlx::PgConnection,
     kind: MediaContentKind,
     content_id: Uuid,
@@ -845,7 +903,7 @@ async fn sync_media_refs(
                 .copied()
                 .collect();
             return Err(UseCaseError::Invalid(format!(
-                "正文引用了不存在或已不可用的图片：{missing:?}"
+                "内容引用了不存在或已不可用的图片：{missing:?}"
             )));
         }
     }
@@ -916,7 +974,8 @@ impl PublishedPostQuery for PostgresPublishedPostQuery {
         let rows = sqlx::query(&format!(
             r#"
             SELECT p.title, p.slug, p.excerpt, p.published_at,
-                   COALESCE(NULLIF(u.display_name, ''), u.username) AS author_display
+                   COALESCE(NULLIF(u.display_name, ''), u.username) AS author_display,
+                   u.avatar_media_id AS author_avatar_media_id
             FROM posts p
             JOIN users u ON u.id = p.author_id
             WHERE {POST_PUBLIC_PREDICATE}
@@ -938,6 +997,9 @@ impl PublishedPostQuery for PostgresPublishedPostQuery {
                     excerpt: row.try_get("excerpt").map_err(map_row_error)?,
                     published_at: row.try_get("published_at").map_err(map_row_error)?,
                     author_display: row.try_get("author_display").map_err(map_row_error)?,
+                    author_avatar_media_id: row
+                        .try_get("author_avatar_media_id")
+                        .map_err(map_row_error)?,
                 })
             })
             .collect()
@@ -952,7 +1014,9 @@ impl PublishedPostQuery for PostgresPublishedPostQuery {
         let row = sqlx::query(&format!(
             r#"
             SELECT p.title, p.slug, p.excerpt, p.published_at, p.updated_at, p.content,
+                   p.cover_media_id,
                    COALESCE(NULLIF(u.display_name, ''), u.username) AS author_display,
+                   u.avatar_media_id AS author_avatar_media_id,
                    u.username AS author_username,
                    (
                        SELECT json_agg(json_build_object('slug', t.slug, 'name', t.name) ORDER BY t.slug)
@@ -983,8 +1047,12 @@ impl PublishedPostQuery for PostgresPublishedPostQuery {
                 published_at: row.try_get("published_at").map_err(map_row_error)?,
                 updated_at: row.try_get("updated_at").map_err(map_row_error)?,
                 author_display: row.try_get("author_display").map_err(map_row_error)?,
+                author_avatar_media_id: row
+                    .try_get("author_avatar_media_id")
+                    .map_err(map_row_error)?,
                 author_username: row.try_get("author_username").map_err(map_row_error)?,
                 content: row.try_get("content").map_err(map_row_error)?,
+                cover_media_id: row.try_get("cover_media_id").map_err(map_row_error)?,
                 tags: serde_json::from_value(tags_json.unwrap_or(serde_json::Value::Null))
                     .unwrap_or_default(),
                 category: row
@@ -1110,7 +1178,8 @@ impl PageRepository for PostgresPageRepository {
 
     async fn insert(&self, snapshot: &PageSnapshot) -> Result<(), UseCaseError> {
         // 引用集合在事务外推导：提取要完整渲染 + 清洗正文，不应占用事务。
-        let media_ids = extract_media_ids(&snapshot.content);
+        // Page 没有封面列，因此引用集合只由正文推导。
+        let media_ids = media_ids_for(&snapshot.content, None);
         // 正文与正文引用同一事务：引用校验失败则整页不落库。
         let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
         sqlx::query(
@@ -1146,7 +1215,8 @@ impl PageRepository for PostgresPageRepository {
         now: OffsetDateTime,
     ) -> Result<SaveOutcome, UseCaseError> {
         // 引用集合在事务外推导（渲染 + 清洗是纯 CPU 工作，不应占用事务）。
-        let media_ids = extract_media_ids(&snapshot.content);
+        // Page 没有封面列，因此引用集合只由正文推导。
+        let media_ids = media_ids_for(&snapshot.content, None);
         // 条件更新与引用替换同一事务：观察者不会看到新正文配旧引用。
         let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
         let updated = sqlx::query(
@@ -1516,6 +1586,7 @@ impl PublishedTagQuery for PostgresPublishedTagQuery {
             r#"
             SELECT p.title, p.slug, p.excerpt, p.published_at,
                    COALESCE(NULLIF(u.display_name, ''), u.username) AS author_display,
+                   u.avatar_media_id AS author_avatar_media_id,
                    count(*) OVER() AS total
             FROM tags t
             JOIN post_tags pt ON pt.tag_id = t.id
@@ -1548,6 +1619,9 @@ impl PublishedTagQuery for PostgresPublishedTagQuery {
                     excerpt: row.try_get("excerpt").map_err(map_row_error)?,
                     published_at: row.try_get("published_at").map_err(map_row_error)?,
                     author_display: row.try_get("author_display").map_err(map_row_error)?,
+                    author_avatar_media_id: row
+                        .try_get("author_avatar_media_id")
+                        .map_err(map_row_error)?,
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -1931,6 +2005,7 @@ impl PublishedCategoryQuery for PostgresPublishedCategoryQuery {
             r#"
             SELECT p.title, p.slug, p.excerpt, p.published_at,
                    COALESCE(NULLIF(u.display_name, ''), u.username) AS author_display,
+                   u.avatar_media_id AS author_avatar_media_id,
                    count(*) OVER() AS total
             FROM categories c
             JOIN posts p ON p.category_id = c.id
@@ -1961,6 +2036,9 @@ impl PublishedCategoryQuery for PostgresPublishedCategoryQuery {
                     excerpt: row.try_get("excerpt").map_err(map_row_error)?,
                     published_at: row.try_get("published_at").map_err(map_row_error)?,
                     author_display: row.try_get("author_display").map_err(map_row_error)?,
+                    author_avatar_media_id: row
+                        .try_get("author_avatar_media_id")
+                        .map_err(map_row_error)?,
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -2009,7 +2087,8 @@ impl PostgresSeriesRepository {
     }
 }
 
-const SERIES_COLUMNS: &str = "id, name, slug, description, cover, version, created_at, updated_at";
+const SERIES_COLUMNS: &str =
+    "id, name, slug, description, cover_media_id, version, created_at, updated_at";
 
 fn series_from_row(
     row: &sqlx::postgres::PgRow,
@@ -2019,7 +2098,7 @@ fn series_from_row(
         name: row.try_get("name").map_err(map_row_error)?,
         slug: row.try_get("slug").map_err(map_row_error)?,
         description: row.try_get("description").map_err(map_row_error)?,
-        cover: row.try_get("cover").map_err(map_row_error)?,
+        cover_media_id: row.try_get("cover_media_id").map_err(map_row_error)?,
         version: row.try_get("version").map_err(map_row_error)?,
         created_at: row.try_get("created_at").map_err(map_row_error)?,
         updated_at: row.try_get("updated_at").map_err(map_row_error)?,
@@ -2030,14 +2109,14 @@ fn series_from_row(
 impl SeriesRepository for PostgresSeriesRepository {
     async fn insert(&self, snapshot: &domain::content::SeriesSnapshot) -> Result<(), UseCaseError> {
         sqlx::query(
-            "INSERT INTO series (id, name, slug, description, cover, version, created_at, \
+            "INSERT INTO series (id, name, slug, description, cover_media_id, version, created_at, \
              updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
         )
         .bind(snapshot.id)
         .bind(&snapshot.name)
         .bind(&snapshot.slug)
         .bind(&snapshot.description)
-        .bind(&snapshot.cover)
+        .bind(snapshot.cover_media_id)
         .bind(snapshot.version)
         .bind(snapshot.created_at)
         .bind(snapshot.updated_at)
@@ -2063,7 +2142,7 @@ impl SeriesRepository for PostgresSeriesRepository {
 
     async fn list(&self) -> Result<Vec<SeriesWithUsage>, UseCaseError> {
         let rows = sqlx::query(
-            "SELECT s.id, s.name, s.slug, s.description, s.cover, s.version, s.created_at, \
+            "SELECT s.id, s.name, s.slug, s.description, s.cover_media_id, s.version, s.created_at, \
                     s.updated_at, \
                     (SELECT count(*) FROM posts p WHERE p.series_id = s.id) AS post_count, \
                     (SELECT count(*) FROM posts p WHERE p.series_id = s.id \
@@ -2090,21 +2169,40 @@ impl SeriesRepository for PostgresSeriesRepository {
         id: Uuid,
         name: &str,
         description: Option<&str>,
+        cover_media_id: Option<Uuid>,
         expected_version: i64,
     ) -> Result<Option<domain::content::SeriesSnapshot>, UseCaseError> {
+        // name/描述/封面与引用行在同一事务：封面替换时旧图必须同时被释放，
+        // 否则会出现「列里已换新图、引用表还占着旧图」的幽灵占用。
+        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
         let row = sqlx::query(
-            "UPDATE series SET name = $3, description = $4, version = version + 1, \
-             updated_at = now() WHERE id = $1 AND version = $2 \
-             RETURNING id, name, slug, description, cover, version, created_at, updated_at",
+            "UPDATE series SET name = $3, description = $4, cover_media_id = $5, \
+             version = version + 1, updated_at = now() WHERE id = $1 AND version = $2 \
+             RETURNING id, name, slug, description, cover_media_id, version, created_at, updated_at",
         )
         .bind(id)
         .bind(expected_version)
         .bind(name)
         .bind(description)
-        .fetch_optional(&self.pool)
+        .bind(cover_media_id)
+        .fetch_optional(&mut *tx)
         .await
         .map_err(map_sqlx_error)?;
-        row.as_ref().map(series_from_row).transpose()
+        let Some(row) = row else {
+            tx.commit().await.map_err(map_sqlx_error)?;
+            return Ok(None);
+        };
+        let snapshot = series_from_row(&row)?;
+        // 系列封面的公开来源引用必须与列同事务固化：引用表是删除保护的唯一判据。
+        sync_media_refs(
+            &mut tx,
+            MediaContentKind::Series,
+            snapshot.id,
+            &media_ids_for("", snapshot.cover_media_id),
+        )
+        .await?;
+        tx.commit().await.map_err(map_sqlx_error)?;
+        Ok(Some(snapshot))
     }
 
     async fn delete(
@@ -2138,6 +2236,9 @@ impl SeriesRepository for PostgresSeriesRepository {
             tx.commit().await.map_err(map_sqlx_error)?;
             return Ok(SeriesDeleteOutcome::Referenced { count });
         }
+        // 内容物理删除：其媒体引用必须在同一事务清理（content_id 是多态引用，
+        // 没有外键级联兜底）。系列只有封面一种引用来源。
+        clear_media_refs(&mut tx, MediaContentKind::Series, id).await?;
         sqlx::query("DELETE FROM series WHERE id = $1")
             .bind(id)
             .execute(&mut *tx)
@@ -2302,13 +2403,17 @@ impl PublishedSeriesQuery for PostgresPublishedSeriesQuery {
         &self,
         slug: &str,
     ) -> Result<Option<PublicSeriesSummary>, UseCaseError> {
-        let row: Option<(String, String)> =
-            sqlx::query_as("SELECT slug, name FROM series WHERE slug = $1")
+        let row: Option<(String, String, Option<Uuid>)> =
+            sqlx::query_as("SELECT slug, name, cover_media_id FROM series WHERE slug = $1")
                 .bind(slug)
                 .fetch_optional(&self.pool)
                 .await
                 .map_err(map_sqlx_error)?;
-        Ok(row.map(|(slug, name)| PublicSeriesSummary { slug, name }))
+        Ok(row.map(|(slug, name, cover_media_id)| PublicSeriesSummary {
+            slug,
+            name,
+            cover_media_id,
+        }))
     }
 
     async fn list_public_posts_by_series(
@@ -2325,6 +2430,7 @@ impl PublishedSeriesQuery for PostgresPublishedSeriesQuery {
             r#"
             SELECT p.title, p.slug, p.excerpt, p.published_at,
                    COALESCE(NULLIF(u.display_name, ''), u.username) AS author_display,
+                   u.avatar_media_id AS author_avatar_media_id,
                    count(*) OVER() AS total
             FROM series s
             JOIN posts p ON p.series_id = s.id
@@ -2355,6 +2461,9 @@ impl PublishedSeriesQuery for PostgresPublishedSeriesQuery {
                     excerpt: row.try_get("excerpt").map_err(map_row_error)?,
                     published_at: row.try_get("published_at").map_err(map_row_error)?,
                     author_display: row.try_get("author_display").map_err(map_row_error)?,
+                    author_avatar_media_id: row
+                        .try_get("author_avatar_media_id")
+                        .map_err(map_row_error)?,
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -2400,7 +2509,12 @@ const REF_IS_PUBLIC: &str = "((refs.content_type = 'post' AND EXISTS ( \
           AND mp.status = 'published' AND mp.visibility = 'public' AND mp.deleted_at IS NULL)) \
     OR (refs.content_type = 'page' AND EXISTS ( \
         SELECT 1 FROM pages gp WHERE gp.id = refs.content_id \
-          AND gp.status = 'published' AND gp.visibility = 'public')))";
+          AND gp.status = 'published' AND gp.visibility = 'public')) \
+    OR (refs.content_type = 'series' AND EXISTS ( \
+        SELECT 1 FROM series sp WHERE sp.id = refs.content_id)) \
+    OR (refs.content_type = 'user' AND EXISTS ( \
+        SELECT 1 FROM users au WHERE au.id = refs.content_id AND au.deleted_at IS NULL)) \
+    OR (refs.content_type = 'site'))";
 
 const MEDIA_COLUMNS: &str = "m.id, m.owner_id, m.storage_key, m.original_name, m.mime, m.byte_size, \
      m.width, m.height, m.checksum_sha256, m.status, m.version, m.created_at, m.updated_at";
@@ -2564,15 +2678,25 @@ impl MediaRepository for PostgresMediaRepository {
     async fn usage_of(&self, id: Uuid) -> Result<Vec<MediaUsageRow>, UseCaseError> {
         let rows = sqlx::query(&format!(
             "SELECT refs.content_type, refs.content_id, mp.author_id, \
-                COALESCE(mp.slug, gp.slug, '') AS slug, \
-                COALESCE(mp.title, gp.title, '') AS title, \
-                COALESCE(mp.status, gp.status, '') AS content_status, \
-                COALESCE(mp.visibility, gp.visibility, '') AS content_visibility, \
-                COALESCE(mp.deleted_at IS NOT NULL, false) AS content_deleted, \
+                COALESCE(mp.slug, gp.slug, sp.slug, au.username, '') AS slug, \
+                COALESCE(mp.title, gp.title, sp.name, NULLIF(au.display_name, ''), au.username, \
+                    CASE WHEN refs.content_type = 'site' THEN '站点设置' END, '') AS title, \
+                COALESCE(mp.status, gp.status, \
+                    CASE WHEN sp.id IS NOT NULL THEN 'published' END, \
+                    CASE WHEN au.id IS NOT NULL OR refs.content_type = 'site' \
+                        THEN 'active' END, '') AS content_status, \
+                COALESCE(mp.visibility, gp.visibility, \
+                    CASE WHEN sp.id IS NOT NULL THEN 'public' END, \
+                    CASE WHEN au.id IS NOT NULL OR refs.content_type = 'site' \
+                        THEN 'public' END, '') AS content_visibility, \
+                COALESCE(mp.deleted_at IS NOT NULL, au.deleted_at IS NOT NULL, false) \
+                    AS content_deleted, \
                 ({REF_IS_PUBLIC}) AS is_public \
              FROM content_media_refs refs \
              LEFT JOIN posts mp ON refs.content_type = 'post' AND mp.id = refs.content_id \
              LEFT JOIN pages gp ON refs.content_type = 'page' AND gp.id = refs.content_id \
+             LEFT JOIN series sp ON refs.content_type = 'series' AND sp.id = refs.content_id \
+             LEFT JOIN users au ON refs.content_type = 'user' AND au.id = refs.content_id \
              WHERE refs.media_id = $1 \
              ORDER BY refs.content_type, slug"
         ))

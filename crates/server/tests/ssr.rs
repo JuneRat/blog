@@ -107,6 +107,7 @@ async fn stack_with_theme(theme_dir: &str) -> Stack {
     let fallback = SiteInfo {
         title: "测试站点".into(),
         description: "集成测试".into(),
+        logo_url: None,
     };
     let public_site = Arc::new(PublicSiteInteractor::new(
         public_query,
@@ -189,6 +190,7 @@ fn cmd(slug: &str, title: &str) -> CreatePostCmd {
         tag_ids: Vec::new(),
         category_id: None,
         series: None,
+        cover_media_id: None,
     }
 }
 
@@ -452,6 +454,7 @@ async fn tag_page_lists_public_posts_and_hides_drafts_and_private() {
                 tag_ids: vec![rust],
                 category_id: None,
                 series: None,
+                cover_media_id: None,
             },
         )
         .await
@@ -475,6 +478,7 @@ async fn tag_page_lists_public_posts_and_hides_drafts_and_private() {
                 tag_ids: vec![rust],
                 category_id: None,
                 series: None,
+                cover_media_id: None,
             },
         )
         .await
@@ -493,6 +497,7 @@ async fn tag_page_lists_public_posts_and_hides_drafts_and_private() {
                 tag_ids: vec![rust],
                 category_id: None,
                 series: None,
+                cover_media_id: None,
             },
         )
         .await
@@ -545,6 +550,7 @@ async fn tag_page_paginates_public_posts() {
                     tag_ids: vec![rust],
                     category_id: None,
                     series: None,
+                    cover_media_id: None,
                 },
             )
             .await
@@ -616,6 +622,7 @@ async fn category_page_lists_public_posts_and_hides_drafts() {
                     tag_ids: Vec::new(),
                     category_id: Some(cat_snapshot.id),
                     series: None,
+                    cover_media_id: None,
                 },
             )
             .await
@@ -676,6 +683,7 @@ async fn series_page_lists_public_posts_in_reading_order() {
                     tag_ids: Vec::new(),
                     category_id: None,
                     series: Some((s.id, order)),
+                    cover_media_id: None,
                 },
             )
             .await
@@ -743,6 +751,7 @@ async fn paper_theme_functions_use_only_public_data() {
                     tag_ids: vec![tag],
                     category_id: Some(category.id),
                     series: None,
+                    cover_media_id: None,
                 },
             )
             .await
@@ -781,4 +790,150 @@ async fn paper_theme_functions_use_only_public_data() {
     let (status, page) = get(&s.router, "/paper-page").await;
     assert_eq!(status, StatusCode::OK, "{page}");
     assert!(page.contains("纸张主题页面"));
+}
+
+/// 在测试库里预置一张 `ready` 媒体资产：封面引用校验要求资产存在且可用。
+async fn seed_ready_media(pool: &PgPool, owner: uuid::Uuid) -> uuid::Uuid {
+    let id = uuid::Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO media_assets (id, owner_id, storage_key, original_name, mime, byte_size, \
+         width, height, checksum_sha256, status, version) \
+         VALUES ($1, $2, $3, 'cover.png', 'image/png', 16, 8, 8, $4, 'ready', 1)",
+    )
+    .bind(id)
+    .bind(owner)
+    .bind(format!("objects/{id}.png"))
+    .bind("a".repeat(64))
+    .execute(pool)
+    .await
+    .unwrap();
+    id
+}
+
+/// 文章封面出现在公开详情页，地址与正文图片同一个 `/media/{id}` 出口；
+/// 撤回后页面整体 404，封面自然不再输出。
+#[tokio::test]
+async fn post_cover_is_rendered_on_the_public_detail_page() {
+    let _g = SERIAL.lock().await;
+    let s = stack().await;
+    let cover = seed_ready_media(&s.pool, s.author.user_id.0).await;
+
+    let mut command = cmd("with-cover", "带封面的文章");
+    command.cover_media_id = Some(cover);
+    s.posts.create(&s.author, command).await.unwrap();
+    s.posts
+        .publish(&s.author, "with-cover", None)
+        .await
+        .unwrap();
+
+    let (status, body) = get(&s.router, "/posts/with-cover").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        body.contains(&format!("src=\"/media/{cover}\"")),
+        "公开详情页必须渲染封面：{body}"
+    );
+
+    s.posts
+        .withdraw(&s.author, "with-cover", None)
+        .await
+        .unwrap();
+    let (status, body) = get(&s.router, "/posts/with-cover").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(
+        !body.contains(&cover.to_string()),
+        "撤回后不得再输出封面地址"
+    );
+}
+
+/// 系列封面出现在公开系列页；没有封面的系列不输出图片标签。
+#[tokio::test]
+async fn series_cover_is_rendered_on_the_public_series_page() {
+    let _g = SERIAL.lock().await;
+    let s = stack().await;
+    let cover = seed_ready_media(&s.pool, s.author.user_id.0).await;
+
+    sqlx::query(
+        "INSERT INTO series (id, name, slug, cover_media_id, version) \
+         VALUES (gen_random_uuid(), '封面系列', 'cover-series', $1, 1)",
+    )
+    .bind(cover)
+    .execute(&s.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO series (id, name, slug, version) \
+         VALUES (gen_random_uuid(), '无封面系列', 'plain-series', 1)",
+    )
+    .execute(&s.pool)
+    .await
+    .unwrap();
+
+    let (status, body) = get(&s.router, "/series/cover-series").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        body.contains(&format!("src=\"/media/{cover}\"")),
+        "公开系列页必须渲染封面：{body}"
+    );
+
+    let (status, body) = get(&s.router, "/series/plain-series").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        !body.contains("<img class=\"series-cover\""),
+        "没有封面时不输出封面标签：{body}"
+    );
+}
+
+/// 站点 logo（base 头部）与作者头像（署名行）出现在公开页面。
+///
+/// 两者都走 `/media/{id}` 出口：logo 读 settings.site 的值，头像读 users.avatar_media_id。
+#[tokio::test]
+async fn site_logo_and_author_avatar_are_rendered_on_public_pages() {
+    let _g = SERIAL.lock().await;
+    let s = stack().await;
+    let logo = seed_ready_media(&s.pool, s.author.user_id.0).await;
+    let avatar = seed_ready_media(&s.pool, s.author.user_id.0).await;
+
+    // 站点 logo：直接写 settings.site 值（渲染只读值，不依赖引用行）。
+    sqlx::query(
+        "INSERT INTO settings (key, value, version, updated_at) \
+         VALUES ('site', jsonb_build_object('schema_version', 1, 'title', '测试站点', \
+                 'description', '集成测试', 'logo_media_id', $1::text), 1, now())",
+    )
+    .bind(logo.to_string())
+    .execute(&s.pool)
+    .await
+    .unwrap();
+
+    // 作者头像：本人自助设置（写 users.avatar_media_id 与引用行）。
+    s.users
+        .set_own_avatar(&s.author, Some(avatar))
+        .await
+        .unwrap();
+
+    s.posts
+        .create(&s.author, cmd("avatar-post", "带头像的文章"))
+        .await
+        .unwrap();
+    s.posts
+        .publish(&s.author, "avatar-post", None)
+        .await
+        .unwrap();
+
+    let (status, body) = get(&s.router, "/posts/avatar-post").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        body.contains(&format!("src=\"/media/{avatar}\"")),
+        "文章页必须渲染作者头像：{body}"
+    );
+    assert!(
+        body.contains(&format!("src=\"/media/{logo}\"")),
+        "base 头部必须渲染站点 logo：{body}"
+    );
+
+    let (status, index) = get(&s.router, "/").await;
+    assert_eq!(status, StatusCode::OK, "{index}");
+    assert!(
+        index.contains(&format!("src=\"/media/{avatar}\"")),
+        "首页列表必须渲染作者头像：{index}"
+    );
 }

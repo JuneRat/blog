@@ -17,13 +17,57 @@ import { useRef, useState } from "react";
 import { ApiError, mediaApi } from "../api";
 import { useAuth } from "../auth";
 import { navigate, paths } from "../router";
-import type { MediaAsset, MediaUsageView } from "../types";
+import type { MediaAsset, MediaReference, MediaUsageView } from "../types";
 import { MEDIA_ACCEPT, formatBytes } from "../media";
 import { uploadImages } from "../components/useImageInsertion";
 import { permissionMessageOf } from "../apiError";
 import { queryKeys } from "../queryClient";
 
 const { Dragger } = Upload;
+
+/**
+ * 引用来源 → 展示名与站内跳转目标。
+ *
+ * 系列封面是**整个系列**引用图片（系列本身没有单独编辑页），因此统一回到系列目录，
+ * 不能沿用页面编辑地址——那会把用户带到 `pages/{slug}/edit` 这个不存在的页面。
+ * 头像与站点 logo 同理：回到用户列表与站点设置。
+ */
+function referenceTarget(
+  kind: MediaReference["kind"],
+  slug: string,
+): { label: string; to: string } {
+  switch (kind) {
+    case "post":
+      return { label: "文章", to: paths.editPost(slug) };
+    case "page":
+      return { label: "页面", to: paths.editPage(slug) };
+    case "series":
+      return { label: "系列", to: paths.series };
+    case "user":
+      return { label: "用户", to: paths.users };
+    case "site":
+      return { label: "站点设置", to: paths.settings };
+  }
+}
+
+/**
+ * 引用状态文案。
+ *
+ * 文章/页面有发布状态；系列目录、头像与站点 logo 没有「草稿」这一态，
+ * 只说明是否公开可读——照搬「已发布/草稿」会把它们误标成草稿。
+ */
+function referenceStatus(reference: MediaReference): string {
+  const publicText = reference.public ? "公开可读" : "不公开";
+  if (reference.kind === "post" || reference.kind === "page") {
+    const state = reference.deleted
+      ? "回收站"
+      : reference.status === "published"
+        ? "已发布"
+        : "草稿";
+    return `${state}；${publicText}`;
+  }
+  return publicText;
+}
 
 /**
  * 媒体库屏（`/admin/media`）。
@@ -216,33 +260,25 @@ export function MediaLibraryScreen() {
           description={
             <>
               <ul style={{ margin: "0 0 8px", paddingInlineStart: 20 }}>
-                {usage.data.references.map((reference) => (
-                  <li key={`${reference.kind}-${reference.content_id}`}>
-                    <Button
-                      type="link"
-                      style={{ padding: 0, height: "auto" }}
-                      onClick={() =>
-                        navigate(
-                          reference.kind === "post"
-                            ? paths.editPost(reference.slug)
-                            : paths.editPage(reference.slug),
-                        )
-                      }
-                    >
-                      {reference.kind === "post" ? "文章" : "页面"}：
-                      {reference.title || reference.slug}
-                    </Button>
-                    <Typography.Text type="secondary">
-                      {" "}
-                      {reference.deleted
-                        ? "回收站"
-                        : reference.status === "published"
-                          ? "已发布"
-                          : "草稿"}
-                      {reference.public ? "；公开可读" : "；不公开"}
-                    </Typography.Text>
-                  </li>
-                ))}
+                {usage.data.references.map((reference) => {
+                  const target = referenceTarget(reference.kind, reference.slug);
+                  return (
+                    <li key={`${reference.kind}-${reference.content_id}`}>
+                      <Button
+                        type="link"
+                        style={{ padding: 0, height: "auto" }}
+                        onClick={() => navigate(target.to)}
+                      >
+                        {target.label}：
+                        {reference.title || reference.slug}
+                      </Button>
+                      <Typography.Text type="secondary">
+                        {" "}
+                        {referenceStatus(reference)}
+                      </Typography.Text>
+                    </li>
+                  );
+                })}
               </ul>
               {usage.data.hidden_references > 0 && (
                 <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>

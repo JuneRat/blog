@@ -219,4 +219,49 @@ describe("媒体库屏", () => {
     render(<App />);
     await waitFor(() => expect(screen.getByRole("heading", { name: "媒体库" })).toBeTruthy());
   });
+
+  it("使用位置按引用类型标注：用户/站点设置不再误标为草稿", async () => {
+    const used = asset();
+    vi.mocked(mediaApi.list).mockResolvedValue(pageOf([used]));
+    vi.mocked(mediaApi.remove).mockRejectedValue(
+      new ApiError(409, "图片仍被内容引用", "media_in_use"),
+    );
+    vi.mocked(mediaApi.detail).mockResolvedValue({
+      media: used,
+      references: [
+        {
+          kind: "user",
+          content_id: "user-id",
+          slug: "author",
+          title: "作者甲",
+          status: "active",
+          visibility: "public",
+          deleted: false,
+          public: true,
+        },
+        {
+          kind: "site",
+          content_id: "00000000-0000-0000-0000-000000000000",
+          slug: "",
+          title: "站点设置",
+          status: "active",
+          visibility: "public",
+          deleted: false,
+          public: true,
+        },
+      ],
+      hidden_references: 0,
+    });
+
+    render(<App />);
+    await waitFor(() => expect(screen.getByText("photo.png")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "删除" }));
+    fireEvent.click(await screen.findByRole("button", { name: "确定" }));
+
+    expect(await screen.findByText("用户：作者甲")).toBeTruthy();
+    expect(screen.getByText("站点设置：站点设置")).toBeTruthy();
+    // 两者都是公开来源：只展示公开状态，不再套用「已发布/草稿」。
+    expect(screen.getAllByText("公开可读").length).toBe(2);
+    expect(screen.queryByText("草稿")).toBeNull();
+  });
 });

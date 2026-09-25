@@ -33,6 +33,8 @@ pub struct CreateSeriesCmd {
 pub struct UpdateSeriesCmd {
     pub name: String,
     pub description: Option<String>,
+    /// 封面三态：None 不修改；Some(None) 移除封面；Some(Some(id)) 设置封面。
+    pub cover_media_id: Option<Option<Uuid>>,
     pub expected_version: Option<i64>,
 }
 
@@ -49,6 +51,8 @@ pub struct SeriesDto {
     pub name: String,
     pub slug: String,
     pub description: Option<String>,
+    /// 封面媒体资产 id（None = 无封面）；URL 由接口层按 `/media/{id}` 生成。
+    pub cover_media_id: Option<Uuid>,
     pub version: i64,
     /// 成员总数（含草稿/私密/回收站——它们保留位置）。
     pub post_count: i64,
@@ -63,6 +67,7 @@ impl SeriesDto {
             name: row.snapshot.name.clone(),
             slug: row.snapshot.slug.clone(),
             description: row.snapshot.description.clone(),
+            cover_media_id: row.snapshot.cover_media_id,
             version: row.snapshot.version,
             post_count: row.post_count,
             public_post_count: row.public_post_count,
@@ -106,6 +111,7 @@ impl SeriesInteractor {
             name: snapshot.name,
             slug: snapshot.slug,
             description: snapshot.description,
+            cover_media_id: snapshot.cover_media_id,
             version: snapshot.version,
             post_count: 0,
             public_post_count: 0,
@@ -126,7 +132,7 @@ impl SeriesInteractor {
         let expected = checked_version(series.version(), cmd.expected_version)?;
         let mut series = series;
         if !series
-            .update(cmd.name, cmd.description)
+            .update(cmd.name, cmd.description, cmd.cover_media_id)
             .map_err(map_domain)?
         {
             return self.dto_of(series.id()).await;
@@ -138,6 +144,7 @@ impl SeriesInteractor {
                 snapshot.id,
                 &snapshot.name,
                 snapshot.description.as_deref(),
+                snapshot.cover_media_id,
                 expected,
             )
             .await?

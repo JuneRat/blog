@@ -35,6 +35,8 @@ pub struct CreatePostCmd {
     pub category_id: Option<Uuid>,
     /// 初始系列与序号（None = 不加入系列）。
     pub series: Option<(Uuid, i32)>,
+    /// 初始封面媒体资产（None = 无封面）。
+    pub cover_media_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -52,6 +54,8 @@ pub struct EditPostCmd {
     pub category_id: Option<Option<Uuid>>,
     /// 三态：None 不修改；Some(None) 退出系列；Some(Some((id, order))) 设置。
     pub series: Option<Option<(Uuid, i32)>>,
+    /// 封面三态：None 不修改；Some(None) 移除封面；Some(Some(id)) 设置封面。
+    pub cover_media_id: Option<Option<Uuid>>,
     /// None 表示使用读取到的当前版本（仍可检测读后并发修改）。
     pub expected_version: Option<i64>,
 }
@@ -79,6 +83,8 @@ pub struct PostDto {
     /// 所属系列与序号（同空或同非空）。
     pub series_id: Option<Uuid>,
     pub series_order: Option<i32>,
+    /// 封面媒体资产 id（None = 无封面）；URL 由接口层按 `/media/{id}` 生成。
+    pub cover_media_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -108,6 +114,7 @@ impl PostDto {
             category_id: s.category_id,
             series_id: s.series_id,
             series_order: s.series_order,
+            cover_media_id: s.cover_media_id,
         }
     }
 }
@@ -171,7 +178,8 @@ impl PostInteractor {
         snapshot.category_id = cmd.category_id;
         snapshot.series_id = cmd.series.map(|(id, _)| id);
         snapshot.series_order = cmd.series.map(|(_, order)| order);
-        // 正文与初始标签/分类/系列关系同一事务写入。
+        snapshot.cover_media_id = cmd.cover_media_id;
+        // 正文与初始标签/分类/系列/封面关系同一事务写入。
         self.posts.insert(&snapshot, &tag_ids).await?;
         Ok(PostDto::from_snapshot(&snapshot, tag_ids))
     }
@@ -214,6 +222,7 @@ impl PostInteractor {
                 visibility: cmd.visibility,
                 category_id: cmd.category_id,
                 series: cmd.series,
+                cover_media_id: cmd.cover_media_id,
             })
             .map_err(|e| UseCaseError::Invalid(e.to_string()))?;
 

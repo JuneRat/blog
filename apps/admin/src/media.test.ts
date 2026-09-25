@@ -5,6 +5,7 @@ import {
   formatBytes,
   insertImageMarkdown,
   isSupportedImage,
+  mediaUrl,
   uploadRejection,
 } from "./media";
 import { MEDIA_MAX_BYTES } from "./media";
@@ -50,6 +51,14 @@ describe("媒体客户端预筛", () => {
     expect(defaultAltText("photo.png")).toBe("photo");
     expect(defaultAltText("my_holiday-photo.jpg")).toBe("my holiday photo");
     expect(defaultAltText(".gitignore")).toBe(".gitignore");
+  });
+
+  it("媒体地址只此一处构造（与后端 url/cover_url 同形）", () => {
+    expect(mediaUrl("media-1")).toBe("/media/media-1");
+    // 后端用 UUID；这里不做转义，保持与 `MediaAsset.url` 完全一致。
+    expect(mediaUrl("0f8fad5b-d9cb-469f-a165-70867728950e")).toBe(
+      "/media/0f8fad5b-d9cb-469f-a165-70867728950e",
+    );
   });
 });
 

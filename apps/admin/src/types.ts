@@ -10,12 +10,26 @@ export interface ProviderSummary {
   kind: ProviderKind;
 }
 
-/** GET /api/admin/v1/me */
+/** GET /api/admin/v1/me（含本人资料，供头部头像与自助设置使用）。 */
 export interface Me {
   user_id: string;
+  username: string;
+  display_name: string | null;
+  avatar_media_id: string | null;
+  /** 头像站内地址（`/media/{id}`；null = 无头像）。 */
+  avatar_url: string | null;
   permissions: string[];
   csrf_token: string;
   channel: "session";
+}
+
+/** PUT /api/admin/v1/me/avatar 的响应（与 `Me` 的资料字段同源）。 */
+export interface Profile {
+  user_id: string;
+  username: string;
+  display_name: string | null;
+  avatar_media_id: string | null;
+  avatar_url: string | null;
 }
 
 /** POST /auth/login/password（成功时另下发会话 cookie） */
@@ -39,6 +53,10 @@ export interface PostSummary {
   category_id: string | null;
   series_id: string | null;
   series_order: number | null;
+  /** 封面所引用的媒体资产 id（null = 无封面）；与封面地址同时出现。 */
+  cover_media_id: string | null;
+  /** 封面站内地址（`/media/{id}`；null = 无封面），由后端随 `cover_media_id` 下发。 */
+  cover_url: string | null;
 }
 
 /** 单篇详情：摘要 + Markdown 源文（编辑器数据源）。 */
@@ -133,6 +151,10 @@ export interface SeriesSummary {
   /** 成员总数（含草稿/私密——它们保留位置）。 */
   post_count: number;
   pub_post_count: number;
+  /** 封面所引用的媒体资产 id（null = 无封面）；与封面地址同时出现。 */
+  cover_media_id: string | null;
+  /** 封面站内地址（`/media/{id}`；null = 无封面）。 */
+  cover_url: string | null;
 }
 
 /** 系列成员（重排与目录展示）。 */
@@ -153,6 +175,10 @@ export type SiteSettingsSource = "database" | "fallback";
 export interface SiteSettings {
   title: string;
   description: string;
+  /** 站点 logo 的媒体资产 id（null = 无 logo）。 */
+  logo_media_id: string | null;
+  /** 站点 logo 站内地址（`/media/{id}`；null = 无 logo）。 */
+  logo_url: string | null;
   source: SiteSettingsSource;
   /** site 行版本；未配置为 0（首次保存以此为 expected_version）。 */
   version: number;
@@ -200,7 +226,8 @@ export interface MediaPage {
 
 /** 一处使用位置（删除前提示、删除被拒后定位引用）。 */
 export interface MediaReference {
-  kind: "post" | "page";
+  /** 引用来源：文章/页面正文、系列封面、用户头像或站点 logo。 */
+  kind: "post" | "page" | "series" | "user" | "site";
   content_id: string;
   slug: string;
   title: string;

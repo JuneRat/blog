@@ -18,6 +18,7 @@
   <div class="site-shell">
     <header class="masthead">
       <p class="eyebrow">Independent notes &amp; essays</p>
+      {% if site.logo_url %}<img class="site-logo" src="{{ site.logo_url | url }}" alt="{{ site.title }}">{% endif %}
       <a class="brand" href="/">{{ site.title }}</a>
       <p class="subtitle">{{ site.description }}</p>
       <nav aria-label="主导航"><a href="/">首页</a><a href="/feed.xml">订阅 RSS</a><a href="/sitemap.xml">站点地图</a></nav>

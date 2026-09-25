@@ -207,6 +207,7 @@ async fn fresh_stack_with(throttle_config: ThrottleConfig) -> Stack {
             application::public_site::SiteInfo {
                 title: "测试站点".into(),
                 description: "测试描述".into(),
+                logo_url: None,
             },
         )),
         roles: roles.clone(),

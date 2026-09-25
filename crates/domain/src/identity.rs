@@ -61,6 +61,11 @@ pub struct UserSnapshot {
     pub username: String,
     pub email: Option<String>,
     pub display_name: Option<String>,
+    /// 头像所引用的媒体资产（None = 无头像）。
+    ///
+    /// 用户自助设置，因此没有版本前提；公开可读性由媒体库按「账号未软删除」
+    /// 实时判定，不由聚合缓存。
+    pub avatar_media_id: Option<Uuid>,
     pub version: i64,
     pub created_at: OffsetDateTime,
     pub updated_at: OffsetDateTime,
@@ -233,6 +238,7 @@ impl User {
                 username: username.to_string(),
                 email,
                 display_name,
+                avatar_media_id: None,
                 version: 1,
                 created_at: now,
                 updated_at: now,

@@ -145,7 +145,11 @@ pub struct PostSnapshot {
     pub slug: String,
     pub excerpt: Option<String>,
     pub content: String,
-    pub cover: Option<String>,
+    /// 封面所引用的媒体资产（None = 无封面）。
+    ///
+    /// 与正文引用同源：保存时把 `{封面} ∪ 正文图片` 写进 `content_media_refs`，
+    /// 因此「仍被引用不能删除」与「匿名访问跟随内容公开状态」对封面同样成立。
+    pub cover_media_id: Option<Uuid>,
     pub series_order: Option<i32>,
     pub status: PostStatus,
     pub visibility: Visibility,
@@ -171,6 +175,9 @@ pub struct PostPatch {
     /// 系列归属三态：None 不修改；Some(None) 退出系列；Some(Some((id, order)))
     /// 设置系列与序号（order 必须为正整数；同空同非空由类型形状保证）。
     pub series: Option<Option<(Uuid, i32)>>,
+    /// 封面三态：None 不修改；Some(None) 移除封面；Some(Some(id)) 设置封面。
+    /// 资产存在性与 `ready` 状态由保存事务内的引用校验兜底。
+    pub cover_media_id: Option<Option<Uuid>>,
 }
 
 /// Post 聚合。字段私有，状态转换只经由行为方法。
@@ -209,7 +216,7 @@ impl Post {
                 slug: slug.into_string(),
                 excerpt,
                 content,
-                cover: None,
+                cover_media_id: None,
                 series_order: None,
                 status: PostStatus::Draft,
                 visibility,
@@ -307,6 +314,7 @@ impl Post {
             Some(new_slug) => new_slug != self.snapshot.slug,
             None => false,
         };
+        let new_cover_media_id = patch.cover_media_id.unwrap_or(self.snapshot.cover_media_id);
 
         // 2. 全量校验候选值（不写任何字段）。
         Self::validate_mutation_fields(&new_title, new_excerpt_owned.as_deref())?;
@@ -356,6 +364,10 @@ impl Post {
         if new_series != (self.snapshot.series_id, self.snapshot.series_order) {
             self.snapshot.series_id = new_series.0;
             self.snapshot.series_order = new_series.1;
+            changed = true;
+        }
+        if new_cover_media_id != self.snapshot.cover_media_id {
+            self.snapshot.cover_media_id = new_cover_media_id;
             changed = true;
         }
         if slug_changed {
@@ -647,5 +659,45 @@ mod tests {
         assert_eq!(err, PostError::EmptyContentWhenPublished);
         assert_eq!(post.snapshot().title, before.title);
         assert_eq!(post.snapshot().content, before.content);
+    }
+
+    #[test]
+    fn cover_is_three_state_and_only_a_real_change_bumps_the_aggregate() {
+        let mut post = draft();
+        let cover = Uuid::now_v7();
+
+        // None = 不修改：默认补丁不应把封面误清空。
+        assert!(!post.edit(PostPatch::default()).unwrap());
+        assert_eq!(post.snapshot().cover_media_id, None);
+
+        // Some(Some(id)) = 设置；仅封面变化也算变化。
+        assert!(
+            post.edit(PostPatch {
+                cover_media_id: Some(Some(cover)),
+                ..Default::default()
+            })
+            .unwrap()
+        );
+        assert_eq!(post.snapshot().cover_media_id, Some(cover));
+
+        // 同值幂等。
+        assert!(
+            !post
+                .edit(PostPatch {
+                    cover_media_id: Some(Some(cover)),
+                    ..Default::default()
+                })
+                .unwrap()
+        );
+
+        // Some(None) = 移除。
+        assert!(
+            post.edit(PostPatch {
+                cover_media_id: Some(None),
+                ..Default::default()
+            })
+            .unwrap()
+        );
+        assert_eq!(post.snapshot().cover_media_id, None);
     }
 }

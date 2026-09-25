@@ -1,4 +1,14 @@
-import { Alert, App as AntdApp, Button, Form, Input, Space, Table, Typography } from "antd";
+import {
+  Alert,
+  App as AntdApp,
+  Button,
+  Form,
+  Input,
+  Modal,
+  Space,
+  Table,
+  Typography,
+} from "antd";
 import type { TableProps } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
@@ -6,6 +16,7 @@ import type { ReactNode } from "react";
 import { seriesApi } from "../api";
 import { permissionMessageOf } from "../apiError";
 import { useAuth } from "../auth";
+import { CoverPicker } from "../components/CoverPicker";
 import { queryKeys } from "../queryClient";
 import type { SeriesMemberRow, SeriesSummary } from "../types";
 
@@ -48,7 +59,17 @@ export function SeriesListScreen() {
    * 但展开键必须在目录到达后才能设上——Table 的 defaultExpandAllRows
    * 只在首帧生效，而首帧 dataSource 还是空的。 */
   const [expandedKeys, setExpandedKeys] = useState<string[]>([]);
+  /**
+   * 正在编辑封面的系列（null = 弹窗关闭）与弹窗里的选择值。
+   *
+   * 选择值单独存一份而不是直接读 `coverEditing`：弹窗内改动在点「保存」前
+   * 不应影响表格；保存成功/失败后再由目录刷新覆盖。
+   */
+  const [coverEditing, setCoverEditing] = useState<SeriesSummary | null>(null);
+  const [coverValue, setCoverValue] = useState<string | null>(null);
   const canManage = me?.permissions.includes("series.manage") ?? false;
+  const canReadMedia = me?.permissions.includes("media.read") ?? false;
+  const canUploadMedia = me?.permissions.includes("media.upload") ?? false;
   // 屏内多处直接设置文案（如「名称与 slug 都不能为空。」），沿用同一个 setter。
   const setError = setActionError;
 
@@ -138,6 +159,48 @@ export function SeriesListScreen() {
         }
       },
     });
+  }
+
+  /** 打开封面弹窗：以目录里的当前封面为起点，取消则不改动任何数据。 */
+  function editCover(s: SeriesSummary): void {
+    setError(null);
+    setNotice(null);
+    setCoverValue(s.cover_media_id);
+    setCoverEditing(s);
+  }
+
+  /**
+   * 保存封面。
+   *
+   * 系列更新接口的 `name` 必填，因此改封面也必须原样带上名称与描述；
+   * `cover_media_id` 按绝对值提交（null = 移除，id = 设置）。
+   * 失败时先重读目录（拿到最新 version 与封面）再展示服务端原因，
+   * 并关闭弹窗——内联 Alert 在弹窗遮罩后面看不见，且旧 version 重试也不会成功。
+   */
+  async function saveCover(): Promise<void> {
+    const s = coverEditing;
+    if (s === null) return;
+    setError(null);
+    setNotice(null);
+    setBusy(true);
+    try {
+      await seriesApi.update(s.slug, {
+        name: s.name,
+        description: s.description ?? undefined,
+        cover_media_id: coverValue,
+        expected_version: s.version,
+      });
+      setCoverEditing(null);
+      setNotice(`已更新系列 ${s.name} 的封面。`);
+      await load();
+    } catch (e) {
+      // 版本冲突/越权同样先重读目录，再展示服务端文案（与重排失败一致）。
+      await load();
+      setCoverEditing(null);
+      setError(permissionMessageOf(e));
+    } finally {
+      setBusy(false);
+    }
   }
 
   /** 与相邻成员交换后提交完整顺序。 */
@@ -269,15 +332,36 @@ export function SeriesListScreen() {
         </Space>
       ),
     },
+    {
+      title: "封面",
+      key: "cover",
+      width: 112,
+      render: (_value, s) =>
+        s.cover_url === null ? (
+          <Typography.Text type="secondary">无封面</Typography.Text>
+        ) : (
+          // 用原生 img 而不是 antd Image：列表里只需要缩略图，不需要预览弹层。
+          <img
+            src={s.cover_url}
+            alt={`${s.name} 的封面`}
+            style={{ width: 72, height: 40, objectFit: "cover", borderRadius: 4 }}
+          />
+        ),
+    },
   ];
   if (canManage) {
     columns.push({
       title: "操作",
       key: "actions",
       render: (_value, s) => (
-        <Button type="text" danger disabled={busy} onClick={() => remove(s)}>
-          删除
-        </Button>
+        <Space size={0}>
+          <Button type="text" disabled={busy} onClick={() => editCover(s)}>
+            封面
+          </Button>
+          <Button type="text" danger disabled={busy} onClick={() => remove(s)}>
+            删除
+          </Button>
+        </Space>
       ),
     });
   }
@@ -336,6 +420,38 @@ export function SeriesListScreen() {
                 : "还没有系列。需要持有系列管理权限的用户创建。",
         }}
       />
+
+      {/*
+        只挂载打开的弹窗：关闭即卸载，避免残留的选择器列表与文件输入影响
+        后续交互（与「关闭后不保留上次列表」的选择器语义一致）。
+      */}
+      {coverEditing !== null && (
+        <Modal
+          title={`设置系列「${coverEditing.name}」的封面`}
+          open
+          okText="保存"
+          cancelText="取消"
+          confirmLoading={busy}
+          onOk={() => void saveCover()}
+          onCancel={() => setCoverEditing(null)}
+          destroyOnHidden
+        >
+          <CoverPicker
+            value={coverValue}
+            onChange={setCoverValue}
+            // 后端下发的 cover_url 只对「当前目录里的那一个 id」有效：一旦在弹窗里
+            // 换了封面，value 已不是它，必须回退到 mediaUrl(value) 显示新图，
+            // 否则预览会一直停在旧封面上。
+            currentUrl={
+              coverValue === coverEditing.cover_media_id ? coverEditing.cover_url : null
+            }
+            canReadMedia={canReadMedia}
+            canUploadMedia={canUploadMedia}
+            disabled={busy}
+            label="系列封面"
+          />
+        </Modal>
+      )}
     </>
   );
 }

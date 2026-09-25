@@ -86,6 +86,7 @@ async fn stack() -> Stack {
         SiteInfo {
             title: "测试站点".into(),
             description: "集成测试".into(),
+            logo_url: None,
         },
         PublicBaseUrl::parse(BASE).unwrap(),
     ));
@@ -161,6 +162,7 @@ fn cmd(slug: &str, title: &str) -> CreatePostCmd {
         tag_ids: Vec::new(),
         category_id: None,
         series: None,
+        cover_media_id: None,
     }
 }
 
@@ -490,6 +492,7 @@ async fn site_settings_change_is_reflected_in_feed_and_html() {
             &SiteSettingsValue {
                 title: Some("改名站点".into()),
                 description: Some("改名描述".into()),
+                logo_media_id: None,
             },
             0,
             time::OffsetDateTime::now_utc(),

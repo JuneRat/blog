@@ -19,6 +19,7 @@
 </head>
 <body>
   <header class="site-header">
+    {% if site.logo_url %}<img class="site-logo" src="{{ site.logo_url | url }}" alt="{{ site.title }}">{% endif %}
     <h1><a href="/">{{ site.title }}</a></h1>
     <p class="site-description">{{ site.description }}</p>
   </header>

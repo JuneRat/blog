@@ -4,7 +4,7 @@
 
 ## 1. 一份当前内容
 
-Post 与 Page 分别存储，每条记录只有一份当前正文，不存在 published_revision_id、独立工作副本、历史快照或恢复检查点。Post 另有 author_id、category_id、series_id、series_order、cover、excerpt；Page 无作者、分类、标签、系列。
+Post 与 Page 分别存储，每条记录只有一份当前正文，不存在 published_revision_id、独立工作副本、历史快照或恢复检查点。Post 另有 author_id、category_id、series_id、series_order、cover_media_id、excerpt；Page 无作者、分类、标签、系列。
 
 - Draft 可以自动保存，公开查询始终排除。
 - 保存已发布文章/页面会直接改变线上内容；包括标题、正文、摘要、分类、标签、系列和可见性。
@@ -70,9 +70,11 @@ Tag 为多对多，post_tags 的复合主键去重。名称读取当前值，改
 
 数据库只保护各表唯一，系统路由保留由应用校验。无需为当前固定前缀和根页面再建立全站路径表。
 
-## 5. 媒体库（第一版已交付：Post/Page 正文图片）
+## 5. 媒体库（第一版：Post/Page 正文图片；第二段：Post/Series 封面；第三段：用户头像与站点 logo）
 
-avatar、cover、settings 中的 logo 仍只是 URL 或受控静态资源路径。**第一版媒体库只覆盖 Post/Page 正文图片**：封面、头像与站点 logo 接入同一媒体库属于下一段，届时才需要定义「哪些站点配置构成公开来源」。本段不提供私有附件（非图片）、视频与任意上传。
+**第二段已交付：Post 与 Series 封面接入媒体库。** 封面不再是 `posts.cover` / `series.cover` 文本 URL，而是 `cover_media_id` 外键（引用 `media_assets`）；它与正文图片共用同一张 `content_media_refs`——保存内容时把「正文渲染出的图片 ∪ 封面」写进引用表，因此「仍被引用的图片不能删除」与「匿名访问跟随内容公开状态」对封面逐字生效，不新增第二套判据。
+
+**第三段已交付：用户头像与站点 logo 接入媒体库。** 头像用 `users.avatar_media_id` 真外键，公开来源 = 账号未软删除（软删除后匿名读取立即失效，但引用仍占用，恢复账号后语义不变），本人可在后台自助设置/清除且**不递增 `users.version`**（那是会话绑定版本，换头像不该把人踢下线）。站点 logo 的 id 按用户确认的取舍存在 `settings.site` 的 JSONB 值里，但引用关系仍写入同一张 `content_media_refs`（与配置行同事务），删除保护与公开来源继续以引用表为唯一判据；JSON 里的 id 没有 FK 兜底，属于本条明确的取舍。本段仍不提供私有附件（非图片）、视频与任意上传。
 
 ### 5.1 数据模型
 
@@ -83,7 +85,11 @@ avatar、cover、settings 中的 logo 仍只是 URL 或受控静态资源路径�
 | media_assets | 资产元数据：上传者、随机存储路径、展示文件名、MIME、字节数、宽高、SHA-256、状态、version |
 | content_media_refs | 内容 → 媒体的真实引用关系（`media_id` + `content_type` + `content_id`） |
 
-文件用随机标识存储（存储根目录下 `objects/<uuid>.<ext>`，飞行中的上传在 `staging/`），数据库行是唯一权威。`content_id` 是指向 posts/pages 的**多态引用**（无法建外键），因此内容物理删除（`post.purge`、`page.delete`）必须在同一事务清理对应引用行。
+`content_type` 取 `post` / `page` / `series` / `user` / `site`：Post/Page 的正文图片、Post/Series 的封面、用户头像与站点 logo 都写进这张表。
+
+文件用随机标识存储（存储根目录下 `objects/<uuid>.<ext>`，飞行中的上传在 `staging/`），数据库行是唯一权威。`content_id` 是指向 posts/pages/series/users 的**多态引用**（无法建外键），因此内容物理删除（`post.purge`、`page.delete`、系列删除）必须在同一事务清理对应引用行；站点是单例、`settings` 行没有 uuid，`content_type='site'` 用固定的 nil UUID 占位（`SITE_MEDIA_CONTENT_ID`），由「站点保存整体替换这组引用」保证单例语义。
+
+**封面与头像都是独立列，不是正文文本。** `posts.cover_media_id` / `series.cover_media_id` / `users.avatar_media_id` 是 `media_assets(id)` 的真外键；保存时把该字段与正文图片 id 求并集（同一张图只计一次、按 id 排序）后整体替换引用行。这样它们不依赖任何字符串扫描，数据库也拒绝悬空引用。仅封面/头像变化同样递增所属内容的 version（头像是自助字段，没有版本前提，后写覆盖）。站点 logo 是唯一例外：id 在 settings JSONB 值里，写入时由引用表的 `ready` 校验把关。
 
 **「是否仍被使用」以引用表为唯一判据，不以搜索 Markdown 文本为依据。** 正文只在保存时被解析一次（`infrastructure::media_refs`），解析出的集合同事务整体替换进引用表；删除流程不回头搜索正文。
 
@@ -136,16 +142,19 @@ staged ──promote──▶ ready ──删除请求──▶ pending_deletion
 ```text
 content_type = 'post' AND posts.status='published' AND posts.visibility='public' AND posts.deleted_at IS NULL
 OR content_type = 'page' AND pages.status='published' AND pages.visibility='public'
+OR content_type = 'series' AND EXISTS (series 行)
+OR content_type = 'user' AND EXISTS (users 行且 users.deleted_at IS NULL)
+OR content_type = 'site'
 ```
 
-因此文章撤回、改为 private、移入回收站，或页面撤回/改为 private 后，只要没有其他公开引用，图片**下一次请求即停止匿名读取**。后台预览需要登录且持有 `media.read`；未获授权的请求返回 404 而不是 403——「不存在」与「不公开」不可区分，避免泄漏资产存在性。
+系列目录页对**任何已存在系列**公开可达（不存在即 404，见 §4），因此系列封面在有系列行时即构成公开来源；删除系列会在同一事务清掉它的引用行。站点配置本身公开，因此站点 logo 只要有引用即公开来源；头像的公开来源是「账号未软删除」，账号软删除后匿名读取立即停止（引用仍占用，恢复账号后语义不变）。因此文章撤回、改为 private、移入回收站，或页面撤回/改为 private，或账号软删除后，只要没有其他公开引用，图片**下一次请求即停止匿名读取**。后台预览需要登录且持有 `media.read`；未获授权的请求返回 404 而不是 403——「不存在」与「不公开」不可区分，避免泄漏资产存在性。
 
 缓存：公开引用响应用 `no-cache` + ETag（必须重校验，撤回后立即失效），后台预览用 `no-store`。媒体**绝不**使用长 max-age，否则撤回后图片会继续从缓存流出。
 
 **使用位置的展示必须按内容权限过滤。** `media.read` 只授予「浏览媒体库」，不能顺带给出他人草稿或私密内容的标题与 slug；媒体库是共享资源，任何人上传的图片都可能被别人的未公开内容引用。因此：
 
 - **引用计数全局**：`reference_count` / `public_reference_count` 不过滤——它们决定「能否删除」与「匿名能否读取」，与调用者能否看见引用无关；
-- **使用位置过滤**：Post 按 own/any（`post.read` / `post.read_any`），Page 按站点级 `page.read`；**公开可读的内容直接可见**——它的标题与 slug 本来就能匿名访问、正文里也带着同一个图片地址，过滤它保护不到任何东西，反而会把「公开引用」误报成「无权查看的引用」。可见性规则因此是「调用者有权读该内容 **或** 该内容公开可读」；
+- **使用位置过滤**：Post 按 own/any（`post.read` / `post.read_any`），Page 按站点级 `page.read`，Series 按 `series.manage`，软删除账号的头像按 `user.manage`，站点 logo 按 `settings.manage`；**公开可读的内容直接可见**——它的标题与 slug 本来就能匿名访问、正文里也带着同一个图片地址，过滤它保护不到任何东西，反而会把「公开引用」误报成「无权查看的引用」。可见性规则因此是「调用者有权读该内容 **或** 该内容公开可读」；
 - **差额如实返回**：详情返回 `hidden_references`（引用总数 − 可见数），否则界面会显示「被 3 处引用」却只列出 1 处。
 
 ### 5.4 上传边界
@@ -161,11 +170,11 @@ OR content_type = 'page' AND pages.status='published' AND pages.visibility='publ
 
 并发协议避免「引用写入」与「文件回收」交错：
 
-- **内容保存**：同一事务内先按 id 序对涉及媒体行取 `FOR SHARE` 并确认全部 `ready`，再整体替换引用行；任一媒体不可用则整次保存回滚（正文与引用都不落库）。
+- **内容保存**：同一事务内先按 id 序对涉及媒体行（正文图片、封面、头像、站点 logo 的并集）取 `FOR SHARE` 并确认全部 `ready`，再整体替换引用行；任一媒体不可用则整次保存回滚（正文、引用字段与引用行都不落库）。系列设置封面、本人设置头像、站点保存 logo 走同一条路径（站点 logo 与 settings 行的 CAS 同一事务）。
 - **媒体删除**：对同一媒体行取 `FOR UPDATE`，在锁内读状态、校验引用（有引用即拒绝）、迁移到 `pending_deletion`。
 - **回收放弃未完成上传**：`staged → pending_deletion` 的单语句条件更新（带宽限期），与 `staged → ready` 只有一个能成功。
 
-两者锁序一致（先媒体行、后引用行），因此不会死锁。结果只有两种：要么引用先落地（删除随后被引用保护拒绝），要么删除先落地（内容保存因媒体不再 `ready` 而失败）。回收侧同理：要么上传先就绪（回收不认领、不碰文件），要么回收先认领（上传的 `mark_ready` 失败并如实报错）。
+两者锁序一致（先媒体行、后引用行），因此不会死锁。结果只有两种：要么引用先落地（删除随后被引用保护拒绝），要么删除先落地（内容保存因媒体不再 `ready` 而失败）。回收侧同理：要么上传先就绪（回收不认领、不碰文件），要么回收先认领（上传的 `mark_ready` 失败并如实报错）。「替换封面」与「删除候选图片」并发时正是这两条路径：封面写入先落地则图片被引用、删除被拒；删除先落地则整次封面保存回滚、封面保持旧图，不会出现「引用已写入、文件已回收」的破图中间态。
 
 ### 5.6 权限
 
@@ -178,13 +187,15 @@ OR content_type = 'page' AND pages.status='published' AND pages.visibility='publ
 
 内置角色：Owner 全部；Editor 持 read/upload/delete_any；Author 持 read/upload/delete。媒体库是共享资源——作者可以引用他人上传的图片，但删除他人上传需要显式 any 权限。
 
+**头像与站点 logo 的写入权限**：头像由**本人自助**设置/清除（`PUT /api/admin/v1/me/avatar`，任何有效会话即可，不要求媒体库删除权限，也**不递增 `users.version`**，因此不会让本人的会话失效）；站点 logo 随 `settings.site` 整组保存，需要 `settings.manage` 加 `media.upload`（选择已有图片需要 `media.read`）。
+
 ### 5.7 运维与备份
 
 媒体文件根目录由 `BLOG_MEDIA_DIR` 指定（默认 `data/media`），与数据库一起构成恢复单元，必须纳入同一份备份清单（见 [备份与恢复](operations-and-recovery.md)）。回收入口是受控 CLI：`blog media reclaim`，输出四类结果——认领并放弃的超期上传、完成的文件删除、清理掉的暂存孤儿文件、逐项失败原因（含资产 id 与存储路径）。
 
 ## 6. 验证边界
 
-当前验证：版本冲突、保存已发布内容立即生效、草稿/private 过滤、作者 own/any、Page 站点权限、分类环、系列序号和重排、标签去重、引用删除保护、回收站恢复不发布、草稿 slug 占用、首次发布后锁定路径、Page 系统路由冲突；媒体库的图片内容校验（格式/尺寸/大小）、正文引用同事务写入与替换、**提取与渲染的图片形式等价**（Markdown 与原始 HTML，代码块排除）、匿名可见性随内容状态变化、引用保护删除、**回收与上传就绪的真并发互斥**、宽限期、暂存孤儿清扫、**使用位置按内容权限过滤**、上传/浏览/删除权限边界与公开文件缓存头。
+当前验证：版本冲突、保存已发布内容立即生效、草稿/private 过滤、作者 own/any、Page 站点权限、分类环、系列序号和重排、标签去重、引用删除保护、回收站恢复不发布、草稿 slug 占用、首次发布后锁定路径、Page 系统路由冲突；媒体库的图片内容校验（格式/尺寸/大小）、正文引用同事务写入与替换、**提取与渲染的图片形式等价**（Markdown 与原始 HTML，代码块排除）、匿名可见性随内容状态变化、引用保护删除、**回收与上传就绪的真并发互斥**、宽限期、暂存孤儿清扫、**使用位置按内容权限过滤**、上传/浏览/删除权限边界与公开文件缓存头。封面：封面引用随内容保存同事务提交、替换/移除释放旧引用、仍被引用时删除受保护、匿名可见性随文章撤回/private/回收站变化、系列封面公开来源与删除系列清理引用、公开详情/系列页渲染封面、**封面写入的版本冲突**与**「替换封面 vs 删除候选图片」的真并发串行化**。头像与站点 logo：本人自助设置/清除且会话不被清理、账号未软删除时头像匿名可读、软删除后立即失效而引用仍占用、站点 logo 随 settings 整组保存并受 `ready` 校验与版本 CAS、移除后引用释放、公开页渲染 logo 与作者头像。
 
-后续修订、媒体扩展（封面/头像/logo）和外部任务交付时增加对应历史隔离、文件访问、回收与可靠事件验收；当前 16 表不能被标记为已经覆盖这些能力。
+后续修订和外部任务交付时增加对应历史隔离、回收与可靠事件验收；当前 16 表不能被标记为已经覆盖这些能力。
 

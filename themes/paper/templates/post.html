@@ -1,8 +1,9 @@
 {% extends "base.html" %}
 {% block content %}
 <article class="entry">
-  <p class="eyebrow">Article / {{ post.author_display }}</p>
+  <p class="eyebrow">Article / {% if post.author_avatar_url %}<img class="avatar" src="{{ post.author_avatar_url | url }}" alt="">{% endif %}{{ post.author_display }}</p>
   <h1>{{ post.title }}</h1>
+  {% if post.cover_url %}<img class="cover" src="{{ post.cover_url | url }}" alt="{{ post.title }}">{% endif %}
   <p class="article-meta"><time>{{ post.published_at }}</time>{% if post.category %}<span> · </span><a href="/categories/{{ post.category.slug }}">{{ post.category.name }}</a>{% endif %}</p>
   {% if post.excerpt %}<p class="lead">{{ post.excerpt }}</p>{% endif %}
   <div class="prose">{{ post.content_html | safe }}</div>

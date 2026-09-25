@@ -23,10 +23,11 @@ use axum::extract::{ConnectInfo, DefaultBodyLimit, Extension, Path, Query, State
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::middleware;
 use axum::response::{IntoResponse, Redirect, Response};
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use serde_json::json;
 
+use crate::http_admin::AdminAuth;
 use crate::http_support::{
     RequestId, admin_error, admin_error_with_status, cookie_value, ensure_same_origin, no_store,
     oauth_state_cookie_name,
@@ -101,6 +102,7 @@ pub fn admin_router(state: AdminState) -> Router {
     Router::new()
         .route("/api/admin/v1/me", get(me))
         .route("/api/admin/v1/me/password", post(change_password))
+        .route("/api/admin/v1/me/avatar", put(set_own_avatar))
         .layer(DefaultBodyLimit::max(PASSWORD_BODY_LIMIT))
         .layer(middleware::from_fn(no_store))
         .with_state(state)
@@ -301,14 +303,49 @@ async fn me(
         Err(e) => return admin_error(e, &request_id),
     };
     request_id.set_actor(actor.user_id.0);
-    let _ = &state.users;
+    // 资料来自 users 行（展示名/头像）：`/me` 是 SPA 唯一的自身资料入口，
+    // 软删除账号已在用例层按不存在处理（会话本应已被撤销）。
+    let profile = match state.users.profile_of(&actor).await {
+        Ok(profile) => profile,
+        Err(e) => return admin_error(e, &request_id),
+    };
     let body = json!({
         "user_id": actor.user_id.0,
+        "username": profile.username,
+        "display_name": profile.display_name,
+        "avatar_media_id": profile.avatar_media_id,
+        "avatar_url": profile.avatar_url,
         "permissions": actor.permissions().keys().collect::<Vec<_>>(),
         "csrf_token": record.csrf_token,
         "channel": "session",
     });
     (StatusCode::OK, Json(body)).into_response()
+}
+
+#[derive(serde::Deserialize, Default)]
+struct SetAvatarBody {
+    /// 缺省或 null = 清除头像；id = 设置头像（PUT 是整值替换，非三态）。
+    #[serde(default)]
+    avatar_media_id: Option<uuid::Uuid>,
+}
+
+/// 自助设置/清除头像：本人即可，无需额外权限；CSRF/Origin 由 `AdminAuth` 统一校验。
+///
+/// 有意不递增 `users.version`——那是会话绑定版本，递增会让本人所有会话失效。
+async fn set_own_avatar(
+    State(state): State<AdminState>,
+    auth: AdminAuth,
+    request_id: RequestId,
+    Json(body): Json<SetAvatarBody>,
+) -> Response {
+    match state
+        .users
+        .set_own_avatar(&auth.actor, body.avatar_media_id)
+        .await
+    {
+        Ok(profile) => (StatusCode::OK, Json(profile)).into_response(),
+        Err(e) => admin_error(e, &request_id),
+    }
 }
 
 #[derive(serde::Deserialize)]

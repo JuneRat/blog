@@ -1358,3 +1358,60 @@ async fn failing_to_record_an_upload_removes_its_staged_file() {
 
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+/// 头像的公开来源 = 账号未软删除：软删除后匿名读取立即失效，但引用仍占用
+/// （图片不得被删，恢复账号后语义不漂移）。
+#[tokio::test]
+async fn avatar_public_source_follows_user_soft_deletion() {
+    let _g = SERIAL.lock().await;
+    let pool = fresh_pool().await;
+    let user_id = seed_user(&pool, "avatar-owner").await;
+    let media = ready_media(&pool, user_id, 12, 12).await;
+    let users = PostgresUserRepository::new(pool.clone());
+    let store = repo(&pool);
+    let now = OffsetDateTime::now_utc();
+
+    users
+        .set_avatar(user_id, Some(media.id), now)
+        .await
+        .unwrap();
+    assert!(
+        store.has_public_reference(media.id).await.unwrap(),
+        "未软删除账号的头像是公开来源"
+    );
+
+    // 软删除账号：公开来源立即消失，但引用（删除保护）仍在。
+    sqlx::query("UPDATE users SET deleted_at = now() WHERE id = $1")
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(
+        !store.has_public_reference(media.id).await.unwrap(),
+        "软删除后头像不再是公开来源"
+    );
+    assert_eq!(
+        store
+            .begin_delete(media.id, media.version, now)
+            .await
+            .unwrap(),
+        MediaDeleteOutcome::Referenced { count: 1 },
+        "引用仍在：删除必须被拒绝，恢复账号后语义不变"
+    );
+
+    // 恢复账号 → 清除头像：引用释放，图片可进入回收流程。
+    // （软删除账号不允许改头像，这正是 set_avatar 的 deleted_at IS NULL 谓词。）
+    sqlx::query("UPDATE users SET deleted_at = NULL WHERE id = $1")
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    users.set_avatar(user_id, None, now).await.unwrap();
+    assert_eq!(
+        store
+            .begin_delete(media.id, media.version, now)
+            .await
+            .unwrap(),
+        MediaDeleteOutcome::Marked
+    );
+}

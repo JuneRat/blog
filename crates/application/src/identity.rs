@@ -372,6 +372,29 @@ impl UserDto {
     }
 }
 
+/// 本人资料视图：`/me` 与头像入口共用，只暴露账号自身的公开字段。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ProfileView {
+    pub user_id: Uuid,
+    pub username: String,
+    pub display_name: Option<String>,
+    pub avatar_media_id: Option<Uuid>,
+    /// 头像站内地址（None = 无头像）。
+    pub avatar_url: Option<String>,
+}
+
+impl ProfileView {
+    fn from_snapshot(snapshot: &UserSnapshot) -> Self {
+        Self {
+            user_id: snapshot.id,
+            username: snapshot.username.clone(),
+            display_name: snapshot.display_name.clone(),
+            avatar_media_id: snapshot.avatar_media_id,
+            avatar_url: snapshot.avatar_media_id.map(crate::media::media_url),
+        }
+    }
+}
+
 /// 账号管理列表默认页大小与硬上限。
 /// 上限既防一次拉取无限账号，也让下面批量查角色的 `IN` 列表有界。
 pub const ADMIN_USER_PAGE_DEFAULT: i64 = 50;
@@ -440,6 +463,45 @@ impl UserInteractor {
         let snapshot = user.snapshot();
         self.users.insert(&snapshot).await?;
         Ok(UserDto::from_snapshot(&snapshot))
+    }
+
+    /// 本人资料（`/me`）：任何有效会话都可读，只回账号自身的公开字段。
+    ///
+    /// 账号在读取前已软删除时按不存在处理——会话本应已被撤销，
+    /// 这里再兜一层，避免旧 Cookie 在软删除后仍能读到资料。
+    pub async fn profile_of(&self, actor: &Actor) -> Result<ProfileView, UseCaseError> {
+        let snapshot = self
+            .users
+            .find_by_id(actor.user_id.0)
+            .await?
+            .filter(|snapshot| snapshot.deleted_at.is_none())
+            .ok_or_else(|| UseCaseError::NotFound("用户".into()))?;
+        Ok(ProfileView::from_snapshot(&snapshot))
+    }
+
+    /// 自助设置/清除头像：只允许改本人，不需要额外权限。
+    ///
+    /// 引用关系在仓储的同一事务内整体替换；`Some(id)` 要求资产存在且 `ready`。
+    /// 有意**不**递增 `users.version`（那是会话绑定版本，递增会把本人全部会话踢下线）。
+    pub async fn set_own_avatar(
+        &self,
+        actor: &Actor,
+        avatar_media_id: Option<Uuid>,
+    ) -> Result<ProfileView, UseCaseError> {
+        actor.ensure_write_channel()?;
+        let snapshot = self
+            .users
+            .find_by_id(actor.user_id.0)
+            .await?
+            .filter(|snapshot| snapshot.deleted_at.is_none())
+            .ok_or_else(|| UseCaseError::NotFound("用户".into()))?;
+        self.users
+            .set_avatar(snapshot.id, avatar_media_id, self.clock.now())
+            .await?;
+        let mut updated = snapshot;
+        updated.avatar_media_id = avatar_media_id;
+        updated.updated_at = self.clock.now();
+        Ok(ProfileView::from_snapshot(&updated))
     }
 
     /// 账号管理列表：持有 `user.manage` 或 `role.manage` 才可读取。

@@ -8,6 +8,17 @@
 /** 允许上传的位图 MIME（与后端 `domain::media::ImageFormat` 一致）。 */
 export const MEDIA_ACCEPT = "image/png,image/jpeg,image/gif,image/webp";
 
+/**
+ * 站内媒体地址的唯一构造处。
+ *
+ * 后端下发的 `cover_url` 与资产条目的 `url` 都是这个形状；封面选择器在只有
+ * id（例如刚选中、或后端未回传地址）时也要能显示缩略图，所以形状只在这里写一次，
+ * 避免 `"/media/" + id` 散落到各屏后与后端不一致。
+ */
+export function mediaUrl(id: string): string {
+  return `/media/${id}`;
+}
+
 /** 单张图片上限（与后端 `MAX_IMAGE_BYTES` 一致）。 */
 export const MEDIA_MAX_BYTES = 10 * 1024 * 1024;
 

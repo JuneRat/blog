@@ -53,6 +53,8 @@ const post: PostDetail = {
   category_id: null,
   series_id: null,
   series_order: null,
+  cover_media_id: null,
+  cover_url: null,
 };
 
 function asset(overrides: Partial<MediaAsset> = {}): MediaAsset {
@@ -178,6 +180,14 @@ describe("编辑器内插入图片", () => {
     render(<App />);
     await waitFor(() => expect(contentBox().value).toBe("原始正文"));
     expect(screen.queryByRole("button", { name: "插入图片" })).toBeNull();
+  });
+
+  it("没有 media.read 时封面选择器不提供死路径，只说明缺哪项权限", async () => {
+    state.permissions = ["post.update"];
+    render(<App />);
+    await waitFor(() => expect(contentBox().value).toBe("原始正文"));
+    expect(screen.queryByRole("button", { name: "选择封面" })).toBeNull();
+    expect(screen.getByText(/没有 media.read 权限/)).toBeTruthy();
   });
 
   it("没有 media.upload 时面板不提供上传按钮", async () => {

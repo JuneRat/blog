@@ -2,14 +2,14 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
-import { ApiError, api, categoryApi, seriesApi } from "../src/api";
+import { ApiError, api, categoryApi, mediaApi, seriesApi } from "../src/api";
 import { navigate, paths } from "../src/router";
-import type { PostDetail } from "../src/types";
+import type { MediaAsset, MediaPage, PostDetail } from "../src/types";
 
 vi.mock("../src/auth", () => ({
   useAuth: () => ({
     status: "authenticated",
-    me: { permissions: ["post.create", "post.publish"] },
+    me: { permissions: ["post.create", "post.publish", "media.read", "media.upload"] },
   }),
 }));
 
@@ -19,6 +19,7 @@ vi.mock("../src/api", async (importOriginal) => {
     ...original,
     categoryApi: { list: vi.fn() },
     seriesApi: { list: vi.fn() },
+    mediaApi: { list: vi.fn(), detail: vi.fn(), upload: vi.fn(), remove: vi.fn() },
     api: {
       getPost: vi.fn(), createPost: vi.fn(), updatePost: vi.fn(),
       publishPost: vi.fn(), unpublishPost: vi.fn(), listTags: vi.fn(),
@@ -32,12 +33,37 @@ const post: PostDetail = {
   excerpt: null, status: "draft", visibility: "public", version: 1,
   published_at: null, updated_at: "2026-09-22T00:00:00Z", author_id: "author-id",
   tag_ids: [], category_id: null, series_id: null, series_order: null,
+  cover_media_id: null, cover_url: null,
 };
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((done) => { resolve = done; });
   return { promise, resolve };
+}
+
+function asset(overrides: Partial<MediaAsset> = {}): MediaAsset {
+  return {
+    id: "media-1",
+    original_name: "cover.png",
+    mime: "image/png",
+    byte_size: 2048,
+    width: 800,
+    height: 600,
+    status: "ready",
+    version: 1,
+    created_at: "2026-09-23T10:00:00Z",
+    owner_id: "me",
+    owner_display: "sun",
+    url: "/media/media-1",
+    reference_count: 0,
+    public_reference_count: 0,
+    ...overrides,
+  };
+}
+
+function pageOf(items: MediaAsset[]): MediaPage {
+  return { items, total: items.length, page: 1, per_page: 24 };
 }
 
 function input(label: string): HTMLInputElement {
@@ -226,5 +252,116 @@ describe("文章编辑器回归", () => {
     // 保存已经生效：返回列表必须是新标题。
     fireEvent.click(screen.getByRole("menuitem", { name: "文章" }));
     expect(await screen.findByText("改过的标题")).toBeTruthy();
+  });
+});
+
+describe("文章编辑器封面", () => {
+  // 编辑器里的封面控件与正文图片面板共用同一份文件输入习惯：上传即选中。
+  it("从媒体库选择封面，保存时提交 cover_media_id", async () => {
+    vi.mocked(mediaApi.list).mockResolvedValue(pageOf([asset()]));
+    vi.mocked(api.updatePost).mockResolvedValue({
+      ...post, cover_media_id: "media-1", cover_url: "/media/media-1", version: 2,
+    });
+    render(<App />);
+    await screen.findByDisplayValue(post.title);
+
+    fireEvent.click(screen.getByRole("button", { name: "选择封面" }));
+    await waitFor(() => expect(mediaApi.list).toHaveBeenCalledWith(1));
+    fireEvent.click(await screen.findByRole("button", { name: "选择" }));
+
+    // 选中后预览区换成缩略图，按钮文案变为「更换封面」。
+    expect(screen.getByRole("button", { name: "更换封面" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "保存并更新线上" }));
+    await waitFor(() =>
+      expect(api.updatePost).toHaveBeenCalledWith(
+        post.slug,
+        expect.objectContaining({ cover_media_id: "media-1", expected_version: 1 }),
+      ),
+    );
+  });
+
+  it("移除封面：保存时提交 cover_media_id: null（后端按绝对值移除）", async () => {
+    vi.mocked(api.getPost).mockResolvedValue({
+      ...post, cover_media_id: "media-1", cover_url: "/media/media-1",
+    });
+    vi.mocked(api.updatePost).mockResolvedValue({
+      ...post, cover_media_id: null, cover_url: null, version: 2,
+    });
+    render(<App />);
+    await screen.findByDisplayValue(post.title);
+
+    fireEvent.click(screen.getByRole("button", { name: "移除封面" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存并更新线上" }));
+
+    await waitFor(() =>
+      expect(api.updatePost).toHaveBeenCalledWith(
+        post.slug,
+        expect.objectContaining({ cover_media_id: null }),
+      ),
+    );
+  });
+
+  it("在选择器里上传新图片即选中它（不必再点一次「选择」）", async () => {
+    vi.mocked(mediaApi.list).mockResolvedValue(pageOf([]));
+    const uploaded = asset({
+      id: "new-media", original_name: "new-cover.png", url: "/media/new-media",
+    });
+    vi.mocked(mediaApi.upload).mockResolvedValue(uploaded);
+    vi.mocked(api.updatePost).mockResolvedValue({
+      ...post, cover_media_id: "new-media", cover_url: "/media/new-media", version: 2,
+    });
+    render(<App />);
+    await screen.findByDisplayValue(post.title);
+
+    fireEvent.click(screen.getByRole("button", { name: "选择封面" }));
+    await waitFor(() => expect(mediaApi.list).toHaveBeenCalledWith(1));
+
+    // 此时页面上只有选择器弹窗里的隐藏文件输入（正文图片面板未打开）。
+    const input = document.querySelector<HTMLInputElement>('input[type="file"]')!;
+    const file = new File([new Uint8Array(16)], "new-cover.png", { type: "image/png" });
+    fireEvent.change(input, { target: { files: [file] } });
+
+    await waitFor(() => expect(mediaApi.upload).toHaveBeenCalledWith(file));
+    await waitFor(() => expect(screen.getByRole("button", { name: "更换封面" })).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("button", { name: "保存并更新线上" }));
+    await waitFor(() =>
+      expect(api.updatePost).toHaveBeenCalledWith(
+        post.slug,
+        expect.objectContaining({ cover_media_id: "new-media" }),
+      ),
+    );
+  });
+
+  it("上传前预筛：不支持的类型不发请求", async () => {
+    vi.mocked(mediaApi.list).mockResolvedValue(pageOf([]));
+    render(<App />);
+    await screen.findByDisplayValue(post.title);
+
+    fireEvent.click(screen.getByRole("button", { name: "选择封面" }));
+    await waitFor(() => expect(mediaApi.list).toHaveBeenCalledWith(1));
+
+    const input = document.querySelector<HTMLInputElement>('input[type="file"]')!;
+    const svg = new File([new Uint8Array(16)], "evil.svg", { type: "image/svg+xml" });
+    fireEvent.change(input, { target: { files: [svg] } });
+
+    expect(await screen.findByText(/不支持的图片类型/)).toBeTruthy();
+    expect(mediaApi.upload).not.toHaveBeenCalled();
+  });
+
+  it("选择封面算未保存改动：离开时触发确认", async () => {
+    vi.mocked(mediaApi.list).mockResolvedValue(pageOf([asset()]));
+    render(<App />);
+    await screen.findByDisplayValue(post.title);
+
+    fireEvent.click(screen.getByRole("button", { name: "选择封面" }));
+    fireEvent.click(await screen.findByRole("button", { name: "选择" }));
+    expect(screen.getByRole("button", { name: "更换封面" })).toBeTruthy();
+
+    // 封面进入 FormState 的脏判断：点侧栏离开必须先确认，否则改动会静默丢失。
+    // 按 dialog 的无障碍名断言（标题是 span 套 span，按文本查会命中两层）。
+    fireEvent.click(screen.getByRole("menuitem", { name: "文章" }));
+    expect(await screen.findByRole("dialog", { name: "有未保存的修改" })).toBeTruthy();
   });
 });

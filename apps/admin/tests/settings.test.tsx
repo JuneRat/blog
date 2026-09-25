@@ -2,14 +2,14 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
-import { ApiError, settingsApi, themeSettingsApi } from "../src/api";
+import { ApiError, mediaApi, settingsApi, themeSettingsApi } from "../src/api";
 import { paths } from "../src/router";
 import type { SiteSettings } from "../src/types";
 
 vi.mock("../src/auth", () => ({
   useAuth: () => ({
     status: "authenticated",
-    me: { permissions: ["settings.manage"] },
+    me: { permissions: ["settings.manage", "media.read", "media.upload"] },
   }),
 }));
 
@@ -19,14 +19,34 @@ vi.mock("../src/api", async (importOriginal) => {
     ...original,
     settingsApi: { get: vi.fn(), save: vi.fn() },
     themeSettingsApi: { get: vi.fn(), save: vi.fn() },
+    mediaApi: { ...original.mediaApi, list: vi.fn(), upload: vi.fn() },
   };
 });
 
 const fallbackView: SiteSettings = {
   title: "环境变量站点",
   description: "回退描述",
+  logo_media_id: null,
+  logo_url: null,
   source: "fallback",
   version: 0,
+};
+
+const logoAsset = {
+  id: "logo-1",
+  original_name: "logo.png",
+  mime: "image/png",
+  byte_size: 10,
+  width: 32,
+  height: 32,
+  status: "ready",
+  version: 2,
+  created_at: "2026-01-01",
+  owner_id: "u1",
+  owner_display: "管理员",
+  url: "/media/logo-1",
+  reference_count: 0,
+  public_reference_count: 0,
 };
 
 beforeEach(() => {
@@ -88,6 +108,7 @@ describe("站点设置屏", () => {
       expect(settingsApi.save).toHaveBeenCalledWith({
         title: "数据库站点",
         description: "新描述",
+        logo_media_id: null,
         expected_version: 0,
       }),
     );
@@ -282,5 +303,63 @@ describe("站点设置屏", () => {
       expect(screen.getByText("站点标题长度不能超过 200 字符。")).toBeTruthy(),
     );
     expect(settingsApi.save).toHaveBeenCalledTimes(1);
+  });
+
+  it("选择站点 logo 后保存：整组 PUT 携带 logo_media_id", async () => {
+    vi.mocked(settingsApi.get).mockResolvedValue({
+      ...fallbackView,
+      source: "database",
+      version: 1,
+    });
+    vi.mocked(mediaApi.list).mockResolvedValue({
+      items: [logoAsset],
+      total: 1,
+      page: 1,
+      per_page: 24,
+    });
+    vi.mocked(settingsApi.save).mockResolvedValue({
+      ...fallbackView,
+      source: "database",
+      version: 2,
+      logo_media_id: "logo-1",
+      logo_url: "/media/logo-1",
+    });
+
+    render(<App />);
+    // 站点 logo 的未设置态按钮（与文章/系列封面同一个选择器）。
+    fireEvent.click(await screen.findByRole("button", { name: "选择封面" }));
+    fireEvent.click(await screen.findByRole("button", { name: "选择" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+
+    await waitFor(() => expect(settingsApi.save).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(settingsApi.save).mock.calls[0][0]).toMatchObject({
+      logo_media_id: "logo-1",
+      expected_version: 1,
+    });
+  });
+
+  it("移除站点 logo 后保存：提交 logo_media_id: null（与「不改 logo」区分开）", async () => {
+    vi.mocked(settingsApi.get).mockResolvedValue({
+      ...fallbackView,
+      source: "database",
+      version: 3,
+      logo_media_id: "logo-1",
+      logo_url: "/media/logo-1",
+    });
+    vi.mocked(settingsApi.save).mockResolvedValue({
+      ...fallbackView,
+      source: "database",
+      version: 4,
+    });
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "移除封面" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+
+    await waitFor(() => expect(settingsApi.save).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(settingsApi.save).mock.calls[0][0]).toMatchObject({
+      logo_media_id: null,
+      expected_version: 3,
+    });
   });
 });

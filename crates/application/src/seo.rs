@@ -302,6 +302,7 @@ mod tests {
         SiteInfo {
             title: "站点名".into(),
             description: "站点描述".into(),
+            logo_url: None,
         }
     }
 

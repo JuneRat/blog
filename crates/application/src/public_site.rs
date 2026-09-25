@@ -32,6 +32,8 @@ pub fn format_datetime(t: OffsetDateTime) -> String {
 pub struct SiteInfo {
     pub title: String,
     pub description: String,
+    /// 站点 logo 的站内地址（None = 无 logo）。站点配置公开，因此有 logo 即公开来源。
+    pub logo_url: Option<String>,
 }
 
 /// 列表页模板数据契约。
@@ -42,6 +44,8 @@ pub struct PostCard {
     pub excerpt: Option<String>,
     pub published_at: Option<String>,
     pub author_display: String,
+    /// 作者头像站内地址（None = 无头像）；匿名可读性跟随「账号未软删除」。
+    pub author_avatar_url: Option<String>,
 }
 
 /// 详情页上的标签链接（目录公开；名称取当前值）。
@@ -75,7 +79,12 @@ pub struct PostView {
     pub published_at: Option<String>,
     pub updated_at: String,
     pub author_display: String,
+    /// 作者头像站内地址（None = 无头像）。
+    pub author_avatar_url: Option<String>,
     pub content_html: String,
+    /// 封面站内地址（None = 无封面）。与正文图片同一个 `/media/{id}` 出口，
+    /// 匿名可读性由内容公开状态决定（撤回/私密/回收站后下一次请求即失效）。
+    pub cover_url: Option<String>,
     /// 当前标签（链接到 /tags/{slug}）。
     pub tags: Vec<TagCard>,
     /// 所属分类（链接到 /categories/{slug}）。
@@ -109,6 +118,8 @@ pub struct CategoryView {
 pub struct SeriesView {
     pub series_slug: String,
     pub series_name: String,
+    /// 封面站内地址（None = 无封面）。
+    pub cover_url: Option<String>,
     pub page: i64,
     pub total_pages: i64,
     /// 公开成员的连续阅读序号（1 起；不是 posts.series_order——草稿占位会造成空档）。
@@ -296,6 +307,7 @@ impl PublicSiteInteractor {
                 excerpt: s.excerpt,
                 published_at: s.published_at.map(format_datetime),
                 author_display: s.author_display,
+                author_avatar_url: s.author_avatar_media_id.map(crate::media::media_url),
             })
             .collect();
         let site = self.site_info().await;
@@ -318,7 +330,9 @@ impl PublicSiteInteractor {
             published_at: detail.published_at.map(format_datetime),
             updated_at: format_datetime(detail.updated_at),
             author_display: detail.author_display.clone(),
+            author_avatar_url: detail.author_avatar_media_id.map(crate::media::media_url),
             content_html: self.markdown.render_markdown(&detail.content),
+            cover_url: detail.cover_media_id.map(crate::media::media_url),
             tags: detail
                 .tags
                 .iter()
@@ -406,6 +420,7 @@ impl PublicSiteInteractor {
                     excerpt: s.excerpt,
                     published_at: s.published_at.map(format_datetime),
                     author_display: s.author_display,
+                    author_avatar_url: s.author_avatar_media_id.map(crate::media::media_url),
                 })
                 .collect(),
         };
@@ -449,6 +464,7 @@ impl PublicSiteInteractor {
                     excerpt: s.excerpt,
                     published_at: s.published_at.map(format_datetime),
                     author_display: s.author_display,
+                    author_avatar_url: s.author_avatar_media_id.map(crate::media::media_url),
                 })
                 .collect(),
         };
@@ -483,6 +499,7 @@ impl PublicSiteInteractor {
         let view = SeriesView {
             series_slug: series.slug,
             series_name: series.name,
+            cover_url: series.cover_media_id.map(crate::media::media_url),
             page,
             total_pages,
             posts: posts
@@ -496,6 +513,7 @@ impl PublicSiteInteractor {
                         excerpt: s.excerpt,
                         published_at: s.published_at.map(format_datetime),
                         author_display: s.author_display,
+                        author_avatar_url: s.author_avatar_media_id.map(crate::media::media_url),
                     },
                 })
                 .collect(),

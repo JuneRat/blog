@@ -183,6 +183,16 @@ impl FakeUserRepo {
 
 #[async_trait::async_trait]
 impl UserRepository for FakeUserRepo {
+    /// 头像只走真实认证 HTTP 用例（server/tests）；本 fake 不实现，误用即失败。
+    async fn set_avatar(
+        &self,
+        _user_id: uuid::Uuid,
+        _avatar_media_id: Option<uuid::Uuid>,
+        _now: time::OffsetDateTime,
+    ) -> Result<(), UseCaseError> {
+        unimplemented!("该用例不使用头像")
+    }
+
     async fn insert(&self, snapshot: &UserSnapshot) -> Result<(), UseCaseError> {
         self.insert_user(snapshot.clone());
         Ok(())
@@ -449,6 +459,7 @@ fn active_user(username: &str) -> UserSnapshot {
         created_at: now,
         updated_at: now,
         deleted_at: None,
+        avatar_media_id: None,
     }
 }
 

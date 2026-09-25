@@ -56,6 +56,10 @@ struct PostJson {
     category_id: Option<Uuid>,
     series_id: Option<Uuid>,
     series_order: Option<i32>,
+    /// 封面媒体资产 id（None = 无封面）。
+    cover_media_id: Option<Uuid>,
+    /// 封面站内地址（`/media/{id}`）；None = 无封面。
+    cover_url: Option<String>,
 }
 
 impl From<&PostDto> for PostJson {
@@ -76,6 +80,8 @@ impl From<&PostDto> for PostJson {
             category_id: dto.category_id,
             series_id: dto.series_id,
             series_order: dto.series_order,
+            cover_media_id: dto.cover_media_id,
+            cover_url: dto.cover_media_id.map(application::media::media_url),
         }
     }
 }
@@ -191,6 +197,9 @@ pub struct CreatePostBody {
     /// 初始系列与序号。
     #[serde(default)]
     pub series: Option<SeriesBody>,
+    /// 初始封面媒体资产 id（缺省 = 无封面）。
+    #[serde(default)]
+    pub cover_media_id: Option<Uuid>,
 }
 
 #[derive(Deserialize, Default)]
@@ -208,6 +217,9 @@ pub struct EditPostBody {
     /// 三态：缺省不修改；null 退出系列；对象设置系列与序号。
     #[serde(default, deserialize_with = "deserialize_double_option")]
     pub series: Option<Option<SeriesBody>>,
+    /// 封面三态：缺省不修改；null 移除封面；id 设置封面。
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    pub cover_media_id: Option<Option<Uuid>>,
     pub expected_version: Option<i64>,
 }
 
@@ -275,6 +287,7 @@ async fn create_post(
                 tag_ids: body.tag_ids,
                 category_id: body.category_id,
                 series: body.series.map(|s| (s.id, s.order)),
+                cover_media_id: body.cover_media_id,
             },
         )
         .await
@@ -439,6 +452,7 @@ async fn edit_post(
                 tag_ids: body.tag_ids,
                 category_id: body.category_id,
                 series: body.series.map(|opt| opt.map(|s| (s.id, s.order))),
+                cover_media_id: body.cover_media_id,
                 expected_version: body.expected_version,
             },
         )
@@ -996,6 +1010,10 @@ struct SeriesJson {
     slug: String,
     name: String,
     description: Option<String>,
+    /// 封面媒体资产 id（None = 无封面）。
+    cover_media_id: Option<Uuid>,
+    /// 封面站内地址（`/media/{id}`）；None = 无封面。
+    cover_url: Option<String>,
     version: i64,
     /// 成员总数（含草稿/私密/回收站——它们保留位置）。
     post_count: i64,
@@ -1009,6 +1027,8 @@ impl From<&SeriesDto> for SeriesJson {
             slug: dto.slug.clone(),
             name: dto.name.clone(),
             description: dto.description.clone(),
+            cover_media_id: dto.cover_media_id,
+            cover_url: dto.cover_media_id.map(application::media::media_url),
             version: dto.version,
             post_count: dto.post_count,
             pub_post_count: dto.public_post_count,
@@ -1027,6 +1047,9 @@ pub struct CreateSeriesBody {
 pub struct UpdateSeriesBody {
     pub name: String,
     pub description: Option<String>,
+    /// 封面三态：缺省不修改；null 移除封面；id 设置封面。
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    pub cover_media_id: Option<Option<Uuid>>,
     pub expected_version: Option<i64>,
 }
 
@@ -1104,6 +1127,7 @@ async fn update_series(
             UpdateSeriesCmd {
                 name: body.name,
                 description: body.description,
+                cover_media_id: body.cover_media_id,
                 expected_version: body.expected_version,
             },
         )
@@ -1206,6 +1230,10 @@ async fn reorder_series(
 struct SiteSettingsJson {
     title: String,
     description: String,
+    /// 站点 logo 的媒体资产 id（None = 无 logo）。
+    logo_media_id: Option<Uuid>,
+    /// 站点 logo 的站内地址（None = 无 logo）。
+    logo_url: Option<String>,
     /// "database"（settings.site 行）或 "fallback"（环境变量/默认值，version=0）。
     source: &'static str,
     version: i64,
@@ -1216,6 +1244,8 @@ impl From<&SiteSettingsView> for SiteSettingsJson {
         Self {
             title: view.title.clone(),
             description: view.description.clone(),
+            logo_media_id: view.logo_media_id,
+            logo_url: view.logo_url.clone(),
             source: match view.source {
                 application::settings::SiteSettingsSource::Database => "database",
                 application::settings::SiteSettingsSource::Fallback => "fallback",
@@ -1231,6 +1261,9 @@ pub struct SaveSiteSettingsBody {
     pub title: String,
     #[serde(default)]
     pub description: String,
+    /// 站点 logo（PUT 是整组替换：缺省/null = 清除 logo）。
+    #[serde(default)]
+    pub logo_media_id: Option<Uuid>,
     pub expected_version: Option<i64>,
 }
 
@@ -1317,6 +1350,7 @@ async fn put_site_settings(
             SaveSiteSettingsCmd {
                 title: body.title,
                 description: body.description,
+                logo_media_id: body.logo_media_id,
                 expected_version: body.expected_version,
             },
         )

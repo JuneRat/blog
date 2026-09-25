@@ -286,6 +286,7 @@ async fn main() {
             let site_fallback = SiteInfo {
                 title: config.site_title,
                 description: config.site_description,
+                logo_url: None,
             };
             let settings = Arc::new(
                 SettingsInteractor::new(

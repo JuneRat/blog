@@ -53,6 +53,8 @@ MiniJinja 类型只出现在 infrastructure；application 定义引擎无关的�
 | `posts` | 首页文章卡片列表 | index |
 | `post` / `page` / `tag` / `category` / `series` | 各自页面主体 | 对应模板 |
 
+文章详情上下文（`post`）与系列页上下文（`series`）带 `cover_url`，文章卡片/详情带 `author_avatar_url`，`site` 带 `logo_url`：值都是应用层生成的 `/media/{id}` 站内地址（无对应图片时为 none），模板用 `| url` 过滤器输出到属性并自行决定渲染。这些只是地址，**匿名可读性由媒体库按内容公开状态（文章/页面/系列/账号）实时判定**，模板不参与也不得缓存该判定。
+
 - **标题、描述、canonical 只有一处规则**（application 的 `seo` 模块）：详情页标题是「页面标题 - 站点标题」，首页只有站点标题；描述折叠为单行并截断到 160 字符，文章优先取摘要、缺失时回退站点描述；canonical 是绝对 URL，列表页第 2 页起自指 `?page=N`。模板不再各自拼 `<title>`，`base.html` 已无 `{% block title %}`。
 - **站点公开地址**取可信配置 `BLOG_PUBLIC_BASE_URL`（装配期用 `url` crate 解析并校验绝对 http/https、无凭据、无查询与片段、**无路径前缀**），不从请求 Host 头推导。子路径部署当前不支持：模板中的 `/assets/...`、`/posts/...`、`/feed.xml` 等都是域名根相对路径，接受前缀只会产出半套带前缀的链接，因此配置阶段直接拒绝。建议使用独立域名，并在对外域名根路径部署；仅由反向代理改写入站路径无法解决根相对链接问题。Unicode slug 在 URL 中按百分号编码，因此 canonical/feed/sitemap 对同一内容给出一致的地址。
 - URL 值用 `url` 过滤器输出：`{{ seo.canonical_url | url }}`。MiniJinja 的 HTML 自动转义会把 `/` 写成 `&#x2f;`（合法但让地址不可读、外部工具比对失配），该过滤器保留 `/` 并兜底转义 `&`、`<`、`>`、`"`、`'` 后标记为安全字符串。标题、描述等普通文本继续走自动转义。
@@ -106,7 +108,7 @@ MiniJinja 的常规渲染与注册函数接口是同步接口，SQLx future 不�
 
 HTML 模板显式配置自动转义；启用严格未定义行为，并为可选字段提供明确默认值。正文先清洗，再由受控宿主标记为可安全插入 HTML；普通字符串不自动标安全。HTML 转义不能代替 JavaScript、CSS、URL 上下文的专门处理。主题仍仅由可信管理员安装，不宣称引擎提供完整恶意模板隔离。
 
-`asset_url` 仅处理主题包内静态资源。avatar/cover/logo 仍是经校验的 URL/静态路径，**尚未接入媒体库**（媒体库第一版只覆盖 Post/Page 正文图片）；正文图片由 Markdown 渲染成 `<img src="/media/{id}">`，其匿名可读性由媒体库按 [内容生命周期 §5](content-lifecycle.md) 实时判定，主题模板不参与也不得缓存该判定。分类/标签/系列 DTO 使用当前名称，关系及计数只来自当前 public、published、未软删除文章。
+`asset_url` 仅处理主题包内静态资源。封面、头像与站点 logo 均已接入媒体库：模板通过 `post.cover_url` / `series.cover_url` / `post.author_avatar_url` / `site.logo_url` 拿到 `/media/{id}` 地址。正文图片由 Markdown 渲染成 `<img src="/media/{id}">`，它与上述图片的匿名可读性由媒体库按 [内容生命周期 §5](content-lifecycle.md) 实时判定（文章撤回、账号软删除等都会立即失效），主题模板不参与也不得缓存该判定。分类/标签/系列 DTO 使用当前名称，关系及计数只来自当前 public、published、未软删除文章。
 
 查询未找到返回 none/空集合；数据库失败、预算耗尽和参数错误不伪装成没有内容。关键渲染失败返回受控 5xx，服务端记录函数名、模板位置和脱敏错误。仅对明确声明可降级的可选区块使用回退，不缓存部分失败页面为正常页面。
 

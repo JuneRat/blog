@@ -459,5 +459,12 @@ fn can_see_reference(actor: &Actor, row: &MediaUsageRow) -> bool {
             actor.has_permission("post.read") && row.author_id == Some(actor.user_id.0)
         }
         crate::ports::MediaContentKind::Page => actor.has_permission("page.read"),
+        // 系列目录公开可达，因此公开引用在上面的 `row.public` 分支已被放行；
+        // 走到这里说明系列行已消失（悬挂引用），按目录管理权限处理。
+        crate::ports::MediaContentKind::Series => actor.has_permission("series.manage"),
+        // 头像的公开来源是「账号未软删除」；已软删除账号的头像只有账号管理员可见。
+        crate::ports::MediaContentKind::User => actor.has_permission("user.manage"),
+        // 站点 logo 只有 settings.manage 能改；公开分支已放行，这里处理异常情况。
+        crate::ports::MediaContentKind::Site => actor.has_permission("settings.manage"),
     }
 }

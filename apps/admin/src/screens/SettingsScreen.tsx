@@ -3,6 +3,8 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useState } from "react";
 import { ApiError, settingsApi, themeSettingsApi } from "../api";
 import { permissionMessageOf } from "../apiError";
+import { useAuth } from "../auth";
+import { CoverPicker } from "../components/CoverPicker";
 import { queryKeys } from "../queryClient";
 import { codePointLength } from "../text";
 import { useUnsavedGuard } from "../unsaved";
@@ -16,9 +18,11 @@ const DESCRIPTION_MAX = 500;
 interface Draft {
   title: string;
   description: string;
+  /** 站点 logo 媒体 id（null = 无 logo）。 */
+  logoMediaId: string | null;
 }
 
-const EMPTY_DRAFT: Draft = { title: "", description: "" };
+const EMPTY_DRAFT: Draft = { title: "", description: "", logoMediaId: null };
 
 /**
  * 站点设置屏（site 分组：标题与描述）。
@@ -43,6 +47,9 @@ const EMPTY_DRAFT: Draft = { title: "", description: "" };
  */
 export function SettingsScreen() {
   const { modal } = AntdApp.useApp();
+  const { me } = useAuth();
+  const canReadMedia = me?.permissions.includes("media.read") ?? false;
+  const canUploadMedia = me?.permissions.includes("media.upload") ?? false;
   const queryClient = useQueryClient();
   const [formApi] = Form.useForm<Draft>();
   const [settings, setSettings] = useState<SiteSettings | null>(null);
@@ -83,7 +90,11 @@ export function SettingsScreen() {
   const apply = useCallback(
     (view: SiteSettings) => {
       setSettings(view);
-      writeDraft({ title: view.title, description: view.description });
+      writeDraft({
+        title: view.title,
+        description: view.description,
+        logoMediaId: view.logo_media_id,
+      });
     },
     [writeDraft],
   );
@@ -91,7 +102,9 @@ export function SettingsScreen() {
   /** 表单镜像与服务器值的差异：用于离开确认（见 src/unsaved.tsx）。 */
   const dirty =
     settings !== null &&
-    (draft.title !== settings.title || draft.description !== settings.description);
+    (draft.title !== settings.title ||
+      draft.description !== settings.description ||
+      draft.logoMediaId !== settings.logo_media_id);
   useUnsavedGuard(dirty, "站点设置有未保存的修改，离开会丢失。");
 
   useEffect(() => {
@@ -131,6 +144,8 @@ export function SettingsScreen() {
         const saved = await settingsApi.save({
           title,
           description,
+          // PUT 是整组替换：logo 始终显式提交（null = 确实要清除）。
+          logo_media_id: submitted.logoMediaId,
           expected_version: expectedVersion,
         });
         // 服务器返回的是规范化后的值（trim 等）。它只覆盖「等待期间未被继续
@@ -143,9 +158,15 @@ export function SettingsScreen() {
             current.description === submitted.description
               ? saved.description
               : current.description,
+          logoMediaId:
+            current.logoMediaId === submitted.logoMediaId
+              ? saved.logo_media_id
+              : current.logoMediaId,
         };
         const pendingEdits =
-          merged.title !== saved.title || merged.description !== saved.description;
+          merged.title !== saved.title ||
+          merged.description !== saved.description ||
+          merged.logoMediaId !== saved.logo_media_id;
         setSettings(saved);
         writeDraft(merged);
         setConflict(null);
@@ -264,6 +285,27 @@ export function SettingsScreen() {
                 rows={3}
               />
             </Form.Item>
+            {/*
+              站点 logo：隐藏 Form.Item 只负责把 logoMediaId 注册进表单 store，
+              真正控件是 CoverPicker；值由 draft 驱动、变化经 writeDraft 回写，
+              与标题/描述的脏标记、冲突合并走同一条路径。
+            */}
+            <Form.Item name="logoMediaId" hidden>
+              <Input />
+            </Form.Item>
+            <CoverPicker
+              value={draft.logoMediaId}
+              onChange={(id) => writeDraft({ ...readDraft(), logoMediaId: id })}
+              currentUrl={
+                draft.logoMediaId === (settings?.logo_media_id ?? null)
+                  ? (settings?.logo_url ?? null)
+                  : null
+              }
+              canReadMedia={canReadMedia}
+              canUploadMedia={canUploadMedia}
+              disabled={busy || conflict !== null}
+              label="站点 logo"
+            />
             {conflict === null && (
               // 用文案切换而不是 Button 的 loading：见 PostEditScreen 的同名说明。
               <Button type="primary" htmlType="submit" disabled={busy}>

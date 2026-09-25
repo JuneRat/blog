@@ -10,6 +10,7 @@ import type {
   PasswordLoginResult,
   PostDetail,
   PostSummary,
+  Profile,
   ProviderSummary,
   RoleSummary,
   SeriesSummary,
@@ -152,6 +153,8 @@ export interface CreatePostInput {
   tag_ids?: string[];
   /** 初始分类 id。 */
   category_id?: string;
+  /** 初始封面媒体 id；缺省/`null` = 不设封面。 */
+  cover_media_id?: string | null;
   /** 初始系列与序号。 */
   series?: { id: string; order: number };
 }
@@ -166,6 +169,13 @@ export interface EditPostInput {
   tag_ids?: string[];
   /** null = 清空分类；id = 设置；缺省不触碰。 */
   category_id?: string | null;
+  /**
+   * 封面的**三态**：缺省 = 不触碰；`null` = 移除封面；id = 设置封面。
+   *
+   * 与 `category_id` 不同，编辑器的保存一律显式带上当前值（`null` 表示确实要移除），
+   * 这样「移除封面」才能与「不改封面」区分开。
+   */
+  cover_media_id?: string | null;
   /** null = 退出系列；对象 = 设置系列与序号；缺省不触碰。 */
   series?: { id: string; order: number } | null;
   expected_version?: number;
@@ -211,6 +221,17 @@ export interface RenameTagInput {
 
 export const api = {
   me: (): Promise<Me> => request<Me>("/api/admin/v1/me"),
+
+  /**
+   * 自助设置/清除头像（本人即可，无需额外权限）。
+   * `null` = 清除；成功后返回最新资料，调用方应刷新 `/me` 让头部同步。
+   * 不递增 users.version，因此不会让当前会话失效。
+   */
+  setOwnAvatar: (avatarMediaId: string | null): Promise<Profile> =>
+    request<Profile>("/api/admin/v1/me/avatar", {
+      method: "PUT",
+      body: JSON.stringify({ avatar_media_id: avatarMediaId }),
+    }),
 
   /** 自助改密：成功后服务端轮换会话并回新 csrf_token（调用方负责更新内存 token）。 */
   changeOwnPassword: (input: { current_password?: string; new_password: string }): Promise<{ user_id: string; csrf_token: string }> =>
@@ -455,12 +476,21 @@ export interface CreateSeriesInput {
 export interface UpdateSeriesInput {
   name: string;
   description?: string;
+  /**
+   * 封面的**三态**：缺省 = 不触碰；`null` = 移除封面；id = 设置封面。
+   *
+   * 系列屏在同一次保存里必须原样带上 `name`（后端要求必填），因此改封面
+   * 也就是一次普通的系列更新，只是多带了 `cover_media_id`。
+   */
+  cover_media_id?: string | null;
   expected_version?: number;
 }
 
 export interface SaveSiteSettingsInput {
   title: string;
   description: string;
+  /** 站点 logo 媒体 id；PUT 是整组替换，缺省/null = 清除 logo。 */
+  logo_media_id?: string | null;
   expected_version?: number;
 }
 

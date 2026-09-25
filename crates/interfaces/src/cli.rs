@@ -771,6 +771,7 @@ async fn run_post(deps: CliDeps, action: PostAction) -> Result<(), String> {
                         tag_ids: Vec::new(),
                         category_id: None,
                         series: None,
+                        cover_media_id: None,
                     },
                 )
                 .await
@@ -815,6 +816,7 @@ async fn run_post(deps: CliDeps, action: PostAction) -> Result<(), String> {
                         tag_ids: None,
                         category_id: None,
                         series: None,
+                        cover_media_id: None,
                         expected_version: if_version,
                     },
                 )

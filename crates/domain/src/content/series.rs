@@ -32,7 +32,8 @@ pub struct SeriesSnapshot {
     pub name: String,
     pub slug: String,
     pub description: Option<String>,
-    pub cover: Option<String>,
+    /// 封面所引用的媒体资产（None = 无封面）。与 Post 封面同一套引用规则。
+    pub cover_media_id: Option<Uuid>,
     pub version: i64,
     pub created_at: OffsetDateTime,
     pub updated_at: OffsetDateTime,
@@ -57,7 +58,7 @@ impl Series {
                 name: normalize_name(name)?,
                 slug: slug.into_string(),
                 description: normalize_description(description)?,
-                cover: None,
+                cover_media_id: None,
                 version: 1,
                 created_at: now,
                 updated_at: now,
@@ -85,20 +86,29 @@ impl Series {
         self.snapshot.version
     }
 
-    /// 改名/改描述：返回是否存在实际变化（决定 version 是否 +1）。
+    /// 改名/改描述/改封面：返回是否存在实际变化（决定 version 是否 +1）。
     /// slug 创建后不可修改。
+    ///
+    /// 封面是三态：`None` 不修改；`Some(None)` 移除；`Some(Some(id))` 设置。
+    /// 资产的存在性与 `ready` 状态由保存事务内的引用校验兜底，聚合不查库。
     pub fn update(
         &mut self,
         name: String,
         description: Option<String>,
+        cover_media_id: Option<Option<Uuid>>,
     ) -> Result<bool, SeriesError> {
         let name = normalize_name(name)?;
         let description = normalize_description(description)?;
-        if name == self.snapshot.name && description == self.snapshot.description {
+        let cover = cover_media_id.unwrap_or(self.snapshot.cover_media_id);
+        if name == self.snapshot.name
+            && description == self.snapshot.description
+            && cover == self.snapshot.cover_media_id
+        {
             return Ok(false);
         }
         self.snapshot.name = name;
         self.snapshot.description = description;
+        self.snapshot.cover_media_id = cover;
         Ok(true)
     }
 }
@@ -178,18 +188,51 @@ mod tests {
     fn update_reports_change_atomically() {
         let mut s = series();
         assert!(
-            !s.update("Rust 入门".into(), Some("从零开始".into()))
+            !s.update("Rust 入门".into(), Some("从零开始".into()), None)
                 .unwrap()
         );
-        assert!(s.update(" Rust 进阶 ".into(), None).unwrap());
+        assert!(s.update(" Rust 进阶 ".into(), None, None).unwrap());
         let snap = s.snapshot();
         assert_eq!(snap.name, "Rust 进阶");
         assert_eq!(snap.description, None);
         let before = s.snapshot();
         assert_eq!(
-            s.update("长".repeat(201), None).unwrap_err(),
+            s.update("长".repeat(201), None, None).unwrap_err(),
             SeriesError::NameTooLong
         );
         assert_eq!(s.snapshot(), before, "失败不留部分修改");
+    }
+
+    #[test]
+    fn cover_is_three_state_and_counts_as_a_change() {
+        let mut s = series();
+        let cover = Uuid::now_v7();
+        // None = 不修改：封面保持为空，同值不报告变化。
+        assert!(
+            !s.update("Rust 入门".into(), Some("从零开始".into()), None)
+                .unwrap()
+        );
+        assert_eq!(s.snapshot().cover_media_id, None);
+        // Some(Some(id)) = 设置。
+        assert!(
+            s.update(
+                "Rust 入门".into(),
+                Some("从零开始".into()),
+                Some(Some(cover))
+            )
+            .unwrap()
+        );
+        assert_eq!(s.snapshot().cover_media_id, Some(cover));
+        // 仅封面变化也算变化。
+        assert!(
+            s.update("Rust 入门".into(), Some("从零开始".into()), Some(None))
+                .unwrap()
+        );
+        assert_eq!(s.snapshot().cover_media_id, None);
+        // 幂等：同值不再报告变化。
+        assert!(
+            !s.update("Rust 入门".into(), Some("从零开始".into()), Some(None))
+                .unwrap()
+        );
     }
 }

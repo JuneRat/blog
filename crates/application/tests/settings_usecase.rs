@@ -106,6 +106,7 @@ fn fallback() -> SiteInfo {
     SiteInfo {
         title: "环境变量标题".into(),
         description: "环境变量描述".into(),
+        logo_url: None,
     }
 }
 
@@ -113,6 +114,7 @@ fn stored(title: Option<&str>, description: Option<&str>) -> SiteSettingsValue {
     SiteSettingsValue {
         title: title.map(str::to_string),
         description: description.map(str::to_string),
+        logo_media_id: None,
     }
 }
 
@@ -120,6 +122,7 @@ fn cmd(title: &str, description: &str, expected_version: Option<i64>) -> SaveSit
     SaveSiteSettingsCmd {
         title: title.into(),
         description: description.into(),
+        logo_media_id: None,
         expected_version,
     }
 }
@@ -141,6 +144,8 @@ async fn read_falls_back_to_assembly_when_not_configured() {
         SiteSettingsView {
             title: "环境变量标题".into(),
             description: "环境变量描述".into(),
+            logo_media_id: None,
+            logo_url: None,
             source: SiteSettingsSource::Fallback,
             version: 0,
         }
