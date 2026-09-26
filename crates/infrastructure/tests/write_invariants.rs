@@ -6,7 +6,7 @@ use application::error::UseCaseError;
 use application::ports::{MediaRepository, PageRepository, PostRepository};
 use domain::content::{Page, PagePatch, Post, PostPatch, Slug, Visibility};
 use domain::identity::UserId;
-use domain::media::{ImageFormat, ImageInfo, Media, MediaStatus, MediaTransition};
+use domain::media::{ImageFormat, ImageInfo, Media};
 use infrastructure::{PostgresMediaRepository, PostgresPageRepository, PostgresPostRepository};
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -157,7 +157,7 @@ async fn body_budget_rejects_create_edit_and_publish_before_database_changes() {
             .unwrap(),
         before_page
     );
-    let refs: i64 = sqlx::query_scalar("SELECT count(*) FROM content_media_refs")
+    let refs: i64 = sqlx::query_scalar("SELECT count(*) FROM media_refs")
         .fetch_one(&pool)
         .await
         .unwrap();
@@ -166,82 +166,49 @@ async fn body_budget_rejects_create_edit_and_publish_before_database_changes() {
 }
 
 #[tokio::test]
-async fn media_transition_matrix_matches_aggregate_and_conditional_writes() {
+async fn media_trash_restore_matches_aggregate_and_version_checks() {
     let pool = common::fresh_database("blog_test_media_transitions").await;
     let owner = common::seed_user(&pool, "media_rules").await;
     let repo = PostgresMediaRepository::new(pool.clone());
-    let now = OffsetDateTime::UNIX_EPOCH;
-    for action in [
-        MediaTransition::Ready,
-        MediaTransition::RequestDeletion,
-        MediaTransition::ConfirmDeleted,
-        MediaTransition::AbandonStaged,
-    ] {
-        for status in [
-            MediaStatus::Staged,
-            MediaStatus::Ready,
-            MediaStatus::PendingDeletion,
-            MediaStatus::Deleted,
-        ] {
-            let id = Uuid::now_v7();
-            let media = Media::stage(
-                id,
-                owner,
-                format!("objects/{id}.png"),
-                "test.png",
-                ImageInfo::new(ImageFormat::Png, 1, 1).unwrap(),
-                1,
-                "a".repeat(64),
-                now,
-            )
+    let now = OffsetDateTime::now_utc();
+    let id = Uuid::now_v7();
+    let mut media = Media::uploaded(
+        id,
+        Some(owner),
+        format!("objects/{id}.png"),
+        "test.png",
+        ImageInfo::new(ImageFormat::Png, 1, 1).unwrap(),
+        1,
+        "a".repeat(64),
+        now,
+    )
+    .unwrap();
+    repo.insert(&media, Some(owner)).await.unwrap();
+    for deleted in [true, true, false, false, true] {
+        let version = media.version();
+        let changed = media.set_deleted(deleted, now);
+        let result = repo
+            .set_deleted(id, version, deleted, now, Some(owner))
+            .await
             .unwrap();
-            repo.insert_staged(&media).await.unwrap();
-            sqlx::query("UPDATE media_assets SET status=$2 WHERE id=$1")
-                .bind(id)
-                .bind(status.as_str())
-                .execute(&pool)
-                .await
-                .unwrap();
-            let mut aggregate =
-                Media::reconstitute(repo.find_by_id(id).await.unwrap().unwrap()).unwrap();
-            let result = match action {
-                MediaTransition::Ready => aggregate.mark_ready(now),
-                MediaTransition::RequestDeletion => aggregate.mark_pending_deletion(now),
-                MediaTransition::ConfirmDeleted => aggregate.mark_deleted(now),
-                MediaTransition::AbandonStaged => aggregate.abandon_staged(now),
-            };
-            let expected = action.apply(status);
-            assert_eq!(result.is_ok(), expected.is_ok());
-            match action {
-                MediaTransition::Ready => {
-                    repo.mark_ready(id, now).await.unwrap();
-                }
-                MediaTransition::RequestDeletion => {
-                    repo.begin_delete(id, 1, now).await.unwrap();
-                }
-                MediaTransition::ConfirmDeleted => {
-                    repo.confirm_deleted(id, now).await.unwrap();
-                }
-                MediaTransition::AbandonStaged => {
-                    repo.claim_abandoned_staged(now + time::Duration::seconds(1), now, 100)
-                        .await
-                        .unwrap();
-                }
+        assert_eq!(
+            result,
+            if changed {
+                application::ports::MediaChangeOutcome::Updated
+            } else {
+                application::ports::MediaChangeOutcome::Unchanged
             }
-            let stored = repo.find_by_id(id).await.unwrap().unwrap();
-            assert_eq!(
-                stored.status,
-                expected.unwrap_or(status),
-                "{status:?} {action:?}"
-            );
-            assert_eq!(stored, aggregate.snapshot(), "{status:?} {action:?}");
-            // Keep each matrix case independent from the batch reclaimer.
-            sqlx::query("DELETE FROM media_assets WHERE id=$1")
-                .bind(id)
-                .execute(&pool)
+        );
+        assert_eq!(
+            repo.find_by_id(id).await.unwrap().unwrap(),
+            media.snapshot()
+        );
+        assert_eq!(
+            repo.set_deleted(id, version - 1, !deleted, now, Some(owner))
                 .await
-                .unwrap();
-        }
+                .unwrap(),
+            application::ports::MediaChangeOutcome::StaleVersion
+        );
     }
     pool.close().await;
 }

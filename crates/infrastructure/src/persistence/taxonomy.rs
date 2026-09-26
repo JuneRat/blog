@@ -761,6 +761,7 @@ fn series_from_row(
 impl SeriesRepository for PostgresSeriesRepository {
     async fn insert(&self, aggregate: &domain::content::Series) -> Result<(), UseCaseError> {
         let snapshot = aggregate.snapshot();
+        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
         sqlx::query(
             "INSERT INTO series (id, name, slug, description, cover_media_id, version, created_at, \
              updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
@@ -773,10 +774,17 @@ impl SeriesRepository for PostgresSeriesRepository {
         .bind(snapshot.version)
         .bind(snapshot.created_at)
         .bind(snapshot.updated_at)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(map_sqlx_error)?;
-        Ok(())
+        sync_media_refs(
+            &mut tx,
+            MediaContentKind::Series,
+            snapshot.id,
+            &media_ids_for(&[], snapshot.cover_media_id),
+        )
+        .await?;
+        tx.commit().await.map_err(map_sqlx_error)
     }
 
     async fn find_by_slug(
@@ -846,7 +854,7 @@ impl SeriesRepository for PostgresSeriesRepository {
             return Ok(None);
         };
         let snapshot = series_from_row(&row)?;
-        // 系列封面的公开来源引用必须与列同事务固化：引用表是删除保护的唯一判据。
+        // 系列封面与引用同事务固化，保留站内使用统计与物理清理保护。
         sync_media_refs(
             &mut tx,
             MediaContentKind::Series,

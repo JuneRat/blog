@@ -21,12 +21,13 @@ use axum::http::{Request, StatusCode, header};
 use axum::middleware;
 use http_body_util::BodyExt;
 use infrastructure::{
-    InMemoryLoginThrottle, InMemoryOAuthAttemptStore, InMemorySessionStore,
-    PostgresCategoryRepository, PostgresOAuthAccountStore, PostgresOAuthConfigStore,
-    PostgresPageRepository, PostgresPostRepository, PostgresRbacStore, PostgresTagRepository,
+    InMemoryLoginThrottle, InMemoryOAuthAttemptStore, PostgresCategoryRepository,
+    PostgresOAuthAccountStore, PostgresOAuthConfigStore, PostgresPageRepository,
+    PostgresPostRepository, PostgresRbacStore, PostgresSessionStore, PostgresTagRepository,
     PostgresUserRepository, SystemClock, ThrottleConfig,
 };
 use interfaces::http_auth::{AdminState, AuthState, admin_router, auth_router};
+use interfaces::http_identity::identity_router;
 use interfaces::http_support::request_context;
 use sqlx::PgPool;
 use tower::ServiceExt;
@@ -119,7 +120,8 @@ async fn fresh_stack_with(throttle_config: ThrottleConfig) -> Stack {
         .await
         .unwrap();
 
-    let sessions: Arc<dyn SessionStore> = Arc::new(InMemorySessionStore::with_defaults());
+    let sessions: Arc<dyn SessionStore> =
+        Arc::new(PostgresSessionStore::with_defaults(pool.clone()));
     let accounts: Arc<dyn OAuthAccountStore> =
         Arc::new(PostgresOAuthAccountStore::new(pool.clone()));
     let passwords = common::password_interactor_with_throttle(
@@ -229,6 +231,7 @@ async fn fresh_stack_with(throttle_config: ThrottleConfig) -> Stack {
         secure_cookies: false,
     };
     let router = auth_router(auth_state)
+        .merge(identity_router(admin_state.clone()))
         .merge(admin_router(admin_state))
         .layer(middleware::from_fn(request_context));
 
@@ -385,6 +388,99 @@ async fn password_login_issues_session_and_me_resolves_actor() {
             .iter()
             .any(|p| p == "post.create")
     );
+}
+
+#[tokio::test]
+async fn owner_can_edit_profile_keep_session_and_log_out() {
+    let _g = SERIAL.lock().await;
+    let stack = fresh_stack().await;
+    stack
+        .roles
+        .assign_to_username(&Actor::bootstrap_cli(), "sun", "owner")
+        .await
+        .unwrap();
+    let (status, headers, _) = login(&stack, PASSWORD).await;
+    assert_eq!(status, StatusCode::OK);
+    let cookie = session_cookie(&headers).unwrap();
+    let (_, profile) = me(&stack, &cookie).await;
+    assert!(
+        profile["permissions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p == "ownership.manage")
+    );
+    let csrf = profile["csrf_token"].as_str().unwrap();
+    let version = profile["version"].as_i64().unwrap();
+    let revision: i64 = sqlx::query_scalar("SELECT auth_version FROM users WHERE id=$1")
+        .bind(stack.user_id)
+        .fetch_one(&stack.pool)
+        .await
+        .unwrap();
+    let body = serde_json::json!({
+        "display_name": "新的展示名", "bio": "个人简介", "expected_version": version,
+    });
+    let cookie_header = format!("blog_session={cookie}");
+    let (status, _, _) = request(
+        &stack.router,
+        "PUT",
+        "/api/admin/v1/me/profile",
+        &[("cookie", &cookie_header)],
+        Some(body.clone()),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "通用管理写入口拒绝缺失的 CSRF"
+    );
+    let (status, _, saved) = request(
+        &stack.router,
+        "PUT",
+        "/api/admin/v1/me/profile",
+        &[("cookie", &cookie_header), ("x-csrf-token", csrf)],
+        Some(body.clone()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!(saved["version"], version + 1);
+    let (status, current) = me(&stack, &cookie).await;
+    assert_eq!(status, StatusCode::OK, "资料编辑不撤销会话");
+    assert_eq!(current["display_name"], "新的展示名");
+    assert_eq!(current["bio"], "个人简介");
+    let current_revision: i64 = sqlx::query_scalar("SELECT auth_version FROM users WHERE id=$1")
+        .bind(stack.user_id)
+        .fetch_one(&stack.pool)
+        .await
+        .unwrap();
+    assert_eq!(current_revision, revision);
+    let (status, _, _) = request(
+        &stack.router,
+        "PUT",
+        "/api/admin/v1/me/profile",
+        &[("cookie", &cookie_header), ("x-csrf-token", csrf)],
+        Some(body),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "旧资料版本拒绝覆盖");
+    let audits: Vec<serde_json::Value> = sqlx::query_scalar(
+        "SELECT metadata FROM audit_logs WHERE actor_id=$1 AND action='user.profile.update'",
+    )
+    .bind(stack.user_id)
+    .fetch_all(&stack.pool)
+    .await
+    .unwrap();
+    assert_eq!(audits, vec![serde_json::json!({"version": version + 1})]);
+    let (status, _, _) = request(
+        &stack.router,
+        "POST",
+        "/auth/logout",
+        &[("cookie", &cookie_header), ("x-csrf-token", csrf)],
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    assert_eq!(me(&stack, &cookie).await.0, StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]
@@ -630,10 +726,7 @@ async fn client_address_dimension_locks_independently_of_username() {
 
 /// 跨进程改密必须让运行中服务的旧会话失效。
 ///
-/// `blog user passwd` 是**另一个进程**，它调用 `revoke_all_for_user` 只会清空
-/// 自己那份空的内存存储，对服务进程内的会话是空操作。真正生效的是数据库里的
-/// `users.version`：会话签发时绑定它，校验时比对。这里直接改版本号来模拟
-/// 「别处改了身份材料、但没碰到本进程内存」，不借助任何内存撤销。
+/// 认证版本由数据库统一判定；即使没有物理删除会话行，旧快照也不得继续使用。
 #[tokio::test]
 async fn session_is_invalidated_by_out_of_process_identity_change() {
     let _g = SERIAL.lock().await;
@@ -644,8 +737,7 @@ async fn session_is_invalidated_by_out_of_process_identity_change() {
     let (status, _) = me(&stack, &cookie).await;
     assert_eq!(status, StatusCode::OK);
 
-    // 只动数据库：服务进程的内存会话仍在，撤销动作从未在这个进程里发生。
-    sqlx::query("UPDATE users SET version = version + 1 WHERE id = $1")
+    sqlx::query("UPDATE users SET auth_version = auth_version + 1 WHERE id = $1")
         .bind(stack.user_id)
         .execute(&stack.pool)
         .await
@@ -659,9 +751,9 @@ async fn session_is_invalidated_by_out_of_process_identity_change() {
     );
 }
 
-/// 角色变更同样递增 users.version：授权变更即时生效，无需等待会话过期。
+/// 同一个会话逐次读取最新角色权限，角色变更不撤销登录。
 #[tokio::test]
-async fn role_change_invalidates_existing_sessions() {
+async fn role_change_updates_permissions_without_invalidating_session() {
     let _g = SERIAL.lock().await;
     let stack = fresh_stack().await;
 
@@ -669,24 +761,14 @@ async fn role_change_invalidates_existing_sessions() {
     let cookie = session_cookie(&headers).unwrap();
     assert_eq!(me(&stack, &cookie).await.0, StatusCode::OK);
 
-    // 走真实用例（不触碰内存会话存储），只改数据库里的角色与版本号。
+    // 走真实用例修改角色，用原 cookie 验证权限立即更新。
     stack
         .roles
         .assign_to_username(&Actor::bootstrap_cli(), "sun", "editor")
         .await
         .unwrap();
 
-    assert_eq!(
-        me(&stack, &cookie).await.0,
-        StatusCode::UNAUTHORIZED,
-        "角色变更后旧会话必须失效"
-    );
-
-    // 重新登录即可拿到新权限。
-    let (status, headers, _) = login(&stack, PASSWORD).await;
-    assert_eq!(status, StatusCode::OK);
-    let fresh = session_cookie(&headers).unwrap();
-    let (status, body) = me(&stack, &fresh).await;
+    let (status, body) = me(&stack, &cookie).await;
     assert_eq!(status, StatusCode::OK);
     assert!(
         body["permissions"]
@@ -694,7 +776,21 @@ async fn role_change_invalidates_existing_sessions() {
             .unwrap()
             .iter()
             .any(|p| p == "post.update_any"),
-        "新会话应带上 editor 权限：{body}"
+        "原会话应带上 editor 权限：{body}"
+    );
+    stack
+        .roles
+        .remove_from_username(&Actor::bootstrap_cli(), "sun", "editor")
+        .await
+        .unwrap();
+    let (status, body) = me(&stack, &cookie).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        !body["permissions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p == "post.update_any")
     );
 }
 

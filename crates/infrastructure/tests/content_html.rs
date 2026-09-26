@@ -158,7 +158,7 @@ async fn media_failure_and_stale_version_leave_source_html_and_refs_unchanged() 
     let pool = database().await;
     let author = common::seed_user(&pool, "writer").await;
     let media_id = Uuid::now_v7();
-    sqlx::query("INSERT INTO media_assets(id,owner_id,storage_key,original_name,mime,byte_size,width,height,checksum_sha256,status) VALUES($1,$2,$3,'image.png','image/png',1,1,1,$4,'ready')")
+    sqlx::query("INSERT INTO media(id,uploaded_by,path,filename,mime_type,size,width,height,checksum_sha256) VALUES($1,$2,$3,'image.png','image/png',1,1,1,$4)")
         .bind(media_id).bind(author).bind(media_id.to_string()).bind("a".repeat(64))
         .execute(&pool).await.unwrap();
     let repo = PostgresPostRepository::new(pool.clone(), Arc::new(RenderingRuntime::default()));
@@ -197,7 +197,7 @@ async fn media_failure_and_stale_version_leave_source_html_and_refs_unchanged() 
     ));
     assert_eq!(stored(&pool, "posts", id).await, before);
     let references: Vec<Uuid> = sqlx::query_scalar(
-        "SELECT media_id FROM content_media_refs WHERE content_id=$1 ORDER BY media_id",
+        "SELECT media_id FROM media_refs WHERE source_type='post' AND source_id=$1 ORDER BY media_id",
     )
     .bind(id)
     .fetch_all(&pool)

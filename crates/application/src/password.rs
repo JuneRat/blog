@@ -143,11 +143,11 @@ impl PasswordInteractor {
             })
             .ok_or(UseCaseError::InvalidCredentials)?;
 
-        // 会话绑定读取到的 users.version：此后任何改密/改角色/软删除都会让它失效。
+        // 会话绑定读取到的 users.auth_version：此后改密/认证撤销/软删除都会让它失效。
         let token = self
             .deps
             .sessions
-            .create(current.user_id, current.version)
+            .create(current.user_id, current.auth_version)
             .await?;
         Ok(PasswordLogin {
             token,
@@ -234,7 +234,7 @@ impl PasswordInteractor {
             .users
             .find_by_id(actor.user_id.0)
             .await?
-            .filter(|user| user.deleted_at.is_none())
+            .filter(UserSnapshot::is_active)
             .ok_or(UseCaseError::Unauthenticated)?;
 
         let existing = self.deps.users.password_hash_of(actor.user_id.0).await?;
@@ -369,7 +369,7 @@ impl PasswordInteractor {
             .find_by_username(&normalized)
             .await?
             .ok_or_else(|| UseCaseError::NotFound(format!("用户 {normalized}")))?;
-        if user.deleted_at.is_some() {
+        if !user.is_active() {
             return Err(UseCaseError::Forbidden);
         }
         Ok(user)

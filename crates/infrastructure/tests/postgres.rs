@@ -38,10 +38,9 @@ async fn fresh_database() -> PgPool {
 /// 给用户绑定一个外部登录方式（“有效 Owner”判定要求至少一种登录方式）。
 async fn seed_binding(pool: &PgPool, user_id: uuid::Uuid) {
     sqlx::query(
-        "INSERT INTO oauth_accounts (id, user_id, provider, provider_user_id, created_at, updated_at) \
-         VALUES ($1, $2, 'https://idp.example', $3, now(), now())",
+        "INSERT INTO oauth_accounts (user_id, provider, subject) \
+         VALUES ($1, 'https://idp.example', $2)",
     )
-    .bind(uuid::Uuid::now_v7())
     .bind(user_id)
     .bind(format!("sub-{user_id}"))
     .execute(pool)
@@ -78,14 +77,14 @@ async fn migrations_create_core_tables() {
     let _g = SERIAL.lock().await;
     let pool = fresh_database().await;
 
-    // 13 张核心内容/身份表 + 媒体 2 张 + 持久会话 1 张 + 评论 3 张（docs/database-design.md）。
+    // 新初始基线：18 张业务表 + sessions。
     let count: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename <> '_sqlx_migrations'",
     )
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(count, 19, "13 张核心表 + 媒体 2 张 + 会话 1 张 + 评论 3 张");
+    assert_eq!(count, 19, "18 张业务表 + sessions");
 
     let tables: Vec<String> = sqlx::query_scalar(
         "SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename <> '_sqlx_migrations' ORDER BY tablename",
@@ -94,15 +93,15 @@ async fn migrations_create_core_tables() {
     .await
     .unwrap();
     let expected = [
+        "audit_logs",
         "categories",
-        "comment_settings",
         "comments",
-        "content_media_refs",
-        "media_assets",
+        "media",
+        "media_refs",
         "oauth_accounts",
         "pages",
         "permissions",
-        "post_comment_settings",
+        "post_series",
         "post_tags",
         "posts",
         "role_permissions",
@@ -117,6 +116,15 @@ async fn migrations_create_core_tables() {
     for t in expected {
         assert!(tables.iter().any(|x| x == t), "缺少表 {t}");
     }
+    infrastructure::migrate(&pool, "../../migrations/postgres")
+        .await
+        .unwrap();
+    let applied: Vec<i64> =
+        sqlx::query_scalar("SELECT version FROM _sqlx_migrations ORDER BY version")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(applied, vec![1], "只有一个基线，重复启动不重复迁移");
 }
 
 #[tokio::test]
@@ -548,7 +556,7 @@ async fn rbac_registry_sync_is_idempotent() {
         .unwrap();
 
     let versions_after_first: Vec<(String, i64)> =
-        sqlx::query_as("SELECT slug, version FROM roles ORDER BY slug")
+        sqlx::query_as("SELECT code, version FROM roles ORDER BY code")
             .fetch_all(&pool)
             .await
             .unwrap();
@@ -562,7 +570,7 @@ async fn rbac_registry_sync_is_idempotent() {
         .unwrap();
 
     let versions_after_second: Vec<(String, i64)> =
-        sqlx::query_as("SELECT slug, version FROM roles ORDER BY slug")
+        sqlx::query_as("SELECT code, version FROM roles ORDER BY code")
             .fetch_all(&pool)
             .await
             .unwrap();
@@ -583,7 +591,7 @@ async fn rbac_registry_sync_is_idempotent() {
 
     let author_perms: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM role_permissions rp \
-         JOIN roles r ON r.id = rp.role_id WHERE r.slug = 'author'",
+         JOIN roles r ON r.id = rp.role_id WHERE r.code = 'author'",
     )
     .fetch_one(&pool)
     .await
@@ -596,7 +604,7 @@ async fn rbac_registry_sync_is_idempotent() {
     // Owner 持有全部已注册权限（含 oauth.manage / ownership.manage）。
     let owner_perms: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM role_permissions rp \
-         JOIN roles r ON r.id = rp.role_id WHERE r.slug = 'owner'",
+         JOIN roles r ON r.id = rp.role_id WHERE r.code = 'owner'",
     )
     .fetch_one(&pool)
     .await
@@ -613,7 +621,7 @@ async fn rbac_registry_sync_is_idempotent() {
     let err = rbac.permissions_of_role("ghost").await.unwrap_err();
     assert!(matches!(err, application::error::UseCaseError::NotFound(_)));
 
-    let roles: Vec<String> = sqlx::query_scalar("SELECT slug FROM roles ORDER BY slug")
+    let roles: Vec<String> = sqlx::query_scalar("SELECT code FROM roles ORDER BY code")
         .fetch_all(&pool)
         .await
         .unwrap();
@@ -703,7 +711,7 @@ async fn rbac_last_owner_protection() {
         "SELECT count(*) FROM user_roles ur \
          JOIN roles r ON r.id = ur.role_id \
          JOIN users u ON u.id = ur.user_id \
-         WHERE r.slug = 'owner' AND u.deleted_at IS NULL",
+         WHERE r.code = 'owner' AND u.deleted_at IS NULL",
     )
     .fetch_one(&pool)
     .await
@@ -914,7 +922,7 @@ async fn concurrent_last_owner_removal_keeps_at_least_one_loginable_owner() {
         "SELECT count(*) FROM user_roles ur \
          JOIN roles r ON r.id = ur.role_id \
          JOIN users u ON u.id = ur.user_id \
-         WHERE r.slug = 'owner' AND u.deleted_at IS NULL \
+         WHERE r.code = 'owner' AND u.deleted_at IS NULL \
            AND EXISTS (SELECT 1 FROM oauth_accounts oa WHERE oa.user_id = u.id)",
     )
     .fetch_one(&pool)

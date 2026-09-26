@@ -58,13 +58,13 @@ async fn session_validate_refreshes_idle_and_respects_absolute_expiry() {
 }
 
 #[tokio::test]
-async fn session_record_carries_issuing_user_version() {
+async fn session_record_carries_issuing_auth_version() {
     let store = InMemorySessionStore::with_defaults();
     let user = Uuid::now_v7();
     let token = store.create(user, 42).await.unwrap();
     let record = store.validate(&token).await.unwrap().expect("会话有效");
     assert_eq!(
-        record.user_version, 42,
+        record.auth_version, 42,
         "会话必须记住签发时的 users.version，供跨进程改密/撤权比对"
     );
 }

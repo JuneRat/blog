@@ -366,7 +366,7 @@ async fn new_interactor_over_same_store_keeps_configuration() {
 }
 
 // ---------------------------------------------------------------------------
-// 站点 logo 的媒体附着归属校验
+// 站点 logo 的媒体引用可用性
 // ---------------------------------------------------------------------------
 
 fn logo_cmd(logo: uuid::Uuid, expected_version: Option<i64>) -> SaveSiteSettingsCmd {
@@ -378,70 +378,50 @@ fn logo_cmd(logo: uuid::Uuid, expected_version: Option<i64>) -> SaveSiteSettings
     }
 }
 
-/// 他人私有图片不能附着为站点 logo：logo 引用是无条件公开来源。
-/// admin_actor 只持 settings.manage（无 media.read），验证拒绝路径。
 #[tokio::test]
-async fn site_logo_of_another_users_private_image_is_rejected() {
+async fn site_logo_accepts_shared_image_without_media_read_permission() {
     let store = Arc::new(FakeSettingsStore::new());
     let guard = Arc::new(common::FakeMediaGuard::new());
     let settings = interactor_with_guard(store, guard.clone());
-
-    let foreign = uuid::Uuid::now_v7();
-    let owner = uuid::Uuid::now_v7(); // 任何非本人（Uuid::nil）的上传者
-    guard.allow_private(foreign, owner);
-
-    let err = settings
-        .save_site(&admin_actor(), logo_cmd(foreign, Some(0)))
+    let image = uuid::Uuid::now_v7();
+    guard.allow(image);
+    settings
+        .save_site(&admin_actor(), logo_cmd(image, Some(0)))
         .await
-        .unwrap_err();
-    assert!(matches!(err, UseCaseError::MediaNotAttachable), "{err:?}");
-
-    // 行未写入：读取仍是回退值，版本 0。
-    let view = settings.site_view(&admin_actor()).await.unwrap();
-    assert_eq!(view.version, 0);
+        .unwrap();
+    guard.trash(image);
+    settings
+        .save_site(&admin_actor(), logo_cmd(image, Some(1)))
+        .await
+        .unwrap();
+    assert_eq!(
+        settings
+            .site_view(&admin_actor())
+            .await
+            .unwrap()
+            .logo_media_id,
+        Some(image)
+    );
+    assert!(matches!(
+        settings
+            .save_site(&admin_actor(), logo_cmd(uuid::Uuid::now_v7(), Some(1)))
+            .await,
+        Err(UseCaseError::Invalid(_))
+    ));
 }
 
-/// 本人资产可保存；**换成**他人私有图片才被拒——保存其他字段
-/// （重复提交当前 logo）不受历史引用影响（幂等路径不重新授权）。
 #[tokio::test]
-async fn site_logo_change_to_foreign_private_image_is_rejected() {
-    let store = Arc::new(FakeSettingsStore::new());
+async fn site_logo_rejects_trashed_image_as_a_new_reference() {
     let guard = Arc::new(common::FakeMediaGuard::new());
-    let settings = interactor_with_guard(store, guard.clone());
-
-    let own = uuid::Uuid::now_v7();
-    guard.allow_private(own, uuid::Uuid::nil()); // admin_actor 的 user_id 是 nil
-    settings
-        .save_site(&admin_actor(), logo_cmd(own, Some(0)))
-        .await
-        .unwrap();
-
-    // 幂等重存同一 logo：即使登记转为不利也不重新授权。
-    guard.allow(own, uuid::Uuid::now_v7(), false);
-    settings
-        .save_site(&admin_actor(), logo_cmd(own, Some(1)))
-        .await
-        .unwrap();
-
-    // 换成他人私有图片被拒，且不落库。
-    let foreign = uuid::Uuid::now_v7();
-    guard.allow_private(foreign, uuid::Uuid::now_v7());
-    let err = settings
-        .save_site(&admin_actor(), logo_cmd(foreign, Some(1)))
-        .await
-        .unwrap_err();
-    assert!(matches!(err, UseCaseError::MediaNotAttachable), "{err:?}");
-    let view = settings.site_view(&admin_actor()).await.unwrap();
-    assert_eq!(view.logo_media_id, Some(own));
-}
-
-/// 未知 logo 资产按「不存在或已不可用」拒绝。
-#[tokio::test]
-async fn site_logo_of_an_unknown_image_reports_invalid() {
-    let settings = interactor(Arc::new(FakeSettingsStore::new()));
-    let err = settings
-        .save_site(&admin_actor(), logo_cmd(uuid::Uuid::now_v7(), Some(0)))
-        .await
-        .unwrap_err();
-    assert!(matches!(err, UseCaseError::Invalid(_)), "{err:?}");
+    let image = uuid::Uuid::now_v7();
+    guard.allow(image);
+    guard.trash(image);
+    let settings = interactor_with_guard(Arc::new(FakeSettingsStore::new()), guard);
+    assert!(matches!(
+        settings
+            .save_site(&admin_actor(), logo_cmd(image, Some(0)))
+            .await,
+        Err(UseCaseError::Invalid(_))
+    ));
+    assert_eq!(settings.site_view(&admin_actor()).await.unwrap().version, 0);
 }

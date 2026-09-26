@@ -1,8 +1,23 @@
 //! 用户聚合、身份标识与资料值对象。
-//! `UserSnapshot::version` 是会话绑定的身份修订号，资料更新不能将其当作通用内容版本。
+//! 资料编辑 version 与会话认证 auth_version 分离。
 
 use time::OffsetDateTime;
 use uuid::Uuid;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UserStatus {
+    Active,
+    Disabled,
+}
+
+impl UserStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Disabled => "disabled",
+        }
+    }
+}
 
 /// 用户唯一标识。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -21,17 +36,25 @@ pub struct UserSnapshot {
     pub username: String,
     pub email: Option<String>,
     pub display_name: Option<String>,
+    pub bio: Option<String>,
+    pub status: UserStatus,
     /// 头像所引用的媒体资产（None = 无头像）。
     ///
-    /// 用户自助设置，因此没有版本前提；公开可读性由媒体库按「账号未软删除」
-    /// 实时判定，不由聚合缓存。
+    /// 媒体链接独立公开，不根据账号状态改变公开性。
     pub avatar_media_id: Option<Uuid>,
-    /// 身份修订号：供会话失效判定，不是资料编辑的通用乐观锁版本。
-    /// 凭据、角色及停用变更递增；头像修改不递增。
+    /// 资料及关联编辑的乐观锁版本。
     pub version: i64,
+    /// 认证撤销修订号；资料及角色变化不递增。
+    pub auth_version: i64,
     pub created_at: OffsetDateTime,
     pub updated_at: OffsetDateTime,
     pub deleted_at: Option<OffsetDateTime>,
+}
+
+impl UserSnapshot {
+    pub fn is_active(&self) -> bool {
+        self.status == UserStatus::Active && self.deleted_at.is_none()
+    }
 }
 
 #[derive(Debug, thiserror::Error, PartialEq)]
@@ -42,9 +65,9 @@ pub enum UserError {
     InvalidUsernameLength,
     #[error("username 只允许 ASCII 字母、数字、- 和 _")]
     InvalidUsernameChar,
-    #[error("email 格式不合法")]
+    #[error("email 格式不合法、超过 320 个字符或包含控制字符")]
     InvalidEmail,
-    #[error("display_name 不能为空白")]
+    #[error("display_name 须为 1-100 个字符、不能为空白或包含 NUL")]
     InvalidDisplayName,
 }
 
@@ -105,7 +128,7 @@ fn validate_username(username: &str) -> Result<(), UserError> {
 /// email 形状校验：`local@domain`，domain 的每个点分段都非空。
 /// 拒绝 `a@.com`、`a@b.`、`@b.com` 等。
 fn validate_email(email: &str) -> Result<(), UserError> {
-    if email.chars().any(|c| c.is_whitespace() || c.is_control()) {
+    if email.chars().count() > 320 || email.chars().any(|c| c.is_whitespace() || c.is_control()) {
         return Err(UserError::InvalidEmail);
     }
     let (local, domain) = email.split_once('@').ok_or(UserError::InvalidEmail)?;
@@ -114,6 +137,13 @@ fn validate_email(email: &str) -> Result<(), UserError> {
     }
     if domain.split('.').any(|label| label.is_empty()) {
         return Err(UserError::InvalidEmail);
+    }
+    Ok(())
+}
+
+fn validate_display_name(name: &str) -> Result<(), UserError> {
+    if name.trim().is_empty() || name.chars().count() > 100 || name.contains('\0') {
+        return Err(UserError::InvalidDisplayName);
     }
     Ok(())
 }
@@ -138,10 +168,8 @@ impl User {
             .map(Email::new)
             .transpose()?
             .map(Email::into_string);
-        if let Some(name) = display_name.as_deref()
-            && name.trim().is_empty()
-        {
-            return Err(UserError::InvalidDisplayName);
+        if let Some(name) = display_name.as_deref() {
+            validate_display_name(name)?;
         }
         Ok(Self {
             snapshot: UserSnapshot {
@@ -149,8 +177,11 @@ impl User {
                 username: username.into_string(),
                 email,
                 display_name,
+                bio: None,
+                status: UserStatus::Active,
                 avatar_media_id: None,
                 version: 1,
+                auth_version: 1,
                 created_at: now,
                 updated_at: now,
                 deleted_at: None,
@@ -165,7 +196,9 @@ impl User {
 
     /// Validate persisted structure without silently changing stored identity keys.
     pub fn reconstitute(snapshot: UserSnapshot) -> Result<Self, UserError> {
-        if Username::new(&snapshot.username)?.as_str() != snapshot.username || snapshot.version < 1
+        if Username::new(&snapshot.username)?.as_str() != snapshot.username
+            || snapshot.version < 1
+            || snapshot.auth_version < 1
         {
             return Err(UserError::InvalidSnapshot);
         }
@@ -174,12 +207,8 @@ impl User {
         {
             return Err(UserError::InvalidSnapshot);
         }
-        if snapshot
-            .display_name
-            .as_deref()
-            .is_some_and(|name| name.trim().is_empty())
-        {
-            return Err(UserError::InvalidDisplayName);
+        if let Some(name) = snapshot.display_name.as_deref() {
+            validate_display_name(name)?;
         }
         Ok(Self { snapshot })
     }
@@ -205,7 +234,24 @@ impl User {
     }
 
     pub fn is_active(&self) -> bool {
-        self.snapshot.deleted_at.is_none()
+        self.snapshot.is_active()
+    }
+
+    /// 更新本人展示资料；认证版本保持不变，编辑版本由事务提交维护。
+    pub fn edit_profile(
+        &mut self,
+        display_name: Option<String>,
+        bio: Option<String>,
+    ) -> Result<(), UserError> {
+        if let Some(name) = display_name.as_deref() {
+            validate_display_name(name)?;
+        }
+        if bio.as_deref().is_some_and(|text| text.contains('\0')) {
+            return Err(UserError::InvalidSnapshot);
+        }
+        self.snapshot.display_name = display_name;
+        self.snapshot.bio = bio;
+        Ok(())
     }
 }
 
@@ -215,6 +261,35 @@ mod tests {
 
     fn now() -> OffsetDateTime {
         OffsetDateTime::now_utc()
+    }
+
+    #[test]
+    fn profile_matches_database_character_limits() {
+        for character in ["a", "界"] {
+            let email = format!("{}@b.co", character.repeat(315));
+            assert!(Email::new(&email).is_ok());
+            assert_eq!(
+                Email::new(&format!("{character}{email}")),
+                Err(UserError::InvalidEmail)
+            );
+            assert!(User::new("sun", None, Some(character.repeat(100)), now()).is_ok());
+            let name = character.repeat(101);
+            assert_eq!(
+                User::new("sun", None, Some(name.clone()), now()).unwrap_err(),
+                UserError::InvalidDisplayName
+            );
+            let mut snapshot = User::new("sun", None, None, now()).unwrap().snapshot();
+            snapshot.display_name = Some(name);
+            assert_eq!(
+                User::reconstitute(snapshot).unwrap_err(),
+                UserError::InvalidDisplayName
+            );
+        }
+        assert_eq!(
+            User::new("sun", None, Some("a\0b".into()), now()).unwrap_err(),
+            UserError::InvalidDisplayName
+        );
+        assert_eq!(Email::new("a\0@b.co"), Err(UserError::InvalidEmail));
     }
 
     #[test]

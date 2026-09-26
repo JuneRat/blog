@@ -1,7 +1,6 @@
--- 当前迁移基线的结构参考，生成自 migrations/postgres/0001_initial_schema.sql。
--- 实际建库使用迁移入口；身份以外的业务适配进度见 docs/product-roadmap.md。
-
-BEGIN;
+-- PostgreSQL 18 初始基线：19 张表，仅用于空数据库。
+-- 旧迁移链已替换；已有旧库需显式重建，不执行就地升级或自动清库。
+-- SQLx 负责事务；目标规则见 docs/database-design.md。
 
 CREATE TABLE users (
     id              uuid PRIMARY KEY,
@@ -426,5 +425,3 @@ CREATE INDEX audit_logs_target_time_idx ON audit_logs (target_type, target_id, c
 -- 后台访问需授权，公开响应不泄露 IP/邮箱；目前没有按 IP 搜索/限流的专用索引。
 -- 保留期任务按 created_at 清理过期审计，或将过期 comments.ip_address 置 NULL。
 -- IP 清理保留评论正文、父子关系与审核状态，不把清理操作者的 IP 写回提交来源。
-
-COMMIT;

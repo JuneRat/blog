@@ -22,7 +22,7 @@ export const queryKeys = {
   series: () => ["series"] as const,
   users: () => ["users"] as const,
   roles: () => ["roles"] as const,
-  media: (page: number) => ["media", page] as const,
+  media: (page: number, trash = false) => ["media", page, trash] as const,
   /**
    * 媒体库**整族**前缀。
    *

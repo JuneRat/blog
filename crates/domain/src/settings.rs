@@ -38,7 +38,7 @@ pub struct SiteSettings {
     /// 站点 logo 引用的媒体资产（None = 无 logo）。
     ///
     /// 按用户确认的取舍，id 存进 settings.site 的 JSONB 值；引用行仍由
-    /// `content_media_refs` 承载，删除保护与公开来源以引用表为准。
+    /// `media_refs` 承载，用于使用统计及物理清理保护，不决定图片公开性。
     logo_media_id: Option<Uuid>,
 }
 

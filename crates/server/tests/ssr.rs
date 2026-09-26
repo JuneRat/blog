@@ -807,13 +807,13 @@ async fn paper_theme_functions_use_only_public_data() {
     assert!(page.contains("纸张主题页面"));
 }
 
-/// 在测试库里预置一张 `ready` 媒体资产：封面引用校验要求资产存在且可用。
-async fn seed_ready_media(pool: &PgPool, owner: uuid::Uuid) -> uuid::Uuid {
+/// 在测试库里预置一张可用媒体：封面引用校验要求资产存在且可用。
+async fn seed_media(pool: &PgPool, owner: uuid::Uuid) -> uuid::Uuid {
     let id = uuid::Uuid::now_v7();
     sqlx::query(
-        "INSERT INTO media_assets (id, owner_id, storage_key, original_name, mime, byte_size, \
-         width, height, checksum_sha256, status, version) \
-         VALUES ($1, $2, $3, 'cover.png', 'image/png', 16, 8, 8, $4, 'ready', 1)",
+        "INSERT INTO media (id, uploaded_by, path, filename, mime_type, size, \
+         width, height, checksum_sha256, version) \
+         VALUES ($1, $2, $3, 'cover.png', 'image/png', 16, 8, 8, $4, 1)",
     )
     .bind(id)
     .bind(owner)
@@ -831,7 +831,7 @@ async fn seed_ready_media(pool: &PgPool, owner: uuid::Uuid) -> uuid::Uuid {
 async fn post_cover_is_rendered_on_the_public_detail_page() {
     let _g = SERIAL.lock().await;
     let s = stack().await;
-    let cover = seed_ready_media(&s.pool, s.author.user_id.0).await;
+    let cover = seed_media(&s.pool, s.author.user_id.0).await;
 
     let mut command = cmd("with-cover", "带封面的文章");
     command.cover_media_id = Some(cover);
@@ -862,7 +862,7 @@ async fn post_cover_is_rendered_on_the_public_detail_page() {
 async fn series_cover_is_rendered_on_the_public_series_page() {
     let _g = SERIAL.lock().await;
     let s = stack().await;
-    let cover = seed_ready_media(&s.pool, s.author.user_id.0).await;
+    let cover = seed_media(&s.pool, s.author.user_id.0).await;
 
     sqlx::query(
         "INSERT INTO series (id, name, slug, cover_media_id, version) \
@@ -902,8 +902,8 @@ async fn series_cover_is_rendered_on_the_public_series_page() {
 async fn site_logo_and_author_avatar_are_rendered_on_public_pages() {
     let _g = SERIAL.lock().await;
     let s = stack().await;
-    let logo = seed_ready_media(&s.pool, s.author.user_id.0).await;
-    let avatar = seed_ready_media(&s.pool, s.author.user_id.0).await;
+    let logo = seed_media(&s.pool, s.author.user_id.0).await;
+    let avatar = seed_media(&s.pool, s.author.user_id.0).await;
 
     // 站点 logo：直接写 settings.site 值（渲染只读值，不依赖引用行）。
     sqlx::query(

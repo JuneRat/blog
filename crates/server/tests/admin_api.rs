@@ -98,9 +98,9 @@ impl SessionStore for CountingSessionStore {
     async fn create(
         &self,
         user_id: Uuid,
-        user_version: i64,
+        auth_version: i64,
     ) -> Result<String, application::error::UseCaseError> {
-        self.inner.create(user_id, user_version).await
+        self.inner.create(user_id, auth_version).await
     }
 
     async fn validate(
@@ -1158,8 +1158,7 @@ async fn revoked_role_takes_effect_on_existing_session() {
         .await
         .unwrap();
 
-    // 会话绑定签发时的 users.version；撤权递增版本，旧 cookie 立即被判为未登录。
-    // 这比「旧会话仍有效但权限变少」更强：撤权后不留可继续试探的会话。
+    // 原会话仍有效，逐次读取的权限已移除，因此读取他人文章立即被拒绝。
     let (status, body) = api(
         &stack.router,
         "GET",
@@ -1171,21 +1170,12 @@ async fn revoked_role_takes_effect_on_existing_session() {
     .await;
     assert_eq!(
         status,
-        StatusCode::UNAUTHORIZED,
-        "撤权后旧会话必须立即失效：{body}"
+        StatusCode::FORBIDDEN,
+        "撤权后原会话不能继续读取他人文章：{body}"
     );
 
     let (status, _, body) = request_me(&stack.router, &editor_cookie).await;
-    assert_eq!(
-        status,
-        StatusCode::UNAUTHORIZED,
-        "撤权后 /me 不再接受旧会话：{body}"
-    );
-
-    // 重新登录：会话有效，但权限已按新角色集合计算（不再有 any 权限）。
-    let (editor_cookie, _) = login_as(&stack.router, &stack.idp, "editor").await;
-    let (status, _, body) = request_me(&stack.router, &editor_cookie).await;
-    assert_eq!(status, StatusCode::OK, "重新登录应拿到有效会话：{body}");
+    assert_eq!(status, StatusCode::OK, "撤权后 /me 仍接受原会话：{body}");
     assert!(
         !body.contains("post.read_any"),
         "撤权后 /me 不应再返回 any 权限：{body}"
@@ -1203,7 +1193,7 @@ async fn revoked_role_takes_effect_on_existing_session() {
     assert_eq!(
         status,
         StatusCode::FORBIDDEN,
-        "撤权并重新登录后仍读不到他人文章：{body}"
+        "继续使用原会话也读不到他人文章：{body}"
     );
 }
 
@@ -1744,10 +1734,9 @@ async fn last_loginable_owner_is_protected_with_a_dedicated_code() {
     .await
     .unwrap();
     sqlx::query(
-        "INSERT INTO oauth_accounts (id, user_id, provider, provider_user_id, created_at, updated_at) \
-         VALUES ($1, $2, 'https://idp.example', 'sub-owner2', now(), now())",
+        "INSERT INTO oauth_accounts (user_id, provider, subject) \
+         VALUES ($1, 'https://idp.example', 'sub-owner2')",
     )
-    .bind(Uuid::now_v7())
     .bind(second)
     .execute(&stack.pool)
     .await
@@ -1820,10 +1809,9 @@ async fn last_owner_flag_is_global_across_pages() {
         .await
         .unwrap();
         sqlx::query(
-            "INSERT INTO oauth_accounts (id, user_id, provider, provider_user_id, created_at, updated_at) \
-             VALUES ($1, $2, 'https://idp.example', $3, now(), now())",
+            "INSERT INTO oauth_accounts (user_id, provider, subject) \
+             VALUES ($1, 'https://idp.example', $2)",
         )
-        .bind(Uuid::now_v7())
         .bind(id)
         .bind(external)
         .execute(&stack.pool)
@@ -1859,10 +1847,10 @@ async fn last_owner_flag_is_global_across_pages() {
     );
 }
 
-/// 通过账号 API 改角色会递增 `users.version`，目标用户的旧会话立即失效；
+/// 通过账号 API 改角色只递增编辑版本，目标用户的原会话读取最新权限；
 /// 重复分配同一角色是幂等的，不应把用户意外登出。
 #[tokio::test]
-async fn role_change_through_api_invalidates_the_target_session() {
+async fn role_change_through_api_updates_the_target_permissions() {
     let _g = SERIAL.lock().await;
     let stack = fresh_stack().await;
 
@@ -1883,19 +1871,10 @@ async fn role_change_through_api_invalidates_the_target_session() {
     .await;
     assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
 
-    // 授权集合变化递增目标用户版本：旧 cookie 立即被判为未登录。
+    // 原 cookie 保持有效，权限立即更新。
     let (status, _, body) = request_me(&stack.router, &author_cookie).await;
-    assert_eq!(
-        status,
-        StatusCode::UNAUTHORIZED,
-        "改角色后目标用户旧会话必须失效：{body}"
-    );
-
-    // 重新登录：拿到新角色的权限。
-    let (author_cookie, _) = login_as(&stack.router, &stack.idp, "author").await;
-    let (status, _, body) = request_me(&stack.router, &author_cookie).await;
-    assert_eq!(status, StatusCode::OK, "{body}");
-    assert!(body.contains("post.read_any"), "重新登录应带新权限：{body}");
+    assert_eq!(status, StatusCode::OK, "改角色后原会话仍有效：{body}");
+    assert!(body.contains("post.read_any"), "原会话应带新权限：{body}");
 
     // 幂等重复分配：不再递增版本，会话保持有效。
     let (status, _) = api(
@@ -1915,7 +1894,7 @@ async fn role_change_through_api_invalidates_the_target_session() {
         "重复分配同一角色不应撤销会话：{body}"
     );
 
-    // 移除角色 → 会话再次失效。
+    // 移除角色立即收回权限，保持登录。
     let (status, _) = api(
         &stack.router,
         "DELETE",
@@ -1927,17 +1906,16 @@ async fn role_change_through_api_invalidates_the_target_session() {
     .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
     let (status, _, body) = request_me(&stack.router, &author_cookie).await;
-    assert_eq!(
-        status,
-        StatusCode::UNAUTHORIZED,
-        "移除角色后旧会话必须失效：{body}"
+    assert_eq!(status, StatusCode::OK, "移除角色保持登录：{body}");
+    assert!(
+        !body.contains("post.read_any"),
+        "原会话不能继续使用已移除权限：{body}"
     );
 }
 
-/// 对自己改角色同样递增版本：操作成功，但本人当前会话随之下线。
-/// 界面据此在成功后重新读 `/me`，而不是继续显示已失效的登录态。
+/// 对自己改角色同样只递增编辑版本：重新读 `/me` 获得新授权，保持登录。
 #[tokio::test]
-async fn self_role_change_logs_the_actor_out() {
+async fn self_role_change_preserves_the_actor_session() {
     let _g = SERIAL.lock().await;
     let stack = fresh_stack().await;
 
@@ -1955,11 +1933,7 @@ async fn self_role_change_logs_the_actor_out() {
     assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
 
     let (status, _, body) = request_me(&stack.router, &owner_cookie).await;
-    assert_eq!(
-        status,
-        StatusCode::UNAUTHORIZED,
-        "改自己的角色也会让本人会话失效：{body}"
-    );
+    assert_eq!(status, StatusCode::OK, "改自己的角色保持会话有效：{body}");
 }
 
 // ---------------------------------------------------------------------------
@@ -2801,25 +2775,25 @@ async fn series_members_requires_read_permission_for_every_member() {
     // P1 复现场景：给 Author 追加**只有 series.manage** 的自定义角色
     // （无 post.read_any——内置角色恰好两个都有，不能作为授权依据）。
     sqlx::query(
-        "INSERT INTO roles (id, name, slug, description, version, created_at, updated_at) \
+        "INSERT INTO roles (id, name, code, description, version, created_at, updated_at) \
          SELECT gen_random_uuid(), '仅系列管理', 'series-manage-only', NULL, 1, now(), now() \
-         WHERE NOT EXISTS (SELECT 1 FROM roles WHERE slug = 'series-manage-only')",
+         WHERE NOT EXISTS (SELECT 1 FROM roles WHERE code = 'series-manage-only')",
     )
     .execute(&stack.pool)
     .await
     .unwrap();
     sqlx::query(
-        "INSERT INTO role_permissions (role_id, permission_id) \
-         SELECT r.id, p.id FROM roles r JOIN permissions p ON p.key = 'series.manage' \
-         WHERE r.slug = 'series-manage-only' \
-           AND NOT EXISTS (SELECT 1 FROM role_permissions rp WHERE rp.role_id = r.id AND rp.permission_id = p.id)",
+        "INSERT INTO role_permissions (role_id, permission_code) \
+         SELECT r.id, p.code FROM roles r JOIN permissions p ON p.code = 'series.manage' \
+         WHERE r.code = 'series-manage-only' \
+           AND NOT EXISTS (SELECT 1 FROM role_permissions rp WHERE rp.role_id = r.id AND rp.permission_code = p.code)",
     )
     .execute(&stack.pool)
     .await
     .unwrap();
     sqlx::query(
         "INSERT INTO user_roles (user_id, role_id) \
-         SELECT u.id, r.id FROM users u JOIN roles r ON r.slug = 'series-manage-only' \
+         SELECT u.id, r.id FROM users u JOIN roles r ON r.code = 'series-manage-only' \
          WHERE u.username = 'author' \
            AND NOT EXISTS (SELECT 1 FROM user_roles ur WHERE ur.user_id = u.id AND ur.role_id = r.id)",
     )

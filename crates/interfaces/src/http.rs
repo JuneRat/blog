@@ -41,7 +41,6 @@ pub struct HttpAssets {
 pub fn app_router(state: AppState, assets: HttpAssets) -> Router {
     let media_read = crate::http_media::MediaReadState {
         media: state.admin.media.clone(),
-        auth: state.admin.auth.clone(),
     };
     let app = mount_theme_assets(public_router(state.public, None), assets.themes)
         .merge(crate::http_auth::auth_router(state.auth))

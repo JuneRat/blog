@@ -23,8 +23,8 @@ pub use identity::{
     ThrottleSubject, UserRepository,
 };
 pub use media::{
-    ImageInspector, MediaAttachStatus, MediaContentKind, MediaDeleteOutcome, MediaRefGuard,
-    MediaRepository, MediaStorage, MediaUsageRow, MediaWithUsage, SITE_MEDIA_CONTENT_ID,
+    ImageInspector, MediaChangeOutcome, MediaContentKind, MediaRefGuard, MediaRepository,
+    MediaStorage, MediaUsageRow, MediaWithUsage, SITE_MEDIA_CONTENT_ID,
 };
 pub use rendering::{ContentRenderer, RenderedContent, ThemeRenderer};
 pub use runtime::{Clock, HealthCheck, SaveOutcome};

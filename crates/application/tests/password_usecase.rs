@@ -183,6 +183,38 @@ impl FakeUserRepo {
 
 #[async_trait::async_trait]
 impl UserRepository for FakeUserRepo {
+    async fn save_profile(
+        &self,
+        user: &domain::identity::User,
+        expected_version: i64,
+        now: time::OffsetDateTime,
+    ) -> Result<UserSnapshot, UseCaseError> {
+        let snapshot = user.snapshot();
+        let mut users = self.users.lock().unwrap();
+        let current = users
+            .values_mut()
+            .find(|u| u.id == snapshot.id)
+            .ok_or_else(|| UseCaseError::NotFound("用户".into()))?;
+        if current.version != expected_version || !current.is_active() {
+            return Err(UseCaseError::VersionConflict);
+        }
+        current.display_name = snapshot.display_name;
+        current.bio = snapshot.bio;
+        current.version += 1;
+        current.updated_at = now;
+        Ok(current.clone())
+    }
+
+    async fn revoke_authentication(&self, user_id: Uuid) -> Result<(), UseCaseError> {
+        let mut users = self.users.lock().unwrap();
+        let user = users
+            .values_mut()
+            .find(|u| u.id == user_id)
+            .ok_or_else(|| UseCaseError::NotFound("用户".into()))?;
+        user.auth_version += 1;
+        Ok(())
+    }
+
     /// 头像只走真实认证 HTTP 用例（server/tests）；本 fake 不实现，误用即失败。
     async fn set_avatar(
         &self,
@@ -245,11 +277,13 @@ impl UserRepository for FakeUserRepo {
             let mut users = self.users.lock().unwrap();
             let user = users.values_mut().find(|user| user.id == user_id).unwrap();
             user.version += 1;
-            let revision = user.version;
+            user.auth_version += 1;
+            let revision = user.auth_version;
             // 模拟本次 UPDATE 完成后、调用方继续执行前的管理员重置。
             if let Some(replacement) = self.replacement_after_write.lock().unwrap().take() {
                 passwords.insert(user_id, replacement);
                 user.version += 1;
+                user.auth_version += 1;
             }
             Ok(Some(revision))
         } else {
@@ -284,14 +318,14 @@ impl UserRepository for FakeUserRepo {
         let Some(user) = self.users.lock().unwrap().get(username).cloned() else {
             return Ok(None);
         };
-        if user.deleted_at.is_some() {
+        if !user.is_active() {
             return Ok(None);
         }
         let hash = self.hash_of(user.id);
         Ok(hash.map(|password_hash| PasswordCredential {
             user_id: user.id,
             password_hash,
-            version: user.version,
+            auth_version: user.auth_version,
         }))
     }
 
@@ -319,7 +353,7 @@ impl FakeSessions {
 
 #[async_trait::async_trait]
 impl SessionStore for FakeSessions {
-    async fn create(&self, user_id: Uuid, user_version: i64) -> Result<String, UseCaseError> {
+    async fn create(&self, user_id: Uuid, auth_version: i64) -> Result<String, UseCaseError> {
         let mut next = self.next.lock().unwrap();
         *next += 1;
         let token = format!("session-{}", *next);
@@ -330,7 +364,7 @@ impl SessionStore for FakeSessions {
                 csrf_token: format!("csrf-{user_id}"),
                 created_at: OffsetDateTime::now_utc(),
                 last_seen_at: OffsetDateTime::now_utc(),
-                user_version,
+                auth_version,
             },
         );
         Ok(token)
@@ -456,6 +490,9 @@ fn active_user(username: &str) -> UserSnapshot {
         username: username.to_string(),
         email: None,
         display_name: Some(username.to_string()),
+        bio: None,
+        status: domain::identity::UserStatus::Active,
+        auth_version: 1,
         version: 1,
         created_at: now,
         updated_at: now,
@@ -1019,17 +1056,17 @@ async fn password_change_session_uses_its_own_write_revision() {
                 .unwrap();
             let session = f.sessions.validate(&token).await.unwrap().unwrap();
             let current = f.repo.find_by_id(f.user_id).await.unwrap().unwrap();
-            assert_eq!(session.user_version, 2, "必须使用本次写入返回的版本");
+            assert_eq!(session.auth_version, 2, "必须使用本次写入返回的版本");
             if concurrent_reset {
-                assert_eq!(current.version, 3);
+                assert_eq!(current.auth_version, 3);
                 // actor_from_session 以这两个版本是否相等判定会话有效性。
-                assert_ne!(session.user_version, current.version);
+                assert_ne!(session.auth_version, current.auth_version);
                 assert_eq!(
                     f.repo.hash_of(f.user_id).as_deref(),
                     Some("phc::admin-forced-reset")
                 );
             } else {
-                assert_eq!(session.user_version, current.version);
+                assert_eq!(session.auth_version, current.auth_version);
             }
         }
     }

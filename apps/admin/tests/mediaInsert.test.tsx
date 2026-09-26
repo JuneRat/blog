@@ -65,14 +65,13 @@ function asset(overrides: Partial<MediaAsset> = {}): MediaAsset {
     byte_size: 1024,
     width: 100,
     height: 50,
-    status: "ready",
+    deleted_at: null,
     version: 2,
     created_at: "2026-09-23T10:00:00Z",
     owner_id: "me",
     owner_display: "sun",
     url: "/media/media-1",
     reference_count: 0,
-    public_reference_count: 0,
     ...overrides,
   };
 }

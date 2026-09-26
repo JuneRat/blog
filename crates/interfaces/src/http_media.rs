@@ -1,25 +1,9 @@
-//! 媒体 HTTP 入站适配器：后台管理 API 与公开文件读取。
-//!
-//! - 管理 API 走 `AdminAuth`（会话 + CSRF/Origin），权限由用例判定。
-//! - `GET /media/{id}` 是**公开边界**：匿名只在存在公开来源引用时放行；
-//!   已认证且持有 `media.read` 时可预览任意可用图片（后台预览）。
-//!   两种失败一律 404，不泄漏资产存在性。
-//! - 上传是**裸字节体**（不是 multipart）：`POST /api/admin/v1/media?filename=…`
-//!   的 body 就是图片本身。请求的 `Content-Type` 与文件名都不参与判定——格式由
-//!   文件内容嗅探（`domain::media`），文件名只用于展示。因此不需要 multipart
-//!   解析依赖，也从根本上避免「按声明类型放行」。
-//! - 上传上限由 `DefaultBodyLimit` 在解析前拦住，避免超大请求进入内存。
-//!
-//! 缓存：公开引用只能重校验（撤回后下一次请求必须立即停止），因此用 `no-cache`
-//! 配 ETag；后台预览是私密响应，一律 `no-store`。**绝不**使用长 max-age，
-//! 否则撤回后图片会继续从缓存流出（docs/content-lifecycle.md §5）。
+//! 媒体管理 API 与独立公开的图片读取。上传接受受限图片裸字节体。
 
 use std::sync::Arc;
 
-use application::auth::AuthInteractor;
 use application::error::UseCaseError;
 use application::media::{MediaContent, MediaDto, MediaInteractor, MediaUsageDto, UploadMediaCmd};
-use application::ports::SESSION_COOKIE;
 use axum::body::Bytes;
 use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
@@ -32,7 +16,7 @@ use uuid::Uuid;
 
 use crate::http_admin::AdminAuth;
 use crate::http_auth::AdminState;
-use crate::http_support::{RequestId, admin_error, cookie_value, no_store};
+use crate::http_support::{RequestId, admin_error, no_store};
 
 /// 单次上传的请求体上限：与 `domain::media::MAX_IMAGE_BYTES`（10 MiB）留出余量。
 pub const MEDIA_BODY_LIMIT: usize = 12 * 1024 * 1024;
@@ -49,16 +33,14 @@ struct MediaJson {
     byte_size: i64,
     width: i32,
     height: i32,
-    status: String,
+    deleted_at: Option<String>,
     version: i64,
     created_at: String,
-    owner_id: Uuid,
+    owner_id: Option<Uuid>,
     owner_display: String,
     url: String,
-    /// 全部引用数（含草稿/私密/回收站）；> 0 时删除会被拒绝。
+    /// 已知引用数；软删除保留引用。
     reference_count: i64,
-    /// 构成公开来源的引用数；> 0 时匿名可读取。
-    public_reference_count: i64,
 }
 
 impl From<&MediaDto> for MediaJson {
@@ -70,14 +52,15 @@ impl From<&MediaDto> for MediaJson {
             byte_size: dto.byte_size,
             width: dto.width,
             height: dto.height,
-            status: dto.status.to_string(),
+            deleted_at: dto
+                .deleted_at
+                .map(application::public_site::format_datetime),
             version: dto.version,
             created_at: application::public_site::format_datetime(dto.created_at),
             owner_id: dto.owner_id,
             owner_display: dto.owner_display.clone(),
             url: dto.url.clone(),
             reference_count: dto.reference_count,
-            public_reference_count: dto.public_reference_count,
         }
     }
 }
@@ -130,6 +113,8 @@ struct MediaUsageViewJson {
 #[derive(Deserialize, Default)]
 struct MediaListQuery {
     page: Option<i64>,
+    #[serde(default)]
+    trash: bool,
 }
 
 /// 上传查询参数：文件名只用于展示，缺省时按「未命名图片」处理。
@@ -139,7 +124,7 @@ struct UploadQuery {
 }
 
 #[derive(Deserialize)]
-struct DeleteMediaBody {
+struct MediaVersionBody {
     expected_version: i64,
 }
 
@@ -156,6 +141,7 @@ pub fn media_admin_router(state: AdminState) -> Router {
     let writes = Router::new()
         .route("/api/admin/v1/media", post(upload_media))
         .route("/api/admin/v1/media/{id}", delete(delete_media))
+        .route("/api/admin/v1/media/{id}/restore", post(restore_media))
         // 二进制入口是唯一需要放宽请求体上限的路由；其余管理 API 仍是 2 MiB。
         .layer(DefaultBodyLimit::max(MEDIA_BODY_LIMIT))
         .layer(middleware::from_fn(no_store))
@@ -170,7 +156,11 @@ async fn list_media(
     Query(query): Query<MediaListQuery>,
     request_id: RequestId,
 ) -> Response {
-    match state.media.list(&auth.actor, query.page.unwrap_or(1)).await {
+    match state
+        .media
+        .list(&auth.actor, query.page.unwrap_or(1), query.trash)
+        .await
+    {
         Ok(page) => (
             StatusCode::OK,
             Json(MediaPageJson {
@@ -185,7 +175,7 @@ async fn list_media(
     }
 }
 
-/// 单个资产详情与使用位置（删除前提示、删除被拒后定位引用）。
+/// 单个资产详情与有权查看的使用位置。
 async fn media_detail(
     State(state): State<AdminState>,
     Path(id): Path<String>,
@@ -216,9 +206,9 @@ async fn upload_media(
     State(state): State<AdminState>,
     auth: AdminAuth,
     Query(query): Query<UploadQuery>,
+    request_id: RequestId,
     body: Bytes,
 ) -> Response {
-    let request_id = RequestId::generate();
     if body.is_empty() {
         return admin_error(UseCaseError::Invalid("上传内容为空".into()), &request_id);
     }
@@ -232,20 +222,40 @@ async fn upload_media(
     }
 }
 
-/// 删除：未被任何内容引用时进入回收流程；仍被引用则 409 `media_in_use`。
+/// 软删除：保留对象、链接和引用；只从正常媒体库隐藏。
 async fn delete_media(
     State(state): State<AdminState>,
     Path(id): Path<String>,
     auth: AdminAuth,
     request_id: RequestId,
-    Json(body): Json<DeleteMediaBody>,
+    Json(body): Json<MediaVersionBody>,
 ) -> Response {
     let Ok(id) = Uuid::parse_str(&id) else {
         return admin_error(UseCaseError::NotFound("图片".into()), &request_id);
     };
     match state
         .media
-        .delete(&auth.actor, id, body.expected_version)
+        .set_deleted(&auth.actor, id, body.expected_version, true)
+        .await
+    {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => admin_error(e, &request_id),
+    }
+}
+
+async fn restore_media(
+    State(state): State<AdminState>,
+    Path(id): Path<String>,
+    auth: AdminAuth,
+    request_id: RequestId,
+    Json(body): Json<MediaVersionBody>,
+) -> Response {
+    let Ok(id) = Uuid::parse_str(&id) else {
+        return admin_error(UseCaseError::NotFound("图片".into()), &request_id);
+    };
+    match state
+        .media
+        .set_deleted(&auth.actor, id, body.expected_version, false)
         .await
     {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
@@ -260,7 +270,6 @@ async fn delete_media(
 #[derive(Clone)]
 pub struct MediaReadState {
     pub media: Arc<MediaInteractor>,
-    pub auth: Arc<AuthInteractor>,
 }
 
 pub fn media_read_router(state: MediaReadState) -> Router {
@@ -277,12 +286,7 @@ async fn read_media(
     let Ok(id) = Uuid::parse_str(&id) else {
         return media_not_found();
     };
-    // 会话无效时按匿名处理：公开引用的图片对已失效的旧 Cookie 仍应可读。
-    let viewer = match cookie_value(&headers, SESSION_COOKIE) {
-        Some(token) => state.auth.actor_from_session(&token).await.ok(),
-        None => None,
-    };
-    match state.media.read(id, viewer.as_ref()).await {
+    match state.media.read(id).await {
         Ok(content) => file_response(&content, &headers),
         Err(UseCaseError::NotFound(_)) => media_not_found(),
         Err(e) => {
@@ -292,9 +296,9 @@ async fn read_media(
     }
 }
 
-/// 公开引用的响应可重校验（撤回后下一次请求必须立刻失效）；后台预览不可缓存。
+/// 地址对应不可变的图片字节，可公开长期缓存；软删除不撤销访问。
 fn file_response(content: &MediaContent, request: &HeaderMap) -> Response {
-    let etag = format!("\"{}\"", &content.checksum_sha256[..32]);
+    let etag = format!("\"{}\"", content.checksum_sha256);
     if let Some(value) = request
         .get(header::IF_NONE_MATCH)
         .and_then(|v| v.to_str().ok())
@@ -324,15 +328,10 @@ fn insert_media_headers(headers: &mut HeaderMap, content: &MediaContent, etag: &
     // 不写 Content-Disposition：浏览器按 MIME 内联展示图片本身。
     headers.insert(
         header::CACHE_CONTROL,
-        HeaderValue::from_static(if content.public_reference {
-            "no-cache"
-        } else {
-            "no-store"
-        }),
+        HeaderValue::from_static("public, max-age=31536000, immutable"),
     );
 }
 
 fn media_not_found() -> Response {
-    // 不存在、未就绪与无权读取共用同一响应：不泄漏资产存在性。
-    (StatusCode::NOT_FOUND, "图片不存在或未公开").into_response()
+    (StatusCode::NOT_FOUND, "图片不存在").into_response()
 }

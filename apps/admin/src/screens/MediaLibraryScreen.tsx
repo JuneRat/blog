@@ -8,13 +8,14 @@ import {
   Flex,
   Pagination,
   Row,
+  Segmented,
   Space,
   Typography,
   Upload,
 } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
-import { ApiError, mediaApi } from "../api";
+import { mediaApi } from "../api";
 import { useAuth } from "../auth";
 import { navigate, paths } from "../router";
 import type { MediaAsset, MediaReference, MediaUsageView } from "../types";
@@ -69,27 +70,13 @@ function referenceStatus(reference: MediaReference): string {
   return publicText;
 }
 
-/**
- * 媒体库屏（`/admin/media`）。
- *
- * - 按上传时间分页，显示缩略图、文件名、大小、尺寸、上传者与引用状态；
- * - 可复制站内地址，或在编辑器中「插入图片」面板里选择；
- * - **未被任何内容引用**才可删除；仍被引用时后端 409 `media_in_use`，
- *   这里随后拉取使用位置并逐条列出（草稿/私密/回收站引用同样占用）。
- *
- * 权限由后端判定：无 `media.read` 时列表本身就会 403，界面只做入口隐藏。
- *
- * 取数走 React Query：列表按页缓存，使用位置按资产 id 缓存，写操作后用
- * `invalidateQueries` 失效重取，而不是自己维护 `load()`。
- *
- * 提示沿用**内联 Alert 而不是 message 吐司**：引用规模、删除被拒与冲突文案
- * 需要停留在屏幕上（3 秒后自动消失会让人来不及看清）。
- */
+/** 媒体库与回收站共享稳定公开链接；使用位置仍按来源内容权限过滤。 */
 export function MediaLibraryScreen() {
   const { me } = useAuth();
   const { modal } = AntdApp.useApp();
   const queryClient = useQueryClient();
   const [page, setPage] = useState(1);
+  const [trash, setTrash] = useState(false);
   /**
    * 列表查询：翻页即换键（每页一份缓存）。
    *
@@ -97,8 +84,8 @@ export function MediaLibraryScreen() {
    * `actionError` 是上传/删除等写操作失败；展示时动作错误优先。
    */
   const media = useQuery({
-    queryKey: queryKeys.media(page),
-    queryFn: () => mediaApi.list(page),
+    queryKey: queryKeys.media(page, trash),
+    queryFn: () => mediaApi.list(page, trash),
   });
   const [actionError, setActionError] = useState<string | null>(null);
   const errorText =
@@ -106,7 +93,7 @@ export function MediaLibraryScreen() {
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   /**
-   * 删除被拒后要展示使用位置的资产 id（`null` = 不展示）。
+   * 要展示使用位置的资产 id（`null` = 不展示）。
    *
    * 使用位置是另一份服务端状态，用**独立查询**按 id 缓存；`enabled` 让它在
    * 需要时才请求，不必把详情混进列表数据里。
@@ -143,7 +130,8 @@ export function MediaLibraryScreen() {
     setBusy(true);
     try {
       const uploaded = await uploadImages(files);
-      setNotice(`已上传 ${uploaded.length} 张图片；默认可被你自己引用，公开后匿名才可读取。`);
+      setNotice(`已上传 ${uploaded.length} 张图片。`);
+      setTrash(false);
       setPage(1);
       // 上传使全部页内容移位（新资产排在最前）：整族失效，与回收站 trashAll 同理；
       // 非活跃页的失效标记会在切回该页时触发重取，不会留下陈旧列表。
@@ -170,41 +158,35 @@ export function MediaLibraryScreen() {
   }
 
   function canDelete(asset: MediaAsset): boolean {
-    if (asset.reference_count > 0) return false;
     if (canDeleteAny) return true;
     return canDeleteOwn && viewerId !== null && asset.owner_id === viewerId;
   }
 
+  async function changeDeleted(asset: MediaAsset, deleted: boolean): Promise<void> {
+    setActionError(null);
+    setNotice(null);
+    setBusy(true);
+    try {
+      if (deleted) await mediaApi.remove(asset.id, asset.version);
+      else await mediaApi.restore(asset.id, asset.version);
+      setNotice(`${asset.original_name} 已${deleted ? "移入回收站" : "恢复"}。`);
+      setUsageId(null);
+      // 内容会跨页移动，同时失效正常库、回收站和使用位置。
+      await queryClient.invalidateQueries({ queryKey: queryKeys.mediaAll() });
+      if ((media.data?.items.length ?? 0) === 1 && page > 1) setPage(page - 1);
+    } catch (e) {
+      setActionError(permissionMessageOf(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function remove(asset: MediaAsset): void {
-    // 确认按钮用默认文案「确定」：卡片上已有「删除」按钮，同名会让定位产生歧义。
     modal.confirm({
-      title: `删除「${asset.original_name}」？`,
-      content: "文件会被移除且不可恢复。",
+      title: `将「${asset.original_name}」移入回收站？`,
+      content: "图片链接仍公开可访问，已有引用会保留。恢复后可以重新选择。",
       okButtonProps: { danger: true },
-      onOk: async () => {
-        setActionError(null);
-        setNotice(null);
-        setUsageId(null);
-        setBusy(true);
-        try {
-          await mediaApi.remove(asset.id, asset.version);
-          setNotice(`已删除 ${asset.original_name}。`);
-          // 删除使后续页内容前移：整族失效，只失效当前页会留下兄弟页的陈旧列表。
-          await queryClient.invalidateQueries({ queryKey: queryKeys.mediaAll() });
-        } catch (e) {
-          setActionError(permissionMessageOf(e));
-          // 引用保护被触发时把使用位置摊开，让用户知道该去哪里解除引用。
-          if (e instanceof ApiError && e.code === "media_in_use") {
-            setUsageId(asset.id);
-            // 同一资产重复被拒时缓存可能还新鲜：显式失效才能反映最新引用。
-            await queryClient.invalidateQueries({
-              queryKey: queryKeys.mediaUsage(asset.id),
-            });
-          }
-        } finally {
-          setBusy(false);
-        }
-      },
+      onOk: () => changeDeleted(asset, true),
     });
   }
 
@@ -245,6 +227,21 @@ export function MediaLibraryScreen() {
         </Space>
       </Flex>
 
+      <Segmented
+        aria-label="媒体范围"
+        options={[{ label: "全部图片", value: "active" }, { label: "回收站", value: "trash" }]}
+        value={trash ? "trash" : "active"}
+        onChange={(value) => { setTrash(value === "trash"); setPage(1); setUsageId(null); setActionError(null); }}
+        style={{ marginBottom: 16 }}
+      />
+      <Alert
+        type="info"
+        showIcon
+        title="图片链接独立公开。文章设为私密或图片移入回收站，都不会限制链接访问。"
+        style={{ marginBottom: 16 }}
+      />
+      {usage.error !== null && <Alert type="error" title={permissionMessageOf(usage.error)} />}
+
       {errorText !== null && (
         <Alert type="error" showIcon title={errorText} style={{ marginBottom: 16 }} />
       )}
@@ -254,10 +251,10 @@ export function MediaLibraryScreen() {
 
       {usage.data !== undefined && (
         <Alert
-          type="warning"
+          type="info"
           showIcon
           style={{ marginBottom: 16 }}
-          title={`「${usage.data.media.original_name}」仍被以下内容引用，无法删除：`}
+          title={`「${usage.data.media.original_name}」的使用位置`}
           description={
             <>
               <ul style={{ margin: "0 0 8px", paddingInlineStart: 20 }}>
@@ -284,12 +281,11 @@ export function MediaLibraryScreen() {
               {usage.data.hidden_references > 0 && (
                 <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
                   另有 {usage.data.hidden_references} 处引用你无权查看（他人草稿、私密内容，
-                  或你没有页面读取权限的内容）。删除保护按全部引用判定，
-                  因此仍需对方解除引用。
+                  或你没有页面读取权限的内容）。
                 </Typography.Paragraph>
               )}
               <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
-                在上面的内容里移除该图片并保存后，才能删除。
+                这里只统计站内引用，站外使用不在统计范围内。
               </Typography.Paragraph>
             </>
           }
@@ -315,7 +311,7 @@ export function MediaLibraryScreen() {
         <Typography.Text type="secondary">正在加载…</Typography.Text>
       )}
       {data !== null && data.items.length === 0 && errorText === null && (
-        <Empty description="媒体库还是空的。" />
+        <Empty description={trash ? "回收站是空的。" : "媒体库还是空的。"} />
       )}
 
       {data !== null && data.items.length > 0 && (
@@ -349,18 +345,12 @@ export function MediaLibraryScreen() {
                     <Button
                       key="delete"
                       type="text"
-                      danger
+                      danger={!trash}
                       disabled={busy || !canDelete(asset)}
-                      title={
-                        asset.reference_count > 0
-                          ? "仍被内容引用，先移除引用"
-                          : canDelete(asset)
-                            ? "删除图片"
-                            : "需要 media.delete（本人上传）或 media.delete_any"
-                      }
-                      onClick={() => remove(asset)}
+                      title={canDelete(asset) ? undefined : "需要 media.delete（本人上传）或 media.delete_any"}
+                      onClick={() => trash ? void changeDeleted(asset, false) : remove(asset)}
                     >
-                      删除
+                      {trash ? "恢复" : "移入回收站"}
                     </Button>,
                   ]}
                 >
@@ -372,14 +362,9 @@ export function MediaLibraryScreen() {
                       {asset.width}×{asset.height} · {formatBytes(asset.byte_size)} ·{" "}
                       {asset.owner_display}
                     </Typography.Text>
-                    <Typography.Text type="secondary">
-                      {asset.reference_count === 0
-                        ? "未被引用"
-                        : `被 ${asset.reference_count} 处引用`}
-                      {asset.public_reference_count > 0
-                        ? `（${asset.public_reference_count} 处公开可读）`
-                        : "（不公开）"}
-                    </Typography.Text>
+                    <Button type="link" style={{ padding: 0, width: "fit-content", height: "auto" }} onClick={() => setUsageId(asset.id)}>
+                      {asset.reference_count === 0 ? "查看使用位置" : `被 ${asset.reference_count} 处引用`}
+                    </Button>
                     <Typography.Text type="secondary">{asset.created_at}</Typography.Text>
                   </Flex>
                 </Card>

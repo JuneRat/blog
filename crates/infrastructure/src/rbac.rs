@@ -34,7 +34,7 @@ impl PostgresRbacStore {
         executor: impl Executor<'_, Database = sqlx::Postgres>,
         slug: &str,
     ) -> Result<Option<Uuid>, UseCaseError> {
-        let row: Option<(Uuid,)> = sqlx::query_as("SELECT id FROM roles WHERE slug = $1")
+        let row: Option<(Uuid,)> = sqlx::query_as("SELECT id FROM roles WHERE code = $1")
             .bind(slug)
             .fetch_optional(executor)
             .await
@@ -57,7 +57,7 @@ impl PostgresRbacStore {
              FROM user_roles ur \
              JOIN roles r ON r.id = ur.role_id \
              JOIN users u ON u.id = ur.user_id \
-             WHERE r.slug = 'owner' AND u.deleted_at IS NULL \
+             WHERE r.code = 'owner' AND u.status = 'active' AND u.deleted_at IS NULL \
                AND (u.password_hash IS NOT NULL \
                     OR EXISTS (SELECT 1 FROM oauth_accounts oa WHERE oa.user_id = u.id))",
         )
@@ -94,7 +94,7 @@ impl PostgresRbacStore {
     ) -> Result<bool, UseCaseError> {
         let row: Option<(i32,)> = sqlx::query_as(
             "SELECT 1 FROM users u \
-             WHERE u.id = $1 AND u.deleted_at IS NULL \
+             WHERE u.id = $1 AND u.status = 'active' AND u.deleted_at IS NULL \
                AND (u.password_hash IS NOT NULL \
                     OR EXISTS (SELECT 1 FROM oauth_accounts oa WHERE oa.user_id = u.id)) \
              LIMIT 1",
@@ -115,13 +115,11 @@ impl RbacStore for PostgresRbacStore {
     ) -> Result<(), UseCaseError> {
         for entry in entries {
             sqlx::query(
-                "INSERT INTO permissions (id, name, key, description) VALUES ($1, $2, $3, $4) \
-                 ON CONFLICT (key) DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description",
+                "INSERT INTO permissions (code, name) VALUES ($1, $2) \
+                 ON CONFLICT (code) DO UPDATE SET name = EXCLUDED.name",
             )
-            .bind(Uuid::now_v7())
-            .bind(entry.name)
             .bind(entry.key)
-            .bind(entry.description)
+            .bind(entry.name)
             .execute(&self.pool)
             .await
             .map_err(Self::map_err)?;
@@ -132,9 +130,12 @@ impl RbacStore for PostgresRbacStore {
     async fn sync_builtin_roles(&self, defs: &[BuiltinRoleDef]) -> Result<(), UseCaseError> {
         for def in defs {
             let mut tx = self.pool.begin().await.map_err(Self::map_err)?;
+            crate::persistence::acquire_identity_lock(&mut *tx)
+                .await
+                .map_err(Self::map_err)?;
 
             let existing: Option<(Uuid, String, Option<String>)> =
-                sqlx::query_as("SELECT id, name, description FROM roles WHERE slug = $1")
+                sqlx::query_as("SELECT id, name, description FROM roles WHERE code = $1")
                     .bind(def.slug)
                     .fetch_optional(&mut *tx)
                     .await
@@ -144,7 +145,7 @@ impl RbacStore for PostgresRbacStore {
                 // 新建内置角色：version 从 1 起（首次创建不算「修改授权集合」）。
                 let role_id = Uuid::now_v7();
                 sqlx::query(
-                    "INSERT INTO roles (id, name, slug, description, version, created_at, updated_at) \
+                    "INSERT INTO roles (id, name, code, description, version, created_at, updated_at) \
                      VALUES ($1, $2, $3, $4, 1, now(), now())",
                 )
                 .bind(role_id)
@@ -155,8 +156,8 @@ impl RbacStore for PostgresRbacStore {
                 .await
                 .map_err(Self::map_err)?;
                 sqlx::query(
-                    "INSERT INTO role_permissions (role_id, permission_id) \
-                     SELECT $1, p.id FROM permissions p WHERE p.key = ANY($2) \
+                    "INSERT INTO role_permissions (role_id, permission_code) \
+                     SELECT $1, p.code FROM permissions p WHERE p.code = ANY($2) \
                      ON CONFLICT DO NOTHING",
                 )
                 .bind(role_id)
@@ -170,8 +171,8 @@ impl RbacStore for PostgresRbacStore {
 
             // 已存在：名称/描述/授权集合完全一致时不动任何行（roles.version 不漂移）。
             let current: Vec<(String,)> = sqlx::query_as(
-                "SELECT p.key FROM role_permissions rp \
-                 JOIN permissions p ON p.id = rp.permission_id \
+                "SELECT p.code FROM role_permissions rp \
+                 JOIN permissions p ON p.code = rp.permission_code \
                  WHERE rp.role_id = $1",
             )
             .bind(role_id)
@@ -206,7 +207,7 @@ impl RbacStore for PostgresRbacStore {
             sqlx::query(
                 "DELETE FROM role_permissions rp \
                  WHERE rp.role_id = $1 \
-                 AND rp.permission_id NOT IN (SELECT id FROM permissions WHERE key = ANY($2))",
+                 AND rp.permission_code NOT IN (SELECT code FROM permissions WHERE code = ANY($2))",
             )
             .bind(role_id)
             .bind(def.permissions)
@@ -215,8 +216,8 @@ impl RbacStore for PostgresRbacStore {
             .map_err(Self::map_err)?;
 
             sqlx::query(
-                "INSERT INTO role_permissions (role_id, permission_id) \
-                 SELECT $1, p.id FROM permissions p WHERE p.key = ANY($2) \
+                "INSERT INTO role_permissions (role_id, permission_code) \
+                 SELECT $1, p.code FROM permissions p WHERE p.code = ANY($2) \
                  ON CONFLICT DO NOTHING",
             )
             .bind(role_id)
@@ -232,13 +233,13 @@ impl RbacStore for PostgresRbacStore {
 
     async fn permissions_of_user(&self, user_id: Uuid) -> Result<PermissionSet, UseCaseError> {
         let keys: Vec<(String,)> = sqlx::query_as(
-            "SELECT DISTINCT p.key \
+            "SELECT DISTINCT p.code \
              FROM users u \
              JOIN user_roles ur ON ur.user_id = u.id \
              JOIN roles r ON r.id = ur.role_id \
              JOIN role_permissions rp ON rp.role_id = r.id \
-             JOIN permissions p ON p.id = rp.permission_id \
-             WHERE u.id = $1 AND u.deleted_at IS NULL",
+             JOIN permissions p ON p.code = rp.permission_code \
+             WHERE u.id = $1 AND u.status = 'active' AND u.deleted_at IS NULL",
         )
         .bind(user_id)
         .fetch_all(&self.pool)
@@ -252,8 +253,8 @@ impl RbacStore for PostgresRbacStore {
             .await?
             .ok_or_else(|| UseCaseError::NotFound(format!("角色 {role_slug}")))?;
         let keys: Vec<(String,)> = sqlx::query_as(
-            "SELECT p.key FROM role_permissions rp \
-             JOIN permissions p ON p.id = rp.permission_id \
+            "SELECT p.code FROM role_permissions rp \
+             JOIN permissions p ON p.code = rp.permission_code \
              WHERE rp.role_id = $1",
         )
         .bind(role_id)
@@ -337,11 +338,11 @@ impl RbacStore for PostgresRbacStore {
 
     async fn list_roles(&self) -> Result<Vec<RoleDto>, UseCaseError> {
         let rows = sqlx::query(
-            "SELECT r.slug, r.name, r.description, count(rp.permission_id) AS permission_count \
+            "SELECT r.code, r.name, r.description, count(rp.permission_code) AS permission_count \
              FROM roles r \
              LEFT JOIN role_permissions rp ON rp.role_id = r.id \
-             GROUP BY r.id, r.slug, r.name, r.description \
-             ORDER BY r.slug",
+             GROUP BY r.id, r.code, r.name, r.description \
+             ORDER BY r.code",
         )
         .fetch_all(&self.pool)
         .await
@@ -350,7 +351,7 @@ impl RbacStore for PostgresRbacStore {
         rows.iter()
             .map(|row| {
                 Ok(RoleDto {
-                    slug: row.try_get("slug").map_err(Self::map_err)?,
+                    slug: row.try_get("code").map_err(Self::map_err)?,
                     name: row.try_get("name").map_err(Self::map_err)?,
                     description: row.try_get("description").map_err(Self::map_err)?,
                     builtin: false, // 由应用层按 BUILTIN_ROLES 标注
@@ -362,8 +363,8 @@ impl RbacStore for PostgresRbacStore {
 
     async fn roles_of_user(&self, user_id: Uuid) -> Result<Vec<String>, UseCaseError> {
         let rows: Vec<(String,)> = sqlx::query_as(
-            "SELECT r.slug FROM user_roles ur JOIN roles r ON r.id = ur.role_id \
-             WHERE ur.user_id = $1 ORDER BY r.slug",
+            "SELECT r.code FROM user_roles ur JOIN roles r ON r.id = ur.role_id \
+             WHERE ur.user_id = $1 ORDER BY r.code",
         )
         .bind(user_id)
         .fetch_all(&self.pool)
@@ -378,8 +379,8 @@ impl RbacStore for PostgresRbacStore {
             return Ok(Vec::new());
         }
         let rows: Vec<(Uuid, String)> = sqlx::query_as(
-            "SELECT ur.user_id, r.slug FROM user_roles ur JOIN roles r ON r.id = ur.role_id \
-             WHERE ur.user_id = ANY($1) ORDER BY ur.user_id, r.slug",
+            "SELECT ur.user_id, r.code FROM user_roles ur JOIN roles r ON r.id = ur.role_id \
+             WHERE ur.user_id = ANY($1) ORDER BY ur.user_id, r.code",
         )
         .bind(user_ids)
         .fetch_all(&self.pool)

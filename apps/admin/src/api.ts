@@ -524,10 +524,10 @@ export const themeSettingsApi = {
  * 声明什么类型都不会让非图片通过。
  */
 export const mediaApi = {
-  list: (page = 1): Promise<MediaPage> =>
-    request<MediaPage>(`/api/admin/v1/media?page=${page}`),
+  list: (page = 1, trash = false): Promise<MediaPage> =>
+    request<MediaPage>(`/api/admin/v1/media?page=${page}${trash ? "&trash=true" : ""}`),
 
-  /** 资产详情 + 全部使用位置（删除前提示、删除被拒后定位引用）。 */
+  /** 资产详情与按内容阅读权限过滤的使用位置。 */
   detail: (id: string): Promise<MediaUsageView> =>
     request<MediaUsageView>(`/api/admin/v1/media/${encodeURIComponent(id)}`),
 
@@ -541,13 +541,15 @@ export const mediaApi = {
       },
     ),
 
-  /**
-   * 删除。仍被内容引用（含草稿/私密/回收站）时 409 `media_in_use`——
-   * 先在使用位置里移除引用再删除；成功返回 204。
-   */
+  /** 移入回收站；保留文件、链接和引用，成功返回 204。 */
   remove: (id: string, expectedVersion: number): Promise<void> =>
     request<void>(`/api/admin/v1/media/${encodeURIComponent(id)}`, {
       method: "DELETE",
+      body: JSON.stringify({ expected_version: expectedVersion }),
+    }),
+  restore: (id: string, expectedVersion: number): Promise<void> =>
+    request<void>(`/api/admin/v1/media/${encodeURIComponent(id)}/restore`, {
+      method: "POST",
       body: JSON.stringify({ expected_version: expectedVersion }),
     }),
 };

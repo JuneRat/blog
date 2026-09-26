@@ -83,6 +83,11 @@ async fn state_is_shared_across_pools_and_revocation_crosses_processes() {
     let pool = common::fresh_database(DB).await;
     let user = common::seed_user(&pool, "cross-process").await;
     let other = common::seed_user(&pool, "cross-other").await;
+    sqlx::query("UPDATE users SET auth_version=7 WHERE id=$1")
+        .bind(user)
+        .execute(&pool)
+        .await
+        .unwrap();
 
     let now = shared_now();
     let store_a = session_store(pool.clone(), config(3600, 86_400, 100), &now);
@@ -97,7 +102,7 @@ async fn state_is_shared_across_pools_and_revocation_crosses_processes() {
         .unwrap()
         .expect("另一个进程看得到 A 签发的会话");
     assert_eq!(record.user_id, user);
-    assert_eq!(record.user_version, 7, "签发版本落库并跨进程读回");
+    assert_eq!(record.auth_version, 7, "签发版本落库并跨进程读回");
     assert_eq!(record.csrf_token.len(), 64, "CSRF token 跨进程可读");
 
     store_b.revoke(&token).await.unwrap();
@@ -120,6 +125,61 @@ async fn state_is_shared_across_pools_and_revocation_crosses_processes() {
 }
 
 /// 空闲过期看 `last_seen_at`：活动续期，空闲超时失效，且过期行被顺带清理。
+#[tokio::test]
+async fn only_valid_identity_snapshots_refresh_activity() {
+    let _g = SERIAL.lock().await;
+    let pool = common::fresh_database(DB).await;
+    let user = common::seed_user(&pool, "auth-snapshot").await;
+    let now = shared_now();
+    let store = session_store(pool.clone(), config(3600, 86_400, 100), &now);
+    let token = store.create(user, 1).await.unwrap();
+    sqlx::query("UPDATE users SET version=version+1 WHERE id=$1")
+        .bind(user)
+        .execute(&pool)
+        .await
+        .unwrap();
+    advance(&now, 10);
+    assert!(
+        store.validate(&token).await.unwrap().is_some(),
+        "资料版本不参与鉴权"
+    );
+    let last_seen: OffsetDateTime = sqlx::query_scalar("SELECT last_seen_at FROM sessions")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE users SET auth_version=auth_version+1 WHERE id=$1")
+        .bind(user)
+        .execute(&pool)
+        .await
+        .unwrap();
+    advance(&now, 10);
+    assert!(store.validate(&token).await.unwrap().is_none());
+    let row: (i64, OffsetDateTime) =
+        sqlx::query_as("SELECT auth_version, last_seen_at FROM sessions")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(row, (1, last_seen), "旧认证快照和活跃时间均不得刷新");
+    store.revoke(&token).await.unwrap();
+    let fresh = store.create(user, 2).await.unwrap();
+    let last_seen: OffsetDateTime = sqlx::query_scalar("SELECT last_seen_at FROM sessions")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE users SET status='disabled' WHERE id=$1")
+        .bind(user)
+        .execute(&pool)
+        .await
+        .unwrap();
+    advance(&now, 10);
+    assert!(store.validate(&fresh).await.unwrap().is_none());
+    let unchanged: OffsetDateTime = sqlx::query_scalar("SELECT last_seen_at FROM sessions")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(unchanged, last_seen, "禁用账号不得刷新活跃时间");
+}
+
 #[tokio::test]
 async fn validate_refreshes_idle_window_and_idle_expiry_cleans_the_row() {
     let _g = SERIAL.lock().await;
@@ -203,7 +263,7 @@ async fn purge_expired_removes_only_stale_rows_and_reports_count() {
     let at = *now.lock().unwrap();
     sqlx::query(
         "INSERT INTO sessions \
-             (token_hash, user_id, csrf_token, user_version, created_at, last_seen_at, expires_at) \
+             (token_hash, user_id, csrf_token, auth_version, created_at, last_seen_at, expires_at) \
          VALUES ($1, $2, $3, 1, $4, $4, $5)",
     )
     .bind("d".repeat(64))
@@ -239,7 +299,7 @@ async fn row_stores_digest_not_plaintext_and_constraints_hold() {
     let store = session_store(pool.clone(), config(3600, 86_400, 100), &now);
 
     let token = store.create(user, 3).await.unwrap();
-    let row = sqlx::query("SELECT token_hash, csrf_token, user_version FROM sessions")
+    let row = sqlx::query("SELECT token_hash, csrf_token, auth_version FROM sessions")
         .fetch_one(&pool)
         .await
         .unwrap();
@@ -247,12 +307,12 @@ async fn row_stores_digest_not_plaintext_and_constraints_hold() {
     assert_ne!(hash, token, "库中绝不保存明文令牌");
     assert_eq!(hash, digest_hex(&token), "落库的是 SHA-256 摘要");
     assert_eq!(row.get::<String, _>("csrf_token").len(), 64);
-    assert_eq!(row.get::<i64, _>("user_version"), 3);
+    assert_eq!(row.get::<i64, _>("auth_version"), 3);
 
     // CHECK 拒绝非 64 位 hex 的摘要。
     let bad_digest = sqlx::query(
         "INSERT INTO sessions \
-             (token_hash, user_id, csrf_token, user_version, created_at, last_seen_at, expires_at) \
+             (token_hash, user_id, csrf_token, auth_version, created_at, last_seen_at, expires_at) \
          VALUES ('not-a-digest', $1, $2, 1, $3, $3, $4)",
     )
     .bind(user)
@@ -266,7 +326,7 @@ async fn row_stores_digest_not_plaintext_and_constraints_hold() {
     // 外键拒绝不存在的用户。
     let orphan = sqlx::query(
         "INSERT INTO sessions \
-             (token_hash, user_id, csrf_token, user_version, created_at, last_seen_at, expires_at) \
+             (token_hash, user_id, csrf_token, auth_version, created_at, last_seen_at, expires_at) \
          VALUES ($1, $2, $3, 1, $4, $4, $5)",
     )
     .bind("b".repeat(64))
@@ -444,7 +504,7 @@ async fn revoke_all_waits_for_in_flight_create_then_invalidates_it() {
     let at = *now.lock().unwrap();
     sqlx::query(
         "INSERT INTO sessions \
-             (token_hash, user_id, csrf_token, user_version, created_at, last_seen_at, expires_at) \
+             (token_hash, user_id, csrf_token, auth_version, created_at, last_seen_at, expires_at) \
          VALUES ($1, $2, $3, 1, $4, $4, $5)",
     )
     .bind(digest_hex(&token))

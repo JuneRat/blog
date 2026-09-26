@@ -20,13 +20,13 @@ pub(super) const PAGE_PUBLIC_PREDICATE: &str = "p.status = 'published' AND p.vis
 fn unique_conflict_target(error: &PgDatabaseError) -> Option<ConflictKind> {
     match error.constraint()? {
         "posts_slug_key" | "pages_slug_key" => Some(ConflictKind::Slug),
-        "users_username_key" => Some(ConflictKind::Username),
-        "users_email_key" => Some(ConflictKind::Email),
+        "users_username_ci_uq" => Some(ConflictKind::Username),
+        "users_email_ci_uq" => Some(ConflictKind::Email),
         "posts_series_position_unique" => Some(ConflictKind::SeriesPosition),
-        "oauth_accounts_provider_provider_user_id_key" => Some(ConflictKind::ExternalIdentity),
+        "oauth_accounts_pkey" => Some(ConflictKind::ExternalIdentity),
         "categories_slug_key" | "series_slug_key" | "tags_slug_key" => Some(ConflictKind::Slug),
-        "roles_slug_key" => Some(ConflictKind::RoleSlug),
-        "permissions_key_key" => Some(ConflictKind::PermissionKey),
+        "roles_code_key" => Some(ConflictKind::RoleSlug),
+        "permissions_pkey" => Some(ConflictKind::PermissionKey),
         _ => None,
     }
 }

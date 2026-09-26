@@ -10,6 +10,8 @@ cargo run -p server -- serve
 
 当前配置入口是 [server/config.rs](../crates/server/src/config.rs)，命令依赖装配见[架构](architecture.md)。
 
+已采纳设计新增 `settings.comments`、`settings.audit` 及默认 180 天的评论 IP/审计保留策略，见[目标设置设计](database-design.md#6-分组设置与审计)。对应管理入口、可信代理配置与维护任务尚未实现，不属于下表已支持的运行配置。
+
 ## 环境变量
 
 | 变量 | 默认值 | 生效范围与用途 |
@@ -20,7 +22,7 @@ cargo run -p server -- serve
 | `BLOG_PUBLIC_BASE_URL` | `http://127.0.0.1:8080` | `serve` 的公开基础 URL，供 OAuth 回调、canonical、RSS 和 sitemap 使用 |
 | `BLOG_THEME_DIR` | `themes/default` | `serve` 的默认主题目录；从同级目录发现其他已安装主题 |
 | `BLOG_ADMIN_DIST` | `apps/admin/dist` | `serve` 的后台构建产物；目录不存在时不挂载 `/admin` |
-| `BLOG_MEDIA_DIR` | `data/media` | `serve` 与 `media reclaim` 使用的文件根目录 |
+| `BLOG_MEDIA_DIR` | `data/media` | `serve` 与 `media cleanup-staging` 使用的文件根目录 |
 | `BLOG_SITE_TITLE` | `Sun's Blog` | `serve` 的站点标题回退值 |
 | `BLOG_SITE_DESCRIPTION` | `一个 Rust 博客` | `serve` 的站点描述回退值 |
 | `BLOG_SECURE_COOKIES` | 按公开 URL 是否为 HTTPS 推断 | `serve` 的 cookie Secure 开关；显式值为 `1` 或不区分大小写的 `true` 时启用，其余显式值关闭 |
@@ -63,7 +65,7 @@ OAuth 提供商通过 `secret_ref` 引用任意命名的环境变量，例如 `I
 | `migrate` | 数据库与迁移；执行结构迁移及旧版本 HTML 派生重建 |
 | `user` / `role` / `oauth` | 数据库、结构迁移及对应身份依赖；不加载站点主题和公开 URL |
 | `post` | 数据库、迁移及 Markdown 渲染；不加载网站模板 |
-| `media reclaim` | 数据库、结构迁移和媒体目录 |
+| `media cleanup-staging` | 数据库、结构迁移和媒体目录 |
 | `serve` | 数据库、迁移与完整站点配置、主题、后台静态资源 |
 
 因此坏掉的主题或公开 URL 不会阻止 CLI 修复账号、角色与 OAuth 配置。渲染并发、排队时间、结果等待和缓存容量目前由代码中的执行策略控制，不存在对应的 `BLOG_*` 环境变量，详见[主题与渲染](themes-and-rendering.md)。

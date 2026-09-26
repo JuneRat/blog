@@ -85,7 +85,7 @@ pub struct ReorderedDto {
 pub struct SeriesInteractor {
     series: Arc<dyn SeriesRepository>,
     clock: Arc<dyn Clock>,
-    /// 封面附着的归属校验（`ensure_attachable`）：系列封面引用是无条件公开来源。
+    /// 封面附着的可用性校验（`ensure_attachable`）。
     media_guard: Arc<dyn crate::ports::MediaRefGuard>,
 }
 
@@ -141,11 +141,11 @@ impl SeriesInteractor {
         let series = self.load(target_slug).await?;
         let expected = checked_version(series.version(), cmd.expected_version)?;
         let mut series = series;
-        // 封面只有**换成新资产**时才过归属校验：重复提交当前封面不重新授权。
+        // 封面只有**换成新资产**时才过可用性校验：重复提交当前封面不重新授权。
         if let Some(Some(cover_media_id)) = cmd.cover_media_id
             && series.snapshot().cover_media_id != Some(cover_media_id)
         {
-            crate::media::ensure_attachable(&*self.media_guard, actor, cover_media_id).await?;
+            crate::media::ensure_attachable(&*self.media_guard, cover_media_id).await?;
         }
         if !series
             .update(cmd.name, cmd.description, cmd.cover_media_id)

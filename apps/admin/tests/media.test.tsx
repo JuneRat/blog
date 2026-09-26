@@ -2,7 +2,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
-import { ApiError, mediaApi } from "../src/api";
+import { mediaApi } from "../src/api";
 import { navigate, paths } from "../src/router";
 import type { MediaAsset, MediaPage } from "../src/types";
 
@@ -22,6 +22,7 @@ vi.mock("../src/api", async (importOriginal) => {
       detail: vi.fn(),
       upload: vi.fn(),
       remove: vi.fn(),
+      restore: vi.fn(),
     },
   };
 });
@@ -34,14 +35,13 @@ function asset(overrides: Partial<MediaAsset> = {}): MediaAsset {
     byte_size: 2048,
     width: 800,
     height: 600,
-    status: "ready",
+    deleted_at: null,
     version: 2,
     created_at: "2026-09-23T10:00:00Z",
     owner_id: "me",
     owner_display: "sun",
     url: "/media/media-1",
     reference_count: 0,
-    public_reference_count: 0,
     ...overrides,
   };
 }
@@ -66,7 +66,6 @@ describe("媒体库屏", () => {
           id: "media-2",
           original_name: "used.png",
           reference_count: 2,
-          public_reference_count: 1,
           owner_id: "someone-else",
         }),
       ]),
@@ -77,24 +76,20 @@ describe("媒体库屏", () => {
     // 两张图的尺寸相同，因此用 getAllByText 断言两者都渲染了尺寸信息。
     expect(screen.getAllByText(/800×600/).length).toBe(2);
     expect(screen.getAllByText(/2\.0 KiB/).length).toBe(2);
-    expect(screen.getByText("未被引用（不公开）")).toBeTruthy();
-    expect(screen.getByText("被 2 处引用（1 处公开可读）")).toBeTruthy();
+    expect(screen.getByText(/图片链接独立公开/)).toBeTruthy();
+    expect(screen.getByText("被 2 处引用")).toBeTruthy();
 
     // 未被引用且是本人上传：可删除。
-    const deleteButtons = screen.getAllByRole("button", { name: "删除" });
+    const deleteButtons = screen.getAllByRole("button", { name: "移入回收站" });
     expect((deleteButtons[0] as HTMLButtonElement).disabled).toBe(false);
-    // 仍被引用：按钮禁用，避免必然失败的请求。
+    // 其他上传者：没有 media.delete_any 时不能管理。
     expect((deleteButtons[1] as HTMLButtonElement).disabled).toBe(true);
   });
 
-  it("删除被拒绝时把使用位置摊开", async () => {
-    // 列表显示「未被引用」因此按钮可用；删除瞬间另一处内容引用了它，
-    // 后端按引用保护拒绝（409 media_in_use）——这正是需要展示使用位置的场景。
+  it("主动查看使用位置并解释隐藏引用", async () => {
+    // 使用位置来自独立详情请求，允许隐去没有阅读权限的来源。
     const used = asset();
     vi.mocked(mediaApi.list).mockResolvedValue(pageOf([used]));
-    vi.mocked(mediaApi.remove).mockRejectedValue(
-      new ApiError(409, "图片仍被 1 处内容引用，先移除引用再删除", "media_in_use"),
-    );
     vi.mocked(mediaApi.detail).mockResolvedValue({
       media: used,
       references: [
@@ -116,11 +111,9 @@ describe("媒体库屏", () => {
     render(<App />);
     await waitFor(() => expect(screen.getByText("photo.png")).toBeTruthy());
 
-    fireEvent.click(screen.getByRole("button", { name: "删除" }));
-    // 确认弹窗由 antd 的 modal.confirm 渲染，必须点掉它才会发请求。
-    fireEvent.click(await screen.findByRole("button", { name: "确定" }));
+    fireEvent.click(screen.getByRole("button", { name: "查看使用位置" }));
     await waitFor(() => expect(mediaApi.detail).toHaveBeenCalledWith("media-1"));
-    expect(await screen.findByText(/仍被以下内容引用/)).toBeTruthy();
+    expect(await screen.findByText(/的使用位置/)).toBeTruthy();
     expect(screen.getByText(/带图文章/)).toBeTruthy();
     expect(screen.getByText(/已发布；公开可读/)).toBeTruthy();
     // 被权限过滤掉的引用要解释清楚，否则「被 N 处引用」与列表条数会对不上。
@@ -128,12 +121,9 @@ describe("媒体库屏", () => {
   });
 
   it("没有隐藏引用时不显示解释文案", async () => {
-    // 列表显示「未被引用」因此按钮可用；删除时才发现唯一那处引用（本页可见）。
+    // 唯一那处引用对当前用户可见。
     const used = asset();
     vi.mocked(mediaApi.list).mockResolvedValue(pageOf([used]));
-    vi.mocked(mediaApi.remove).mockRejectedValue(
-      new ApiError(409, "图片仍被 1 处内容引用，先移除引用再删除", "media_in_use"),
-    );
     vi.mocked(mediaApi.detail).mockResolvedValue({
       media: used,
       references: [
@@ -153,12 +143,37 @@ describe("媒体库屏", () => {
 
     render(<App />);
     await waitFor(() => expect(screen.getByText("photo.png")).toBeTruthy());
-    fireEvent.click(screen.getByRole("button", { name: "删除" }));
-    fireEvent.click(await screen.findByRole("button", { name: "确定" }));
+    fireEvent.click(screen.getByRole("button", { name: "查看使用位置" }));
     // 先等使用位置面板出现（唯一那处引用可见），再断言「无隐藏引用」的解释文案缺席。
     expect(await screen.findByText(/我的草稿/)).toBeTruthy();
     expect(screen.queryByText(/无权查看/)).toBeNull();
     expect(screen.getByText(/草稿；不公开/)).toBeTruthy();
+  });
+
+  it("被引用的图片也可移入回收站并恢复，两个列表同步更新", async () => {
+    let trashed = false;
+    const used = asset({ reference_count: 3 });
+    vi.mocked(mediaApi.list).mockImplementation(async (_page, trash) =>
+      pageOf(Boolean(trash) === trashed ? [{ ...used, deleted_at: trashed ? "2026-09-26T00:00:00Z" : null, version: trashed ? 3 : 2 }] : []),
+    );
+    vi.mocked(mediaApi.remove).mockImplementation(async () => { trashed = true; });
+    vi.mocked(mediaApi.restore).mockImplementation(async () => { trashed = false; });
+    render(<App />);
+    await screen.findByText("photo.png");
+    const remove = screen.getByRole("button", { name: "移入回收站" }) as HTMLButtonElement;
+    expect(remove.disabled).toBe(false);
+    fireEvent.click(remove);
+    expect(await screen.findByText(/图片链接仍公开可访问/)).toBeTruthy();
+    fireEvent.click(await screen.findByRole("button", { name: "确定" }));
+    await screen.findByText("媒体库还是空的。");
+    expect(mediaApi.remove).toHaveBeenCalledWith("media-1", 2);
+    fireEvent.click(screen.getByRole("radio", { name: "回收站" }));
+    await screen.findByText("photo.png");
+    fireEvent.click(screen.getByRole("button", { name: "恢复" }));
+    await screen.findByText("回收站是空的。");
+    expect(mediaApi.restore).toHaveBeenCalledWith("media-1", 3);
+    fireEvent.click(screen.getByRole("radio", { name: "全部图片" }));
+    expect(await screen.findByText("photo.png")).toBeTruthy();
   });
 
   it("上传成功后让列表重取并展示新资产", async () => {
@@ -252,14 +267,14 @@ describe("媒体库屏", () => {
 
     // 第 1 页展示第 1 页数据（请求第 1 页）；总数 50、每页 24 → 共 3 页，当前页为 1。
     await waitFor(() => expect(screen.getByText("photo.png")).toBeTruthy());
-    expect(mediaApi.list).toHaveBeenCalledWith(1);
+    expect(mediaApi.list).toHaveBeenCalledWith(1, false);
     expect(screen.getByText("共 50 张")).toBeTruthy();
     expect(screen.getByTitle("3")).toBeTruthy();
     expect(screen.getByTitle("1").className).toContain("ant-pagination-item-active");
 
     // antd Pagination 的「下一页」是带 title 的 <li>；点击后请求第 2 页。
     fireEvent.click(screen.getByTitle("下一页"));
-    await waitFor(() => expect(mediaApi.list).toHaveBeenCalledWith(2));
+    await waitFor(() => expect(mediaApi.list).toHaveBeenCalledWith(2, false));
   });
 
   it("路由与地址对齐：/admin/media 打开媒体库", async () => {
@@ -271,9 +286,6 @@ describe("媒体库屏", () => {
   it("使用位置按引用类型标注：用户/站点设置不再误标为草稿", async () => {
     const used = asset();
     vi.mocked(mediaApi.list).mockResolvedValue(pageOf([used]));
-    vi.mocked(mediaApi.remove).mockRejectedValue(
-      new ApiError(409, "图片仍被内容引用", "media_in_use"),
-    );
     vi.mocked(mediaApi.detail).mockResolvedValue({
       media: used,
       references: [
@@ -303,8 +315,7 @@ describe("媒体库屏", () => {
 
     render(<App />);
     await waitFor(() => expect(screen.getByText("photo.png")).toBeTruthy());
-    fireEvent.click(screen.getByRole("button", { name: "删除" }));
-    fireEvent.click(await screen.findByRole("button", { name: "确定" }));
+    fireEvent.click(screen.getByRole("button", { name: "查看使用位置" }));
 
     expect(await screen.findByText("用户：作者甲")).toBeTruthy();
     expect(screen.getByText("站点设置：站点设置")).toBeTruthy();

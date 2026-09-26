@@ -44,6 +44,7 @@ pub struct CreateUserBody {
 
 pub fn identity_router(state: AdminState) -> Router {
     Router::new()
+        .route("/api/admin/v1/me/profile", put(update_profile))
         .route("/api/admin/v1/users", get(list_users).post(create_user))
         .route(
             "/api/admin/v1/users/{username}/roles/{role}",
@@ -58,6 +59,30 @@ pub fn identity_router(state: AdminState) -> Router {
 // ---------------------------------------------------------------------------
 // 处理器
 // ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UpdateProfileBody {
+    display_name: Option<String>,
+    bio: Option<String>,
+    expected_version: i64,
+}
+
+async fn update_profile(
+    AdminAuth { actor }: AdminAuth,
+    request_id: RequestId,
+    State(state): State<AdminState>,
+    Json(body): Json<UpdateProfileBody>,
+) -> Response {
+    match state
+        .users
+        .update_own_profile(&actor, body.display_name, body.bio, body.expected_version)
+        .await
+    {
+        Ok(profile) => Json(profile).into_response(),
+        Err(error) => admin_error(error, &request_id),
+    }
+}
 
 async fn list_users(
     AdminAuth { actor }: AdminAuth,

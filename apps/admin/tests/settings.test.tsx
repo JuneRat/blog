@@ -39,14 +39,13 @@ const logoAsset = {
   byte_size: 10,
   width: 32,
   height: 32,
-  status: "ready",
+  deleted_at: null,
   version: 2,
   created_at: "2026-01-01",
   owner_id: "u1",
   owner_display: "管理员",
   url: "/media/logo-1",
   reference_count: 0,
-  public_reference_count: 0,
 };
 
 beforeEach(() => {

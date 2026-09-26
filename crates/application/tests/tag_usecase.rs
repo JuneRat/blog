@@ -262,6 +262,38 @@ impl FakeUserRepo {
 
 #[async_trait::async_trait]
 impl UserRepository for FakeUserRepo {
+    async fn save_profile(
+        &self,
+        user: &domain::identity::User,
+        expected_version: i64,
+        now: time::OffsetDateTime,
+    ) -> Result<UserSnapshot, UseCaseError> {
+        let snapshot = user.snapshot();
+        let mut users = self.users.lock().unwrap();
+        let current = users
+            .values_mut()
+            .find(|u| u.id == snapshot.id)
+            .ok_or_else(|| UseCaseError::NotFound("用户".into()))?;
+        if current.version != expected_version || !current.is_active() {
+            return Err(UseCaseError::VersionConflict);
+        }
+        current.display_name = snapshot.display_name;
+        current.bio = snapshot.bio;
+        current.version += 1;
+        current.updated_at = now;
+        Ok(current.clone())
+    }
+
+    async fn revoke_authentication(&self, user_id: Uuid) -> Result<(), UseCaseError> {
+        let mut users = self.users.lock().unwrap();
+        let user = users
+            .values_mut()
+            .find(|u| u.id == user_id)
+            .ok_or_else(|| UseCaseError::NotFound("用户".into()))?;
+        user.auth_version += 1;
+        Ok(())
+    }
+
     /// 头像只走真实认证 HTTP 用例（server/tests）；本 fake 不实现，误用即失败。
     async fn set_avatar(
         &self,

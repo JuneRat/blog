@@ -2,6 +2,8 @@
 
 本文说明当前工具的可执行流程、边界和上线前所需证据。交付状态统一见[路线图](product-roadmap.md)；设计取舍保留在 [ADR-0005](adr/0005-consistent-backup-and-recovery.md)。当前采用单站点 PostgreSQL 的维护窗口备份与隔离恢复，不承诺在线一致备份或零数据丢失。
 
+新的 [19 表设计](database-design.md)尚未接入恢复工具。当前脚本仍使用旧表白名单、评论设置表和媒体状态；新旧结构虽然表数相同，不能互换恢复。下面的命令仅供旧结构配套版本使用，不适用于已经采用新 `0001_initial_schema.sql` 的数据库；恢复工具适配和验收将在收尾批次完成。
+
 ## 1. 当前工具实际覆盖
 
 工具为 [`scripts/recovery.py`](../scripts/recovery.py)，检查见 [`scripts/test_recovery.py`](../scripts/test_recovery.py)。
@@ -65,7 +67,7 @@ python3 -B scripts/recovery.py restore /secure/backups/blog-2026-09-26 \
 - `sessions` 已清空，旧 Cookie 无效。手工 `pg_restore` 同样必须先清空会话；OAuth 临时状态和失败限流随新进程从零开始。
 - 文章/Page 正文和公开条件、回收站、分类树、系列位置、标签关系、settings 与主题选择正确。
 - 数据库所有应存在的媒体原件与 `storage_key`、大小/校验和对应；正文图片、封面、头像、logo 的私有与公开访问符合当前引用。有效引用缺失时保持隔离。
-- `staged` 与 `pending_deletion` 状态符合[媒体生命周期](content-lifecycle.md)；确认映射与引用后才运行 `blog media reclaim`，不能用回收命令代替恢复完整性检查。
+- 此处旧版恢复流程曾使用 staged/pending_deletion 与 media reclaim。新版本已移除该状态机和命令，只提供 `blog media cleanup-staging`；不得用暂存清理代替媒体完整性检查或正式文件回收。
 - 匹配的后台 SPA 已构建，登录、编辑、发布、撤回及公开页面正常。保留核验记录后再开放写入。
 
 ## 4. 后续外部系统的恢复约束
@@ -98,3 +100,9 @@ python3 -B scripts/recovery.py restore /secure/backups/blog-2026-09-26 \
 5. 不通过恢复旧备份撤销泄露：旧备份可能重新引入口令哈希及旧会话。恢复后仍需应用必要的轮换，开放前清空会话。
 
 密码不放在命令行参数或日志中；通过标准输入传入时也不得开启会回显输入的脚本追踪。
+
+## 目标设计的恢复适配
+
+新方案实施时需同步表清单、版本识别和数据核验，覆盖 media/media_refs、post_series、评论根关系、settings.comments、audit_logs 与 sessions.auth_version。核验媒体时包含回收站记录及其仍公开的文件；核验预约内容时先隔离发布任务，确认恢复时间与状态后再恢复调度。
+
+恢复后继续清空旧会话。审计运行账号的只追加授权及独立维护身份需重新配置，因为现有 dump 使用 `--no-acl`；评论 IP 和审计保留期任务须在核验通过后启用。这些适配尚待实现与演练，不能由设计稿建表通过推定完成。

@@ -134,7 +134,7 @@ pub struct PostInteractor {
     /// 系列存在性校验（文章设置系列的前置检查；写关系仍在 PostRepository 事务内）。
     series: Arc<dyn crate::ports::SeriesRepository>,
     clock: Arc<dyn Clock>,
-    /// 封面附着的归属校验（`ensure_attachable`）。
+    /// 封面附着的可用性校验（`ensure_attachable`）。
     media_guard: Arc<dyn crate::ports::MediaRefGuard>,
 }
 
@@ -174,9 +174,9 @@ impl PostInteractor {
         if let Some((series_id, _)) = cmd.series {
             self.validate_series(series_id).await?;
         }
-        // 新文章的封面总是首次附着，一律过归属校验。
+        // 新文章的封面总是首次附着，一律过可用性校验。
         if let Some(cover_media_id) = cmd.cover_media_id {
-            crate::media::ensure_attachable(&*self.media_guard, actor, cover_media_id).await?;
+            crate::media::ensure_attachable(&*self.media_guard, cover_media_id).await?;
         }
         let post = Post::create_draft_with_metadata(
             actor.user_id,
@@ -212,12 +212,12 @@ impl PostInteractor {
         if let Some(Some((series_id, _))) = cmd.series {
             self.validate_series(series_id).await?;
         }
-        // 封面只有**换成新资产**时才过归属校验：编辑者重复提交当前封面
+        // 封面只有**换成新资产**时才过可用性校验：编辑者重复提交当前封面
         // （含编辑他人文章）不重新授权，历史引用不卡正常保存。
         if let Some(Some(cover_media_id)) = cmd.cover_media_id
             && post.snapshot().cover_media_id != Some(cover_media_id)
         {
-            crate::media::ensure_attachable(&*self.media_guard, actor, cover_media_id).await?;
+            crate::media::ensure_attachable(&*self.media_guard, cover_media_id).await?;
         }
         let new_tags = match cmd.tag_ids {
             Some(ids) => Some(self.validate_tags(ids).await?),

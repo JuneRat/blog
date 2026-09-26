@@ -323,6 +323,8 @@ async fn me(
         "user_id": actor.user_id.0,
         "username": profile.username,
         "display_name": profile.display_name,
+        "bio": profile.bio,
+        "version": profile.version,
         "avatar_media_id": profile.avatar_media_id,
         "avatar_url": profile.avatar_url,
         "permissions": actor.permissions().keys().collect::<Vec<_>>(),
@@ -341,7 +343,7 @@ struct SetAvatarBody {
 
 /// 自助设置/清除头像：本人即可，无需额外权限；CSRF/Origin 由 `AdminAuth` 统一校验。
 ///
-/// 有意不递增 `users.version`——那是会话绑定版本，递增会让本人所有会话失效。
+/// 只递增资料编辑版本，保持 `users.auth_version`，既有会话继续有效。
 async fn set_own_avatar(
     State(state): State<AdminState>,
     auth: AdminAuth,
@@ -480,12 +482,9 @@ fn auth_error(e: UseCaseError) -> Response {
         | UseCaseError::Conflict(_)
         | UseCaseError::TagInUse(_)
         | UseCaseError::CategoryInUse { .. }
-        | UseCaseError::SeriesInUse(_)
-        | UseCaseError::MediaInUse(_) => StatusCode::BAD_REQUEST,
+        | UseCaseError::SeriesInUse(_) => StatusCode::BAD_REQUEST,
         UseCaseError::NotFound(_) => StatusCode::NOT_FOUND,
         UseCaseError::Forbidden | UseCaseError::LastOwnerProtected => StatusCode::FORBIDDEN,
-        // 认证路由不涉及媒体附着；与 admin 端映射保持同码，防御未来复用。
-        UseCaseError::MediaNotAttachable => StatusCode::FORBIDDEN,
         UseCaseError::External(_) => StatusCode::BAD_GATEWAY,
         UseCaseError::VersionConflict => StatusCode::CONFLICT,
         UseCaseError::Repository(_) | UseCaseError::Render(_) => {

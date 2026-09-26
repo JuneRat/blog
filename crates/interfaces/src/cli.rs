@@ -192,8 +192,8 @@ pub enum OauthAction {
 
 #[derive(Debug, Subcommand)]
 pub enum MediaAction {
-    /// 重试回收：丢弃中断的上传、完成待删除文件的删除（幂等，可反复执行）
-    Reclaim,
+    /// 清理超期上传暂存文件，不删除正式图片或软删除记录
+    CleanupStaging,
 }
 
 #[derive(Debug, Subcommand)]
@@ -559,40 +559,18 @@ fn normalize_optional(value: Option<String>) -> Option<String> {
         .filter(|v| !v.is_empty())
 }
 
-/// 媒体库维护：回收流程是文件删除与数据库更新之间的补偿通道。
-///
-/// 上传中断（staged）与文件删除失败（pending_deletion）都会停在中间状态，
-/// 这里幂等地重试；失败项保留原状态并打印原因，可再次执行。
+/// 独立维护入口，只清理暂存区；正常及软删除媒体均保留。
 pub async fn run_media(
     media: &application::media::MediaInteractor,
     action: MediaAction,
 ) -> Result<(), String> {
     match action {
-        MediaAction::Reclaim => {
-            let report = media
-                .reclaim(&Actor::bootstrap_cli())
+        MediaAction::CleanupStaging => {
+            let removed = media
+                .cleanup_staging(&Actor::bootstrap_cli())
                 .await
                 .map_err(fmt_error)?;
-            println!(
-                "已认领并放弃超期未完成的上传（staged → pending_deletion）：{}",
-                report.abandoned_staged
-            );
-            println!("已完成文件删除（→ deleted）：{}", report.deleted);
-            println!(
-                "已清理无记录的暂存残留文件：{}",
-                report.orphaned_staging_files
-            );
-            if report.failures.is_empty() {
-                println!("没有失败项。");
-            } else {
-                println!(
-                    "失败 {} 项（保持原状态，可重复执行本命令重试）：",
-                    report.failures.len()
-                );
-                for failure in &report.failures {
-                    println!("  - {failure}");
-                }
-            }
+            println!("已清理超期暂存文件：{removed}；正式图片保持不变。");
             Ok(())
         }
     }

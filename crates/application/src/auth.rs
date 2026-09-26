@@ -214,8 +214,8 @@ impl AuthInteractor {
 
     /// 从会话令牌解析 Actor：校验会话、重新读取当前用户与权限，并核对身份修订号。
     ///
-    /// 版本比对让**跨进程**的改密/改角色/软删除同样立刻生效——CLI 在另一个进程
-    /// 改了 `users.version`，这里读到的版本就不再等于会话签发时的值。
+    /// 版本比对让**跨进程**的改密/认证撤销/软删除同样立刻生效——CLI 在另一个进程
+    /// 改了 `users.auth_version`，这里读到的版本就不再等于会话签发时的值。
     pub async fn actor_from_session(&self, token: &str) -> Result<Actor, UseCaseError> {
         let record = self.validate_session(token).await?;
         self.actor_from_validated_record(&record).await
@@ -263,8 +263,8 @@ impl AuthInteractor {
                 // A failed lookup does not prove that the session is invalid.
                 other => other,
             })?;
-        if revision != record.user_version {
-            // 账号身份材料已变化（改密/改角色/软删除）：旧会话立即失效。
+        if revision != record.auth_version {
+            // 账号身份材料已变化（改密/认证撤销/软删除）：旧会话立即失效。
             return Err(UseCaseError::Unauthenticated);
         }
         Ok(actor)
@@ -275,8 +275,9 @@ impl AuthInteractor {
         self.deps.sessions.revoke(token).await
     }
 
-    /// 账号事件入口：软删除/撤权时撤销全部会话（恢复账号不恢复旧会话）。
+    /// 明确撤销全部登录：递增认证版本，并清理该用户的会话。
     pub async fn revoke_sessions_of_user(&self, user_id: Uuid) -> Result<(), UseCaseError> {
+        self.users.revoke_authentication(user_id).await?;
         self.deps.sessions.revoke_all_for_user(user_id).await
     }
 

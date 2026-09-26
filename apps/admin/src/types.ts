@@ -195,8 +195,7 @@ export interface ThemeSettings {
 /**
  * GET /api/admin/v1/media 列表条目，同时是上传响应。
  *
- * `reference_count` 是**全部**引用数（含草稿/私密/回收站）：> 0 时后端拒绝删除；
- * `public_reference_count` 只统计构成公开来源的引用：> 0 时匿名可读取该图片。
+ * `reference_count` 是全部站内引用数；软删除保留引用，所有图片链接独立公开。
  */
 export interface MediaAsset {
   id: string;
@@ -205,15 +204,14 @@ export interface MediaAsset {
   byte_size: number;
   width: number;
   height: number;
-  status: string;
+  deleted_at: string | null;
   version: number;
   created_at: string;
-  owner_id: string;
+  owner_id: string | null;
   owner_display: string;
   /** 站内地址：正文插入与「复制地址」共用。 */
   url: string;
   reference_count: number;
-  public_reference_count: number;
 }
 
 /** GET /api/admin/v1/media?page=N */
@@ -224,7 +222,7 @@ export interface MediaPage {
   per_page: number;
 }
 
-/** 一处使用位置（删除前提示、删除被拒后定位引用）。 */
+/** 一处使用位置（已按内容阅读权限过滤）。 */
 export interface MediaReference {
   /** 引用来源：文章/页面正文、系列封面、用户头像或站点 logo。 */
   kind: "post" | "page" | "series" | "user" | "site";
@@ -233,9 +231,9 @@ export interface MediaReference {
   title: string;
   status: string;
   visibility: Visibility;
-  /** Post 回收站中的内容（Page 无软删除，恒 false）。 */
+  /** 来源内容是否在回收站。 */
   deleted: boolean;
-  /** 该引用是否让图片匿名可读。 */
+  /** 来源内容是否公开可读；与图片链接公开性无关。 */
   public: boolean;
 }
 

@@ -9,4 +9,6 @@ pub use password::{
     COMMON_PASSWORDS, PASSWORD_MAX_CHARS, PASSWORD_MIN_CHARS, PasswordError, validate_password,
 };
 pub use permissions::PermissionSet;
-pub use user::{Email, User, UserError, UserId, UserSnapshot, Username, normalize_username};
+pub use user::{
+    Email, User, UserError, UserId, UserSnapshot, UserStatus, Username, normalize_username,
+};

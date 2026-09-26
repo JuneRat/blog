@@ -151,7 +151,7 @@ pub const PERMISSION_REGISTRY: &[PermissionDescriptor] = &[
     PermissionDescriptor {
         key: "media.read",
         name: "浏览媒体库",
-        description: "浏览媒体库并预览未公开引用的图片；公开引用的图片匿名即可读取。",
+        description: "浏览共享媒体库；图片链接独立公开，使用位置按内容权限展示。",
     },
     PermissionDescriptor {
         key: "media.upload",
@@ -160,13 +160,13 @@ pub const PERMISSION_REGISTRY: &[PermissionDescriptor] = &[
     },
     PermissionDescriptor {
         key: "media.delete",
-        name: "删除本人上传的图片",
-        description: "删除本人上传且已无内容引用的图片。",
+        name: "管理本人图片回收站",
+        description: "将本人上传的图片移入回收站或恢复；链接和已有引用保留。",
     },
     PermissionDescriptor {
         key: "media.delete_any",
-        name: "删除任意图片",
-        description: "删除任意上传者且已无内容引用的图片。",
+        name: "管理全部图片回收站",
+        description: "将任意图片移入回收站或恢复；可清理超期上传暂存文件。",
     },
     PermissionDescriptor {
         key: "oauth.manage",
@@ -378,6 +378,8 @@ pub struct ProfileView {
     pub user_id: Uuid,
     pub username: String,
     pub display_name: Option<String>,
+    pub bio: Option<String>,
+    pub version: i64,
     pub avatar_media_id: Option<Uuid>,
     /// 头像站内地址（None = 无头像）。
     pub avatar_url: Option<String>,
@@ -389,6 +391,8 @@ impl ProfileView {
             user_id: snapshot.id,
             username: snapshot.username.clone(),
             display_name: snapshot.display_name.clone(),
+            bio: snapshot.bio.clone(),
+            version: snapshot.version,
             avatar_media_id: snapshot.avatar_media_id,
             avatar_url: snapshot.avatar_media_id.map(crate::media::media_url),
         }
@@ -430,7 +434,7 @@ pub struct UserInteractor {
     users: Arc<dyn UserRepository>,
     rbac: Arc<dyn RbacStore>,
     clock: Arc<dyn Clock>,
-    /// 头像附着的归属校验（`ensure_attachable`）：头像引用是无条件公开来源。
+    /// 新增头像引用的可用性校验（`ensure_attachable`）。
     media_guard: Arc<dyn crate::ports::MediaRefGuard>,
 }
 
@@ -482,19 +486,47 @@ impl UserInteractor {
             .users
             .find_by_id(actor.user_id.0)
             .await?
-            .filter(|snapshot| snapshot.deleted_at.is_none())
+            .filter(UserSnapshot::is_active)
             .ok_or_else(|| UseCaseError::NotFound("用户".into()))?;
         Ok(ProfileView::from_snapshot(&snapshot))
     }
 
+    pub async fn update_own_profile(
+        &self,
+        actor: &Actor,
+        display_name: Option<String>,
+        bio: Option<String>,
+        expected_version: i64,
+    ) -> Result<ProfileView, UseCaseError> {
+        actor.ensure_write_channel()?;
+        let snapshot = self
+            .users
+            .find_by_id(actor.user_id.0)
+            .await?
+            .filter(UserSnapshot::is_active)
+            .ok_or(UseCaseError::Unauthenticated)?;
+        if snapshot.version != expected_version {
+            return Err(UseCaseError::VersionConflict);
+        }
+        let mut user = User::reconstitute(snapshot)
+            .map_err(|error| UseCaseError::Repository(error.to_string()))?;
+        user.edit_profile(normalize_display_name(display_name), bio)
+            .map_err(|error| UseCaseError::Invalid(error.to_string()))?;
+        let result = self
+            .users
+            .save_profile(&user, expected_version, self.clock.now())
+            .await?;
+        Ok(ProfileView::from_snapshot(&result))
+    }
+
+    pub async fn revoke_authentication(&self, user_id: Uuid) -> Result<(), UseCaseError> {
+        self.users.revoke_authentication(user_id).await
+    }
+
     /// 自助设置/清除头像：只允许改本人，不需要额外权限。
     ///
-    /// 引用关系在仓储的同一事务内整体替换；`Some(id)` 要求资产存在且 `ready`。
-    /// 有意**不**递增 `users.version`（那是会话绑定版本，递增会把本人全部会话踢下线）。
-    ///
-    /// 归属校验：头像引用是无条件公开来源，只能附着本人上传、已公开或
-    /// 持 `media.read` 可见的资产（`ensure_attachable`）；重复保存当前头像
-    /// 不重新授权——历史引用（例如曾经公开后来转私有的图片）不因此卡死。
+    /// 新头像必须存在且未软删除；同一用户可以保留已软删除的当前头像。
+    /// 引用与资料、审计在仓储事务中提交，只递增编辑版本，保持登录。
     pub async fn set_own_avatar(
         &self,
         actor: &Actor,
@@ -505,20 +537,17 @@ impl UserInteractor {
             .users
             .find_by_id(actor.user_id.0)
             .await?
-            .filter(|snapshot| snapshot.deleted_at.is_none())
+            .filter(UserSnapshot::is_active)
             .ok_or_else(|| UseCaseError::NotFound("用户".into()))?;
         if let Some(id) = avatar_media_id
             && snapshot.avatar_media_id != Some(id)
         {
-            crate::media::ensure_attachable(&*self.media_guard, actor, id).await?;
+            crate::media::ensure_attachable(&*self.media_guard, id).await?;
         }
         self.users
             .set_avatar(snapshot.id, avatar_media_id, self.clock.now())
             .await?;
-        let mut updated = snapshot;
-        updated.avatar_media_id = avatar_media_id;
-        updated.updated_at = self.clock.now();
-        Ok(ProfileView::from_snapshot(&updated))
+        self.profile_of(actor).await
     }
 
     /// 账号管理列表：持有 `user.manage` 或 `role.manage` 才可读取。
@@ -609,10 +638,10 @@ impl UserInteractor {
             .map(|(actor, _)| actor)
     }
 
-    /// 构造 Actor 并同时返回账号的身份修订号（`users.version`）。
+    /// 构造 Actor 并同时返回账号的身份修订号（`users.auth_version`）。
     ///
-    /// 会话签发时绑定该版本，校验时比对：改密、改角色、软删除都会递增版本，
-    /// 因此**另一个进程**（CLI 改密、改角色）也能让旧会话立即失效。
+    /// 会话签发时绑定该版本，校验时比对：改密、认证撤销、软删除等操作递增认证版本，
+    /// 因此**另一个进程**（CLI 改密、撤销登录）也能让旧会话立即失效。
     /// 这里只读一次用户，版本是顺带得到的，不增加查询。
     pub async fn actor_with_revision(
         &self,
@@ -624,7 +653,7 @@ impl UserInteractor {
             .find_by_id(id)
             .await?
             .ok_or_else(|| UseCaseError::NotFound("作者用户".into()))?;
-        let version = snapshot.version;
+        let version = snapshot.auth_version;
         let user =
             User::reconstitute(snapshot).map_err(|e| UseCaseError::Repository(e.to_string()))?;
         if !user.is_active() {
@@ -737,7 +766,7 @@ impl RoleInteractor {
             .find_by_username(&username)
             .await?
             .ok_or_else(|| UseCaseError::NotFound(format!("用户 {username}")))?;
-        if user.deleted_at.is_some() {
+        if !user.is_active() {
             return Err(UseCaseError::Forbidden);
         }
         Ok(user)

@@ -43,14 +43,13 @@ const asset: MediaAsset = {
   byte_size: 10,
   width: 8,
   height: 8,
-  status: "ready",
+  deleted_at: null,
   version: 2,
   created_at: "2026-01-01",
   owner_id: "u1",
   owner_display: "作者",
   url: "/media/m1",
   reference_count: 0,
-  public_reference_count: 0,
 };
 
 function profile(avatarMediaId: string | null) {

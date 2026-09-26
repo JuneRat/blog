@@ -1,6 +1,8 @@
 # 领域模型与不变量
 
-本文描述当前 `domain` crate。内容的完整操作语义见[内容生命周期](content-lifecycle.md)，跨层依赖见[架构](architecture.md)，数据库并发与约束见[数据库设计](database-design.md)。
+本文描述当前 `domain` crate。内容的完整操作语义见[内容生命周期](content-lifecycle.md)，跨层依赖见[架构](architecture.md)，数据库并发与约束见[当前数据库实现](database-current.md)。
+
+[ADR-0016](adr/0016-confirmed-blog-schema.md) 已采纳新的领域规则：编辑/认证版本分离、系列多对多、定时发布、Page 回收站、媒体独立公开和多级评论。下文类型与方法仍对应现有代码；实施时按[目标数据库设计](database-design.md)更新，不再沿用旧规则作为新方案约束。
 
 ## 当前模块
 
@@ -15,7 +17,7 @@
 | [identity/user.rs](../crates/domain/src/identity/user.rs) | `User`、`UserId`、`UserSnapshot`、`Username`、`Email` | 用户名与资料格式、身份修订号语义 |
 | [identity/password.rs](../crates/domain/src/identity/password.rs) | `PasswordError`、密码策略与常量 | 新密码长度、用户名包含与常见口令规则 |
 | [identity/permissions.rs](../crates/domain/src/identity/permissions.rs) | `PermissionSet` | 权限并集、成员判断与子集关系 |
-| [media.rs](../crates/domain/src/media.rs) | `Media`、媒体状态、图片格式与校验结果 | 资产状态转换、上传大小与声明尺寸、文件名规范化 |
+| [media.rs](../crates/domain/src/media.rs) | `Media`、软删除标记、图片格式与校验结果 | 软删除和恢复、上传大小与声明尺寸、文件名规范化 |
 | [comment.rs](../crates/domain/src/comment.rs) | `CommentBody`、`CommentNickname`、`CommentStatus`、`ModerationAction` | 评论正文与昵称校验、审核动作与状态 |
 | [settings.rs](../crates/domain/src/settings.rs) | `SiteSettings` | 站点标题、描述与 logo 的完整写入值 |
 
@@ -57,7 +59,7 @@ Post/Page 第一次发布后禁止改 slug，撤回不解锁。Page 在创建、
 | 分类父节点存在、移动后无环、含子节点或引用时拒绝删除 | 分类用例与分类树事务锁 |
 | 系列成员完整性、位置唯一、重排与跨系列移动 | 系列/文章用例、系列行锁、版本条件和数据库约束 |
 | 标签、分类、系列是否被文章引用 | 对应目录删除端口；聚合不查询其他内容 |
-| 媒体存在、可用、引用权、禁止删除仍被引用资产 | 应用授权与媒体引用事务协议 |
+| 新媒体引用可用性、软删除保留历史引用、禁止物理删除仍被引用资产 | 应用授权与媒体引用事务协议 |
 | 作者归属、own/any 权限、Page 站点权限 | 应用 `Actor` 与授权用例 |
 | 最后 Owner、最后登录方式、角色委派上限 | 身份用例与身份变更锁 |
 
@@ -69,7 +71,7 @@ Post 只引用 `identity::UserId`，不引用 User 聚合或权限实现。公�
 
 `UserSnapshot::version` 是身份修订号，用于会话有效性判定；凭据、角色和停用变更递增，头像修改不递增。它不能作为普通资料编辑的通用乐观锁版本。identity 按 user/password/permissions 拆分，通过 [mod.rs](../crates/domain/src/identity/mod.rs) 显式重导出；调用方继续从 `domain::identity` 导入。
 
-`Media` 区分 `staged`、`ready`、`pending_deletion`、`deleted`，只允许明确的状态转换；未完成上传可从 staged 进入待删除状态。删除决定与文件删除完成分开，以支持重试。只有 ready 资产可被引用，但 ready 本身不代表匿名可读：公开性实时取决于引用它的内容。
+`Media` 在文件就位后登记，使用 deleted_at 表达回收站；软删除/恢复改变编辑版本，保留路径、文件与引用。链接独立公开；新引用要求未软删除，历史引用可继续使用。没有 staged/ready/pending_deletion 等持久化状态。
 
 图片校验接受 PNG、JPEG、GIF、WebP，按文件头识别格式与尺寸；上限为 10 MiB、单边 12,000 像素、总像素 60,000,000。它不完整解码图片，不能据此宣称已检查所有损坏文件。存储路径由资产 ID 决定，原始文件名只供展示。
 

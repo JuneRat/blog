@@ -2,6 +2,8 @@
 
 本文描述当前 HTTP 路由与通用请求约定。业务状态和可见性见[内容生命周期](content-lifecycle.md)，权限和会话见[身份、权限与后台](identity-and-admin.md)。项目仍在开发阶段，客户端应随接口变更同步更新。
 
+[新建库基线](database-current.md)已接入，身份、sessions 与媒体已适配。本文的单系列载荷、Page 物理删除与评论旧契约仍待切换，相关路由虽然保留，但尚不能在新库上完成全部操作。新接口在相应用例实施时同步调整。
+
 路由与传输 DTO 的实现入口：[内容和设置](../crates/interfaces/src/http_admin.rs)、[身份](../crates/interfaces/src/http_identity.rs)、[媒体](../crates/interfaces/src/http_media.rs)、[认证](../crates/interfaces/src/http_auth.rs)。
 
 ## 通用约定
@@ -11,7 +13,7 @@
 - 请求带 Origin 时校验其与 Host 的关系；当前接受 `http://{Host}` 或 `https://{Host}`，缺失 Origin 不拒绝。跨源拒绝为 403；普通管理写入的 CSRF 失败为 400，退出和自助改密的 CSRF 失败为 403。
 - JSON 请求使用 `Content-Type: application/json`，媒体上传例外，直接发送图片字节。
 - Post、Page 和 Media 的路径标识是 UUID。Tag、Category、Series 使用 slug；角色分配路径使用 username 和 role key。管理身份不应统一推断为 slug 或 UUID。
-- 每个响应有 `x-request-id`，应用错误体也有 `request_id`。报障优先保留响应头编号，当前存在媒体上传错误体编号不同的例外，见下方追踪说明。
+- 每个响应有 `x-request-id`，应用错误体也有 `request_id`。报障时保留该编号。
 
 ## 评论
 
@@ -28,11 +30,14 @@
 | `GET /auth/callback/{provider}` | OAuth 回调 |
 | `POST /auth/login/password` | `{ "username": "sun", "password": "…" }`，成功设置会话 cookie |
 | `POST /auth/logout` | 会话、CSRF 与来源校验通过后退出 |
-| `GET /api/admin/v1/me` | 当前用户、有效权限和 CSRF token |
+| `GET /api/admin/v1/me` | 当前用户、有效权限、CSRF token、`bio` 和资料编辑 `version` |
+| `PUT /api/admin/v1/me/profile` | 本人 `display_name`、`bio` 及必填 `expected_version`；返回资料与新版本，保持登录 |
 | `POST /api/admin/v1/me/password` | `new_password`；已启用密码时还需 `current_password` |
 | `PUT /api/admin/v1/me/avatar` | `{ "avatar_media_id": "UUID" }`；`null` 清除 |
 
 密码登录是匿名写入口，没有可用的会话 CSRF token，执行来源检查。密码登录和本人资料请求体上限为 4 KiB；密码失败与限流行为见下方错误表。
+
+资料 PUT 为整值替换：`display_name`、`bio` 省略或 `null` 表示清空，简介按纯文本存储。版本过期返回 409；未知字段拒绝。只增 `users.version`，不修改 `auth_version`，并同事务追加脱敏审计。改密递增认证版本并轮换会话；角色变更保持 Cookie 有效，权限在下一次请求生效。
 
 ## 文章与回收站
 
@@ -120,20 +125,23 @@ Page 没有作者，使用站点级 `page.*` 权限。
 | `GET /settings/theme` | 所选 slug、生效 slug、来源、版本与可用主题 |
 | `PUT /settings/theme` | `slug`、`expected_version` |
 
-`site` 是整组替换，省略或传 `null` 的 logo 会被清除；设置 logo 还需要满足媒体附着权限。未配置的设置版本为 0。仅注册 `site` 和 `theme`，`/settings/oauth` 等未知分组返回 404。生效优先级见[配置参考](configuration.md)。
+`site` 是整组替换，省略或传 `null` 的 logo 会被清除；新 logo 要求图片存在且未移入回收站，原有引用可继续保留。未配置的设置版本为 0。仅注册 `site` 和 `theme`，`/settings/oauth` 等未知分组返回 404。生效优先级见[配置参考](configuration.md)。
 
 ## 媒体
 
 | 方法与路径 | 行为 / 权限 |
 |---|---|
-| `GET /media?page=1` | 分页，`media.read` |
+| `GET /media?page=1&trash=false` | 正常库分页；trash=true 查询回收站，`media.read` |
 | `POST /media?filename=…` | 裸图片字节上传，`media.upload`；文件名只用于展示 |
 | `GET /media/{id}` | 资产详情、可见引用位置及 `hidden_references`，`media.read` |
-| `DELETE /media/{id}` | JSON 必须含 `expected_version`；本人 `media.delete` / 任意 `media.delete_any`，成功 204 |
+| `DELETE /media/{id}` | 移入回收站，保留文件和引用；JSON 必须含 `expected_version`，本人 `media.delete` / 任意 `media.delete_any`，成功 204 |
+| `POST /media/{id}/restore` | 恢复；版本、权限和成功状态码同上 |
 
 上传不是 multipart。业务上限为 10 MiB、单边 12000 px、总计 6000 万像素，仅支持 PNG/JPEG/GIF/WebP，格式从内容识别；HTTP 上传体上限为 12 MiB，最终仍执行业务大小校验。
 
-文件读取路径为站点根下的 `GET /media/{id}`，不含管理前缀。匿名可见性由公开引用决定，公开响应 `no-cache` 配 ETag，后台私有预览 `no-store`。完整引用、附着和回收规则见[内容生命周期](content-lifecycle.md)。
+媒体 DTO 使用 deleted_at（null 表示正常库），不再返回 status 或 public_reference_count。owner_id 可空；reference_count 包含所有站内引用，软删除不要求其为零。上传初始 version 为 1。
+
+文件读取为站点根下的 GET/HEAD /media/{id}，不含管理前缀。所有已登记图片，包括回收站图片，均独立公开；不校验 Cookie 或查询引用。使用 `public, max-age=31536000, immutable` 与 SHA-256 ETag，命中返回 304。来源内容的标题仍按阅读权限过滤。完整规则见[内容生命周期](content-lifecycle.md)。
 
 ## 版本与请求限制
 
@@ -161,9 +169,9 @@ Page 没有作者，使用站点级 `page.*` 权限。
 |---|---|
 | 400 | `invalid_request`（含使用 `AdminAuth` 的管理写入 CSRF 校验失败） |
 | 401 | `unauthenticated`、`invalid_credentials`；带 `WWW-Authenticate: Session` |
-| 403 | `forbidden`（含退出/自助改密的 CSRF 失败）、`last_owner`、`media_not_attachable` |
+| 403 | `forbidden`（含退出/自助改密的 CSRF 失败）、`last_owner` |
 | 404 | `not_found` |
-| 409 | `version_conflict`、`conflict`、`username_taken`、`email_taken`、`tag_in_use`、`category_in_use`、`series_in_use`、`media_in_use` |
+| 409 | `version_conflict`、`conflict`、`username_taken`、`email_taken`、`tag_in_use`、`category_in_use`、`series_in_use` |
 | 429 | `rate_limited`；带 `Retry-After` |
 | 502 | `external_error` |
 | 500 | `internal_error`；响应不暴露内部错误细节 |
@@ -172,4 +180,4 @@ Page 没有作者，使用站点级 `page.*` 权限。
 
 上表覆盖管理接口和密码认证的应用错误。OAuth 登录启动与回调仍使用纯文本错误；非法 JSON、UUID 路径解析、请求体超限和未注册路由等也可能由 Axum 直接拒绝，当前并未全部规范为上述 JSON 形态，客户端需处理非 JSON 错误响应。
 
-完成日志记录方法、路径、状态、耗时和已验证的 actor，不记录 query、Cookie、token 或正文。大多数应用错误复用请求上下文编号；当前媒体上传处理器另行生成错误体的 `request_id`，可能与全站响应头编号不同，定位完成日志以 `x-request-id` 为准。这是请求追踪能力，不能替代角色变更、身份绑定等动作级审计；审计交付范围见[路线图](product-roadmap.md)。
+完成日志记录方法、路径、状态、耗时和已验证的 actor，不记录 query、Cookie、token 或正文。应用错误复用请求上下文编号，媒体上传的错误体与 x-request-id 响应头保持一致。这是请求追踪能力，不能替代角色变更、身份绑定等动作级审计；审计交付范围见[路线图](product-roadmap.md)。

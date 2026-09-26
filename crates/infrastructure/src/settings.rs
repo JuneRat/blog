@@ -42,10 +42,8 @@ impl SettingsStore for PostgresSettingsStore {
     /// UPSERT + 版本 CAS：插入路径带出版本 1；更新路径要求版本匹配，
     /// 否则 0 行受影响（StaleConflict），不覆盖并发写入。
     ///
-    /// 站点 logo 的 id 存在 `site` 值的 JSONB 里（用户确认的取舍），但引用关系
-    /// 仍写进 `content_media_refs`，且与配置行**同一事务**：删除保护与公开来源
-    /// 继续以引用表为唯一判据。JSON 里的 id 没有 FK 兜底，`ready` 校验由
-    /// `sync_media_refs` 在锁内完成——指向不可用资产的保存整次回滚。
+    /// logo ID 存在 site JSONB 中，media_refs 与配置行在同一事务同步。
+    /// 新引用要求媒体存在且未软删除，原值可以保留历史引用；校验失败整体回滚。
     async fn save_site(
         &self,
         value: &SiteSettingsValue,

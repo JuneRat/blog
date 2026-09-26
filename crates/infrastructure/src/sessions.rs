@@ -173,7 +173,7 @@ impl InMemorySessionStore {
 
 #[async_trait]
 impl SessionStore for InMemorySessionStore {
-    async fn create(&self, user_id: Uuid, user_version: i64) -> Result<String, UseCaseError> {
+    async fn create(&self, user_id: Uuid, auth_version: i64) -> Result<String, UseCaseError> {
         // 令牌生成需要系统随机；由应用层 SecureRandom 注入更纯粹，
         // 但存储自身也必须保证摘要在同一路径下计算，故内部直接生成。
         let token = opaque_token()?;
@@ -193,7 +193,7 @@ impl SessionStore for InMemorySessionStore {
                 csrf_token,
                 created_at: now,
                 last_seen_at: now,
-                user_version,
+                auth_version,
             },
         });
         state.by_user.entry(user_id).or_default().push(digest);
@@ -252,7 +252,7 @@ pub const SESSION_LOCK: (i32, i32) = (2048002, 1);
 /// 与 [`InMemorySessionStore`] 使用同一套令牌形态、摘要算法与过期语义，
 /// 差别只在状态位置：
 /// - 重启不清空；服务与运维进程（或多个实例）看到同一份会话；
-/// - 另一个进程的 `revoke_all_for_user` 立刻生效，不再只靠 `users.version` 兜底；
+/// - 另一个进程的 `revoke_all_for_user` 立刻生效，不再只靠 `users.auth_version` 兜底；
 /// - 代价是每次校验都要写一次 `last_seen_at`（空闲续期），并依赖数据库可用性。
 ///
 /// 时钟由构造时注入：生产用系统时钟，测试可在不 sleep 的情况下推进过期。
@@ -314,7 +314,7 @@ impl PostgresSessionStore {
 
 #[async_trait]
 impl SessionStore for PostgresSessionStore {
-    async fn create(&self, user_id: Uuid, user_version: i64) -> Result<String, UseCaseError> {
+    async fn create(&self, user_id: Uuid, auth_version: i64) -> Result<String, UseCaseError> {
         let token = opaque_token()?;
         let digest = sha256_hex(token.as_bytes());
         let csrf_token = opaque_token()?;
@@ -362,13 +362,13 @@ impl SessionStore for PostgresSessionStore {
 
         sqlx::query(
             "INSERT INTO sessions \
-                 (token_hash, user_id, csrf_token, user_version, created_at, last_seen_at, expires_at) \
+                 (token_hash, user_id, csrf_token, auth_version, created_at, last_seen_at, expires_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7)",
         )
         .bind(&digest)
         .bind(user_id)
         .bind(&csrf_token)
-        .bind(user_version)
+        .bind(auth_version)
         .bind(now)
         .bind(now)
         .bind(expires_at)
@@ -386,11 +386,13 @@ impl SessionStore for PostgresSessionStore {
         let idle_cutoff = self.idle_cutoff(now);
 
         // 有效边界与内存实现逐字对齐（>=，不是 >）：过期/未知都不返回记录。
-        // RETURNING 给出**更新后**的 last_seen_at（= now），与内存返回的续期结果一致。
+        // 身份快照有效才刷新；GREATEST 避免并发请求或时钟回拨把活跃时间往回写。
         let row = sqlx::query(
-            "UPDATE sessions SET last_seen_at = $2 \
-             WHERE token_hash = $1 AND expires_at >= $2 AND last_seen_at >= $3 \
-             RETURNING user_id, csrf_token, created_at, last_seen_at, user_version",
+            "UPDATE sessions s SET last_seen_at = GREATEST(s.last_seen_at, $2) \
+             FROM users u WHERE s.token_hash = $1 AND s.expires_at >= $2 AND s.last_seen_at >= $3 \
+             AND u.id = s.user_id AND u.status = 'active' AND u.deleted_at IS NULL \
+             AND u.auth_version = s.auth_version \
+             RETURNING s.user_id, s.csrf_token, s.created_at, s.last_seen_at, s.auth_version",
         )
         .bind(&digest)
         .bind(now)
@@ -419,7 +421,7 @@ impl SessionStore for PostgresSessionStore {
             csrf_token: row.try_get("csrf_token").map_err(repo_err)?,
             created_at: row.try_get("created_at").map_err(repo_err)?,
             last_seen_at: row.try_get("last_seen_at").map_err(repo_err)?,
-            user_version: row.try_get("user_version").map_err(repo_err)?,
+            auth_version: row.try_get("auth_version").map_err(repo_err)?,
         }))
     }
 

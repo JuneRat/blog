@@ -128,8 +128,8 @@ pub struct PostSnapshot {
     pub content: String,
     /// 封面所引用的媒体资产（None = 无封面）。
     ///
-    /// 与正文引用同源：保存时把 `{封面} ∪ 正文图片` 写进 `content_media_refs`，
-    /// 因此「仍被引用不能删除」与「匿名访问跟随内容公开状态」对封面同样成立。
+    /// 与正文引用同源：保存时把 `{封面} ∪ 正文图片` 写进 `media_refs`，
+    /// 为使用统计与独立物理清理保留依据；图片 URL 不受内容公开状态限制。
     pub cover_media_id: Option<Uuid>,
     pub series_order: Option<i32>,
     pub status: PostStatus,

@@ -62,7 +62,7 @@ pub struct SettingsInteractor {
     /// 装配回退值：环境变量/内置默认值（server 装配层构造，进程内不变）。
     fallback: SiteInfo,
     themes: Option<(Arc<dyn ThemeSettingsStore>, Arc<ThemeRegistry>)>,
-    /// 站点 logo 附着的归属校验（`ensure_attachable`）：logo 引用是无条件公开来源。
+    /// 站点 logo 附着的可用性校验（`ensure_attachable`）。
     media_guard: Arc<dyn crate::ports::MediaRefGuard>,
 }
 
@@ -267,14 +267,13 @@ impl SettingsInteractor {
             return Ok(self.view_of(record.value.clone(), record.version));
         }
 
-        // logo 只有**换成新资产**时才过归属校验：站点 logo 引用是无条件
-        // 公开来源，不得把他人私有图片经 settings 变成公开图片。
+        // 更换 logo 时要求媒体可用；同一来源保留历史引用。
         if let Some(logo_media_id) = logo_media_id
             && !current
                 .as_ref()
                 .is_some_and(|record| record.value.logo_media_id == Some(logo_media_id))
         {
-            crate::media::ensure_attachable(&*self.media_guard, actor, logo_media_id).await?;
+            crate::media::ensure_attachable(&*self.media_guard, logo_media_id).await?;
         }
 
         match self

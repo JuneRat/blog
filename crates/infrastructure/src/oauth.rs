@@ -460,7 +460,7 @@ impl OAuthConfigStore for PostgresOAuthConfigStore {
         sqlx::query(
             "INSERT INTO settings (key, value, version, updated_at) \
              VALUES ('oauth', $1, 1, now()) \
-             ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()",
+             ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, version = settings.version + 1, updated_at = now() WHERE settings.value IS DISTINCT FROM EXCLUDED.value",
         )
         .bind(value)
         .execute(&self.pool)
@@ -494,7 +494,7 @@ impl OAuthAccountStore for PostgresOAuthAccountStore {
         let row: Option<(Uuid,)> = sqlx::query_as(
             "SELECT oa.user_id FROM oauth_accounts oa \
              JOIN users u ON u.id = oa.user_id \
-             WHERE oa.provider = $1 AND oa.provider_user_id = $2 AND u.deleted_at IS NULL",
+             WHERE oa.provider = $1 AND oa.subject = $2 AND u.status = 'active' AND u.deleted_at IS NULL",
         )
         .bind(provider_key)
         .bind(provider_user_id)
@@ -509,31 +509,43 @@ impl OAuthAccountStore for PostgresOAuthAccountStore {
         user_id: Uuid,
         provider_key: &str,
         provider_user_id: &str,
-        email: Option<String>,
+        _email: Option<String>,
     ) -> Result<(), UseCaseError> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| UseCaseError::Repository(e.to_string()))?;
+        crate::persistence::acquire_identity_lock(&mut *tx)
+            .await
+            .map_err(|e| UseCaseError::Repository(e.to_string()))?;
+        sqlx::query("SELECT id FROM users WHERE id=$1 AND status='active' AND deleted_at IS NULL FOR UPDATE")
+            .bind(user_id).fetch_optional(&mut *tx).await
+            .map_err(|e| UseCaseError::Repository(e.to_string()))?
+            .ok_or_else(|| UseCaseError::NotFound("用户".into()))?;
         let result = sqlx::query(
-            "INSERT INTO oauth_accounts (id, user_id, provider, provider_user_id, email, created_at, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, now(), now()) \
-             ON CONFLICT (provider, provider_user_id) DO NOTHING",
+            "INSERT INTO oauth_accounts (user_id, provider, subject) VALUES ($1, $2, $3) \
+             ON CONFLICT (provider, subject) DO NOTHING",
         )
-        .bind(Uuid::now_v7())
         .bind(user_id)
         .bind(provider_key)
         .bind(provider_user_id)
-        .bind(email)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(|e| UseCaseError::Repository(e.to_string()))?;
         if result.rows_affected() == 0 {
-            // 绑定冲突：该外部身份已属于某个账号；邮箱碰撞不自动合并。
             return Err(UseCaseError::Conflict(ConflictKind::ExternalIdentity));
         }
-        sqlx::query("UPDATE users SET version = version + 1, updated_at = now() WHERE id = $1")
+        sqlx::query("UPDATE users SET version=version+1, auth_version=auth_version+1, updated_at=now() WHERE id=$1")
+            .bind(user_id).execute(&mut *tx).await.map_err(|e| UseCaseError::Repository(e.to_string()))?;
+        sqlx::query("DELETE FROM sessions WHERE user_id=$1")
             .bind(user_id)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await
             .map_err(|e| UseCaseError::Repository(e.to_string()))?;
-        Ok(())
+        tx.commit()
+            .await
+            .map_err(|e| UseCaseError::Repository(e.to_string()))
     }
 
     async fn unbind(
@@ -552,6 +564,18 @@ impl OAuthAccountStore for PostgresOAuthAccountStore {
             .await
             .map_err(|e| UseCaseError::Repository(e.to_string()))?;
 
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM oauth_accounts WHERE user_id=$1 AND provider=$2 AND subject=$3)",
+        )
+        .bind(user_id).bind(provider_key).bind(provider_user_id)
+        .fetch_one(&mut *tx).await.map_err(|e| UseCaseError::Repository(e.to_string()))?;
+        if !exists {
+            return tx
+                .commit()
+                .await
+                .map_err(|e| UseCaseError::Repository(e.to_string()));
+        }
+
         let (remaining, password): (i64, Option<String>) = sqlx::query_as(
             "SELECT \
                 (SELECT count(*) FROM oauth_accounts WHERE user_id = $1) - 1, \
@@ -562,14 +586,14 @@ impl OAuthAccountStore for PostgresOAuthAccountStore {
         .await
         .map_err(|e| UseCaseError::Repository(e.to_string()))?;
 
-        // 解绑不能去掉最后一种有效登录方式（本版未开放密码登录）。
+        // 解绑必须保留另一外部身份或本地密码。
         if remaining <= 0 && password.is_none() {
             return Err(UseCaseError::Forbidden);
         }
 
         let result = sqlx::query(
             "DELETE FROM oauth_accounts \
-             WHERE user_id = $1 AND provider = $2 AND provider_user_id = $3",
+             WHERE user_id = $1 AND provider = $2 AND subject = $3",
         )
         .bind(user_id)
         .bind(provider_key)
@@ -578,7 +602,12 @@ impl OAuthAccountStore for PostgresOAuthAccountStore {
         .await
         .map_err(|e| UseCaseError::Repository(e.to_string()))?;
         if result.rows_affected() > 0 {
-            sqlx::query("UPDATE users SET version = version + 1, updated_at = now() WHERE id = $1")
+            sqlx::query("UPDATE users SET version = version + 1, auth_version = auth_version + 1, updated_at = now() WHERE id = $1")
+                .bind(user_id)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| UseCaseError::Repository(e.to_string()))?;
+            sqlx::query("DELETE FROM sessions WHERE user_id=$1")
                 .bind(user_id)
                 .execute(&mut *tx)
                 .await
@@ -591,8 +620,8 @@ impl OAuthAccountStore for PostgresOAuthAccountStore {
 
     async fn list_for_user(&self, user_id: Uuid) -> Result<Vec<ExternalIdentity>, UseCaseError> {
         let rows = sqlx::query(
-            "SELECT provider, provider_user_id, email FROM oauth_accounts WHERE user_id = $1 \
-             ORDER BY provider, provider_user_id",
+            "SELECT provider, subject FROM oauth_accounts WHERE user_id = $1 \
+             ORDER BY provider, subject",
         )
         .bind(user_id)
         .fetch_all(&self.pool)
@@ -605,11 +634,9 @@ impl OAuthAccountStore for PostgresOAuthAccountStore {
                         .try_get("provider")
                         .map_err(|e| UseCaseError::Repository(e.to_string()))?,
                     provider_user_id: row
-                        .try_get("provider_user_id")
+                        .try_get("subject")
                         .map_err(|e| UseCaseError::Repository(e.to_string()))?,
-                    email: row
-                        .try_get("email")
-                        .map_err(|e| UseCaseError::Repository(e.to_string()))?,
+                    email: None,
                 })
             })
             .collect()

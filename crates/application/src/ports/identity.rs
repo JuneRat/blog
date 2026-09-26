@@ -14,21 +14,22 @@ pub struct PasswordCredential {
     pub user_id: Uuid,
     /// PHC 格式的 Argon2id 字符串（算法与参数自描述）。
     pub password_hash: String,
-    /// 读取时的 `users.version`（身份修订号）：会话签发时绑定它，避免并发改密后用旧口令建会话。
-    pub version: i64,
+    /// 读取时的认证修订号，会话签发绑定它，避免并发改密后用旧口令建会话。
+    pub auth_version: i64,
 }
 
 /// 账号管理列表行：用户基本字段 + 是否仍有登录方式。
 ///
 /// 「是否可登录」是最后 Owner 保护判定的输入（docs §3），界面据此在移除 Owner
 /// 角色前给出提示；因此它必须与 `PostgresRbacStore::active_owner_count` 用同一套
-/// 定义——未软删除，且至少一条 oauth_accounts 或已启用本地密码。
+/// 定义——active 且未软删除，并且至少一条 oauth_accounts 或已启用本地密码。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AdminUserRow {
     pub id: Uuid,
     pub username: String,
     pub email: Option<String>,
     pub display_name: Option<String>,
+    pub status: domain::identity::UserStatus,
     pub deleted: bool,
     /// `users.password_hash IS NOT NULL`。
     pub password_enabled: bool,
@@ -37,9 +38,11 @@ pub struct AdminUserRow {
 }
 
 impl AdminUserRow {
-    /// 未软删除且至少一种登录方式：与 RBAC 存储的最后 Owner 判定同义。
+    /// active 且未软删除并至少一种登录方式：与最后 Owner 判定同义。
     pub fn can_login(&self) -> bool {
-        !self.deleted && (self.password_enabled || self.external_identities > 0)
+        self.status == domain::identity::UserStatus::Active
+            && !self.deleted
+            && (self.password_enabled || self.external_identities > 0)
     }
 }
 
@@ -50,11 +53,20 @@ pub trait UserRepository: Send + Sync {
     async fn find_by_id(&self, id: Uuid) -> Result<Option<UserSnapshot>, UseCaseError>;
     async fn find_by_username(&self, username: &str) -> Result<Option<UserSnapshot>, UseCaseError>;
 
+    /// 本人资料按编辑版本提交，保留 auth_version；返回同次事务的用户记录。
+    async fn save_profile(
+        &self,
+        user: &domain::identity::User,
+        expected_version: i64,
+        now: OffsetDateTime,
+    ) -> Result<UserSnapshot, UseCaseError>;
+
+    /// 同事务递增认证修订号并清理会话，用于明确的全部会话撤销。
+    async fn revoke_authentication(&self, user_id: Uuid) -> Result<(), UseCaseError>;
+
     /// 设置/清除头像（自助；仅本人）。
     ///
-    /// **不递增 `users.version`**：该版本是会话绑定的身份修订号，递增会让该用户的所有
-    /// 会话立即失效——换个头像不该把人踢下线。头像因此是后写覆盖，没有 CAS。
-    /// 头像的媒体引用在同一事务内整体替换；`Some(id)` 时资产必须存在且 `ready`。
+    /// 递增资料编辑 version，保持 auth_version；头像引用与列同事务替换。
     async fn set_avatar(
         &self,
         user_id: Uuid,
@@ -71,7 +83,7 @@ pub trait UserRepository: Send + Sync {
     //
     // 口令材料单独走这几个方法，不进入 `UserSnapshot`，避免哈希随实体到处传播。
 
-    /// 写入/覆盖密码哈希（调用方已完成策略校验与哈希），并递增 `users.version`。
+    /// 写入密码哈希并递增 version/auth_version，同事务删除既有持久会话。
     ///
     /// **无条件覆盖**，只用于受控重置/设置（`user.manage`）：那是明确要「以本次为准」。
     /// 任何可能被并发写入抢先的场景都必须走 [`Self::compare_and_set_password_hash`]。
@@ -80,7 +92,7 @@ pub trait UserRepository: Send + Sync {
     /// 条件写入（compare-and-swap）：仅当当前值等于 `expected` 时替换，并递增版本。
     ///
     /// `expected = None` 表示「当前必须为空」（OAuth 用户设置初始密码）。
-    /// 写入成功返回本次更新原子产生的版本，未命中返回 None。
+    /// 写入成功返回本次更新原子产生的 auth_version，未命中返回 None。
     /// 会话必须绑定该版本，不能重新读取并借用后续凭据变更的版本。
     /// 用途是让并发的凭据写入不会互相覆盖：
     /// 登录时的透明升级、自助改密、设置初始密码都走这里——否则一次并发的
@@ -92,7 +104,7 @@ pub trait UserRepository: Send + Sync {
         new_hash: &str,
     ) -> Result<Option<i64>, UseCaseError>;
 
-    /// 清除密码哈希（禁用密码登录），并递增 `users.version`。
+    /// 清除密码哈希，递增 version/auth_version 并删除既有持久会话。
     ///
     /// 不做保护：只应在「确定还有其他登录方式」时调用。带保护请用
     /// [`Self::clear_password_hash_guarded`]。
@@ -108,8 +120,8 @@ pub trait UserRepository: Send + Sync {
         user_id: Uuid,
     ) -> Result<ClearPasswordOutcome, UseCaseError>;
 
-    /// 未软删除用户的密码凭据；未设置密码或已软删除返回 None。
-    /// 软删除用户在查询层就被排除，登录失败路径因此无法区分「不存在」与「已停用」。
+    /// active 且未软删除用户的密码凭据；未设置密码或已停用返回 None。
+    /// 无效用户在查询层排除，登录失败路径因此无法区分「不存在」与「已停用」。
     async fn find_password_credential(
         &self,
         username: &str,
@@ -201,12 +213,12 @@ pub struct SessionRecord {
     pub csrf_token: String,
     pub created_at: OffsetDateTime,
     pub last_seen_at: OffsetDateTime,
-    /// 签发时账号的 `users.version`（身份修订号）。
+    /// 签发时账号的 `users.auth_version`。
     ///
-    /// 校验会话时与当前版本比对：改密、改角色、软删除都会递增该版本，
+    /// 校验会话时与当前版本比对：改密、撤销全部会话、软删除等递增该版本，
     /// 因此**跨进程**动作（例如运维在另一个进程跑 `blog user passwd`）也能
     /// 让旧会话立即失效，而不依赖只在同一进程有效的「内存撤销」。
-    pub user_version: i64,
+    pub auth_version: i64,
 }
 
 /// 会话存储端口：不透明令牌 + 服务端摘要，有 TTL 与容量上限。
@@ -219,12 +231,12 @@ pub struct SessionRecord {
 #[async_trait]
 pub trait SessionStore: Send + Sync {
     /// 创建会话，返回不透明令牌（明文只出现一次；服务端保存验证摘要）。
-    /// `user_version` 为签发时账号的身份修订号（`users.version`），校验时用于比对。
-    async fn create(&self, user_id: Uuid, user_version: i64) -> Result<String, UseCaseError>;
+    /// `auth_version` 为签发时账号的认证修订号，校验时比对，不能随活跃刷新同步。
+    async fn create(&self, user_id: Uuid, auth_version: i64) -> Result<String, UseCaseError>;
     /// 校验令牌并刷新 last_seen；过期/未知/已撤销返回 None。
     async fn validate(&self, token: &str) -> Result<Option<SessionRecord>, UseCaseError>;
     async fn revoke(&self, token: &str) -> Result<(), UseCaseError>;
-    /// 撤销某用户全部会话（账号软删除/撤权入口调用）。
+    /// 物理清理用户会话；认证撤销需先由身份事务递增 auth_version。
     async fn revoke_all_for_user(&self, user_id: Uuid) -> Result<(), UseCaseError>;
 }
 

@@ -22,6 +22,19 @@ pub async fn migrate_schema(
     pool: &PgPool,
     migrations_dir: impl AsRef<std::path::Path>,
 ) -> Result<(), UseCaseError> {
+    let legacy: bool = sqlx::query_scalar(
+        "SELECT to_regclass('users') IS NOT NULL AND NOT EXISTS ( \
+         SELECT 1 FROM information_schema.columns \
+         WHERE table_schema = current_schema() AND table_name = 'users' AND column_name = 'auth_version')",
+    )
+    .fetch_one(pool)
+    .await
+    .map_err(|error| UseCaseError::Repository(error.to_string()))?;
+    if legacy {
+        return Err(UseCaseError::Repository(
+            "检测到旧版数据库。新初始迁移仅支持空库；请显式重建指定开发库或改用新空库，程序不会自动清库。".into(),
+        ));
+    }
     let migrator = sqlx::migrate::Migrator::new(migrations_dir.as_ref())
         .await
         .map_err(|e| UseCaseError::Repository(format!("加载迁移失败：{e}")))?;
