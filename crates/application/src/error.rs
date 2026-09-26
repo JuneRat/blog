@@ -14,8 +14,6 @@ pub enum ConflictKind {
     Username,
     /// 邮箱占用（`users_email_key`）。
     Email,
-    /// 系列内序号占用。
-    SeriesPosition,
     /// 外部身份已被别的账号绑定。
     ExternalIdentity,
     /// 角色标识占用。
@@ -33,7 +31,6 @@ impl ConflictKind {
             Self::Slug => "slug",
             Self::Username => "username",
             Self::Email => "email",
-            Self::SeriesPosition => "该系列位置",
             Self::ExternalIdentity => "外部身份",
             Self::RoleSlug => "角色标识",
             Self::PermissionKey => "权限标识",
@@ -69,26 +66,12 @@ pub enum UseCaseError {
     #[error("不能移除最后一个可登录的 Owner")]
     LastOwnerProtected,
 
-    /// 删除仍被内容引用的实体被拒绝（引用保护；当前用于标签）。
-    ///
-    /// 引用计数不过滤可见性：草稿/私密/回收站文章同样占用引用，
-    /// 不能靠级联静默改变这些文章（docs/content-lifecycle.md §3）。
-    /// HTTP 层映射 409 + `tag_in_use`：与「slug 已被占用」不同，
-    /// 这是先决条件失败——解除引用后重试才有意义。
-    #[error("标签仍被文章引用（{0} 篇），先解除关联再删除")]
-    TagInUse(i64),
-
     /// 删除仍被引用或仍含子分类的分类被拒绝（引用保护）。
     ///
     /// 文章引用不过滤可见性（草稿/私密/回收站同样占用）；子分类须先移动或删除。
     /// HTTP 层映射 409 + `category_in_use`，与 slug 占用的 `conflict` 区分。
     #[error("分类仍被 {posts} 篇文章引用、仍有 {children} 个子分类；先解除引用并移走子分类")]
     CategoryInUse { posts: i64, children: i64 },
-
-    /// 删除仍被文章引用的系列被拒绝（引用保护，任何可见性都占用）。
-    /// HTTP 层映射 409 + `series_in_use`。
-    #[error("系列仍被 {0} 篇文章引用，先解除关联再删除")]
-    SeriesInUse(i64),
 
     #[error("无权执行该操作")]
     Forbidden,

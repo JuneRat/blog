@@ -2,7 +2,7 @@
 
 本文负责本地运行、CLI、后台联调和检查流程。完整环境变量见[配置参考](configuration.md)，业务规则见[内容生命周期](content-lifecycle.md)，接口见[管理 API](admin-api.md)。后台组件、表单、查询缓存和测试约定见[后台开发指南](admin-development.md)。
 
-迁移链已重写为新的 [19 表初始基线](../migrations/postgres/0001_initial_schema.sql)，仅支持空库。已适配身份、会话和媒体，内容/目录/评论仍待适配，以下相应业务命令保留为后续实现参考，暂不能作为新库的可用功能。不要把 `blog_schema.sql` 手工导入后再执行迁移；统一通过 `migrate` 建立 SQLx 记录。进度见[实施路线](product-roadmap.md#已采纳数据库设计的实施)。
+迁移链已重写为新的 [19 表初始基线](../migrations/postgres/0001_initial_schema.sql)，仅支持空库。身份、会话、媒体、内容和目录已适配，评论与恢复工具仍待适配。不要把 `blog_schema.sql` 手工导入后再执行迁移；统一通过 `migrate` 建立 SQLx 记录。进度见[实施路线](product-roadmap.md#已采纳数据库设计的实施)。
 
 ## 环境准备
 
@@ -21,7 +21,7 @@ cargo run -p server -- serve
 
 数据库脚本使用容器 `blog-postgres` 和持久卷 `blog-pgdata`，只绑定本机回环地址；已有容器时直接启动。数据库连接失败时先检查 Docker 和端口。改变 `BLOG_PG_PORT` 不会修改已有容器的端口映射，也不会自动更新应用连接串。
 
-所有业务命令都会先执行结构迁移；`migrate`、`post` 和 `serve` 还会重建旧渲染版本的 HTML。用户、角色、OAuth 和媒体维护命令只加载各自需要的依赖，站点 URL 或主题配置错误不会阻止身份修复。详见[架构](architecture.md)。
+所有业务命令都会先执行结构迁移；`migrate`、`post`、`publish-due` 和 `serve` 还会重建旧渲染版本的 HTML。用户、角色、OAuth 和媒体维护命令只加载各自需要的依赖，站点 URL 或主题配置错误不会阻止身份修复。详见[架构](architecture.md)。
 
 ## 新基线的隔离验证
 
@@ -47,7 +47,7 @@ cargo test -p server --test password_http
 cargo test -p server --test command_assembly owner_bootstrap_uses_new_identity_baseline
 ```
 
-验收链路为：空库迁移、权限初始化、CLI 创建 Owner、密码登录、资料更新保持登录、改密撤销旧会话。`PUT /api/admin/v1/me/profile` 提交展示名、纯文本简介和必填 `expected_version`，详见[管理 API](admin-api.md)。资料表单尚未接入后台界面。内容和评论的旧数据库集成测试尚待适配；`check.sh` 全量通过属于后续批次的验收，不能用本批定向测试替代。
+验收链路为：空库迁移、权限初始化、CLI 创建 Owner、密码登录、资料更新保持登录、改密撤销旧会话。`PUT /api/admin/v1/me/profile` 提交展示名、纯文本简介和必填 `expected_version`，详见[管理 API](admin-api.md)。资料表单尚未接入后台界面。评论的旧数据库集成测试和恢复工具尚待适配；`check.sh` 全量通过属于后续批次的验收，不能用定向测试替代。
 
 媒体批次在同一独立实例验证：
 
@@ -60,6 +60,17 @@ cargo test -p server --test command_assembly media_cleanup_staging
 ```
 
 覆盖独立公开读取、回收站与恢复、引用事务/竞争、私密来源过滤、审计回滚及暂存清理。
+
+内容与目录批次在独立实例验证：
+
+```bash
+cargo test -p infrastructure --test postgres --test content_lifecycle --test content_html --test write_invariants
+cargo test -p server --test admin_api -- --skip native_comments_
+cargo test -p server --test ssr --test syndication --test command_assembly
+(cd apps/admin && pnpm test && pnpm build)
+```
+
+覆盖多系列和重复权重、目录删除保留文章、预约与取消、恢复统一回草稿、版本冲突、公开时间过滤和事务审计。admin_api 暂时跳过三个尚未适配的评论用例；这不是全量检查通过。
 
 ## 使用 CLI
 
@@ -88,7 +99,17 @@ blog post publish --id YOUR_POST_UUID
 blog post withdraw --id YOUR_POST_UUID
 ```
 
-管理命令使用 UUID；`--slug` 与 `--new-slug` 只设置公开地址。首次发布后 slug 锁定。`--content-file` 接受文件路径或 `-`（stdin）；`--if-version` 用于显式并发检查。默认以作者身份检查内容权限，支持的命令可用 `--as 用户名` 指定操作者。页面、目录、回收站等操作使用后台或管理 API，当前没有对应的完整 CLI。
+管理命令使用 UUID；`--slug` 与 `--new-slug` 只设置公开地址。首次预约或发布后 slug 锁定。`--content-file` 接受文件路径或 `-`（stdin）；`--if-version` 用于显式并发检查。默认以作者身份检查内容权限，支持的命令可用 `--as 用户名` 指定操作者。页面、目录、回收站等操作使用后台或管理 API，当前没有对应的完整 CLI。
+
+### 预约发布
+
+在后台或管理 API 设置未来发布时间。`serve` 启动即检查到期内容，之后每 30 秒检查一次，错过的预约在恢复运行时补发；内容在任务成功后才转为 published。也可通过独立命令处理当前到期内容：
+
+```bash
+blog publish-due
+```
+
+命令分批处理 Post/Page，重复执行不会重复发布；不加载站点 URL、主题或后台资源配置。取消预约、归档或移入回收站会阻止后续发布。
 
 ### 用户与角色
 
@@ -185,7 +206,7 @@ PYTHONPATH=scripts python3 -B -m unittest scripts/test_recovery.py
 | 登录后仍回登录页 | 主机名是否一致，HTTP 环境是否误启用 Secure cookie |
 | 写请求失败 | 查看响应 `code` 与 `x-request-id`；检查当前 CSRF token、权限和版本 |
 | 修改环境中的站点标题不生效 | 数据库 `settings.site` 优先于环境回退值 |
-| 发布后内容仍不可见 | 是否为 `published`、`public`，文章是否仍在回收站 |
+| 发布后内容仍不可见 | 是否为 `published`、`public`、未删除且发布时间已到；预约任务是否正常运行 |
 | CLI 提示配置或文件缺失 | 确认当前工作目录；相对路径从进程工作目录解析 |
 
 错误码见[管理 API](admin-api.md)，站点配置和作用域见[配置参考](configuration.md)。

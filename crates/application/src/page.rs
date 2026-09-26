@@ -1,4 +1,4 @@
-//! 页面用例：创建、读取、列表、编辑、发布、撤回、物理删除。
+//! 页面用例：创建、读取、列表、编辑、发布、预约、归档、回收站与永久删除。
 //!
 //! 权限约定：`page.*` 是**站点级**权限——Page 没有 author_id，
 //! 不套用文章的 own/any 规则（docs/content-lifecycle.md §2）。
@@ -54,6 +54,7 @@ pub struct PageDto {
     pub version: i64,
     pub published_at: Option<OffsetDateTime>,
     pub updated_at: OffsetDateTime,
+    pub deleted: bool,
 }
 
 impl PageDto {
@@ -68,6 +69,7 @@ impl PageDto {
             version: s.version,
             published_at: s.published_at,
             updated_at: s.updated_at,
+            deleted: s.deleted_at.is_some(),
         }
     }
 }
@@ -105,7 +107,10 @@ impl PageInteractor {
             self.clock.now(),
         )
         .map_err(map_domain)?;
-        let snapshot = self.pages.insert_page(&page).await?;
+        let snapshot = self
+            .pages
+            .insert_page(&page, actor.audit_actor_id())
+            .await?;
         Ok(PageDto::from_snapshot(&snapshot))
     }
 
@@ -148,12 +153,12 @@ impl PageInteractor {
             .map_err(map_domain)?;
 
         if changed {
-            return self.commit(page, expected).await;
+            return self.commit(actor, page, expected).await;
         }
         Ok(PageDto::from_snapshot(&page.snapshot()))
     }
 
-    /// 发布：draft → published，首次发布写入 published_at；已发布幂等。
+    /// 立即发布草稿或预约内容；保留过去的发布时间，未来预约改为当前时间。
     pub async fn publish(
         &self,
         actor: &crate::identity::Actor,
@@ -165,7 +170,7 @@ impl PageInteractor {
         let expected = checked_version(loaded, expected_version)?;
 
         if page.publish(self.clock.now()).map_err(map_domain)? {
-            return self.commit(page, expected).await;
+            return self.commit(actor, page, expected).await;
         }
         Ok(PageDto::from_snapshot(&page.snapshot()))
     }
@@ -182,32 +187,149 @@ impl PageInteractor {
         let expected = checked_version(loaded, expected_version)?;
 
         if page.withdraw() {
-            return self.commit(page, expected).await;
+            return self.commit(actor, page, expected).await;
         }
         Ok(PageDto::from_snapshot(&page.snapshot()))
     }
 
-    /// Page 无回收站：物理删除后公开入口立即消失，slug 可重新使用。
-    pub async fn delete(
+    pub async fn schedule(
+        &self,
+        actor: &crate::identity::Actor,
+        id: Uuid,
+        at: OffsetDateTime,
+        version: Option<i64>,
+    ) -> Result<PageDto, UseCaseError> {
+        actor.ensure_write_channel()?;
+        let (mut page, loaded) = self.load_versioned(actor, id, "page.publish").await?;
+        let expected = checked_version(loaded, version)?;
+        if page.schedule(at, self.clock.now()).map_err(map_domain)? {
+            return self.commit(actor, page, expected).await;
+        }
+        Ok(PageDto::from_snapshot(&page.snapshot()))
+    }
+
+    pub async fn archive(
+        &self,
+        actor: &crate::identity::Actor,
+        id: Uuid,
+        version: Option<i64>,
+    ) -> Result<PageDto, UseCaseError> {
+        actor.ensure_write_channel()?;
+        let (mut page, loaded) = self.load_versioned(actor, id, "page.archive").await?;
+        let expected = checked_version(loaded, version)?;
+        if page.archive().map_err(map_domain)? {
+            return self.commit(actor, page, expected).await;
+        }
+        Ok(PageDto::from_snapshot(&page.snapshot()))
+    }
+
+    pub async fn trash(
+        &self,
+        actor: &crate::identity::Actor,
+        cmd: DeletePageCmd,
+    ) -> Result<PageDto, UseCaseError> {
+        actor.ensure_write_channel()?;
+        let (mut page, loaded) = self.load_versioned(actor, cmd.id, "page.delete").await?;
+        let expected = checked_version(loaded, Some(cmd.expected_version))?;
+        page.trash(self.clock.now());
+        Self::committed(
+            self.pages
+                .commit_lifecycle(&page, expected, self.clock.now(), actor.audit_actor_id())
+                .await?,
+        )
+    }
+
+    pub async fn restore(
+        &self,
+        actor: &crate::identity::Actor,
+        cmd: DeletePageCmd,
+    ) -> Result<PageDto, UseCaseError> {
+        actor.ensure_write_channel()?;
+        let mut page = self.load_trash(actor, cmd.id, "page.delete").await?;
+        let expected = checked_version(page.version(), Some(cmd.expected_version))?;
+        page.restore();
+        Self::committed(
+            self.pages
+                .commit_lifecycle(&page, expected, self.clock.now(), actor.audit_actor_id())
+                .await?,
+        )
+    }
+
+    pub async fn purge(
         &self,
         actor: &crate::identity::Actor,
         cmd: DeletePageCmd,
     ) -> Result<(), UseCaseError> {
         actor.ensure_write_channel()?;
-        let (_, loaded_version) = self.load_versioned(actor, cmd.id, "page.delete").await?;
-        checked_version(loaded_version, Some(cmd.expected_version))?;
-        match self.pages.delete(cmd.id, cmd.expected_version).await? {
+        let page = self.load_trash(actor, cmd.id, "page.purge").await?;
+        checked_version(page.version(), Some(cmd.expected_version))?;
+        match self
+            .pages
+            .purge(cmd.id, cmd.expected_version, actor.audit_actor_id())
+            .await?
+        {
             PageDeleteOutcome::Deleted => Ok(()),
             PageDeleteOutcome::StaleVersion => Err(UseCaseError::VersionConflict),
-            PageDeleteOutcome::Gone => Err(UseCaseError::NotFound(format!("页面 {}", cmd.id))),
+            PageDeleteOutcome::Gone => {
+                Err(UseCaseError::NotFound(format!("回收站页面 {}", cmd.id)))
+            }
+        }
+    }
+
+    pub async fn list_trash(
+        &self,
+        actor: &crate::identity::Actor,
+        page: i64,
+    ) -> Result<PageTrash, UseCaseError> {
+        if !actor.has_permission("page.read") {
+            return Err(UseCaseError::Forbidden);
+        }
+        let page = page.clamp(1, 1_000_000);
+        let (rows, total) = self.pages.list_trash(20, (page - 1) * 20).await?;
+        Ok(PageTrash {
+            items: rows.iter().map(PageDto::from_snapshot).collect(),
+            total,
+            page,
+            per_page: 20,
+        })
+    }
+
+    async fn load_trash(
+        &self,
+        actor: &crate::identity::Actor,
+        id: Uuid,
+        permission: &str,
+    ) -> Result<Page, UseCaseError> {
+        if !actor.has_permission(permission) {
+            return Err(UseCaseError::Forbidden);
+        }
+        let snapshot = self
+            .pages
+            .find_by_id(id)
+            .await?
+            .filter(|s| s.deleted_at.is_some())
+            .ok_or_else(|| UseCaseError::NotFound(format!("回收站页面 {id}")))?;
+        Page::reconstitute(snapshot).map_err(|e| UseCaseError::Repository(e.to_string()))
+    }
+
+    fn committed(outcome: PageCommitOutcome) -> Result<PageDto, UseCaseError> {
+        match outcome {
+            PageCommitOutcome::Saved(snapshot) => Ok(PageDto::from_snapshot(&snapshot)),
+            PageCommitOutcome::StaleConflict => Err(UseCaseError::VersionConflict),
+            PageCommitOutcome::Gone => Err(UseCaseError::NotFound("页面（已被删除）".into())),
         }
     }
 
     /// 提交聚合变更：三态结果映射为用例错误；成功时采用数据库返回的新版本。
-    async fn commit(&self, page: Page, expected: i64) -> Result<PageDto, UseCaseError> {
+    async fn commit(
+        &self,
+        actor: &crate::identity::Actor,
+        page: Page,
+        expected: i64,
+    ) -> Result<PageDto, UseCaseError> {
         match self
             .pages
-            .commit_page(&page, expected, self.clock.now())
+            .commit_page(&page, expected, self.clock.now(), actor.audit_actor_id())
             .await?
         {
             PageCommitOutcome::Saved(snapshot) => Ok(PageDto::from_snapshot(&snapshot)),
@@ -229,6 +351,7 @@ impl PageInteractor {
             .pages
             .find_by_id(id)
             .await?
+            .filter(|s| s.deleted_at.is_none())
             .ok_or_else(|| UseCaseError::NotFound(format!("页面 {id}")))?;
         Page::reconstitute(snapshot).map_err(|e| UseCaseError::Repository(e.to_string()))
     }
@@ -247,4 +370,12 @@ impl PageInteractor {
 
 fn map_domain(e: PageError) -> UseCaseError {
     UseCaseError::Invalid(e.to_string())
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PageTrash {
+    pub items: Vec<PageDto>,
+    pub total: i64,
+    pub page: i64,
+    pub per_page: i64,
 }

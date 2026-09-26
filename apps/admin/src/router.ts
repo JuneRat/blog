@@ -23,6 +23,7 @@ export type Route =
   | { name: "tagList" }
   | { name: "mediaLibrary" }
   | { name: "categoryList" }
+  | { name: "pageTrash" }
   | { name: "seriesList" }
   | { name: "userList" }
   | { name: "roleList" }
@@ -64,6 +65,7 @@ export function parseRoute(pathname: string): Route {
 
   if (segments[0] === "comments") return segments.length === 1 ? { name: "comments" } : { name: "invalid" };
   if (segments.length === 0) return { name: "list" };
+  if (segments[0] === "page-trash") return segments.length === 1 ? { name: "pageTrash" } : { name: "invalid" };
   if (segments[0] === "trash") return segments.length === 1 ? { name: "postTrash" } : { name: "invalid" };
 
   // 标签/用户/角色是固定单段路由：多余路径段不静默忽略。
@@ -107,6 +109,7 @@ export const paths = {
   comments: `${BASE}/comments`,
   newPost: `${BASE}/posts/new`,
   postTrash: `${BASE}/trash`,
+  pageTrash: `${BASE}/page-trash`,
   editPost: (id: string): string => `${BASE}/posts/${encodeURIComponent(id)}/edit`,
   pages: `${BASE}/pages`,
   newPage: `${BASE}/pages/new`,

@@ -1,5 +1,5 @@
 //! 公开站点读取用例：组装渲染数据并调用主题渲染端口。
-//! 匿名可见条件唯一：status=published AND visibility=public AND deleted_at IS NULL。
+//! 匿名可见条件唯一：published + public + 未删除 + 发布时间已到。
 
 use std::sync::Arc;
 
@@ -45,7 +45,7 @@ pub struct PostCard {
     pub excerpt: Option<String>,
     pub published_at: Option<String>,
     pub author_display: String,
-    /// 作者头像站内地址（None = 无头像）；匿名可读性跟随「账号未软删除」。
+    /// 作者头像站内地址（None = 无头像）；媒体链接独立公开。
     pub author_avatar_url: Option<String>,
 }
 
@@ -77,12 +77,12 @@ pub struct CategoryCard {
     pub name: String,
 }
 
-/// 详情页上的系列链接（含阅读序号）。
+/// 详情页上的系列链接（含排序权重）。
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SeriesCard {
     pub slug: String,
     pub name: String,
-    pub order: i32,
+    pub position: i32,
 }
 
 /// 详情页模板数据契约；content_html 已经过清洗。
@@ -99,14 +99,14 @@ pub struct PostView {
     pub author_avatar_url: Option<String>,
     pub content_html: String,
     /// 封面站内地址（None = 无封面）。与正文图片同一个 `/media/{id}` 出口，
-    /// 匿名可读性由内容公开状态决定（撤回/私密/回收站后下一次请求即失效）。
+    /// 媒体链接独立公开。
     pub cover_url: Option<String>,
     /// 当前标签（链接到 /tags/{slug}）。
     pub tags: Vec<TagCard>,
     /// 所属分类（链接到 /categories/{slug}）。
     pub category: Option<CategoryCard>,
-    /// 所属系列（链接到 /series/{slug}；公开序号可能留空档）。
-    pub series: Option<SeriesCard>,
+    /// 所属系列数组（链接到 /series/{slug}）。
+    pub series: Vec<SeriesCard>,
 }
 
 /// 页面详情页模板数据契约；content_html 已经过清洗。
@@ -138,7 +138,7 @@ pub struct SeriesView {
     pub cover_url: Option<String>,
     pub page: i64,
     pub total_pages: i64,
-    /// 公开成员的连续阅读序号（1 起；不是 posts.series_order——草稿占位会造成空档）。
+    /// 公开成员的连续阅读序号（1 起；不是 post_series.position 排序权重）。
     pub posts: Vec<SeriesPostCard>,
 }
 
@@ -293,11 +293,15 @@ impl PublicSiteInteractor {
                 slug: c.slug.clone(),
                 name: c.name.clone(),
             }),
-            series: detail.series.as_ref().map(|s| SeriesCard {
-                slug: s.slug.clone(),
-                name: s.name.clone(),
-                order: s.order,
-            }),
+            series: detail
+                .series
+                .iter()
+                .map(|s| SeriesCard {
+                    slug: s.slug.clone(),
+                    name: s.name.clone(),
+                    position: s.position,
+                })
+                .collect(),
         };
         let site = self.site_info().await;
         let seo = SeoMeta::post(
@@ -416,9 +420,8 @@ impl PublicSiteInteractor {
             .await
     }
 
-    /// 渲染公开系列页 /series/{slug}?page=N：按阅读顺序（series_order 升序）。
-    /// 草稿/私密/回收站保留位置但不出现；页内展示的阅读序号按公开成员连续编号，
-    /// 不透出 posts.series_order 的空档。
+    /// 渲染公开系列页 /series/{slug}?page=N：按 position、post_id 稳定排序。
+    /// 过滤非公开内容；展示的阅读序号按公开成员连续编号，与排序权重分开。
     pub async fn render_series(&self, slug: &str, page: i64) -> Result<String, UseCaseError> {
         let series = self
             .series

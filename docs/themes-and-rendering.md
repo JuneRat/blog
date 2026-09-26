@@ -52,12 +52,14 @@ themes/default/
 | `site` | `title`、`description`、可空 `logo_url` | 全部 |
 | `seo` | `title`、`description`、`canonical_url`、`feed_url`、`og_type` | 全部 |
 | `posts` | 文章卡片列表：标题、slug、`url`、摘要、发布时间、作者展示名及可空头像 URL | index |
-| `post` | 文章详情、清洗后 `content_html`、标签、可空分类/系列/封面 | post |
+| `post` | 文章详情、清洗后 `content_html`、标签、系列数组、可空分类/封面 | post |
 | `page` | 页面详情与清洗后 `content_html` | page |
 | `tag` / `category` | 目录名称、slug、页码、总页数和文章卡片 | tag / category |
 | `series` | 系列名称、slug、可空封面、分页和带连续阅读序号的文章卡片 | series |
 
-可空图片 URL 为 `/media/{id}`。文章卡片和详情有 `author_avatar_url`，详情有 `cover_url`；图片是否匿名可读由媒体用例根据当前引用状态判断，主题拿到地址并不授予读取权。
+`post.series` 为数组，每项包含 `slug`、`name` 和排序权重 `position`，无关联时为空数组。链接使用 `/series/{slug}`，权重可重复，不是章节编号；系列页文章卡片另提供连续阅读序号。
+
+可空图片 URL 为 `/media/{id}`。文章卡片和详情有 `author_avatar_url`，详情有 `cover_url`；已登记媒体链接独立公开，不随文章隐私、引用变化或媒体软删除撤销读取。
 
 站点信息每次按数据库设置、装配回退值解析；SEO 规则集中在 [seo.rs](../crates/application/src/seo.rs)，主题只输出结果。canonical、RSS 和 sitemap 使用经过验证的 `BLOG_PUBLIC_BASE_URL`，不取请求 Host；当前要求部署在域名根路径，不支持 URL 路径前缀。描述折叠为空白单行并限制为 160 字符，目录分页从第 2 页起使用自指 canonical。
 

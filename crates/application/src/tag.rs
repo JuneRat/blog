@@ -8,7 +8,7 @@
 //!   不在本用例——跨文章修改仍核验文章授权。
 //!
 //! 并发约定：改名/删除都携带 expected_version，条件更新不自动覆盖；
-//! slug 创建后不可修改；删除在引用保护下拒绝（含草稿/私密/回收站引用）。
+//! slug 创建后不可修改；删除解除标签关系并保留所有文章，由同一事务维护版本。
 
 use std::sync::Arc;
 
@@ -68,7 +68,7 @@ impl TagInteractor {
         let slug = Slug::new(&cmd.slug).map_err(|e| UseCaseError::Invalid(e.to_string()))?;
         let tag = Tag::new(cmd.name, slug, self.clock.now()).map_err(map_domain)?;
         let snapshot = tag.snapshot();
-        self.tags.insert(&tag).await?;
+        self.tags.insert(&tag, actor.audit_actor_id()).await?;
         Ok(TagDto {
             id: snapshot.id,
             name: snapshot.name,
@@ -121,7 +121,12 @@ impl TagInteractor {
         let snapshot = tag.snapshot();
         match self
             .tags
-            .rename(snapshot.id, &snapshot.name, expected)
+            .rename(
+                snapshot.id,
+                &snapshot.name,
+                expected,
+                actor.audit_actor_id(),
+            )
             .await?
         {
             Some(updated) => {
@@ -153,10 +158,13 @@ impl TagInteractor {
         let tag = self.load(target_slug).await?;
         let expected = checked_version(tag.version(), expected_version)?;
 
-        match self.tags.delete(tag.id(), expected).await? {
+        match self
+            .tags
+            .delete(tag.id(), expected, actor.audit_actor_id())
+            .await?
+        {
             TagDeleteOutcome::Deleted => Ok(()),
             TagDeleteOutcome::StaleVersion => Err(UseCaseError::VersionConflict),
-            TagDeleteOutcome::Referenced { count } => Err(UseCaseError::TagInUse(count)),
             TagDeleteOutcome::Gone => Err(UseCaseError::NotFound(format!("标签 {target_slug}"))),
         }
     }

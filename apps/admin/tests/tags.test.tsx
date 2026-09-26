@@ -149,8 +149,7 @@ describe("文章编辑器标签选择", () => {
     author_id: "author-id",
     tag_ids: ["tag-rust"],
     category_id: null,
-    series_id: null,
-    series_order: null,
+    series: [],
   };
 
   beforeEach(() => {

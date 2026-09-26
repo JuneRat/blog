@@ -37,7 +37,12 @@ pub trait PostRepository: Send + Sync {
     async fn find_record_by_id(&self, id: Uuid) -> Result<Option<PostRecord>, UseCaseError>;
 
     /// 保存已经通过领域行为构造的草稿；正文、标签、系列版本、媒体引用同事务。
-    async fn insert_post(&self, post: &Post, tag_ids: &[Uuid]) -> Result<PostRecord, UseCaseError>;
+    async fn insert_post(
+        &self,
+        post: &Post,
+        tag_ids: &[Uuid],
+        actor_id: Option<Uuid>,
+    ) -> Result<PostRecord, UseCaseError>;
 
     /// 提交领域变更与 CAS：正文/标签/媒体引用及受影响系列版本必须原子更新。
     /// `tag_ids=None` 保留当前标签；返回的完整记录必须在本事务内取得。
@@ -47,6 +52,7 @@ pub trait PostRepository: Send + Sync {
         expected_version: i64,
         now: OffsetDateTime,
         tag_ids: Option<&[Uuid]>,
+        actor_id: Option<Uuid>,
     ) -> Result<PostCommitOutcome, UseCaseError>;
 
     /// 提交领域已决定的回收站转换（status/deleted_at），不修改内容与系列关系。
@@ -56,6 +62,7 @@ pub trait PostRepository: Send + Sync {
         post: &Post,
         expected_version: i64,
         now: OffsetDateTime,
+        actor_id: Option<Uuid>,
     ) -> Result<PostCommitOutcome, UseCaseError>;
 
     async fn find_by_id(&self, id: Uuid) -> Result<Option<PostSnapshot>, UseCaseError>;
@@ -66,7 +73,12 @@ pub trait PostRepository: Send + Sync {
         limit: i64,
         offset: i64,
     ) -> Result<(Vec<PostSnapshot>, i64), UseCaseError>;
-    async fn purge(&self, id: Uuid, expected_version: i64) -> Result<SaveOutcome, UseCaseError>;
+    async fn purge(
+        &self,
+        id: Uuid,
+        expected_version: i64,
+        actor_id: Option<Uuid>,
+    ) -> Result<SaveOutcome, UseCaseError>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -76,11 +88,14 @@ pub enum PageDeleteOutcome {
     Gone,
 }
 
-/// Page 写侧端口。Page 无软删除：不存在「已消失但仍是版本冲突」之外的第三态，
-/// 但沿用同一 `SaveOutcome` 以便与 Post 的并发语义保持一致。
+/// 站点级页面写侧端口；回收站独立于发布状态。
 #[async_trait]
 pub trait PageRepository: Send + Sync {
-    async fn insert_page(&self, page: &Page) -> Result<PageSnapshot, UseCaseError>;
+    async fn insert_page(
+        &self,
+        page: &Page,
+        actor_id: Option<Uuid>,
+    ) -> Result<PageSnapshot, UseCaseError>;
 
     /// Page 没有独立标签集合，结果属于同次 CAS，不做提交后回读。
     async fn commit_page(
@@ -88,16 +103,30 @@ pub trait PageRepository: Send + Sync {
         page: &Page,
         expected_version: i64,
         now: OffsetDateTime,
+        actor_id: Option<Uuid>,
     ) -> Result<PageCommitOutcome, UseCaseError>;
 
     async fn find_by_id(&self, id: Uuid) -> Result<Option<PageSnapshot>, UseCaseError>;
     /// 站点级列表：无作者过滤，按更新时间倒序。
     async fn list(&self) -> Result<Vec<PageSnapshot>, UseCaseError>;
-    /// 只删除指定 id 与版本；slug 可重用，不能仅凭 slug 删除新占位者。
-    async fn delete(
+    async fn list_trash(
+        &self,
+        limit: i64,
+        offset: i64,
+    ) -> Result<(Vec<PageSnapshot>, i64), UseCaseError>;
+    async fn commit_lifecycle(
+        &self,
+        page: &Page,
+        expected_version: i64,
+        now: OffsetDateTime,
+        actor_id: Option<Uuid>,
+    ) -> Result<PageCommitOutcome, UseCaseError>;
+    /// 只永久删除回收站内指定 id 与版本；slug 可重用。
+    async fn purge(
         &self,
         id: Uuid,
         expected_version: i64,
+        actor_id: Option<Uuid>,
     ) -> Result<PageDeleteOutcome, UseCaseError>;
 }
 
@@ -137,12 +166,12 @@ pub struct PublicCategoryRef {
     pub name: String,
 }
 
-/// 公开文章上的系列引用（含阅读序号）。
+/// 公开文章上的系列引用（含排序权重，不是章节编号）。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PublicSeriesRef {
     pub slug: String,
     pub name: String,
-    pub order: i32,
+    pub position: i32,
 }
 
 /// 公开详情；正文是写入时已清洗的 HTML 派生内容。
@@ -165,7 +194,7 @@ pub struct PublicPostDetail {
     /// 所属分类（至多一个；分类目录本身公开）。
     pub category: Option<PublicCategoryRef>,
     /// 所属系列与阅读序号（公开页序号可能因草稿占位而留空档）。
-    pub series: Option<PublicSeriesRef>,
+    pub series: Vec<PublicSeriesRef>,
 }
 
 #[async_trait]
@@ -217,7 +246,7 @@ pub trait PublishedSeriesQuery: Send + Sync {
         slug: &str,
     ) -> Result<Option<PublicSeriesSummary>, UseCaseError>;
 
-    /// 系列内公开文章按 series_order 升序分页（含总数）。
+    /// 系列内公开文章按 position、post_id 升序分页（含总数）。
     async fn list_public_posts_by_series(
         &self,
         series_slug: &str,

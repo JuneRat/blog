@@ -1,3 +1,4 @@
+import { statusLabel } from "../components/ContentLifecycleControls";
 import { Alert, App as AntdApp, Button, Flex, Space, Table, Typography } from "antd";
 import type { TableProps } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -69,7 +70,7 @@ export function PostListScreen() {
     {
       title: "状态",
       dataIndex: "status",
-      render: (status: string) => (status === "published" ? "已发布" : "草稿"),
+      render: (status: string) => statusLabel(status),
     },
     {
       title: "可见",

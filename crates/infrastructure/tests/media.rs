@@ -105,7 +105,7 @@ async fn trash_keeps_existing_references_and_restore_allows_new_sources() {
     let (repo, media, owner) = seed(&pool).await;
     let pages = pages(&pool);
     let mut original = page("original", body(media.id()));
-    pages.insert_page(&original).await.unwrap();
+    pages.insert_page(&original, None).await.unwrap();
     assert_eq!(refs(&pool, media.id()).await, 1);
     repo.set_deleted(media.id(), 1, true, OffsetDateTime::now_utc(), Some(owner))
         .await
@@ -118,12 +118,12 @@ async fn trash_keeps_existing_references_and_restore_allows_new_sources() {
         })
         .unwrap();
     pages
-        .commit_page(&original, 1, OffsetDateTime::now_utc())
+        .commit_page(&original, 1, OffsetDateTime::now_utc(), None)
         .await
         .unwrap();
     let another = page("another", body(media.id()));
     assert!(matches!(
-        pages.insert_page(&another).await,
+        pages.insert_page(&another, None).await,
         Err(UseCaseError::Invalid(_))
     ));
     assert!(pages.find_by_id(another.id().0).await.unwrap().is_none());
@@ -138,7 +138,7 @@ async fn trash_keeps_existing_references_and_restore_allows_new_sources() {
     repo.set_deleted(media.id(), 2, false, OffsetDateTime::now_utc(), Some(owner))
         .await
         .unwrap();
-    pages.insert_page(&another).await.unwrap();
+    pages.insert_page(&another, None).await.unwrap();
     assert_eq!(refs(&pool, media.id()).await, 2);
     original
         .edit(PagePatch {
@@ -147,7 +147,7 @@ async fn trash_keeps_existing_references_and_restore_allows_new_sources() {
         })
         .unwrap();
     pages
-        .commit_page(&original, 2, OffsetDateTime::now_utc())
+        .commit_page(&original, 2, OffsetDateTime::now_utc(), None)
         .await
         .unwrap();
     assert_eq!(refs(&pool, media.id()).await, 1);
@@ -160,7 +160,7 @@ async fn invalid_new_reference_rolls_back_content_html_version_and_reference_cha
     let (_, media, _) = seed(&pool).await;
     let pages = pages(&pool);
     let mut original = page("original", body(media.id()));
-    pages.insert_page(&original).await.unwrap();
+    pages.insert_page(&original, None).await.unwrap();
     let before: (String, String, i64) =
         sqlx::query_as("SELECT content,content_html,version FROM pages WHERE id=$1")
             .bind(original.id().0)
@@ -175,7 +175,7 @@ async fn invalid_new_reference_rolls_back_content_html_version_and_reference_cha
         .unwrap();
     assert!(matches!(
         pages
-            .commit_page(&original, 1, OffsetDateTime::now_utc())
+            .commit_page(&original, 1, OffsetDateTime::now_utc(), None)
             .await,
         Err(UseCaseError::Invalid(_))
     ));
@@ -382,7 +382,7 @@ async fn concurrent_trash_and_new_reference_never_lose_a_committed_reference() {
         };
         let page = page(&format!("race-{n}"), body(media.id()));
         let (write, trash) = tokio::join!(
-            pages.insert_page(&page),
+            pages.insert_page(&page, None),
             repo.set_deleted(media.id(), 1, true, OffsetDateTime::now_utc(), Some(owner))
         );
         assert_eq!(trash.unwrap(), MediaChangeOutcome::Updated);
@@ -421,7 +421,7 @@ async fn html_reference_extraction_tracks_rendered_images_without_code_or_commen
         second.id()
     );
     pages
-        .insert_page(&page("html-images", content))
+        .insert_page(&page("html-images", content), None)
         .await
         .unwrap();
     assert_eq!(refs(&pool, media.id()).await, 1);
@@ -445,26 +445,26 @@ async fn series_cover_insert_and_update_synchronize_references_in_the_same_trans
     series
         .update("Series".into(), None, Some(Some(media.id())))
         .unwrap();
-    series_repo.insert(&series).await.unwrap();
+    series_repo.insert(&series, None).await.unwrap();
     assert_eq!(refs(&pool, media.id()).await, 1);
     repo.set_deleted(media.id(), 1, true, OffsetDateTime::now_utc(), Some(owner))
         .await
         .unwrap();
     series_repo
-        .update(series.id(), "Renamed", None, Some(media.id()), 1)
+        .update(series.id(), "Renamed", None, Some(media.id()), 1, None)
         .await
         .unwrap()
         .unwrap();
     assert_eq!(refs(&pool, media.id()).await, 1);
     series_repo
-        .update(series.id(), "Renamed", None, None, 2)
+        .update(series.id(), "Renamed", None, None, 2, None)
         .await
         .unwrap()
         .unwrap();
     assert_eq!(refs(&pool, media.id()).await, 0);
     assert!(matches!(
         series_repo
-            .update(series.id(), "Invalid", None, Some(media.id()), 3)
+            .update(series.id(), "Invalid", None, Some(media.id()), 3, None)
             .await,
         Err(UseCaseError::Invalid(_))
     ));

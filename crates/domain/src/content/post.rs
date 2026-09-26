@@ -2,9 +2,9 @@
 //!
 //! 规则来源 docs/content-lifecycle.md：
 //! - 每条记录只有一份当前正文；保存已发布内容直接更新线上。
-//! - slug 草稿创建时即唯一；首次发布（published_at 产生）后锁定，撤回也不解锁。
-//! - 首次发布校验标题与正文；重新发布保留首次 published_at。
-//! - 撤回 published → draft；归档为终态。
+//! - slug 草稿创建时即唯一；首次预约或发布（published_at 产生）后锁定，撤回也不解锁。
+//! - 首次发布校验标题与正文；重新发布保留过去的 published_at。
+//! - 撤回、取消预约或解除归档 → draft。
 //! - version 由仓储按“有实际变化才 +1”递增；聚合只报告是否发生变化。
 
 use time::OffsetDateTime;
@@ -28,6 +28,7 @@ impl PostId {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PostStatus {
     Draft,
+    Scheduled,
     Published,
     Archived,
 }
@@ -36,6 +37,7 @@ impl PostStatus {
     pub fn as_str(self) -> &'static str {
         match self {
             PostStatus::Draft => "draft",
+            PostStatus::Scheduled => "scheduled",
             PostStatus::Published => "published",
             PostStatus::Archived => "archived",
         }
@@ -45,6 +47,7 @@ impl PostStatus {
     pub fn parse(value: &str) -> Option<Self> {
         match value {
             "draft" => Some(PostStatus::Draft),
+            "scheduled" => Some(PostStatus::Scheduled),
             "published" => Some(PostStatus::Published),
             "archived" => Some(PostStatus::Archived),
             _ => None,
@@ -66,9 +69,9 @@ pub enum PostError {
     TitleTooLong,
     #[error("摘要长度不能超过 {EXCERPT_MAX_CHARS} 字符")]
     ExcerptTooLong,
-    #[error("系列序号必须为正整数，收到 {0}")]
-    InvalidSeriesOrder(i32),
-    #[error("首次发布后 slug 已锁定，撤回也不允许改名")]
+    #[error("系列排序权重不能为负数，收到 {0}")]
+    InvalidSeriesPosition(i32),
+    #[error("首次预约或发布后 slug 已锁定，退回草稿也不允许改名")]
     SlugLocked,
     #[error("发布前标题不能为空")]
     EmptyTitleOnPublish,
@@ -76,34 +79,49 @@ pub enum PostError {
     EmptyContentOnPublish,
     #[error("已发布文章的标题与正文不能清空")]
     EmptyContentWhenPublished,
-    #[error("归档是终态，不能重新发布")]
-    ArchivedIsTerminal,
-    #[error("归档是终态，不能编辑；需要恢复为草稿的流程另行扩展")]
+    #[error("归档内容须先退回草稿")]
+    ArchivedRequiresDraft,
+    #[error("预约时间必须晚于当前时间")]
+    ScheduleMustBeFuture,
+    #[error("已发布内容须先撤回再预约")]
+    AlreadyPublished,
+    #[error("系列不能重复")]
+    DuplicateSeries,
+    #[error("归档内容须先退回草稿再编辑")]
     ArchivedNotEditable,
 }
 
-/// 系列中的有效位置。系列 ID 与序号一起设置，序号始终为正整数。
+/// 一篇文章在一个系列中的排序权重；允许零及与其他文章重复的权重。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SeriesPlacement {
-    series_id: Uuid,
-    order: i32,
+    pub series_id: Uuid,
+    pub position: i32,
 }
 
 impl SeriesPlacement {
-    pub fn new(series_id: Uuid, order: i32) -> Result<Self, PostError> {
-        if order <= 0 {
-            return Err(PostError::InvalidSeriesOrder(order));
+    pub fn new(series_id: Uuid, position: i32) -> Result<Self, PostError> {
+        if position < 0 {
+            return Err(PostError::InvalidSeriesPosition(position));
         }
-        Ok(Self { series_id, order })
+        Ok(Self {
+            series_id,
+            position,
+        })
     }
+}
 
-    pub fn series_id(self) -> Uuid {
-        self.series_id
+fn normalize_series(mut series: Vec<SeriesPlacement>) -> Result<Vec<SeriesPlacement>, PostError> {
+    for placement in &series {
+        SeriesPlacement::new(placement.series_id, placement.position)?;
     }
-
-    pub fn order(self) -> i32 {
-        self.order
+    series.sort_by_key(|placement| placement.series_id);
+    if series
+        .windows(2)
+        .any(|pair| pair[0].series_id == pair[1].series_id)
+    {
+        return Err(PostError::DuplicateSeries);
     }
+    Ok(series)
 }
 
 /// 创建草稿时一并设置的关联信息；存在性由应用和提交事务校验。
@@ -111,7 +129,7 @@ impl SeriesPlacement {
 #[derive(Debug, Clone, Default)]
 pub struct PostDraftMetadata {
     pub category_id: Option<Uuid>,
-    pub series: Option<(Uuid, i32)>,
+    pub series: Vec<SeriesPlacement>,
     pub cover_media_id: Option<Uuid>,
 }
 
@@ -121,7 +139,7 @@ pub struct PostSnapshot {
     pub id: Uuid,
     pub author_id: Uuid,
     pub category_id: Option<Uuid>,
-    pub series_id: Option<Uuid>,
+    pub series: Vec<SeriesPlacement>,
     pub title: String,
     pub slug: String,
     pub excerpt: Option<String>,
@@ -131,7 +149,6 @@ pub struct PostSnapshot {
     /// 与正文引用同源：保存时把 `{封面} ∪ 正文图片` 写进 `media_refs`，
     /// 为使用统计与独立物理清理保留依据；图片 URL 不受内容公开状态限制。
     pub cover_media_id: Option<Uuid>,
-    pub series_order: Option<i32>,
     pub status: PostStatus,
     pub visibility: Visibility,
     pub published_at: Option<OffsetDateTime>,
@@ -153,9 +170,8 @@ pub struct PostPatch {
     pub content: Option<String>,
     pub visibility: Option<Visibility>,
     pub category_id: Option<Option<Uuid>>,
-    /// 系列归属三态：None 不修改；Some(None) 退出系列；Some(Some((id, order)))
-    /// 设置系列与序号（order 必须为正整数；同空同非空由类型形状保证）。
-    pub series: Option<Option<(Uuid, i32)>>,
+    /// None 保留；Some 整体替换系列集合（空数组表示清空）。
+    pub series: Option<Vec<SeriesPlacement>>,
     /// 封面三态：None 不修改；Some(None) 移除封面；Some(Some(id)) 设置封面。
     /// 资产存在性与 `ready` 状态由保存事务内的引用校验兜底。
     pub cover_media_id: Option<Option<Uuid>>,
@@ -205,22 +221,18 @@ impl Post {
     ) -> Result<Self, PostError> {
         super::budget::validate_source(&content)?;
         Self::validate_mutation_fields(&title, excerpt.as_deref())?;
-        let series = metadata
-            .series
-            .map(|(id, order)| SeriesPlacement::new(id, order))
-            .transpose()?;
+        let series = normalize_series(metadata.series)?;
         Ok(Self {
             snapshot: PostSnapshot {
                 id: PostId::generate().0,
                 author_id: author.0,
                 category_id: metadata.category_id,
-                series_id: series.map(SeriesPlacement::series_id),
+                series,
                 title,
                 slug: slug.into_string(),
                 excerpt,
                 content,
                 cover_media_id: metadata.cover_media_id,
-                series_order: series.map(SeriesPlacement::order),
                 status: PostStatus::Draft,
                 visibility,
                 published_at: None,
@@ -233,22 +245,19 @@ impl Post {
     }
 
     /// 受控重建入口：仅供持久化适配器从数据库恢复聚合。
-    pub fn reconstitute(snapshot: PostSnapshot) -> Result<Self, PostError> {
+    pub fn reconstitute(mut snapshot: PostSnapshot) -> Result<Self, PostError> {
         Slug::new(&snapshot.slug)?;
         Self::validate_mutation_fields(&snapshot.title, snapshot.excerpt.as_deref())?;
-        match (snapshot.series_id, snapshot.series_order) {
-            (Some(id), Some(order)) => {
-                SeriesPlacement::new(id, order)?;
-            }
-            (None, None) => {}
-            _ => return Err(PostError::InvalidSnapshot("系列与序号必须同时存在")),
-        }
+        snapshot.series = normalize_series(snapshot.series)?;
         if snapshot.version < 1 {
             return Err(PostError::InvalidSnapshot("版本必须为正整数"));
         }
-        if snapshot.status == PostStatus::Published {
+        if matches!(
+            snapshot.status,
+            PostStatus::Published | PostStatus::Scheduled
+        ) {
             if snapshot.published_at.is_none() {
-                return Err(PostError::InvalidSnapshot("已发布文章缺少首次发布时间"));
+                return Err(PostError::InvalidSnapshot("已发布文章缺少发布时间"));
             }
             if snapshot.title.trim().is_empty() || snapshot.content.trim().is_empty() {
                 return Err(PostError::EmptyContentWhenPublished);
@@ -282,10 +291,11 @@ impl Post {
     }
 
     /// 匿名公开条件：published + public + 未进回收站。
-    pub fn is_publicly_visible(&self) -> bool {
+    pub fn is_publicly_visible(&self, now: OffsetDateTime) -> bool {
         self.snapshot.status == PostStatus::Published
             && self.snapshot.visibility == Visibility::Public
             && self.snapshot.deleted_at.is_none()
+            && self.snapshot.published_at.is_some_and(|at| at <= now)
     }
 
     fn validate_mutation_fields(title: &str, excerpt: Option<&str>) -> Result<(), PostError> {
@@ -324,14 +334,8 @@ impl Post {
             .unwrap_or_else(|| self.snapshot.content.clone());
         let new_visibility = patch.visibility.unwrap_or(self.snapshot.visibility);
         let new_category_id = patch.category_id.unwrap_or(self.snapshot.category_id);
-        let new_series = match patch.series {
-            None => (self.snapshot.series_id, self.snapshot.series_order),
-            Some(None) => (None, None),
-            Some(Some((series_id, order))) => {
-                let placement = SeriesPlacement::new(series_id, order)?;
-                (Some(placement.series_id()), Some(placement.order()))
-            }
-        };
+        let new_series =
+            normalize_series(patch.series.unwrap_or_else(|| self.snapshot.series.clone()))?;
         let slug_changed = match patch.slug.as_deref() {
             Some(new_slug) => new_slug != self.snapshot.slug,
             None => false,
@@ -342,7 +346,7 @@ impl Post {
         super::budget::validate_source(&new_content)?;
         Self::validate_mutation_fields(&new_title, new_excerpt_owned.as_deref())?;
         if slug_changed {
-            // 首次发布产生 published_at 后 slug 锁定；撤回不解锁。
+            // 首次预约或发布产生 published_at 后 slug 锁定；退回草稿不解锁。
             if self.snapshot.published_at.is_some() {
                 return Err(PostError::SlugLocked);
             }
@@ -353,7 +357,10 @@ impl Post {
                     .expect("slug_changed 蕴含 patch.slug 存在"),
             )?;
         }
-        if self.snapshot.status == PostStatus::Published {
+        if matches!(
+            self.snapshot.status,
+            PostStatus::Published | PostStatus::Scheduled
+        ) {
             if new_title.trim().is_empty() {
                 return Err(PostError::EmptyContentWhenPublished);
             }
@@ -384,9 +391,8 @@ impl Post {
             self.snapshot.category_id = new_category_id;
             changed = true;
         }
-        if new_series != (self.snapshot.series_id, self.snapshot.series_order) {
-            self.snapshot.series_id = new_series.0;
-            self.snapshot.series_order = new_series.1;
+        if new_series != self.snapshot.series {
+            self.snapshot.series = new_series;
             changed = true;
         }
         if new_cover_media_id != self.snapshot.cover_media_id {
@@ -401,8 +407,8 @@ impl Post {
         Ok(changed)
     }
 
-    /// 发布：draft → published（首次发布写入 published_at，之后保持不变）。
-    /// 已发布时幂等无操作。归档为终态。
+    /// 立即发布；过去的发布时间保留，未来的预约时间改为当前时间。
+    /// 已发布时幂等；归档内容需要先退回草稿。
     pub fn publish(&mut self, now: OffsetDateTime) -> Result<bool, PostError> {
         super::budget::validate_source(&self.snapshot.content)?;
         if self.snapshot.deleted_at.is_some() {
@@ -410,8 +416,8 @@ impl Post {
         }
         match self.snapshot.status {
             PostStatus::Published => Ok(false),
-            PostStatus::Archived => Err(PostError::ArchivedIsTerminal),
-            PostStatus::Draft => {
+            PostStatus::Archived => Err(PostError::ArchivedRequiresDraft),
+            PostStatus::Draft | PostStatus::Scheduled => {
                 if self.snapshot.title.trim().is_empty() {
                     return Err(PostError::EmptyTitleOnPublish);
                 }
@@ -419,7 +425,7 @@ impl Post {
                     return Err(PostError::EmptyContentOnPublish);
                 }
                 self.snapshot.status = PostStatus::Published;
-                if self.snapshot.published_at.is_none() {
+                if self.snapshot.published_at.is_none_or(|at| at > now) {
                     self.snapshot.published_at = Some(now);
                 }
                 Ok(true)
@@ -427,10 +433,9 @@ impl Post {
         }
     }
 
-    /// 撤回：published → draft，保留 published_at（slug 仍锁定）。
-    /// 非发布状态幂等无操作。
+    /// 撤回、取消预约或解除归档：回到草稿，保留 published_at。
     pub fn withdraw(&mut self) -> bool {
-        if self.snapshot.deleted_at.is_none() && self.snapshot.status == PostStatus::Published {
+        if self.snapshot.deleted_at.is_none() && self.snapshot.status != PostStatus::Draft {
             self.snapshot.status = PostStatus::Draft;
             true
         } else {
@@ -438,7 +443,44 @@ impl Post {
         }
     }
 
-    /// 移入回收站，保留原状态与首次发布时间。重复操作幂等。
+    /// 预约发布只接受草稿或已有预约；所有校验通过后才改变状态。
+    pub fn schedule(&mut self, at: OffsetDateTime, now: OffsetDateTime) -> Result<bool, PostError> {
+        if self.snapshot.deleted_at.is_some() {
+            return Err(PostError::InTrash);
+        }
+        if self.snapshot.status == PostStatus::Archived {
+            return Err(PostError::ArchivedRequiresDraft);
+        }
+        if self.snapshot.status == PostStatus::Published {
+            return Err(PostError::AlreadyPublished);
+        }
+        if at <= now {
+            return Err(PostError::ScheduleMustBeFuture);
+        }
+        super::budget::validate_source(&self.snapshot.content)?;
+        if self.snapshot.title.trim().is_empty() {
+            return Err(PostError::EmptyTitleOnPublish);
+        }
+        if self.snapshot.content.trim().is_empty() {
+            return Err(PostError::EmptyContentOnPublish);
+        }
+        let changed =
+            self.snapshot.status != PostStatus::Scheduled || self.snapshot.published_at != Some(at);
+        self.snapshot.status = PostStatus::Scheduled;
+        self.snapshot.published_at = Some(at);
+        Ok(changed)
+    }
+
+    pub fn archive(&mut self) -> Result<bool, PostError> {
+        if self.snapshot.deleted_at.is_some() {
+            return Err(PostError::InTrash);
+        }
+        let changed = self.snapshot.status != PostStatus::Archived;
+        self.snapshot.status = PostStatus::Archived;
+        Ok(changed)
+    }
+
+    /// 移入回收站，保留原状态与发布时间。重复操作幂等。
     /// version 与 updated_at 由提交边界统一处理。
     pub fn trash(&mut self, now: OffsetDateTime) -> bool {
         if self.snapshot.deleted_at.is_some() {
@@ -448,17 +490,15 @@ impl Post {
         true
     }
 
-    /// 从回收站恢复：归档保持终态，其余内容恢复为草稿，避免意外重新上线。
-    /// 保留首次发布时间（slug 仍锁定）；非回收站内容幂等无操作。
+    /// 从回收站恢复为草稿，避免意外重新上线。
+    /// 保留发布时间（slug 仍锁定）；非回收站内容幂等无操作。
     /// version 与 updated_at 由提交边界统一处理。
     pub fn restore(&mut self) -> bool {
         if self.snapshot.deleted_at.is_none() {
             return false;
         }
         self.snapshot.deleted_at = None;
-        if self.snapshot.status != PostStatus::Archived {
-            self.snapshot.status = PostStatus::Draft;
-        }
+        self.snapshot.status = PostStatus::Draft;
         true
     }
 }
@@ -497,7 +537,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(post.status(), PostStatus::Draft);
-        assert!(!post.is_publicly_visible());
+        assert!(!post.is_publicly_visible(OffsetDateTime::now_utc()));
     }
 
     #[test]
@@ -514,7 +554,10 @@ mod tests {
             Visibility::Public,
             PostDraftMetadata {
                 category_id: Some(category_id),
-                series: Some((series_id, 1)),
+                series: vec![SeriesPlacement {
+                    series_id,
+                    position: 1,
+                }],
                 cover_media_id: Some(cover_media_id),
             },
             OffsetDateTime::now_utc(),
@@ -522,8 +565,13 @@ mod tests {
         .unwrap();
         let snapshot = post.snapshot();
         assert_eq!(snapshot.category_id, Some(category_id));
-        assert_eq!(snapshot.series_id, Some(series_id));
-        assert_eq!(snapshot.series_order, Some(1));
+        assert_eq!(
+            snapshot.series,
+            vec![SeriesPlacement {
+                series_id,
+                position: 1
+            }]
+        );
         assert_eq!(snapshot.cover_media_id, Some(cover_media_id));
         assert_eq!(snapshot.version, 1);
     }
@@ -531,7 +579,7 @@ mod tests {
     #[test]
     fn create_and_edit_reject_the_same_invalid_series_positions() {
         let series_id = Uuid::now_v7();
-        for order in [0, -1, i32::MIN] {
+        for order in [-1, i32::MIN] {
             let create_error = Post::create_draft_with_metadata(
                 author(),
                 Slug::new("invalid-series").unwrap(),
@@ -540,7 +588,10 @@ mod tests {
                 "正文".into(),
                 Visibility::Public,
                 PostDraftMetadata {
-                    series: Some((series_id, order)),
+                    series: vec![SeriesPlacement {
+                        series_id,
+                        position: order,
+                    }],
                     ..Default::default()
                 },
                 OffsetDateTime::now_utc(),
@@ -552,11 +603,14 @@ mod tests {
             let edit_error = post
                 .edit(PostPatch {
                     title: Some("不得部分保存的新标题".into()),
-                    series: Some(Some((series_id, order))),
+                    series: Some(vec![SeriesPlacement {
+                        series_id,
+                        position: order,
+                    }]),
                     ..Default::default()
                 })
                 .unwrap_err();
-            assert_eq!(create_error, PostError::InvalidSeriesOrder(order));
+            assert_eq!(create_error, PostError::InvalidSeriesPosition(order));
             assert_eq!(edit_error, create_error);
             assert_eq!(post.snapshot(), before, "非法系列序号不得部分修改内容");
         }
@@ -663,7 +717,7 @@ mod tests {
             assert!(post.trash(now));
             assert_eq!(post.snapshot().deleted_at, Some(now));
             assert_eq!(post.status(), original_status);
-            assert!(!post.is_publicly_visible());
+            assert!(!post.is_publicly_visible(OffsetDateTime::now_utc()));
             let trashed = post.snapshot();
             assert!(!post.trash(now + time::Duration::seconds(1)));
             assert_eq!(post.snapshot(), trashed, "重复删除保留原回收时间");
@@ -671,15 +725,11 @@ mod tests {
             assert!(post.restore());
             let restored = post.snapshot();
             assert_eq!(restored.deleted_at, None);
-            assert_eq!(
-                restored.status,
-                if original_status == PostStatus::Archived {
-                    PostStatus::Archived
-                } else {
-                    PostStatus::Draft
-                }
+            assert_eq!(restored.status, PostStatus::Draft);
+            assert!(
+                !post.is_publicly_visible(OffsetDateTime::now_utc()),
+                "恢复内容不得自动重新上线"
             );
-            assert!(!post.is_publicly_visible(), "恢复内容不得自动重新上线");
             assert_eq!(restored.published_at, original.published_at);
             assert_eq!(restored.version, original.version);
             assert_eq!(restored.updated_at, original.updated_at);
@@ -707,7 +757,7 @@ mod tests {
         let before = post.snapshot();
         assert!(!post.restore());
         assert_eq!(post.snapshot(), before);
-        assert!(post.is_publicly_visible());
+        assert!(post.is_publicly_visible(OffsetDateTime::now_utc()));
     }
 
     #[test]
@@ -746,19 +796,22 @@ mod tests {
     #[test]
     fn public_visibility_rules() {
         let mut post = draft();
-        assert!(!post.is_publicly_visible());
+        assert!(!post.is_publicly_visible(OffsetDateTime::now_utc()));
         post.publish(OffsetDateTime::now_utc()).unwrap();
-        assert!(post.is_publicly_visible());
+        assert!(post.is_publicly_visible(OffsetDateTime::now_utc()));
         post.edit(PostPatch {
             visibility: Some(Visibility::Private),
             ..Default::default()
         })
         .unwrap();
-        assert!(!post.is_publicly_visible(), "private 不公开");
+        assert!(
+            !post.is_publicly_visible(OffsetDateTime::now_utc()),
+            "private 不公开"
+        );
     }
 
     #[test]
-    fn archived_is_terminal() {
+    fn archived_requires_return_to_draft() {
         // 归档由专门用例驱动；这里验证聚合规则：archived 不能发布、撤回无效、不能编辑。
         let mut post = draft();
         post.publish(OffsetDateTime::now_utc()).unwrap();
@@ -767,9 +820,8 @@ mod tests {
         let mut archived = Post::reconstitute(snapshot).unwrap();
         assert_eq!(
             archived.publish(OffsetDateTime::now_utc()).unwrap_err(),
-            PostError::ArchivedIsTerminal
+            PostError::ArchivedRequiresDraft
         );
-        assert!(!archived.withdraw());
         assert_eq!(
             archived
                 .edit(PostPatch {
@@ -778,8 +830,10 @@ mod tests {
                 })
                 .unwrap_err(),
             PostError::ArchivedNotEditable,
-            "归档是终态，正文不可改写"
+            "归档状态下正文不可改写，须先退回草稿"
         );
+        assert!(archived.withdraw());
+        assert_eq!(archived.status(), PostStatus::Draft);
     }
 
     #[test]
@@ -894,10 +948,18 @@ mod tests {
             let mut snapshot = draft().snapshot();
             match field {
                 0 => snapshot.slug = "bad/path".into(),
-                1 => snapshot.series_order = Some(1),
+                1 => {
+                    let placement = SeriesPlacement {
+                        series_id: Uuid::now_v7(),
+                        position: 0,
+                    };
+                    snapshot.series = vec![placement, placement];
+                }
                 2 => {
-                    snapshot.series_id = Some(Uuid::now_v7());
-                    snapshot.series_order = Some(0);
+                    snapshot.series = vec![SeriesPlacement {
+                        series_id: Uuid::now_v7(),
+                        position: -1,
+                    }];
                 }
                 3 => snapshot.version = 0,
                 _ => snapshot.status = PostStatus::Published,
@@ -932,5 +994,48 @@ mod tests {
         })
         .unwrap();
         assert!(post.publish(OffsetDateTime::UNIX_EPOCH).unwrap());
+    }
+    #[test]
+    fn schedule_cancel_archive_and_restore_keep_slug_locked() {
+        let mut content = draft();
+        let now = OffsetDateTime::UNIX_EPOCH;
+        let at = now + time::Duration::hours(1);
+        assert_eq!(
+            content.schedule(now, now),
+            Err(PostError::ScheduleMustBeFuture)
+        );
+        assert!(content.schedule(at, now).unwrap());
+        assert!(!content.schedule(at, now).unwrap());
+        assert!(!content.is_publicly_visible(at));
+        assert!(
+            content
+                .edit(PostPatch {
+                    content: Some(" ".into()),
+                    ..Default::default()
+                })
+                .is_err()
+        );
+        assert!(content.withdraw());
+        assert_eq!(content.snapshot().published_at, Some(at));
+        assert_eq!(
+            content.edit(PostPatch {
+                slug: Some("renamed".into()),
+                ..Default::default()
+            }),
+            Err(PostError::SlugLocked)
+        );
+        assert!(content.publish(now).unwrap());
+        assert_eq!(
+            content.snapshot().published_at,
+            Some(now),
+            "立即发布修正未来时间"
+        );
+        assert!(content.is_publicly_visible(now));
+        assert!(content.archive().unwrap());
+        assert!(!content.is_publicly_visible(now));
+        assert!(content.trash(now));
+        assert!(content.restore());
+        assert_eq!(content.status(), PostStatus::Draft);
+        assert_eq!(content.snapshot().published_at, Some(now));
     }
 }

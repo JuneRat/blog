@@ -1,11 +1,8 @@
-//! Series 聚合：有序系列的目录规则；文章顺序本身存在 posts 上。
+//! Series 聚合：有序系列的目录规则；成员关系及排序权重存在 post_series 上。
 //!
-//! 规则来源 docs/content-lifecycle.md §3 / database-design.md §4：
-//! - 系列是有序文章集合，一篇文章至多一个系列；series_id 与 series_order
-//!   同空或同非空，序号为正整数、系列内唯一（可延后约束，重排事务内检查）；
-//! - 重排在系列行锁 + series.version 校验下进行，同时递增涉及 posts.version
-//!   与 series.version（防止用旧目录重排）；
-//! - 系列被文章引用时默认拒绝删除；跨系列移动按 ID 序锁两个系列。
+//! 一篇文章可以加入多个系列，position 非负且可重复。
+//! 重排由应用授权，在仓储关系锁和版本条件下提交；删除系列只解除文章关联。
+//! 本聚合只保护目录名称、描述和封面字段，不自行读取成员或取得数据库锁。
 
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -41,7 +38,7 @@ pub struct SeriesSnapshot {
     pub updated_at: OffsetDateTime,
 }
 
-/// Series 聚合。字段私有；成员与顺序在 posts 上，重排走专门用例。
+/// Series 聚合。字段私有；成员与权重在 post_series 上，重排走专门用例。
 #[derive(Debug, Clone)]
 pub struct Series {
     snapshot: SeriesSnapshot,
@@ -99,7 +96,7 @@ impl Series {
     /// slug 创建后不可修改。
     ///
     /// 封面是三态：`None` 不修改；`Some(None)` 移除；`Some(Some(id))` 设置。
-    /// 资产的存在性与 `ready` 状态由保存事务内的引用校验兜底，聚合不查库。
+    /// 资产存在性及软删除状态由保存事务内的引用校验兜底，聚合不查库。
     pub fn update(
         &mut self,
         name: String,

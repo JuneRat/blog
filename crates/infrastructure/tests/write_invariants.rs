@@ -47,7 +47,7 @@ async fn body_budget_rejects_create_edit_and_publish_before_database_changes() {
     );
     let mut post = draft("post-budget", "small".into());
     post.publish(now).unwrap();
-    let stored_post = posts.insert_post(&post, &[]).await.unwrap();
+    let stored_post = posts.insert_post(&post, &[], None).await.unwrap();
     let mut page = Page::create_draft(
         Slug::new("about-budget").unwrap(),
         "Title".into(),
@@ -57,11 +57,11 @@ async fn body_budget_rejects_create_edit_and_publish_before_database_changes() {
     )
     .unwrap();
     page.publish(now).unwrap();
-    let stored_page = pages.insert_page(&page).await.unwrap();
+    let stored_page = pages.insert_page(&page, None).await.unwrap();
 
     let mut invalid_post = draft("invalid-budget", expanded.clone());
     assert!(matches!(
-        posts.insert_post(&invalid_post, &[]).await,
+        posts.insert_post(&invalid_post, &[], None).await,
         Err(UseCaseError::Invalid(_))
     ));
     let mut invalid_page = Page::create_draft(
@@ -73,7 +73,7 @@ async fn body_budget_rejects_create_edit_and_publish_before_database_changes() {
     )
     .unwrap();
     assert!(matches!(
-        pages.insert_page(&invalid_page).await,
+        pages.insert_page(&invalid_page, None).await,
         Err(UseCaseError::Invalid(_))
     ));
 
@@ -88,11 +88,11 @@ async fn body_budget_rejects_create_edit_and_publish_before_database_changes() {
     })
     .unwrap();
     assert!(matches!(
-        posts.commit_post(&post, 1, now, None).await,
+        posts.commit_post(&post, 1, now, None, None).await,
         Err(UseCaseError::Invalid(_))
     ));
     assert!(matches!(
-        pages.commit_page(&page, 1, now).await,
+        pages.commit_page(&page, 1, now, None).await,
         Err(UseCaseError::Invalid(_))
     ));
     assert_eq!(
@@ -106,7 +106,7 @@ async fn body_budget_rejects_create_edit_and_publish_before_database_changes() {
 
     // Simulate a draft written before the budget existed. Publishing it must
     // fail without changing status, version, persisted HTML or references.
-    sqlx::query("INSERT INTO posts(id,author_id,slug,title,content) VALUES($1,$2,$3,'Title',$4)")
+    sqlx::query("INSERT INTO posts(id,author_id,slug,title,content,content_html,content_render_version) VALUES($1,$2,$3,'Title',$4,'',1)")
         .bind(invalid_post.id().0)
         .bind(author.0)
         .bind(invalid_post.slug())
@@ -114,7 +114,7 @@ async fn body_budget_rejects_create_edit_and_publish_before_database_changes() {
         .execute(&pool)
         .await
         .unwrap();
-    sqlx::query("INSERT INTO pages(id,slug,title,content) VALUES($1,$2,'Title',$3)")
+    sqlx::query("INSERT INTO pages(id,slug,title,content,content_html,content_render_version) VALUES($1,$2,'Title',$3,'',1)")
         .bind(invalid_page.id().0)
         .bind(invalid_page.slug())
         .bind(&expanded)
@@ -134,11 +134,11 @@ async fn body_budget_rejects_create_edit_and_publish_before_database_changes() {
     invalid_post.publish(now).unwrap();
     invalid_page.publish(now).unwrap();
     assert!(matches!(
-        posts.commit_post(&invalid_post, 1, now, None).await,
+        posts.commit_post(&invalid_post, 1, now, None, None).await,
         Err(UseCaseError::Invalid(_))
     ));
     assert!(matches!(
-        pages.commit_page(&invalid_page, 1, now).await,
+        pages.commit_page(&invalid_page, 1, now, None).await,
         Err(UseCaseError::Invalid(_))
     ));
     assert_eq!(

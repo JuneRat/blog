@@ -51,8 +51,7 @@ const post: PostDetail = {
   author_id: "me",
   tag_ids: [],
   category_id: null,
-  series_id: null,
-  series_order: null,
+  series: [],
   cover_media_id: null,
   cover_url: null,
 };

@@ -39,7 +39,14 @@ impl PageRepository for FakePageRepo {
     }
 
     async fn list(&self) -> Result<Vec<PageSnapshot>, UseCaseError> {
-        let mut all: Vec<PageSnapshot> = self.pages.lock().unwrap().values().cloned().collect();
+        let mut all: Vec<PageSnapshot> = self
+            .pages
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|p| p.deleted_at.is_none())
+            .cloned()
+            .collect();
         all.sort_by_key(|a| std::cmp::Reverse(a.updated_at));
         Ok(all)
     }
@@ -47,6 +54,7 @@ impl PageRepository for FakePageRepo {
     async fn insert_page(
         &self,
         page: &domain::content::Page,
+        _actor_id: Option<uuid::Uuid>,
     ) -> Result<PageSnapshot, UseCaseError> {
         let snapshot = page.snapshot();
         let mut pages = self.pages.lock().unwrap();
@@ -62,6 +70,7 @@ impl PageRepository for FakePageRepo {
         page: &domain::content::Page,
         expected_version: i64,
         now: OffsetDateTime,
+        _actor_id: Option<uuid::Uuid>,
     ) -> Result<PageCommitOutcome, UseCaseError> {
         let snapshot = page.snapshot();
         let mut pages = self.pages.lock().unwrap();
@@ -79,13 +88,63 @@ impl PageRepository for FakePageRepo {
         Ok(PageCommitOutcome::Saved(next))
     }
 
-    async fn delete(
+    async fn list_trash(
+        &self,
+        limit: i64,
+        offset: i64,
+    ) -> Result<(Vec<PageSnapshot>, i64), UseCaseError> {
+        let rows: Vec<_> = self
+            .pages
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|p| p.deleted_at.is_some())
+            .cloned()
+            .collect();
+        let count = rows.len() as i64;
+        Ok((
+            rows.into_iter()
+                .skip(offset as usize)
+                .take(limit as usize)
+                .collect(),
+            count,
+        ))
+    }
+    async fn commit_lifecycle(
+        &self,
+        page: &domain::content::Page,
+        expected_version: i64,
+        now: OffsetDateTime,
+        _actor_id: Option<Uuid>,
+    ) -> Result<PageCommitOutcome, UseCaseError> {
+        let snapshot = page.snapshot();
+        let mut pages = self.pages.lock().unwrap();
+        let Some(existing) = pages.values_mut().find(|p| {
+            p.id == snapshot.id && p.deleted_at.is_some() != snapshot.deleted_at.is_some()
+        }) else {
+            return Ok(PageCommitOutcome::Gone);
+        };
+        if existing.version != expected_version {
+            return Ok(PageCommitOutcome::StaleConflict);
+        }
+        *existing = snapshot;
+        existing.version = expected_version + 1;
+        existing.updated_at = now;
+        Ok(PageCommitOutcome::Saved(existing.clone()))
+    }
+
+    async fn purge(
         &self,
         id: Uuid,
         expected_version: i64,
+        _actor_id: Option<uuid::Uuid>,
     ) -> Result<PageDeleteOutcome, UseCaseError> {
         let mut pages = self.pages.lock().unwrap();
-        let Some(existing) = pages.values().find(|p| p.id == id).cloned() else {
+        let Some(existing) = pages
+            .values()
+            .find(|p| p.id == id && p.deleted_at.is_some())
+            .cloned()
+        else {
             return Ok(PageDeleteOutcome::Gone);
         };
         if existing.version != expected_version {
@@ -212,7 +271,7 @@ async fn read_and_list_require_page_read() {
 }
 
 #[tokio::test]
-async fn physical_delete_requires_permission_and_exact_identity_and_version() {
+async fn trash_and_purge_require_separate_permissions_and_preserve_slug_until_purge() {
     let pages = interactor();
     let editor = actor_with(EDITOR);
     let deleter = actor_with(&["page.delete"]);
@@ -226,12 +285,12 @@ async fn physical_delete_requires_permission_and_exact_identity_and_version() {
         expected_version: created.version,
     };
     assert!(matches!(
-        pages.delete(&without_delete, command()).await,
+        pages.trash(&without_delete, command()).await,
         Err(UseCaseError::Forbidden)
     ));
     assert!(matches!(
         pages
-            .delete(
+            .trash(
                 &deleter,
                 DeletePageCmd {
                     id: Uuid::now_v7(),
@@ -243,7 +302,7 @@ async fn physical_delete_requires_permission_and_exact_identity_and_version() {
     ));
     assert!(matches!(
         pages
-            .delete(
+            .trash(
                 &deleter,
                 DeletePageCmd {
                     expected_version: 99,
@@ -254,9 +313,35 @@ async fn physical_delete_requires_permission_and_exact_identity_and_version() {
         Err(UseCaseError::VersionConflict)
     ));
     assert!(pages.find(&editor, created.id).await.is_ok());
-    pages.delete(&deleter, command()).await.unwrap();
+    let trashed = pages.trash(&deleter, command()).await.unwrap();
     assert!(matches!(
-        pages.delete(&deleter, command()).await,
+        pages.create(&editor, cmd(Some("about"), "不能抢占")).await,
+        Err(UseCaseError::Conflict(_))
+    ));
+    assert!(matches!(
+        pages
+            .purge(
+                &deleter,
+                DeletePageCmd {
+                    id: created.id,
+                    expected_version: trashed.version
+                }
+            )
+            .await,
+        Err(UseCaseError::Forbidden)
+    ));
+    pages
+        .purge(
+            &actor_with(&["page.purge"]),
+            DeletePageCmd {
+                id: created.id,
+                expected_version: trashed.version,
+            },
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        pages.trash(&deleter, command()).await,
         Err(UseCaseError::NotFound(_))
     ));
     let replacement = pages
@@ -265,7 +350,7 @@ async fn physical_delete_requires_permission_and_exact_identity_and_version() {
         .unwrap();
     assert_ne!(replacement.id, created.id);
     assert!(matches!(
-        pages.delete(&deleter, command()).await,
+        pages.trash(&deleter, command()).await,
         Err(UseCaseError::NotFound(_))
     ));
     assert_eq!(

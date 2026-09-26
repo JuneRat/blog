@@ -7,33 +7,31 @@ use crate::error::UseCaseError;
 
 /// 标签目录条目：含公开文章计数（与公开标签页同一可见性口径）。
 ///
-/// 管理界面的删除保护提示只用「是否被引用」的结论（由删除用例给出），
-/// 因此这里不暴露非公开文章的计数，避免草稿/私密的关联规模泄漏给
-/// 无 `tag.manage` 的调用者。
+/// 不暴露非公开文章计数，避免草稿/私密的关联规模泄漏给目录读取者。
 #[derive(Debug, Clone, PartialEq)]
 pub struct TagWithUsage {
     pub snapshot: domain::content::TagSnapshot,
-    /// status=published AND visibility=public AND deleted_at IS NULL 的关联文章数。
+    /// 已发布、公开、未删除且发布时间已到的关联文章数。
     pub public_post_count: i64,
 }
 
-/// 标签删除的三态结果（版本冲突与引用保护由用例翻译为不同错误）。
+/// 标签删除的三态结果（版本冲突与不存在由用例翻译）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TagDeleteOutcome {
     Deleted,
     /// expected_version 不匹配：可基于最新版本重试。
     StaleVersion,
-    /// 仍被文章引用（含草稿/私密/回收站）：引用保护拒绝删除，携带引用数。
-    Referenced {
-        count: i64,
-    },
     Gone,
 }
 
 #[async_trait]
 pub trait TagRepository: Send + Sync {
     /// 创建接收已校验的聚合；快照仅用于读取、重建与返回结果。
-    async fn insert(&self, aggregate: &domain::content::Tag) -> Result<(), UseCaseError>;
+    async fn insert(
+        &self,
+        aggregate: &domain::content::Tag,
+        actor_id: Option<Uuid>,
+    ) -> Result<(), UseCaseError>;
     async fn find_by_slug(
         &self,
         slug: &str,
@@ -48,14 +46,15 @@ pub trait TagRepository: Send + Sync {
         id: Uuid,
         new_name: &str,
         expected_version: i64,
+        actor_id: Option<Uuid>,
     ) -> Result<Option<domain::content::TagSnapshot>, UseCaseError>;
 
-    /// 条件删除：先在事务内检查引用（post_tags RESTRICT 之外的业务级保护），
-    /// 再按版本条件删除。
+    /// 条件删除标签并解除关联；保留文章并递增受影响文章版本。
     async fn delete(
         &self,
         id: Uuid,
         expected_version: i64,
+        actor_id: Option<Uuid>,
     ) -> Result<TagDeleteOutcome, UseCaseError>;
 
     /// 返回 `ids` 中确实存在的标签 id（去重、按 id 排序）。
@@ -70,7 +69,7 @@ pub trait TagRepository: Send + Sync {
 #[derive(Debug, Clone, PartialEq)]
 pub struct CategoryWithUsage {
     pub snapshot: domain::content::CategorySnapshot,
-    /// status=published AND visibility=public AND deleted_at IS NULL 且直接归属的文章数。
+    /// 已发布、公开、未删除且发布时间已到的直接归属文章数。
     pub public_post_count: i64,
 }
 
@@ -135,7 +134,7 @@ pub struct SeriesWithUsage {
     pub snapshot: domain::content::SeriesSnapshot,
     /// 系列内全部文章数（含草稿/私密/回收站——它们保留位置）。
     pub post_count: i64,
-    /// 其中公开可见（published+public+未删除）的文章数。
+    /// 其中公开可见（published+public+未删除+发布时间已到）的文章数。
     pub public_post_count: i64,
 }
 
@@ -144,17 +143,13 @@ pub struct SeriesWithUsage {
 pub enum SeriesDeleteOutcome {
     Deleted,
     StaleVersion,
-    /// 仍被文章引用（任何可见性）：引用保护拒绝删除。
-    Referenced {
-        count: i64,
-    },
     Gone,
 }
 
 /// 重排结果：集合不匹配表示调用方持有的目录已过期。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReorderOutcome {
-    /// 成功；返回递增后的 series.version。
+    /// 成功；返回 series.version，无实际变化时保持原版本。
     Reordered {
         new_version: i64,
     },
@@ -171,17 +166,21 @@ pub struct SeriesMember {
     pub author_id: Uuid,
     pub slug: String,
     pub title: String,
-    /// draft/published/archived（成员含草稿/私密——它们保留位置）。
+    /// draft/scheduled/published/archived（成员含草稿/私密/回收站）。
     pub status: String,
     pub deleted: bool,
     pub visibility: String,
-    pub series_order: i32,
+    pub position: i32,
 }
 
 #[async_trait]
 pub trait SeriesRepository: Send + Sync {
     /// 创建接收已校验的聚合；快照仅用于读取、重建与返回结果。
-    async fn insert(&self, aggregate: &domain::content::Series) -> Result<(), UseCaseError>;
+    async fn insert(
+        &self,
+        aggregate: &domain::content::Series,
+        actor_id: Option<Uuid>,
+    ) -> Result<(), UseCaseError>;
     async fn find_by_slug(
         &self,
         slug: &str,
@@ -196,28 +195,30 @@ pub trait SeriesRepository: Send + Sync {
         description: Option<&str>,
         cover_media_id: Option<Uuid>,
         expected_version: i64,
+        actor_id: Option<Uuid>,
     ) -> Result<Option<domain::content::SeriesSnapshot>, UseCaseError>;
 
-    /// 条件删除：仍被任何文章引用（含草稿/私密/回收站）时拒绝。
+    /// 条件删除系列并解除关联；保留文章并递增受影响文章版本。
     async fn delete(
         &self,
         id: Uuid,
         expected_version: i64,
+        actor_id: Option<Uuid>,
     ) -> Result<SeriesDeleteOutcome, UseCaseError>;
 
     /// 文章设置系列前的存在性校验。
     async fn existing_id(&self, id: Uuid) -> Result<bool, UseCaseError>;
 
-    /// 系列当前成员（按 series_order 升序；重排授权与管理目录展示共用）。
+    /// 系列当前成员（按 position、post_id 升序；重排授权与目录展示共用）。
     async fn members_of(&self, series_id: Uuid) -> Result<Vec<SeriesMember>, UseCaseError>;
 
-    /// 并发安全重排：系列行锁 + series.version 校验 + 成员行锁（按 id 序）
-    /// + DEFERRED 位置唯一约束，更新全部成员顺序与 posts.version，
-    /// 并递增 series.version。见 docs/database-design.md §4。
+    /// 并发安全重排：关系锁、系列版本与完整成员集合校验、成员行锁（按 id 序）。
+    /// 依次写入 0..n-1 权重；实际变化时递增系列及权重变化的文章版本。
     async fn reorder(
         &self,
         series_id: Uuid,
         expected_series_version: i64,
         ordered_post_ids: &[Uuid],
+        actor_id: Option<Uuid>,
     ) -> Result<ReorderOutcome, UseCaseError>;
 }

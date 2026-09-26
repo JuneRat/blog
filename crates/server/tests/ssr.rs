@@ -195,7 +195,7 @@ fn cmd(slug: &str, title: &str) -> CreatePostCmd {
         visibility: domain_visibility_public(),
         tag_ids: Vec::new(),
         category_id: None,
-        series: None,
+        series: vec![],
         cover_media_id: None,
     }
 }
@@ -403,8 +403,8 @@ async fn reserved_root_paths_are_not_shadowed_by_pages() {
 
     // 直接写库模拟历史坏数据，公开读取仍必须 404（不顶掉 /healthz）。
     sqlx::raw_sql(
-        "INSERT INTO pages (id, title, slug, content, status, visibility, published_at, version) \
-         VALUES (gen_random_uuid(), '伪健康检查', 'healthz', '不应出现', 'published', 'public', now(), 1)",
+        "INSERT INTO pages (id, title, slug, content, status, visibility, published_at, version, content_html, content_render_version) \
+         VALUES (gen_random_uuid(), '伪健康检查', 'healthz', '不应出现', 'published', 'public', now(), 1, '<p>不应出现</p>', 1)",
     )
     .execute(&s.pool)
     .await
@@ -433,7 +433,10 @@ async fn seed_tag(stack: &Stack, name: &str, slug: &str) -> uuid::Uuid {
     let snapshot = tag.snapshot();
     stack
         .tags
-        .insert(&domain::content::Tag::reconstitute(snapshot.clone()).unwrap())
+        .insert(
+            &domain::content::Tag::reconstitute(snapshot.clone()).unwrap(),
+            None,
+        )
         .await
         .unwrap();
     snapshot.id
@@ -458,7 +461,7 @@ async fn tag_page_lists_public_posts_and_hides_drafts_and_private() {
                 visibility: application::content::PostVisibility::Public,
                 tag_ids: vec![rust],
                 category_id: None,
-                series: None,
+                series: vec![],
                 cover_media_id: None,
             },
         )
@@ -482,7 +485,7 @@ async fn tag_page_lists_public_posts_and_hides_drafts_and_private() {
                 visibility: application::content::PostVisibility::Public,
                 tag_ids: vec![rust],
                 category_id: None,
-                series: None,
+                series: vec![],
                 cover_media_id: None,
             },
         )
@@ -501,7 +504,7 @@ async fn tag_page_lists_public_posts_and_hides_drafts_and_private() {
                 visibility: application::content::PostVisibility::Private,
                 tag_ids: vec![rust],
                 category_id: None,
-                series: None,
+                series: vec![],
                 cover_media_id: None,
             },
         )
@@ -554,7 +557,7 @@ async fn tag_page_paginates_public_posts() {
                     visibility: application::content::PostVisibility::Public,
                     tag_ids: vec![rust],
                     category_id: None,
-                    series: None,
+                    series: vec![],
                     cover_media_id: None,
                 },
             )
@@ -630,7 +633,7 @@ async fn category_page_lists_public_posts_and_hides_drafts() {
                     visibility: application::content::PostVisibility::Public,
                     tag_ids: Vec::new(),
                     category_id: Some(cat_snapshot.id),
-                    series: None,
+                    series: vec![],
                     cover_media_id: None,
                 },
             )
@@ -673,7 +676,10 @@ async fn series_page_lists_public_posts_in_reading_order() {
     let s = series.snapshot();
     stack
         .series
-        .insert(&domain::content::Series::reconstitute(s.clone()).unwrap())
+        .insert(
+            &domain::content::Series::reconstitute(s.clone()).unwrap(),
+            None,
+        )
         .await
         .unwrap();
 
@@ -695,7 +701,10 @@ async fn series_page_lists_public_posts_in_reading_order() {
                     visibility: application::content::PostVisibility::Public,
                     tag_ids: Vec::new(),
                     category_id: None,
-                    series: Some((s.id, order)),
+                    series: vec![application::content::SeriesPlacement {
+                        series_id: s.id,
+                        position: order,
+                    }],
                     cover_media_id: None,
                 },
             )
@@ -767,7 +776,7 @@ async fn paper_theme_functions_use_only_public_data() {
                     visibility: application::content::PostVisibility::Public,
                     tag_ids: vec![tag],
                     category_id: Some(category.id),
-                    series: None,
+                    series: vec![],
                     cover_media_id: None,
                 },
             )

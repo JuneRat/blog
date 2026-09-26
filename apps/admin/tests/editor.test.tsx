@@ -32,7 +32,7 @@ const post: PostDetail = {
   id: "post-id", slug: "first", title: "原始标题", content: "原始正文",
   excerpt: null, status: "draft", visibility: "public", version: 1,
   published_at: null, updated_at: "2026-09-22T00:00:00Z", author_id: "author-id",
-  tag_ids: [], category_id: null, series_id: null, series_order: null,
+  tag_ids: [], category_id: null, series: [],
   cover_media_id: null, cover_url: null,
 };
 
@@ -117,7 +117,7 @@ describe("文章编辑器回归", () => {
     await waitFor(() => expect(api.createPost).toHaveBeenCalledTimes(2));
     expect(api.createPost).toHaveBeenLastCalledWith({
       slug: undefined, title: "第二篇", excerpt: undefined, content: "", visibility: "public",
-      tag_ids: [],
+      tag_ids: [], series: [],
     });
     await act(async () => {});
   });
@@ -169,7 +169,7 @@ describe("文章编辑器回归", () => {
     expect(api.publishPost).toHaveBeenCalledWith(post.id, 2);
     expect(window.location.pathname).toBe(paths.editPost(post.id));
     expect(input("正文（Markdown）").value).toBe("继续编辑");
-    expect(screen.getByText("已发布；等待期间的新改动尚未保存。")).toBeTruthy();
+    expect(screen.getByText("状态已更新为已发布。还有未保存的改动。")).toBeTruthy();
   });
 
   it("改名保存不改变编辑地址，旧 slug 被复用后重新打开仍编辑原 ID", async () => {
@@ -219,7 +219,7 @@ describe("文章编辑器回归", () => {
     expect(screen.getByText("v1")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "保存并更新线上" }));
-    expect(await screen.findByText(/文章尚未成功加载/)).toBeTruthy();
+    expect(await screen.findByText(/文章未能加载/)).toBeTruthy();
     expect(api.updatePost).not.toHaveBeenCalled();
     expect(api.createPost).not.toHaveBeenCalled();
 

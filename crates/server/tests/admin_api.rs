@@ -2081,7 +2081,7 @@ async fn tag_rename_and_delete_check_version_and_references() {
     assert_eq!(status, StatusCode::OK, "{body}");
     assert!(body.contains("\"version\":2"), "{body}");
 
-    // 作者建文章挂上标签 → 删除标签被引用保护拒绝（409 tag_in_use，区别于通用 conflict）。
+    // 作者建文章挂上标签，Editor 删除目录时只解除关联。
     let (status, body) = api(
         &stack.router,
         "POST",
@@ -2105,11 +2105,9 @@ async fn tag_rename_and_delete_check_version_and_references() {
         Some(r#"{"expected_version":2}"#),
     )
     .await;
-    assert_eq!(status, StatusCode::CONFLICT, "{body}");
-    assert!(body.contains("\"code\":\"tag_in_use\""), "{body}");
-    assert!(body.contains("1 篇"), "文案指出引用规模：{body}");
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
 
-    // 解除关联（清空标签，同事务）后删除成功 → 204。
+    // 文章仍可编辑；重复清空已经解除的标签集合为无变化操作。
     let (status, body) = api(
         &stack.router,
         "PATCH",
@@ -2131,7 +2129,7 @@ async fn tag_rename_and_delete_check_version_and_references() {
         Some(r#"{"expected_version":2}"#),
     )
     .await;
-    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
@@ -2505,7 +2503,7 @@ async fn series_management_reorder_and_post_association() {
         .parse()
         .unwrap();
 
-    // 两篇作者文章挂入系列（同事务；series 三态对象）。
+    // 两篇作者文章挂入系列（同事务；series 数组整体替换）。
     let mut posts = Vec::new();
     for (slug, order) in [("ser-1", 1), ("ser-2", 2)] {
         let (status, body) = api(
@@ -2541,7 +2539,7 @@ async fn series_management_reorder_and_post_association() {
         let (status, body) = api(
             &stack.router, "PATCH", &format!("/api/admin/v1/posts/{post_id}"),
             Some(&author_cookie), Some(&author_csrf),
-            Some(&format!(r#"{{"series":{{"id":"{series_id}","order":{order}}},"expected_version":{version}}}"#)),
+            Some(&format!(r#"{{"series":[{{"series_id":"{series_id}","position":{order}}}],"expected_version":{version}}}"#)),
         ).await;
         assert_eq!(status, StatusCode::OK, "{body}");
         posts.push(post_id);
@@ -2596,7 +2594,7 @@ async fn series_management_reorder_and_post_association() {
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     assert!(body.contains("成员不一致"), "{body}");
 
-    // 退出系列（series: null）后删除保护解除。
+    // 空数组解除全部系列关联。
     for post_id in &posts {
         let (status, body) = api(
             &stack.router,
@@ -2604,7 +2602,7 @@ async fn series_management_reorder_and_post_association() {
             &format!("/api/admin/v1/posts/{post_id}"),
             Some(&author_cookie),
             Some(&author_csrf),
-            Some(r#"{"series":null}"#),
+            Some(r#"{"series":[]}"#),
         )
         .await;
         assert_eq!(status, StatusCode::OK, "{body}");
@@ -2621,7 +2619,7 @@ async fn series_management_reorder_and_post_association() {
     .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
 
-    // 引用保护：另一系列带成员时删除 → 409 series_in_use。
+    // 带成员的系列也可删除，文章保留。
     let (status, body) = api(
         &stack.router,
         "POST",
@@ -2647,10 +2645,12 @@ async fn series_management_reorder_and_post_association() {
         &format!("/api/admin/v1/posts/{}", posts[0]),
         Some(&author_cookie),
         Some(&author_csrf),
-        Some(&format!(r#"{{"series":{{"id":"{occ_id}","order":1}}}}"#)),
+        Some(&format!(r#"{{"series":[{{"series_id":"{occ_id}"}}]}}"#)),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
+    let attached: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(attached["series"][0]["position"], 0, "未指定权重时使用 0");
     let (status, body) = api(
         &stack.router,
         "DELETE",
@@ -2660,8 +2660,7 @@ async fn series_management_reorder_and_post_association() {
         Some(r#"{"expected_version":2}"#),
     )
     .await;
-    assert_eq!(status, StatusCode::CONFLICT, "{body}");
-    assert!(body.contains("\"code\":\"series_in_use\""), "{body}");
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
 }
 
 #[tokio::test]
@@ -2727,7 +2726,7 @@ async fn series_members_endpoint_lists_other_authors_posts() {
             Some(cookie),
             Some(csrf),
             Some(&format!(
-                r#"{{"series":{{"id":"{series_id}","order":{}}},"expected_version":{version}}}"#,
+                r#"{{"series":[{{"series_id":"{series_id}","position":{}}}],"expected_version":{version}}}"#,
                 if slug == "mem-1" { 1 } else { 2 }
             )),
         )
@@ -2855,7 +2854,7 @@ async fn series_members_requires_read_permission_for_every_member() {
             Some(cookie),
             Some(csrf),
             Some(&format!(
-                r#"{{"series":{{"id":"{mixed_id}","order":{order}}},"expected_version":{version}}}"#
+                r#"{{"series":[{{"series_id":"{mixed_id}","position":{order}}}],"expected_version":{version}}}"#
             )),
         )
         .await;
@@ -2940,7 +2939,7 @@ async fn series_members_requires_read_permission_for_every_member() {
         Some(&author_cookie),
         Some(&author_csrf),
         Some(&format!(
-            r#"{{"series":{{"id":"{solo_id}","order":1}},"expected_version":{version}}}"#
+            r#"{{"series":[{{"series_id":"{solo_id}","position":1}}],"expected_version":{version}}}"#
         )),
     )
     .await;
@@ -3292,7 +3291,7 @@ async fn page_by_id_never_targets_a_replacement_after_deletion() {
             Some(r#"{"title":"越权","expected_version":1}"#),
         ),
         ("POST", "/publish", Some(r#"{"expected_version":1}"#)),
-        ("DELETE", "", Some(delete_version_1.as_str())),
+        ("POST", "/trash", Some(delete_version_1.as_str())),
     ] {
         let (status, body) = api(
             &stack.router,
@@ -3347,8 +3346,8 @@ async fn page_by_id_never_targets_a_replacement_after_deletion() {
     let delete_version_4 = r#"{"expected_version":4}"#.to_string();
     let (status, body) = api(
         &stack.router,
-        "DELETE",
-        &uri,
+        "POST",
+        &format!("{uri}/trash"),
         Some(&cookie),
         None,
         Some(&delete_version_4),
@@ -3357,8 +3356,8 @@ async fn page_by_id_never_targets_a_replacement_after_deletion() {
     assert_eq!(status, StatusCode::BAD_REQUEST, "删除 ID 仍需 CSRF：{body}");
     let (status, body) = api(
         &stack.router,
-        "DELETE",
-        &uri,
+        "POST",
+        &format!("{uri}/trash"),
         Some(&cookie),
         Some(&csrf),
         Some(&delete_version_1),
@@ -3371,11 +3370,22 @@ async fn page_by_id_never_targets_a_replacement_after_deletion() {
     );
     let (status, body) = api(
         &stack.router,
-        "DELETE",
-        &uri,
+        "POST",
+        &format!("{uri}/trash"),
         Some(&cookie),
         Some(&csrf),
         Some(&delete_version_4),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (owner_cookie, owner_csrf) = login_as(&stack.router, &stack.idp, "owner").await;
+    let (status, body) = api(
+        &stack.router,
+        "POST",
+        &format!("{uri}/purge"),
+        Some(&owner_cookie),
+        Some(&owner_csrf),
+        Some(r#"{"expected_version":5}"#),
     )
     .await;
     assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
@@ -3403,7 +3413,7 @@ async fn page_by_id_never_targets_a_replacement_after_deletion() {
         ),
         ("POST", "/publish", Some(r#"{"expected_version":1}"#)),
         ("POST", "/unpublish", Some(r#"{"expected_version":1}"#)),
-        ("DELETE", "", Some(delete_version_1.as_str())),
+        ("POST", "/trash", Some(delete_version_1.as_str())),
     ] {
         let (status, body) = api(
             &stack.router,
@@ -3891,5 +3901,124 @@ async fn native_comments_use_server_name_before_guest_nickname_validation() {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+}
+
+#[tokio::test]
+async fn schedule_archive_and_recycle_content_with_version_checks() {
+    let _guard = SERIAL.lock().await;
+    let stack = fresh_stack().await;
+    let (cookie, csrf) = login_as(&stack.router, &stack.idp, "owner").await;
+    let at = (time::OffsetDateTime::now_utc() + time::Duration::hours(1))
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap();
+    for resource in ["posts", "pages"] {
+        let (status, body) = api(
+            &stack.router,
+            "POST",
+            &format!("/api/admin/v1/{resource}"),
+            Some(&cookie),
+            Some(&csrf),
+            Some(r#"{"slug":"scheduled-content","title":"预约内容","content":"正文"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+        let id = response_id(&body);
+        let path = format!("/api/admin/v1/{resource}/{id}");
+        let (status, body) = api(
+            &stack.router,
+            "POST",
+            &format!("{path}/schedule"),
+            Some(&cookie),
+            Some(&csrf),
+            Some(&serde_json::json!({"published_at":at,"expected_version":1}).to_string()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let dto: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(dto["status"], "scheduled");
+        assert_eq!(dto["version"], 2);
+        let (status, _) = api(
+            &stack.router,
+            "POST",
+            &format!("{path}/unpublish"),
+            Some(&cookie),
+            Some(&csrf),
+            Some(r#"{"expected_version":1}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        for (action, version, result) in [
+            ("archive", 2, "archived"),
+            ("unpublish", 3, "draft"),
+            ("trash", 4, "draft"),
+            ("restore", 5, "draft"),
+        ] {
+            let (status, body) = api(
+                &stack.router,
+                "POST",
+                &format!("{path}/{action}"),
+                Some(&cookie),
+                Some(&csrf),
+                Some(&serde_json::json!({"expected_version":version}).to_string()),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{resource}/{action}: {body}");
+            let dto: serde_json::Value = serde_json::from_str(&body).unwrap();
+            assert_eq!(dto["status"], result);
+            assert_eq!(dto["version"], version + 1);
+            assert!(!dto["published_at"].is_null(), "保留预约时间和 slug 锁");
+            if action == "trash" {
+                let (status, _) = api(&stack.router, "GET", &path, Some(&cookie), None, None).await;
+                assert_eq!(status, StatusCode::NOT_FOUND);
+                let trash = if resource == "posts" {
+                    "post-trash"
+                } else {
+                    "page-trash"
+                };
+                let (status, body) = api(
+                    &stack.router,
+                    "GET",
+                    &format!("/api/admin/v1/{trash}"),
+                    Some(&cookie),
+                    None,
+                    None,
+                )
+                .await;
+                assert_eq!(status, StatusCode::OK, "{body}");
+                assert!(body.contains(&id.to_string()));
+            }
+        }
+        let (status, _) = api(
+            &stack.router,
+            "PATCH",
+            &path,
+            Some(&cookie),
+            Some(&csrf),
+            Some(r#"{"new_slug":"cannot-rename","expected_version":6}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, body) = api(
+            &stack.router,
+            "POST",
+            &format!("{path}/publish"),
+            Some(&cookie),
+            Some(&csrf),
+            Some(r#"{"expected_version":6}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let dto: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(dto["status"], "published");
+        let published = time::OffsetDateTime::parse(
+            dto["published_at"].as_str().unwrap(),
+            &time::format_description::well_known::Rfc3339,
+        )
+        .unwrap();
+        assert!(
+            published <= time::OffsetDateTime::now_utc(),
+            "立即发布不得保留未来时间"
+        );
     }
 }

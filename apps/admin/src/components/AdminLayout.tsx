@@ -69,6 +69,7 @@ const TITLES: Record<Route["name"], string> = {
   mediaLibrary: "媒体库",
   categoryList: "分类",
   seriesList: "系列",
+  pageTrash: "页面回收站",
   userList: "用户与角色",
   roleList: "角色目录",
   settings: "站点设置",
@@ -93,6 +94,8 @@ function selectedKey(route: Route): string {
       return paths.tags;
     case "categoryList":
       return paths.categories;
+    case "pageTrash":
+      return paths.pages;
     case "seriesList":
       return paths.series;
     case "mediaLibrary":

@@ -17,6 +17,8 @@ export const queryKeys = {
    * 取具体页用 `queryKeys.trash(page)`。
    */
   trashAll: () => ["trash"] as const,
+  pageTrash: (page: number) => ["page-trash", page] as const,
+  pageTrashAll: () => ["page-trash"] as const,
   tags: () => ["tags"] as const,
   categories: () => ["categories"] as const,
   series: () => ["series"] as const,
@@ -51,7 +53,7 @@ export function createQueryClient(): QueryClient {
          * 只重试服务端故障（5xx）。
          *
          * 业务错误码重试没有意义，而且有害：`version_conflict` 重试会掩盖真实的并发冲突，
-         * `forbidden`/`tag_in_use`/`not_found` 重试三次只是把错误提示推迟几秒。
+         * `forbidden`/`category_in_use`/`not_found` 重试三次只是把错误提示推迟几秒。
          */
         retry: (count, error) => error instanceof ApiError && error.status >= 500 && count < 2,
         /**

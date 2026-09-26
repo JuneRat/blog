@@ -133,6 +133,8 @@ function AdminRoutes() {
           <MediaLibraryScreen />
         ) : route.name === "categoryList" ? (
           <CategoryListScreen />
+        ) : route.name === "pageTrash" ? (
+          <PostTrashScreen kind="page" />
         ) : route.name === "seriesList" ? (
           <SeriesListScreen />
         ) : route.name === "userList" ? (

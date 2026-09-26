@@ -23,6 +23,29 @@ use domain::identity::UserId;
 /// 向接口层转出的值对象（interfaces 不直接依赖 domain crate）。
 pub use domain::content::Visibility as PostVisibility;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SeriesPlacement {
+    pub series_id: Uuid,
+    #[serde(default)]
+    pub position: i32,
+}
+impl From<domain::content::SeriesPlacement> for SeriesPlacement {
+    fn from(p: domain::content::SeriesPlacement) -> Self {
+        Self {
+            series_id: p.series_id,
+            position: p.position,
+        }
+    }
+}
+impl From<SeriesPlacement> for domain::content::SeriesPlacement {
+    fn from(p: SeriesPlacement) -> Self {
+        Self {
+            series_id: p.series_id,
+            position: p.position,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct CreatePostCmd {
     /// None 时由应用生成临时唯一 slug（草稿创建即占用 slug）。
@@ -35,8 +58,8 @@ pub struct CreatePostCmd {
     pub tag_ids: Vec<Uuid>,
     /// 初始分类（存在性由用例校验）。
     pub category_id: Option<Uuid>,
-    /// 初始系列与序号（None = 不加入系列）。
-    pub series: Option<(Uuid, i32)>,
+    /// 初始系列集合（空数组表示不加入系列）。
+    pub series: Vec<SeriesPlacement>,
     /// 初始封面媒体资产（None = 无封面）。
     pub cover_media_id: Option<Uuid>,
 }
@@ -54,8 +77,8 @@ pub struct EditPostCmd {
     pub tag_ids: Option<Vec<Uuid>>,
     /// 三态：None 不修改；Some(None) 清空分类；Some(Some(id)) 设置分类。
     pub category_id: Option<Option<Uuid>>,
-    /// 三态：None 不修改；Some(None) 退出系列；Some(Some((id, order))) 设置。
-    pub series: Option<Option<(Uuid, i32)>>,
+    /// None 不修改；Some 整体替换系列集合。
+    pub series: Option<Vec<SeriesPlacement>>,
     /// 封面三态：None 不修改；Some(None) 移除封面；Some(Some(id)) 设置封面。
     pub cover_media_id: Option<Option<Uuid>>,
     /// None 表示使用读取到的当前版本（仍可检测读后并发修改）。
@@ -82,9 +105,8 @@ pub struct PostDto {
     pub tag_ids: Vec<Uuid>,
     /// 所属分类 id（至多一个；None = 未分类）。
     pub category_id: Option<Uuid>,
-    /// 所属系列与序号（同空或同非空）。
-    pub series_id: Option<Uuid>,
-    pub series_order: Option<i32>,
+    /// 所属系列与各系列内的排序权重。
+    pub series: Vec<SeriesPlacement>,
     /// 封面媒体资产 id（None = 无封面）；URL 由接口层按 `/media/{id}` 生成。
     pub cover_media_id: Option<Uuid>,
 }
@@ -118,8 +140,7 @@ impl PostDto {
             author_id: s.author_id,
             tag_ids,
             category_id: s.category_id,
-            series_id: s.series_id,
-            series_order: s.series_order,
+            series: s.series.iter().copied().map(Into::into).collect(),
             cover_media_id: s.cover_media_id,
         }
     }
@@ -171,8 +192,8 @@ impl PostInteractor {
         if let Some(category_id) = cmd.category_id {
             self.validate_category(category_id).await?;
         }
-        if let Some((series_id, _)) = cmd.series {
-            self.validate_series(series_id).await?;
+        for placement in &cmd.series {
+            self.validate_series(placement.series_id).await?;
         }
         // 新文章的封面总是首次附着，一律过可用性校验。
         if let Some(cover_media_id) = cmd.cover_media_id {
@@ -187,13 +208,16 @@ impl PostInteractor {
             cmd.visibility,
             PostDraftMetadata {
                 category_id: cmd.category_id,
-                series: cmd.series,
+                series: cmd.series.into_iter().map(Into::into).collect(),
                 cover_media_id: cmd.cover_media_id,
             },
             self.clock.now(),
         )
         .map_err(|e| UseCaseError::Invalid(e.to_string()))?;
-        let record = self.posts.insert_post(&post, &tag_ids).await?;
+        let record = self
+            .posts
+            .insert_post(&post, &tag_ids, actor.audit_actor_id())
+            .await?;
         Ok(PostDto::from_record(record))
     }
 
@@ -209,8 +233,10 @@ impl PostInteractor {
         if let Some(Some(category_id)) = cmd.category_id {
             self.validate_category(category_id).await?;
         }
-        if let Some(Some((series_id, _))) = cmd.series {
-            self.validate_series(series_id).await?;
+        if let Some(placements) = &cmd.series {
+            for placement in placements {
+                self.validate_series(placement.series_id).await?;
+            }
         }
         // 封面只有**换成新资产**时才过可用性校验：编辑者重复提交当前封面
         // （含编辑他人文章）不重新授权，历史引用不卡正常保存。
@@ -238,19 +264,21 @@ impl PostInteractor {
                 content: cmd.content,
                 visibility: cmd.visibility,
                 category_id: cmd.category_id,
-                series: cmd.series,
+                series: cmd
+                    .series
+                    .map(|series| series.into_iter().map(Into::into).collect()),
                 cover_media_id: cmd.cover_media_id,
             })
             .map_err(|e| UseCaseError::Invalid(e.to_string()))?;
 
         // 仅标签变化也要提交（version+1）；正文与标签都无变化则幂等返回。
         if changed || tags_changed {
-            return self.commit(post, expected, new_tags).await;
+            return self.commit(actor, post, expected, new_tags).await;
         }
         Ok(PostDto::from_record(record))
     }
 
-    /// 发布：draft → published，首次发布写入 published_at；已发布幂等。
+    /// 立即发布草稿或预约内容；保留过去的发布时间，未来预约改为当前时间。
     pub async fn publish(
         &self,
         actor: &Actor,
@@ -264,12 +292,12 @@ impl PostInteractor {
         let expected = checked_version(record.snapshot.version, expected_version)?;
 
         if post.publish(self.clock.now()).map_err(map_domain)? {
-            return self.commit(post, expected, None).await;
+            return self.commit(actor, post, expected, None).await;
         }
         Ok(PostDto::from_record(record))
     }
 
-    /// 撤回：published → draft，slug 保持锁定；非发布状态幂等。
+    /// 撤回、取消预约或解除归档：回到 draft，slug 保持锁定；草稿幂等。
     pub async fn withdraw(
         &self,
         actor: &Actor,
@@ -283,7 +311,42 @@ impl PostInteractor {
         let expected = checked_version(record.snapshot.version, expected_version)?;
 
         if post.withdraw() {
-            return self.commit(post, expected, None).await;
+            return self.commit(actor, post, expected, None).await;
+        }
+        Ok(PostDto::from_record(record))
+    }
+
+    pub async fn schedule(
+        &self,
+        actor: &Actor,
+        id: Uuid,
+        at: time::OffsetDateTime,
+        version: Option<i64>,
+    ) -> Result<PostDto, UseCaseError> {
+        actor.ensure_write_channel()?;
+        let (mut post, record) = self
+            .load_authorized(id, actor, "post.publish", "post.publish_any")
+            .await?;
+        let expected = checked_version(record.snapshot.version, version)?;
+        if post.schedule(at, self.clock.now()).map_err(map_domain)? {
+            return self.commit(actor, post, expected, None).await;
+        }
+        Ok(PostDto::from_record(record))
+    }
+
+    pub async fn archive(
+        &self,
+        actor: &Actor,
+        id: Uuid,
+        version: Option<i64>,
+    ) -> Result<PostDto, UseCaseError> {
+        actor.ensure_write_channel()?;
+        let (mut post, record) = self
+            .load_authorized(id, actor, "post.unpublish", "post.unpublish_any")
+            .await?;
+        let expected = checked_version(record.snapshot.version, version)?;
+        if post.archive().map_err(map_domain)? {
+            return self.commit(actor, post, expected, None).await;
         }
         Ok(PostDto::from_record(record))
     }
@@ -367,7 +430,11 @@ impl PostInteractor {
         let expected = checked_version(record.snapshot.version, version)?;
         let now = self.clock.now();
         post.trash(now);
-        Self::committed(self.posts.commit_lifecycle(&post, expected, now).await?)
+        Self::committed(
+            self.posts
+                .commit_lifecycle(&post, expected, now, actor.audit_actor_id())
+                .await?,
+        )
     }
 
     pub async fn restore(
@@ -393,7 +460,7 @@ impl PostInteractor {
         post.restore();
         Self::committed(
             self.posts
-                .commit_lifecycle(&post, expected, self.clock.now())
+                .commit_lifecycle(&post, expected, self.clock.now(), actor.audit_actor_id())
                 .await?,
         )
     }
@@ -413,7 +480,11 @@ impl PostInteractor {
             return Err(UseCaseError::Invalid("只能永久删除回收站文章".into()));
         }
         let expected = checked_version(record.snapshot.version, version)?;
-        match self.posts.purge(record.snapshot.id, expected).await? {
+        match self
+            .posts
+            .purge(record.snapshot.id, expected, actor.audit_actor_id())
+            .await?
+        {
             SaveOutcome::Saved { .. } => Ok(()),
             SaveOutcome::StaleConflict => Err(UseCaseError::VersionConflict),
             SaveOutcome::Gone => Err(UseCaseError::NotFound(format!("文章 {id}"))),
@@ -423,13 +494,20 @@ impl PostInteractor {
     /// All relations and the returned editor record belong to the same conditional commit.
     async fn commit(
         &self,
+        actor: &Actor,
         post: Post,
         expected: i64,
         new_tags: Option<Vec<Uuid>>,
     ) -> Result<PostDto, UseCaseError> {
         Self::committed(
             self.posts
-                .commit_post(&post, expected, self.clock.now(), new_tags.as_deref())
+                .commit_post(
+                    &post,
+                    expected,
+                    self.clock.now(),
+                    new_tags.as_deref(),
+                    actor.audit_actor_id(),
+                )
                 .await?,
         )
     }

@@ -3,11 +3,10 @@ use sqlx::postgres::PgDatabaseError;
 use application::error::{ConflictKind, UseCaseError};
 
 /// 匿名公开条件（与 docs/database-design.md §5 保持一致）。
-pub(super) const POST_PUBLIC_PREDICATE: &str =
-    "p.status = 'published' AND p.visibility = 'public' AND p.deleted_at IS NULL";
+pub(super) const POST_PUBLIC_PREDICATE: &str = "p.status = 'published' AND p.visibility = 'public' AND p.deleted_at IS NULL AND p.published_at <= now()";
 
-/// 页面没有 deleted_at：公开条件只有状态与可见性。
-pub(super) const PAGE_PUBLIC_PREDICATE: &str = "p.status = 'published' AND p.visibility = 'public'";
+/// 页面与文章使用相同公开条件。
+pub(super) const PAGE_PUBLIC_PREDICATE: &str = POST_PUBLIC_PREDICATE;
 
 // ---------------------------------------------------------------------------
 // 错误映射
@@ -22,7 +21,6 @@ fn unique_conflict_target(error: &PgDatabaseError) -> Option<ConflictKind> {
         "posts_slug_key" | "pages_slug_key" => Some(ConflictKind::Slug),
         "users_username_ci_uq" => Some(ConflictKind::Username),
         "users_email_ci_uq" => Some(ConflictKind::Email),
-        "posts_series_position_unique" => Some(ConflictKind::SeriesPosition),
         "oauth_accounts_pkey" => Some(ConflictKind::ExternalIdentity),
         "categories_slug_key" | "series_slug_key" | "tags_slug_key" => Some(ConflictKind::Slug),
         "roles_code_key" => Some(ConflictKind::RoleSlug),
@@ -44,6 +42,9 @@ pub(super) fn map_sqlx_error(error: sqlx::Error) -> UseCaseError {
             // 翻译成可定位的参数错误而不是裸存储错误。
             if pg.code() == "23503" && pg.constraint() == Some("post_tags_tag_id_fkey") {
                 return UseCaseError::Invalid("所选标签不存在或刚被删除".into());
+            }
+            if pg.code() == "23503" && pg.constraint() == Some("post_series_series_id_fkey") {
+                return UseCaseError::Invalid("所选系列不存在或刚被删除".into());
             }
             // 同理：并发删除分类时的 FK 兜底。
             if pg.code() == "23503" && pg.constraint() == Some("posts_category_id_fkey") {

@@ -1,3 +1,4 @@
+import { ContentLifecycleControls, statusLabel, type ContentAction } from "../components/ContentLifecycleControls";
 import {
   Alert,
   App as AntdApp,
@@ -106,6 +107,7 @@ export function PageEditScreen({ id }: { id: string | null }) {
   const [version, setVersion] = useState<number | null>(null);
   const [pageId, setPageId] = useState<string | null>(null);
   const [pageStatus, setPageStatus] = useState<string>("draft");
+  const [publishedAt, setPublishedAt] = useState<string | null>(null);
   /** 图片面板是否展开（编辑器内插入图片）。 */
   const [mediaOpen, setMediaOpen] = useState(false);
   /** 正文输入框：插入位置取自它的真实选区。 */
@@ -149,6 +151,7 @@ export function PageEditScreen({ id }: { id: string | null }) {
       setVersion(page.version);
       setPageId(page.id);
       setPageStatus(page.status);
+      setPublishedAt(page.published_at);
       setConflict(false);
       setDeleteConflict(false);
       return !formEquals(merged, server);
@@ -160,6 +163,7 @@ export function PageEditScreen({ id }: { id: string | null }) {
   const applyStatus = useCallback((page: PageDetail): void => {
     setVersion(page.version);
     setPageStatus(page.status);
+      setPublishedAt(page.published_at);
     setConflict(false);
   }, []);
 
@@ -196,6 +200,7 @@ export function PageEditScreen({ id }: { id: string | null }) {
       setVersion(null);
       setPageId(null);
       setPageStatus("draft");
+      setPublishedAt(null);
       setBusy(false);
       setNotice(null);
       setError(null);
@@ -339,7 +344,7 @@ export function PageEditScreen({ id }: { id: string | null }) {
   }
 
   /** 发布/撤回：有未保存改动时先保存，再用保存得到的版本改状态。 */
-  async function setPublished(publish: boolean): Promise<void> {
+  async function changeStatus(action: ContentAction, at?: string): Promise<void> {
     // 表单不属于当前地址时不得改状态：没有可依据的版本号，等于盲写。
     if (id === null || formMismatch) return;
     setError(null);
@@ -348,7 +353,7 @@ export function PageEditScreen({ id }: { id: string | null }) {
     const hadUnsavedEdits = hasUnsaved();
     try {
       let expected = version ?? undefined;
-      if (hadUnsavedEdits) {
+      if (hadUnsavedEdits && pageStatus !== "archived") {
         const sent = readForm();
         const saved = await api.updatePage(id, {
           ...editPayload(),
@@ -363,19 +368,14 @@ export function PageEditScreen({ id }: { id: string | null }) {
          */
         invalidateList();
       }
-      const result = publish
+      const result = action === "publish"
         ? await api.publishPage(id, expected)
+        : action === "schedule" ? await api.schedulePage(id, at!, expected)
+        : action === "archive" ? await api.archivePage(id, expected)
         : await api.unpublishPage(id, expected);
       applyStatus(result);
       invalidateList();
-      const stillDirty = hasUnsaved();
-      if (publish) {
-        if (stillDirty) setNotice("已发布；等待期间的新改动尚未保存。");
-        else setNotice(hadUnsavedEdits ? "已保存并发布。" : "已发布。");
-      } else {
-        if (stillDirty) setNotice("已撤回为草稿；等待期间的新改动尚未保存。");
-        else setNotice(hadUnsavedEdits ? "已保存并撤回为草稿。" : "已撤回为草稿。");
-      }
+      setNotice(`状态已更新为${statusLabel(result.status)}。${hasUnsaved() ? "还有未保存的改动。" : ""}`);
     } catch (e) {
       if (isVersionConflict(e)) {
         setConflict(true);
@@ -391,8 +391,8 @@ export function PageEditScreen({ id }: { id: string | null }) {
     if (id === null || formMismatch || pageId === null || version === null) return;
     const current = readForm();
     modal.confirm({
-      title: `永久删除页面「${current.title || current.slug}」？`,
-      content: `地址 /${baselineRef.current.slug} 会立即失效。此操作没有回收站，无法恢复；未保存的修改也会丢失。`,
+      title: `移入页面回收站「${current.title || current.slug}」？`,
+      content: `地址 /${baselineRef.current.slug} 会立即失效。可从页面回收站恢复为草稿；未保存的修改会丢失。`,
       okButtonProps: { danger: true },
       onOk: async () => {
         setBusy(true);
@@ -400,8 +400,9 @@ export function PageEditScreen({ id }: { id: string | null }) {
         setNotice(null);
         setDeleteConflict(false);
         try {
-          await api.deletePage(id, version);
+          await api.trashPage(id, version);
           invalidateList();
+          void queryClient.invalidateQueries({queryKey: queryKeys.pageTrashAll()});
           navigate(paths.pages, { replace: true });
         } catch (cause) {
           if (isVersionConflict(cause)) {
@@ -428,7 +429,9 @@ export function PageEditScreen({ id }: { id: string | null }) {
     () => readForm().content,
     commitContent,
   );
-  const canToggle = me?.permissions.includes(published ? "page.unpublish" : "page.publish") ?? false;
+  const canPublish = me?.permissions.includes("page.publish") ?? false;
+  const canUnpublish = me?.permissions.includes("page.unpublish") ?? false;
+  const canArchive = me?.permissions.includes("page.archive") ?? false;
   const canDelete = me?.permissions.includes("page.delete") ?? false;
 
   if (loading) {
@@ -442,7 +445,7 @@ export function PageEditScreen({ id }: { id: string | null }) {
           <Typography.Title level={3} style={{ margin: 0 }}>
             {id === null ? "新建页面" : view.slug}
           </Typography.Title>
-          <Tag color={published ? "green" : undefined}>{published ? "已发布" : "草稿"}</Tag>
+          <Tag color={published ? "green" : undefined}>{statusLabel(pageStatus)}</Tag>
           {version !== null && <Typography.Text type="secondary">v{version}</Typography.Text>}
         </Flex>
         {published && id !== null && (
@@ -504,6 +507,7 @@ export function PageEditScreen({ id }: { id: string | null }) {
 
       <Form
         form={formApi}
+        disabled={pageStatus === "archived" || formMismatch}
         layout="vertical"
         initialValues={EMPTY_FORM}
         onValuesChange={(_changed, all) => setView({ ...EMPTY_FORM, ...all })}
@@ -576,17 +580,15 @@ export function PageEditScreen({ id }: { id: string | null }) {
 
         <Space>
           {/* 用文案切换而不是 Button 的 loading：见 PostEditScreen 的同名说明。 */}
-          <Button type="primary" htmlType="submit" disabled={busy}>
+          <Button type="primary" htmlType="submit" disabled={busy || formMismatch || pageStatus === "archived"}>
             {busy ? "处理中…" : "保存并更新线上"}
           </Button>
-          {canToggle && id !== null && (
-            <Button disabled={busy} onClick={() => void setPublished(pageStatus !== "published")}>
-              {published ? "撤回为草稿" : "发布"}
-            </Button>
-          )}
+          {id !== null && <ContentLifecycleControls status={pageStatus} publishedAt={publishedAt} disabled={busy || formMismatch}
+            canPublish={canPublish} canUnpublish={canUnpublish} canArchive={canArchive} onAction={changeStatus} />}
+
           {canDelete && id !== null && !formMismatch && pageId !== null && (
             <Button danger disabled={busy} onClick={deletePage}>
-              永久删除页面
+              移入页面回收站
             </Button>
           )}
         </Space>

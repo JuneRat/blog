@@ -2,7 +2,7 @@
 
 本文记录已确认的 PostgreSQL 18 目标设计，共 **19 张表：18 张业务表和 `sessions`**。字段、外键、CHECK 与索引以根目录的 [blog_schema.sql](../blog_schema.sql) 为准，选择理由见 [ADR-0016](adr/0016-confirmed-blog-schema.md)。
 
-**新建库基线、身份会话与媒体已接入。** `migrate` 现在执行新的 [0001_initial_schema.sql](../migrations/postgres/0001_initial_schema.sql)，原九个迁移已替换，仅支持空库或已应用新基线的库；检测到旧结构时退出，不自动清库。用户、OAuth、RBAC、sessions 和媒体已适配，内容、评论与恢复工具仍待切换，不能据此认为整站可运行。实际适配边界见[当前数据库实现](database-current.md)，后续验收见[路线图](product-roadmap.md#已采纳数据库设计的实施)。
+**新建库基线、身份会话、媒体、内容与目录已接入。** `migrate` 现在执行新的 [0001_initial_schema.sql](../migrations/postgres/0001_initial_schema.sql)，原九个迁移已替换，仅支持空库或已应用新基线的库；检测到旧结构时退出，不自动清库。评论与恢复工具仍待切换，不能据此认为整站可运行。实际适配边界见[当前数据库实现](database-current.md)，后续验收见[路线图](product-roadmap.md#已采纳数据库设计的实施)。
 
 ## 1. 表清单与通用约定
 

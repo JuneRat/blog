@@ -9,14 +9,15 @@ use application::error::UseCaseError;
 use application::ports::{
     ContentRenderer, MediaContentKind, PageCommitOutcome, PageDeleteOutcome, PageRepository,
     PostCommitOutcome, PostRecord, PostRepository, PublicCategoryRef, PublicPageDetail,
-    PublicPostDetail, PublicPostSummary, PublicSeriesRef, PublicUrlEntry, PublishedPageQuery,
-    PublishedPostQuery, SaveOutcome,
+    PublicPostDetail, PublicPostSummary, PublicUrlEntry, PublishedPageQuery, PublishedPostQuery,
+    SaveOutcome,
 };
 use domain::content::{Page, PageSnapshot, PageStatus};
 use domain::content::{Post, PostSnapshot, PostStatus, Visibility};
 
 use super::media::{clear_media_refs, media_ids_for, sync_media_refs};
 use super::sql::{PAGE_PUBLIC_PREDICATE, POST_PUBLIC_PREDICATE, map_row_error, map_sqlx_error};
+use crate::audit::{AuditEntry, append_audit_log};
 
 /// 渲染或清洗规则变更时递增；启动迁移将重建不匹配的派生内容。
 pub const CONTENT_RENDER_VERSION: i32 = 1;
@@ -110,62 +111,38 @@ impl PostgresPostRepository {
         &self,
         snapshot: &PostSnapshot,
         tag_ids: &[Uuid],
+        actor_id: Option<Uuid>,
     ) -> Result<PostRecord, UseCaseError> {
-        // 引用集合在事务外推导：正文图片与封面求并集（提取要完整渲染 + 清洗正文，
-        // 不应占用事务）。
-        domain::content::budget::validate_source(&snapshot.content)
-            .map_err(|e| UseCaseError::Invalid(e.to_string()))?;
-        let rendered = self.renderer.render_content(&snapshot.content).await?;
-        application::rendering_budget::validate_html(&rendered.content_html)
-            .map_err(|e| UseCaseError::Invalid(e.to_string()))?;
-        let media_ids = media_ids_for(&rendered.media_ids, snapshot.cover_media_id);
-        // 正文与初始标签/系列关系同一事务：半套写入不应对外可见。
+        let rendered = render_content(&*self.renderer, &snapshot.content).await?;
         let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
-        // 创建即入系列：先锁系列行并递增其版本（加入即改变成员目录，
-        // 旧目录上的重排必须失效——与 save/重排共用系列锁协议）。
-        if let Some(series_id) = snapshot.series_id {
-            bump_series_versions(&mut tx, &[series_id]).await?;
-        }
-        sqlx::query(
-            r#"
-            INSERT INTO posts (
-                id, author_id, category_id, series_id, title, slug, excerpt, content, cover_media_id,
-                series_order, status, visibility, published_at, version, created_at, updated_at,
-                content_html, content_render_version
-            ) VALUES (
-                $1, $2, $3, $4, $5, $6, $7, $8, $9,
-                $10, $11, $12, $13, $14, $15, $16, $17, $18
-            )
-            "#,
+        lock_content_relations(&mut tx).await?;
+        sqlx::query("INSERT INTO posts (id, author_id, category_id, title, slug, excerpt, content, cover_media_id, status, visibility, published_at, version, created_at, updated_at, deleted_at, content_html, content_render_version) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)")
+            .bind(snapshot.id).bind(snapshot.author_id).bind(snapshot.category_id).bind(&snapshot.title)
+            .bind(&snapshot.slug).bind(&snapshot.excerpt).bind(&snapshot.content).bind(snapshot.cover_media_id)
+            .bind(snapshot.status.as_str()).bind(snapshot.visibility.as_str()).bind(snapshot.published_at)
+            .bind(snapshot.version).bind(snapshot.created_at).bind(snapshot.updated_at).bind(snapshot.deleted_at)
+            .bind(&rendered.content_html).bind(CONTENT_RENDER_VERSION)
+            .execute(&mut *tx).await.map_err(map_sqlx_error)?;
+        insert_post_tags(&mut tx, snapshot.id, tag_ids)
+            .await
+            .map_err(map_sqlx_error)?;
+        replace_post_series(&mut tx, snapshot.id, &[], &snapshot.series).await?;
+        sync_media_refs(
+            &mut tx,
+            MediaContentKind::Post,
+            snapshot.id,
+            &media_ids_for(&rendered.media_ids, snapshot.cover_media_id),
         )
-        .bind(snapshot.id)
-        .bind(snapshot.author_id)
-        .bind(snapshot.category_id)
-        .bind(snapshot.series_id)
-        .bind(&snapshot.title)
-        .bind(&snapshot.slug)
-        .bind(&snapshot.excerpt)
-        .bind(&snapshot.content)
-        .bind(snapshot.cover_media_id)
-        .bind(snapshot.series_order)
-        .bind(snapshot.status.as_str())
-        .bind(snapshot.visibility.as_str())
-        .bind(snapshot.published_at)
-        .bind(snapshot.version)
-        .bind(snapshot.created_at)
-        .bind(snapshot.updated_at)
-        .bind(&rendered.content_html)
-        .bind(CONTENT_RENDER_VERSION)
-        .execute(&mut *tx)
-        .await
-        .map_err(map_sqlx_error)?;
-        if !tag_ids.is_empty() {
-            insert_post_tags(&mut tx, snapshot.id, tag_ids)
-                .await
-                .map_err(map_sqlx_error)?;
-        }
-        // 正文引用与正文同一事务：引用校验失败则整体回滚，不留下半套写入。
-        sync_media_refs(&mut tx, MediaContentKind::Post, snapshot.id, &media_ids).await?;
+        .await?;
+        audit_content(
+            &mut tx,
+            actor_id,
+            "post.create",
+            "post",
+            snapshot.id,
+            serde_json::json!({"version": snapshot.version}),
+        )
+        .await?;
         let record = self.record_in_transaction(&mut tx, snapshot.id).await?;
         tx.commit().await.map_err(map_sqlx_error)?;
         Ok(record)
@@ -177,118 +154,61 @@ impl PostgresPostRepository {
         expected_version: i64,
         now: OffsetDateTime,
         tag_ids: Option<&[Uuid]>,
+        actor_id: Option<Uuid>,
     ) -> Result<PostCommitOutcome, UseCaseError> {
-        // 引用集合在事务外推导：正文图片与封面求并集（渲染 + 清洗是纯 CPU 工作，
-        // 不应占用事务）。封面变化同样反映到引用行，因此替换封面会释放旧图。
-        domain::content::budget::validate_source(&snapshot.content)
-            .map_err(|e| UseCaseError::Invalid(e.to_string()))?;
-        let rendered = self.renderer.render_content(&snapshot.content).await?;
-        application::rendering_budget::validate_html(&rendered.content_html)
-            .map_err(|e| UseCaseError::Invalid(e.to_string()))?;
-        let media_ids = media_ids_for(&rendered.media_ids, snapshot.cover_media_id);
-        // 正文（或仅标签/系列关系）与 version 递增在同一事务：
-        // 观察者不会看到新正文配旧标签（或反之）的混合状态。
-        //
-        // 系列锁协议（P1 修复）：文章加入/退出/移动系列与整体重排共用同一协议——
-        // 锁定顺序恒为「系列行（按 id 序）→ 文章行」，与重排一致（防死锁）；
-        // 系列归属或序号变化时递增**相关系列**（旧+新）的 version，
-        // 让手持旧目录/旧系列版本的重排立即失效（docs/database-design.md §4）。
+        let rendered = render_content(&*self.renderer, &snapshot.content).await?;
         let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
-
-        // 1. 读当前文章（无锁快照）：拿旧系列归属与存活状态做三态判定。
-        let current: Option<(Option<Uuid>, Option<i32>, i64, bool)> = sqlx::query_as(
-            "SELECT series_id, series_order, version, deleted_at IS NULL FROM posts WHERE id = $1",
-        )
+        lock_content_relations(&mut tx).await?;
+        let row = sqlx::query(&format!(
+            "SELECT {POST_COLUMNS} FROM posts WHERE id=$1 FOR UPDATE"
+        ))
         .bind(snapshot.id)
         .fetch_optional(&mut *tx)
         .await
         .map_err(map_sqlx_error)?;
-        let Some((old_series, old_order, current_version, alive)) = current else {
-            tx.commit().await.map_err(map_sqlx_error)?;
+        let Some(row) = row else {
             return Ok(PostCommitOutcome::Gone);
         };
-        if !alive {
-            tx.commit().await.map_err(map_sqlx_error)?;
+        let previous = post_from_row(&row)?;
+        if previous.deleted_at.is_some() {
             return Ok(PostCommitOutcome::Gone);
         }
-        if current_version != expected_version {
-            tx.commit().await.map_err(map_sqlx_error)?;
+        if previous.version != expected_version {
             return Ok(PostCommitOutcome::StaleConflict);
         }
-
-        // 2. 系列归属/序号变化：按 id 序锁定受影响系列（旧+新去重）并递增版本。
-        let series_changed = (old_series, old_order) != (snapshot.series_id, snapshot.series_order);
-        if series_changed {
-            let mut affected: Vec<Uuid> = [old_series, snapshot.series_id]
-                .into_iter()
-                .flatten()
-                .collect();
-            affected.sort();
-            affected.dedup();
-            bump_series_versions(&mut tx, &affected).await?;
-        }
-
-        // 3. 更新文章（此时系列行锁在手，与重排的锁序一致）。
-        let updated = sqlx::query(
-            r#"
-            UPDATE posts SET
-                title = $3, slug = $4, excerpt = $5, content = $6, cover_media_id = $7,
-                series_id = $8, series_order = $9, status = $10, visibility = $11,
-                published_at = $12, updated_at = $13, category_id = $14,
-                version = version + 1, content_html = $15, content_render_version = $16
-            WHERE id = $1 AND version = $2 AND deleted_at IS NULL
-            RETURNING version
-            "#,
-        )
-        .bind(snapshot.id)
-        .bind(expected_version)
-        .bind(&snapshot.title)
-        .bind(&snapshot.slug)
-        .bind(&snapshot.excerpt)
-        .bind(&snapshot.content)
-        .bind(snapshot.cover_media_id)
-        .bind(snapshot.series_id)
-        .bind(snapshot.series_order)
-        .bind(snapshot.status.as_str())
-        .bind(snapshot.visibility.as_str())
-        .bind(snapshot.published_at)
-        .bind(now)
-        .bind(snapshot.category_id)
-        .bind(&rendered.content_html)
-        .bind(CONTENT_RENDER_VERSION)
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(map_sqlx_error)?;
-
-        let Some(_row) = updated else {
-            // 版本在步骤 1 之后被并发改写：不再有写入，放弃事务。
-            tx.rollback().await.map_err(map_sqlx_error)?;
-            return Ok(PostCommitOutcome::StaleConflict);
-        };
-
-        if let Some(tag_ids) = tag_ids {
-            // 整体替换：先清空再写入（幂等；空集合 = 解除全部关联）。
-            sqlx::query("DELETE FROM post_tags WHERE post_id = $1")
+        sqlx::query("UPDATE posts SET title=$3, slug=$4, excerpt=$5, content=$6, category_id=$7, cover_media_id=$8, status=$9, visibility=$10, published_at=$11, updated_at=$12, version=version+1, content_html=$13, content_render_version=$14 WHERE id=$1 AND version=$2 AND deleted_at IS NULL")
+            .bind(snapshot.id).bind(expected_version).bind(&snapshot.title).bind(&snapshot.slug)
+            .bind(&snapshot.excerpt).bind(&snapshot.content).bind(snapshot.category_id).bind(snapshot.cover_media_id)
+            .bind(snapshot.status.as_str()).bind(snapshot.visibility.as_str()).bind(snapshot.published_at)
+            .bind(now).bind(&rendered.content_html).bind(CONTENT_RENDER_VERSION)
+            .execute(&mut *tx).await.map_err(map_sqlx_error)?;
+        if let Some(ids) = tag_ids {
+            sqlx::query("DELETE FROM post_tags WHERE post_id=$1")
                 .bind(snapshot.id)
                 .execute(&mut *tx)
                 .await
                 .map_err(map_sqlx_error)?;
-            if !tag_ids.is_empty() {
-                insert_post_tags(&mut tx, snapshot.id, tag_ids)
-                    .await
-                    .map_err(map_sqlx_error)?;
-            }
+            insert_post_tags(&mut tx, snapshot.id, ids)
+                .await
+                .map_err(map_sqlx_error)?;
         }
-        // 引用集合始终由本次写入的正文推导（发布/撤回时正文未变，重写同集合是幂等的）。
-        sync_media_refs(&mut tx, MediaContentKind::Post, snapshot.id, &media_ids).await?;
+        replace_post_series(&mut tx, snapshot.id, &previous.series, &snapshot.series).await?;
+        sync_media_refs(
+            &mut tx,
+            MediaContentKind::Post,
+            snapshot.id,
+            &media_ids_for(&rendered.media_ids, snapshot.cover_media_id),
+        )
+        .await?;
+        audit_content(&mut tx, actor_id, "post.update", "post", snapshot.id, serde_json::json!({"version": expected_version+1, "previous_status": previous.status.as_str(), "status": snapshot.status.as_str(), "published_at": snapshot.published_at})).await?;
         let record = self.record_in_transaction(&mut tx, snapshot.id).await?;
         tx.commit().await.map_err(map_sqlx_error)?;
         Ok(PostCommitOutcome::Saved(Box::new(record)))
     }
 }
 
-const POST_COLUMNS: &str = "id, author_id, category_id, series_id, title, slug, excerpt, content, \
-     cover_media_id, series_order, status, visibility, published_at, version, created_at, updated_at, deleted_at";
+const POST_COLUMNS: &str = "id, author_id, category_id, title, slug, excerpt, content, cover_media_id, status, visibility, published_at, version, created_at, updated_at, deleted_at,
+    COALESCE((SELECT jsonb_agg(jsonb_build_object('series_id', series_id, 'position', position) ORDER BY series_id) FROM post_series WHERE post_id=posts.id), '[]'::jsonb) AS series";
 
 const POST_TAG_IDS: &str = "ARRAY(SELECT tag_id FROM post_tags WHERE post_id = posts.id \
     ORDER BY tag_id) AS tag_ids";
@@ -307,13 +227,18 @@ fn post_from_row(row: &sqlx::postgres::PgRow) -> Result<PostSnapshot, UseCaseErr
         id: row.try_get("id").map_err(map_row_error)?,
         author_id: row.try_get("author_id").map_err(map_row_error)?,
         category_id: row.try_get("category_id").map_err(map_row_error)?,
-        series_id: row.try_get("series_id").map_err(map_row_error)?,
+        series: row
+            .try_get::<sqlx::types::Json<Vec<application::content::SeriesPlacement>>, _>("series")
+            .map_err(map_row_error)?
+            .0
+            .into_iter()
+            .map(Into::into)
+            .collect(),
         title: row.try_get("title").map_err(map_row_error)?,
         slug: row.try_get("slug").map_err(map_row_error)?,
         excerpt: row.try_get("excerpt").map_err(map_row_error)?,
         content: row.try_get("content").map_err(map_row_error)?,
         cover_media_id: row.try_get("cover_media_id").map_err(map_row_error)?,
-        series_order: row.try_get("series_order").map_err(map_row_error)?,
         status: PostStatus::parse(&status)
             .ok_or_else(|| UseCaseError::Repository(format!("未知文章状态 {status}")))?,
         visibility: Visibility::parse(&visibility)
@@ -339,8 +264,14 @@ impl PostRepository for PostgresPostRepository {
         row.as_ref().map(post_record_from_row).transpose()
     }
 
-    async fn insert_post(&self, post: &Post, tag_ids: &[Uuid]) -> Result<PostRecord, UseCaseError> {
-        self.insert_record(&post.snapshot(), tag_ids).await
+    async fn insert_post(
+        &self,
+        post: &Post,
+        tag_ids: &[Uuid],
+        actor_id: Option<Uuid>,
+    ) -> Result<PostRecord, UseCaseError> {
+        self.insert_record(&post.snapshot(), tag_ids, actor_id)
+            .await
     }
 
     async fn commit_post(
@@ -349,8 +280,9 @@ impl PostRepository for PostgresPostRepository {
         expected_version: i64,
         now: OffsetDateTime,
         tag_ids: Option<&[Uuid]>,
+        actor_id: Option<Uuid>,
     ) -> Result<PostCommitOutcome, UseCaseError> {
-        self.save_record(&post.snapshot(), expected_version, now, tag_ids)
+        self.save_record(&post.snapshot(), expected_version, now, tag_ids, actor_id)
             .await
     }
 
@@ -359,6 +291,7 @@ impl PostRepository for PostgresPostRepository {
         post: &Post,
         expected_version: i64,
         now: OffsetDateTime,
+        actor_id: Option<Uuid>,
     ) -> Result<PostCommitOutcome, UseCaseError> {
         let snapshot = post.snapshot();
         let expected_deleted = snapshot.deleted_at.is_none();
@@ -380,6 +313,19 @@ impl PostRepository for PostgresPostRepository {
         .await
         .map_err(map_sqlx_error)?;
         let outcome = if updated.is_some() {
+            audit_content(
+                &mut tx,
+                actor_id,
+                if expected_deleted {
+                    "post.restore"
+                } else {
+                    "post.trash"
+                },
+                "post",
+                snapshot.id,
+                serde_json::json!({"version": expected_version+1}),
+            )
+            .await?;
             PostCommitOutcome::Saved(Box::new(
                 self.record_in_transaction(&mut tx, snapshot.id).await?,
             ))
@@ -426,6 +372,10 @@ impl PostRepository for PostgresPostRepository {
         offset: i64,
     ) -> Result<(Vec<PostSnapshot>, i64), UseCaseError> {
         let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+            .execute(&mut *tx)
+            .await
+            .map_err(map_sqlx_error)?;
         let (total,): (i64,) = sqlx::query_as(
             "SELECT count(*) FROM posts WHERE author_id = $1 AND deleted_at IS NOT NULL",
         )
@@ -442,72 +392,140 @@ impl PostRepository for PostgresPostRepository {
         ))
     }
 
-    async fn purge(&self, id: Uuid, expected_version: i64) -> Result<SaveOutcome, UseCaseError> {
-        // 与加入、退出、重排同一锁序：先 series 行，后 post 行。
-        // 无锁预读仅用于确定锁目标；锁后再次核对，迁移过的成员重新尝试。
-        for _ in 0..5 {
-            let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
-            let prior: Option<(Option<Uuid>,)> =
-                sqlx::query_as("SELECT series_id FROM posts WHERE id = $1")
-                    .bind(id)
-                    .fetch_optional(&mut *tx)
-                    .await
-                    .map_err(map_sqlx_error)?;
-            let Some((series_id,)) = prior else {
-                return Ok(SaveOutcome::Gone);
-            };
-            if let Some(series_id) = series_id {
-                sqlx::query("SELECT id FROM series WHERE id = $1 FOR UPDATE")
-                    .bind(series_id)
-                    .fetch_optional(&mut *tx)
-                    .await
-                    .map_err(map_sqlx_error)?;
-            }
-            let locked: Option<(Option<Uuid>, i64, bool)> = sqlx::query_as("SELECT series_id, version, deleted_at IS NOT NULL FROM posts WHERE id = $1 FOR UPDATE")
-                .bind(id).fetch_optional(&mut *tx).await.map_err(map_sqlx_error)?;
-            let Some((actual_series, version, deleted)) = locked else {
-                return Ok(SaveOutcome::Gone);
-            };
-            if actual_series != series_id {
-                tx.rollback().await.map_err(map_sqlx_error)?;
-                continue;
-            }
-            if !deleted {
-                return Ok(SaveOutcome::Gone);
-            }
-            if version != expected_version {
-                return Ok(SaveOutcome::StaleConflict);
-            }
-            // 内容物理删除：其媒体引用必须在同一事务清理
-            // （content_id 是多态引用，没有外键级联兜底）。
-            clear_media_refs(&mut tx, MediaContentKind::Post, id).await?;
-            sqlx::query("DELETE FROM posts WHERE id = $1")
-                .bind(id)
-                .execute(&mut *tx)
-                .await
-                .map_err(map_sqlx_error)?;
-            if let Some(series_id) = series_id {
-                sqlx::query(
-                    "UPDATE series SET version = version + 1, updated_at = now() WHERE id = $1",
-                )
-                .bind(series_id)
-                .execute(&mut *tx)
-                .await
-                .map_err(map_sqlx_error)?;
-            }
-            tx.commit().await.map_err(map_sqlx_error)?;
-            return Ok(SaveOutcome::Saved {
-                new_version: version + 1,
-            });
+    async fn purge(
+        &self,
+        id: Uuid,
+        expected_version: i64,
+        actor_id: Option<Uuid>,
+    ) -> Result<SaveOutcome, UseCaseError> {
+        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        lock_content_relations(&mut tx).await?;
+        let row = sqlx::query(&format!(
+            "SELECT {POST_COLUMNS} FROM posts WHERE id=$1 FOR UPDATE"
+        ))
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(map_sqlx_error)?;
+        let Some(row) = row else {
+            return Ok(SaveOutcome::Gone);
+        };
+        let previous = post_from_row(&row)?;
+        if previous.deleted_at.is_none() {
+            return Ok(SaveOutcome::Gone);
         }
-        Ok(SaveOutcome::StaleConflict)
+        if previous.version != expected_version {
+            return Ok(SaveOutcome::StaleConflict);
+        }
+        replace_post_series(&mut tx, id, &previous.series, &[]).await?;
+        // 单条 DELETE 清理整棵评论树，避免自引用约束把父评论逐条删除卡住。
+        sqlx::query("DELETE FROM comments WHERE post_id=$1")
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .map_err(map_sqlx_error)?;
+        clear_media_refs(&mut tx, MediaContentKind::Post, id).await?;
+        sqlx::query("DELETE FROM posts WHERE id=$1")
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .map_err(map_sqlx_error)?;
+        audit_content(
+            &mut tx,
+            actor_id,
+            "post.purge",
+            "post",
+            id,
+            serde_json::json!({"version": expected_version}),
+        )
+        .await?;
+        tx.commit().await.map_err(map_sqlx_error)?;
+        Ok(SaveOutcome::Saved {
+            new_version: expected_version + 1,
+        })
     }
 }
 
-/// 按固定 id 序锁定系列行并递增 version：文章加入/退出/移动系列与整体重排
-/// 共用的系列锁协议（锁序恒为「系列（id 序）→ 文章」，防死锁）。
-/// `ids` 必须已排序去重。旧系列必存在（FK RESTRICT 挡住被引用删除）；
-/// 新系列由用例前置校验，并发删除由 FK 违规翻译兜底。
+/// 短事务串行化内容关系修改（正文渲染在事务外），统一加入/重排/目录删除的锁序。
+/// 自托管博客写入量小；读请求不受此锁影响。
+pub(super) async fn lock_content_relations(
+    tx: &mut sqlx::PgConnection,
+) -> Result<(), UseCaseError> {
+    sqlx::query("SELECT pg_advisory_xact_lock(1129270868, 1)")
+        .execute(tx)
+        .await
+        .map_err(map_sqlx_error)?;
+    Ok(())
+}
+
+pub(super) async fn audit_content(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    actor_id: Option<Uuid>,
+    action: &str,
+    target_type: &str,
+    id: Uuid,
+    metadata: serde_json::Value,
+) -> Result<(), UseCaseError> {
+    append_audit_log(
+        tx,
+        AuditEntry {
+            actor_id,
+            ip_address: None,
+            action,
+            target_type,
+            target_id: &id.to_string(),
+            metadata,
+        },
+    )
+    .await
+}
+
+async fn render_content(
+    renderer: &dyn ContentRenderer,
+    source: &str,
+) -> Result<application::ports::RenderedContent, UseCaseError> {
+    domain::content::budget::validate_source(source)
+        .map_err(|e| UseCaseError::Invalid(e.to_string()))?;
+    let rendered = renderer.render_content(source).await?;
+    application::rendering_budget::validate_html(&rendered.content_html)
+        .map_err(|e| UseCaseError::Invalid(e.to_string()))?;
+    Ok(rendered)
+}
+
+async fn replace_post_series(
+    tx: &mut sqlx::PgConnection,
+    post_id: Uuid,
+    previous: &[domain::content::SeriesPlacement],
+    next: &[domain::content::SeriesPlacement],
+) -> Result<(), UseCaseError> {
+    if previous == next {
+        return Ok(());
+    }
+    let affected: Vec<Uuid> = previous
+        .iter()
+        .chain(next)
+        .filter(|p| {
+            previous.iter().find(|x| x.series_id == p.series_id)
+                != next.iter().find(|x| x.series_id == p.series_id)
+        })
+        .map(|p| p.series_id)
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    bump_series_versions(tx, &affected).await?;
+    sqlx::query("DELETE FROM post_series WHERE post_id=$1")
+        .bind(post_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(map_sqlx_error)?;
+    let ids: Vec<Uuid> = next.iter().map(|p| p.series_id).collect();
+    let positions: Vec<i32> = next.iter().map(|p| p.position).collect();
+    sqlx::query("INSERT INTO post_series (post_id, series_id, position) SELECT $1, series_id, position FROM unnest($2::uuid[], $3::int[]) AS placement(series_id, position)")
+        .bind(post_id).bind(&ids).bind(&positions).execute(tx).await.map_err(map_sqlx_error)?;
+    Ok(())
+}
+
+/// 调用方持有内容关系事务锁；关联变化递增受影响系列的版本。
 async fn bump_series_versions(
     tx: &mut sqlx::PgConnection,
     ids: &[Uuid],
@@ -623,11 +641,11 @@ impl PublishedPostQuery for PostgresPublishedPostQuery {
                        WHERE pt.post_id = p.id
                    ) AS tags,
                    c.slug AS category_slug, c.name AS category_name,
-                   se.slug AS series_slug, se.name AS series_name, p.series_order
+                   (SELECT COALESCE(jsonb_agg(jsonb_build_object('slug', se.slug, 'name', se.name, 'position', ps.position) ORDER BY se.slug), '[]'::jsonb)
+                    FROM post_series ps JOIN series se ON se.id=ps.series_id WHERE ps.post_id=p.id) AS series
             FROM posts p
             JOIN users u ON u.id = p.author_id
             LEFT JOIN categories c ON c.id = p.category_id
-            LEFT JOIN series se ON se.id = p.series_id
             WHERE p.slug = $1 AND {POST_PUBLIC_PREDICATE}
             "#
         ))
@@ -663,17 +681,11 @@ impl PublishedPostQuery for PostgresPublishedPostQuery {
                     )
                     .map(|(slug, name)| PublicCategoryRef { slug, name }),
                 series: row
-                    .try_get::<Option<String>, _>("series_slug")
+                    .try_get::<sqlx::types::Json<Vec<application::ports::PublicSeriesRef>>, _>(
+                        "series",
+                    )
                     .map_err(map_row_error)?
-                    .zip(
-                        row.try_get::<Option<String>, _>("series_name")
-                            .map_err(map_row_error)?,
-                    )
-                    .zip(
-                        row.try_get::<Option<i32>, _>("series_order")
-                            .map_err(map_row_error)?,
-                    )
-                    .map(|((slug, name), order)| PublicSeriesRef { slug, name, order }),
+                    .0,
             })
         })
         .transpose()
@@ -723,108 +735,22 @@ impl PostgresPageRepository {
         Self { pool, renderer }
     }
 
-    async fn insert_record(&self, snapshot: &PageSnapshot) -> Result<(), UseCaseError> {
-        // 引用集合在事务外推导：提取要完整渲染 + 清洗正文，不应占用事务。
-        // Page 没有封面列，因此引用集合只由正文推导。
-        domain::content::budget::validate_source(&snapshot.content)
-            .map_err(|e| UseCaseError::Invalid(e.to_string()))?;
-        let rendered = self.renderer.render_content(&snapshot.content).await?;
-        application::rendering_budget::validate_html(&rendered.content_html)
-            .map_err(|e| UseCaseError::Invalid(e.to_string()))?;
-        let media_ids = media_ids_for(&rendered.media_ids, None);
-        // 正文与正文引用同一事务：引用校验失败则整页不落库。
-        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
-        sqlx::query(
-            r#"
-            INSERT INTO pages (
-                id, title, slug, content, status, visibility, published_at, version,
-                created_at, updated_at, content_html, content_render_version
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-            "#,
-        )
-        .bind(snapshot.id)
-        .bind(&snapshot.title)
-        .bind(&snapshot.slug)
-        .bind(&snapshot.content)
-        .bind(snapshot.status.as_str())
-        .bind(snapshot.visibility.as_str())
-        .bind(snapshot.published_at)
-        .bind(snapshot.version)
-        .bind(snapshot.created_at)
-        .bind(snapshot.updated_at)
-        .bind(&rendered.content_html)
-        .bind(CONTENT_RENDER_VERSION)
-        .execute(&mut *tx)
-        .await
-        .map_err(map_sqlx_error)?;
-        sync_media_refs(&mut tx, MediaContentKind::Page, snapshot.id, &media_ids).await?;
-        tx.commit().await.map_err(map_sqlx_error)?;
-        Ok(())
-    }
-
-    async fn save_record(
+    async fn record_in_transaction(
         &self,
-        snapshot: &PageSnapshot,
-        expected_version: i64,
-        now: OffsetDateTime,
-    ) -> Result<SaveOutcome, UseCaseError> {
-        // 引用集合在事务外推导（渲染 + 清洗是纯 CPU 工作，不应占用事务）。
-        // Page 没有封面列，因此引用集合只由正文推导。
-        domain::content::budget::validate_source(&snapshot.content)
-            .map_err(|e| UseCaseError::Invalid(e.to_string()))?;
-        let rendered = self.renderer.render_content(&snapshot.content).await?;
-        application::rendering_budget::validate_html(&rendered.content_html)
-            .map_err(|e| UseCaseError::Invalid(e.to_string()))?;
-        let media_ids = media_ids_for(&rendered.media_ids, None);
-        // 条件更新与引用替换同一事务：观察者不会看到新正文配旧引用。
-        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
-        let updated = sqlx::query(
-            r#"
-            UPDATE pages SET
-                title = $3, slug = $4, content = $5, status = $6, visibility = $7,
-                published_at = $8, updated_at = $9, version = version + 1,
-                content_html = $10, content_render_version = $11
-            WHERE id = $1 AND version = $2
-            RETURNING version
-            "#,
-        )
-        .bind(snapshot.id)
-        .bind(expected_version)
-        .bind(&snapshot.title)
-        .bind(&snapshot.slug)
-        .bind(&snapshot.content)
-        .bind(snapshot.status.as_str())
-        .bind(snapshot.visibility.as_str())
-        .bind(snapshot.published_at)
-        .bind(now)
-        .bind(&rendered.content_html)
-        .bind(CONTENT_RENDER_VERSION)
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(map_sqlx_error)?;
-
-        if let Some(row) = updated {
-            sync_media_refs(&mut tx, MediaContentKind::Page, snapshot.id, &media_ids).await?;
-            let new_version = row.try_get::<i64, _>(0).map_err(map_row_error)?;
-            tx.commit().await.map_err(map_sqlx_error)?;
-            return Ok(SaveOutcome::Saved { new_version });
-        }
-        // 页面是物理删除：命中不到就是在或不在，不再区分软删除。
-        let alive = sqlx::query("SELECT 1 AS alive FROM pages WHERE id = $1")
-            .bind(snapshot.id)
-            .fetch_optional(&mut *tx)
+        tx: &mut sqlx::PgConnection,
+        id: Uuid,
+    ) -> Result<PageSnapshot, UseCaseError> {
+        let row = sqlx::query(&format!("SELECT {PAGE_COLUMNS} FROM pages WHERE id=$1"))
+            .bind(id)
+            .fetch_one(tx)
             .await
             .map_err(map_sqlx_error)?;
-        tx.commit().await.map_err(map_sqlx_error)?;
-        match alive {
-            Some(_) => Ok(SaveOutcome::StaleConflict),
-            None => Ok(SaveOutcome::Gone),
-        }
+        page_from_row(&row)
     }
 }
 
 const PAGE_COLUMNS: &str = "id, title, slug, content, status, visibility, published_at, version, \
-     created_at, updated_at";
+     created_at, updated_at, deleted_at";
 
 fn page_from_row(row: &sqlx::postgres::PgRow) -> Result<PageSnapshot, UseCaseError> {
     let status: String = row.try_get("status").map_err(map_row_error)?;
@@ -842,15 +768,37 @@ fn page_from_row(row: &sqlx::postgres::PgRow) -> Result<PageSnapshot, UseCaseErr
         version: row.try_get("version").map_err(map_row_error)?,
         created_at: row.try_get("created_at").map_err(map_row_error)?,
         updated_at: row.try_get("updated_at").map_err(map_row_error)?,
+        deleted_at: row.try_get("deleted_at").map_err(map_row_error)?,
     })
 }
 
 #[async_trait]
 impl PageRepository for PostgresPageRepository {
-    async fn insert_page(&self, page: &Page) -> Result<PageSnapshot, UseCaseError> {
-        let snapshot = page.snapshot();
-        self.insert_record(&snapshot).await?;
-        Ok(snapshot)
+    async fn insert_page(
+        &self,
+        page: &Page,
+        actor_id: Option<Uuid>,
+    ) -> Result<PageSnapshot, UseCaseError> {
+        let s = page.snapshot();
+        let rendered = render_content(&*self.renderer, &s.content).await?;
+        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        sqlx::query("INSERT INTO pages (id,title,slug,content,status,visibility,published_at,version,created_at,updated_at,deleted_at,content_html,content_render_version) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)")
+            .bind(s.id).bind(&s.title).bind(&s.slug).bind(&s.content).bind(s.status.as_str()).bind(s.visibility.as_str())
+            .bind(s.published_at).bind(s.version).bind(s.created_at).bind(s.updated_at).bind(s.deleted_at).bind(&rendered.content_html).bind(CONTENT_RENDER_VERSION)
+            .execute(&mut *tx).await.map_err(map_sqlx_error)?;
+        sync_media_refs(&mut tx, MediaContentKind::Page, s.id, &rendered.media_ids).await?;
+        audit_content(
+            &mut tx,
+            actor_id,
+            "page.create",
+            "page",
+            s.id,
+            serde_json::json!({"version": s.version}),
+        )
+        .await?;
+        let record = self.record_in_transaction(&mut tx, s.id).await?;
+        tx.commit().await.map_err(map_sqlx_error)?;
+        Ok(record)
     }
 
     async fn commit_page(
@@ -858,23 +806,80 @@ impl PageRepository for PostgresPageRepository {
         page: &Page,
         expected_version: i64,
         now: OffsetDateTime,
+        actor_id: Option<Uuid>,
     ) -> Result<PageCommitOutcome, UseCaseError> {
-        let mut snapshot = page.snapshot();
-        Ok(
-            match self.save_record(&snapshot, expected_version, now).await? {
-                SaveOutcome::Saved { new_version } => {
-                    snapshot.version = new_version;
-                    snapshot.updated_at = now;
-                    PageCommitOutcome::Saved(snapshot)
-                }
-                SaveOutcome::StaleConflict => PageCommitOutcome::StaleConflict,
-                SaveOutcome::Gone => PageCommitOutcome::Gone,
-            },
+        let s = page.snapshot();
+        let rendered = render_content(&*self.renderer, &s.content).await?;
+        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        let prior: Option<(i64, String)> = sqlx::query_as(
+            "SELECT version, status FROM pages WHERE id=$1 AND deleted_at IS NULL FOR UPDATE",
         )
+        .bind(s.id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(map_sqlx_error)?;
+        let Some((version, status)) = prior else {
+            return Ok(PageCommitOutcome::Gone);
+        };
+        if version != expected_version {
+            return Ok(PageCommitOutcome::StaleConflict);
+        }
+        sqlx::query("UPDATE pages SET title=$3,slug=$4,content=$5,status=$6,visibility=$7,published_at=$8,updated_at=$9,version=version+1,content_html=$10,content_render_version=$11 WHERE id=$1 AND version=$2 AND deleted_at IS NULL")
+            .bind(s.id).bind(expected_version).bind(&s.title).bind(&s.slug).bind(&s.content).bind(s.status.as_str()).bind(s.visibility.as_str())
+            .bind(s.published_at).bind(now).bind(&rendered.content_html).bind(CONTENT_RENDER_VERSION)
+            .execute(&mut *tx).await.map_err(map_sqlx_error)?;
+        sync_media_refs(&mut tx, MediaContentKind::Page, s.id, &rendered.media_ids).await?;
+        audit_content(&mut tx, actor_id, "page.update", "page", s.id, serde_json::json!({"version": expected_version+1, "previous_status": status, "status": s.status.as_str(), "published_at": s.published_at})).await?;
+        let record = self.record_in_transaction(&mut tx, s.id).await?;
+        tx.commit().await.map_err(map_sqlx_error)?;
+        Ok(PageCommitOutcome::Saved(record))
+    }
+
+    async fn commit_lifecycle(
+        &self,
+        page: &Page,
+        expected_version: i64,
+        now: OffsetDateTime,
+        actor_id: Option<Uuid>,
+    ) -> Result<PageCommitOutcome, UseCaseError> {
+        let s = page.snapshot();
+        let expected_deleted = s.deleted_at.is_none();
+        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        let updated=sqlx::query("UPDATE pages SET status=$3,deleted_at=$4,updated_at=$5,version=version+1 WHERE id=$1 AND version=$2 AND (deleted_at IS NOT NULL)=$6")
+            .bind(s.id).bind(expected_version).bind(s.status.as_str()).bind(s.deleted_at).bind(now).bind(expected_deleted)
+            .execute(&mut *tx).await.map_err(map_sqlx_error)?.rows_affected();
+        if updated == 0 {
+            let current: Option<(bool,)> =
+                sqlx::query_as("SELECT deleted_at IS NOT NULL FROM pages WHERE id=$1")
+                    .bind(s.id)
+                    .fetch_optional(&mut *tx)
+                    .await
+                    .map_err(map_sqlx_error)?;
+            return Ok(match current {
+                Some((deleted,)) if deleted == expected_deleted => PageCommitOutcome::StaleConflict,
+                _ => PageCommitOutcome::Gone,
+            });
+        }
+        audit_content(
+            &mut tx,
+            actor_id,
+            if expected_deleted {
+                "page.restore"
+            } else {
+                "page.trash"
+            },
+            "page",
+            s.id,
+            serde_json::json!({"version": expected_version+1}),
+        )
+        .await?;
+        let record = self.record_in_transaction(&mut tx, s.id).await?;
+        tx.commit().await.map_err(map_sqlx_error)?;
+        Ok(PageCommitOutcome::Saved(record))
     }
 
     async fn find_by_id(&self, id: Uuid) -> Result<Option<PageSnapshot>, UseCaseError> {
-        let row = sqlx::query(&format!("SELECT {PAGE_COLUMNS} FROM pages WHERE id = $1"))
+        let row = sqlx::query(&format!("SELECT {PAGE_COLUMNS} FROM pages WHERE id=$1"))
             .bind(id)
             .fetch_optional(&self.pool)
             .await
@@ -883,46 +888,115 @@ impl PageRepository for PostgresPageRepository {
     }
 
     async fn list(&self) -> Result<Vec<PageSnapshot>, UseCaseError> {
-        let rows = sqlx::query(&format!(
-            "SELECT {PAGE_COLUMNS} FROM pages ORDER BY updated_at DESC, id DESC"
-        ))
-        .fetch_all(&self.pool)
-        .await
-        .map_err(map_sqlx_error)?;
+        let rows=sqlx::query(&format!("SELECT {PAGE_COLUMNS} FROM pages WHERE deleted_at IS NULL ORDER BY updated_at DESC,id DESC")).fetch_all(&self.pool).await.map_err(map_sqlx_error)?;
         rows.iter().map(page_from_row).collect()
     }
 
-    async fn delete(
+    async fn list_trash(
+        &self,
+        limit: i64,
+        offset: i64,
+    ) -> Result<(Vec<PageSnapshot>, i64), UseCaseError> {
+        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+            .execute(&mut *tx)
+            .await
+            .map_err(map_sqlx_error)?;
+        let (total,): (i64,) =
+            sqlx::query_as("SELECT count(*) FROM pages WHERE deleted_at IS NOT NULL")
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(map_sqlx_error)?;
+        let rows=sqlx::query(&format!("SELECT {PAGE_COLUMNS} FROM pages WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC,id DESC LIMIT $1 OFFSET $2")).bind(limit.clamp(1,100)).bind(offset.max(0)).fetch_all(&mut *tx).await.map_err(map_sqlx_error)?;
+        tx.commit().await.map_err(map_sqlx_error)?;
+        Ok((
+            rows.iter().map(page_from_row).collect::<Result<_, _>>()?,
+            total,
+        ))
+    }
+
+    async fn purge(
         &self,
         id: Uuid,
         expected_version: i64,
+        actor_id: Option<Uuid>,
     ) -> Result<PageDeleteOutcome, UseCaseError> {
-        // Page 无回收站：删除即物理删除，其媒体引用必须在同一事务清理。
         let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
-        let deleted: Option<(Uuid,)> =
-            sqlx::query_as("DELETE FROM pages WHERE id = $1 AND version = $2 RETURNING id")
-                .bind(id)
-                .bind(expected_version)
-                .fetch_optional(&mut *tx)
-                .await
-                .map_err(map_sqlx_error)?;
-        if deleted.is_some() {
-            clear_media_refs(&mut tx, MediaContentKind::Page, id).await?;
-            tx.commit().await.map_err(map_sqlx_error)?;
-            return Ok(PageDeleteOutcome::Deleted);
+        let prior: Option<(i64,)> = sqlx::query_as(
+            "SELECT version FROM pages WHERE id=$1 AND deleted_at IS NOT NULL FOR UPDATE",
+        )
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(map_sqlx_error)?;
+        let Some((version,)) = prior else {
+            return Ok(PageDeleteOutcome::Gone);
+        };
+        if version != expected_version {
+            return Ok(PageDeleteOutcome::StaleVersion);
         }
-        let alive: Option<(i64,)> = sqlx::query_as("SELECT version FROM pages WHERE id = $1")
+        clear_media_refs(&mut tx, MediaContentKind::Page, id).await?;
+        sqlx::query("DELETE FROM pages WHERE id=$1")
             .bind(id)
-            .fetch_optional(&mut *tx)
+            .execute(&mut *tx)
             .await
             .map_err(map_sqlx_error)?;
+        audit_content(
+            &mut tx,
+            actor_id,
+            "page.purge",
+            "page",
+            id,
+            serde_json::json!({"version":expected_version}),
+        )
+        .await?;
         tx.commit().await.map_err(map_sqlx_error)?;
-        Ok(if alive.is_some() {
-            PageDeleteOutcome::StaleVersion
-        } else {
-            PageDeleteOutcome::Gone
-        })
+        Ok(PageDeleteOutcome::Deleted)
     }
+}
+
+/// 每批到期发布最多处理 limit 条/类型。多进程用 SKIP LOCKED 领取；取消、编辑、删除
+/// 与此 UPDATE 争用同一行锁，只有仍满足预约条件的当前记录会发布。
+pub async fn publish_due_content(
+    pool: &PgPool,
+    now: OffsetDateTime,
+    limit: i64,
+) -> Result<usize, UseCaseError> {
+    let mut tx = pool.begin().await.map_err(map_sqlx_error)?;
+    let mut count = 0;
+    for (table, kind) in [("posts", "post"), ("pages", "page")] {
+        let rows: Vec<(Uuid, i64)> = sqlx::query_as(&format!(
+            "WITH due AS (
+                SELECT id FROM {table}
+                WHERE status = 'scheduled' AND deleted_at IS NULL AND published_at <= $1
+                ORDER BY published_at, id LIMIT $2 FOR UPDATE SKIP LOCKED
+             )
+             UPDATE {table} p SET status = 'published', version = p.version + 1, updated_at = $1
+             FROM due
+             WHERE p.id = due.id AND p.status = 'scheduled'
+               AND p.deleted_at IS NULL AND p.published_at <= $1
+             RETURNING p.id, p.version"
+        ))
+        .bind(now)
+        .bind(limit.clamp(1, 1000))
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(map_sqlx_error)?;
+        for (id, version) in rows {
+            audit_content(
+                &mut tx,
+                None,
+                &format!("{kind}.publish_due"),
+                kind,
+                id,
+                serde_json::json!({"version":version}),
+            )
+            .await?;
+            count += 1;
+        }
+    }
+    tx.commit().await.map_err(map_sqlx_error)?;
+    Ok(count)
 }
 
 pub struct PostgresPublishedPageQuery {

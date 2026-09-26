@@ -111,6 +111,7 @@ impl PostRepository for FakePostRepo {
         &self,
         post: &domain::content::Post,
         tag_ids: &[Uuid],
+        _actor_id: Option<uuid::Uuid>,
     ) -> Result<application::ports::PostRecord, UseCaseError> {
         let snapshot = post.snapshot();
         let mut posts = self.posts.lock().unwrap();
@@ -132,6 +133,7 @@ impl PostRepository for FakePostRepo {
         expected: i64,
         now: OffsetDateTime,
         tag_ids: Option<&[Uuid]>,
+        _actor_id: Option<uuid::Uuid>,
     ) -> Result<application::ports::PostCommitOutcome, UseCaseError> {
         self.commit_record(post, expected, now, tag_ids, false)
     }
@@ -141,6 +143,7 @@ impl PostRepository for FakePostRepo {
         post: &domain::content::Post,
         expected: i64,
         now: OffsetDateTime,
+        _actor_id: Option<uuid::Uuid>,
     ) -> Result<application::ports::PostCommitOutcome, UseCaseError> {
         self.commit_record(post, expected, now, None, true)
     }
@@ -194,7 +197,12 @@ impl PostRepository for FakePostRepo {
         ))
     }
 
-    async fn purge(&self, id: Uuid, expected_version: i64) -> Result<SaveOutcome, UseCaseError> {
+    async fn purge(
+        &self,
+        id: Uuid,
+        expected_version: i64,
+        _actor_id: Option<uuid::Uuid>,
+    ) -> Result<SaveOutcome, UseCaseError> {
         let mut posts = self.posts.lock().unwrap();
         let Some(post) = posts
             .values()
@@ -392,7 +400,11 @@ impl FakeTagRepo {
 
 #[async_trait::async_trait]
 impl TagRepository for FakeTagRepo {
-    async fn insert(&self, aggregate: &domain::content::Tag) -> Result<(), UseCaseError> {
+    async fn insert(
+        &self,
+        aggregate: &domain::content::Tag,
+        _actor_id: Option<uuid::Uuid>,
+    ) -> Result<(), UseCaseError> {
         let snapshot = aggregate.snapshot();
         self.tags.lock().unwrap().push(snapshot.clone());
         Ok(())
@@ -428,6 +440,7 @@ impl TagRepository for FakeTagRepo {
         id: Uuid,
         new_name: &str,
         expected_version: i64,
+        _actor_id: Option<uuid::Uuid>,
     ) -> Result<Option<TagSnapshot>, UseCaseError> {
         let mut tags = self.tags.lock().unwrap();
         let Some(tag) = tags.iter_mut().find(|t| t.id == id) else {
@@ -445,6 +458,7 @@ impl TagRepository for FakeTagRepo {
         &self,
         id: Uuid,
         expected_version: i64,
+        _actor_id: Option<uuid::Uuid>,
     ) -> Result<TagDeleteOutcome, UseCaseError> {
         let mut tags = self.tags.lock().unwrap();
         let Some(tag) = tags.iter().find(|t| t.id == id) else {
@@ -478,7 +492,11 @@ struct FakeSeriesRepo;
 
 #[async_trait::async_trait]
 impl application::ports::SeriesRepository for FakeSeriesRepo {
-    async fn insert(&self, aggregate: &domain::content::Series) -> Result<(), UseCaseError> {
+    async fn insert(
+        &self,
+        aggregate: &domain::content::Series,
+        _actor_id: Option<uuid::Uuid>,
+    ) -> Result<(), UseCaseError> {
         let _snapshot = aggregate.snapshot();
         Ok(())
     }
@@ -498,6 +516,7 @@ impl application::ports::SeriesRepository for FakeSeriesRepo {
         _description: Option<&str>,
         _cover_media_id: Option<uuid::Uuid>,
         _expected_version: i64,
+        _actor_id: Option<uuid::Uuid>,
     ) -> Result<Option<domain::content::SeriesSnapshot>, UseCaseError> {
         Ok(None)
     }
@@ -505,6 +524,7 @@ impl application::ports::SeriesRepository for FakeSeriesRepo {
         &self,
         _id: uuid::Uuid,
         _expected_version: i64,
+        _actor_id: Option<uuid::Uuid>,
     ) -> Result<application::ports::SeriesDeleteOutcome, UseCaseError> {
         Ok(application::ports::SeriesDeleteOutcome::Gone)
     }
@@ -522,6 +542,7 @@ impl application::ports::SeriesRepository for FakeSeriesRepo {
         _series_id: uuid::Uuid,
         _expected: i64,
         _ordered: &[uuid::Uuid],
+        _actor_id: Option<uuid::Uuid>,
     ) -> Result<application::ports::ReorderOutcome, UseCaseError> {
         Ok(application::ports::ReorderOutcome::Reordered { new_version: 1 })
     }
@@ -800,7 +821,7 @@ fn draft_cmd(slug: &str) -> CreatePostCmd {
         visibility: Visibility::Public,
         tag_ids: Vec::new(),
         category_id: None,
-        series: None,
+        series: Vec::new(),
         cover_media_id: None,
     }
 }
@@ -1041,7 +1062,7 @@ async fn publish_requires_content() {
                 visibility: Visibility::Public,
                 tag_ids: Vec::new(),
                 category_id: None,
-                series: None,
+                series: Vec::new(),
                 cover_media_id: None,
             },
         )
@@ -1086,7 +1107,7 @@ async fn generated_slug_occupied_at_creation() {
                 visibility: Visibility::Public,
                 tag_ids: Vec::new(),
                 category_id: None,
-                series: None,
+                series: Vec::new(),
                 cover_media_id: None,
             },
         )

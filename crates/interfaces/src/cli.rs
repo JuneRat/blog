@@ -32,6 +32,8 @@ pub fn parse_args() -> Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// 发布到期的预约文章与页面。
+    PublishDue,
     /// 执行数据库迁移（由 server 装配层直接处理）
     Migrate,
 
@@ -647,7 +649,7 @@ pub async fn run_post(deps: PostCliDeps, action: PostAction) -> Result<(), Strin
                         visibility: parse_visibility(visibility.as_deref())?,
                         tag_ids: Vec::new(),
                         category_id: None,
-                        series: None,
+                        series: Vec::new(),
                         cover_media_id: None,
                     },
                 )

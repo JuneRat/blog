@@ -36,11 +36,11 @@ const guide: SeriesSummary = {
 const posts = [
   { id: "p1", slug: "part-1", title: "第一篇", status: "published", visibility: "public",
     version: 1, published_at: null, updated_at: "", author_id: "me",
-    tag_ids: [], category_id: null, series_id: "ser-1", series_order: 1,
+    tag_ids: [], category_id: null, series: [{series_id: "ser-1", position: 1}],
     cover_media_id: null, cover_url: null },
   { id: "p2", slug: "part-2", title: "第二篇", status: "published", visibility: "public",
     version: 1, published_at: null, updated_at: "", author_id: "me",
-    tag_ids: [], category_id: null, series_id: "ser-1", series_order: 2,
+    tag_ids: [], category_id: null, series: [{series_id: "ser-1", position: 2}],
     cover_media_id: null, cover_url: null },
 ];
 
@@ -230,7 +230,7 @@ describe("文章编辑器系列校验", () => {
     id: "post-id", slug: "ed-1", title: "标题", content: "正文", excerpt: null,
     status: "draft", visibility: "public" as const, version: 2,
     published_at: null, updated_at: "2026-09-22T00:00:00Z", author_id: "me",
-    tag_ids: [], category_id: null, series_id: null, series_order: null,
+    tag_ids: [], category_id: null, series: [],
   };
 
   beforeEach(() => {
@@ -261,12 +261,12 @@ describe("文章编辑器系列校验", () => {
     const title = await screen.findByLabelText("标题");
     fireEvent.change(title, { target: { value: "新篇" } });
     await selectOption("系列", "指南");
-    // 序号留空。
+    fireEvent.change(screen.getByLabelText("指南 · 排序权重"), { target: { value: "" } });
     fireEvent.click(screen.getByRole("button", { name: "保存并更新线上" }));
 
     // antd Form 的 onFinish 是异步的，校验错误要等文案出现。
     expect(
-      await screen.findByText("选择了系列时，系列内序号必须是正整数（如 1、2、3）。"),
+      await screen.findByText("系列排序权重必须是非负整数。"),
     ).toBeTruthy();
     const apiAny = api as unknown as Record<string, ReturnType<typeof vi.fn>>;
     expect(apiAny.createPost).not.toHaveBeenCalled();
@@ -276,10 +276,10 @@ describe("文章编辑器系列校验", () => {
     render(<App />);
     fireEvent.change(await screen.findByLabelText("标题"), { target: { value: "新篇" } });
     await selectOption("系列", "指南");
-    fireEvent.change(screen.getByLabelText("系列内序号"), { target: { value: "1.5" } });
+    fireEvent.change(screen.getByLabelText("指南 · 排序权重"), { target: { value: "1.5" } });
     fireEvent.click(screen.getByRole("button", { name: "保存并更新线上" }));
 
-    expect(await screen.findByText(/正整数/)).toBeTruthy();
+    expect(await screen.findByText(/非负整数/)).toBeTruthy();
     const apiAny = api as unknown as Record<string, ReturnType<typeof vi.fn>>;
     expect(apiAny.createPost).not.toHaveBeenCalled();
   });
@@ -288,15 +288,35 @@ describe("文章编辑器系列校验", () => {
     render(<App />);
     fireEvent.change(await screen.findByLabelText("标题"), { target: { value: "新篇" } });
     await selectOption("系列", "指南");
-    fireEvent.change(screen.getByLabelText("系列内序号"), { target: { value: "3" } });
+    fireEvent.change(screen.getByLabelText("指南 · 排序权重"), { target: { value: "3" } });
     fireEvent.click(screen.getByRole("button", { name: "保存并更新线上" }));
 
     const apiAny = api as unknown as Record<string, ReturnType<typeof vi.fn>>;
     await waitFor(() =>
       expect(apiAny.createPost).toHaveBeenCalledWith(
-        expect.objectContaining({ series: { id: "ser-1", order: 3 } }),
+        expect.objectContaining({ series: [{ series_id: "ser-1", position: 3 }] }),
       ),
     );
+  });
+
+  it("同一篇文章保存多个系列及各自权重，允许默认的零权重", async () => {
+    vi.mocked(seriesApi.list).mockResolvedValue([
+      { ...guide, id: "ser-1", name: "指南" },
+      { ...guide, id: "ser-2", slug: "notes", name: "笔记" },
+    ]);
+    render(<App />);
+    fireEvent.change(await screen.findByLabelText("标题"), { target: { value: "跨系列文章" } });
+    await selectOption("系列", "指南");
+    fireEvent.change(screen.getByLabelText("指南 · 排序权重"), { target: { value: "7" } });
+    await selectOption("系列", "笔记");
+    fireEvent.click(screen.getByRole("button", { name: "保存并更新线上" }));
+
+    await waitFor(() => expect(api.createPost).toHaveBeenCalledWith(
+      expect.objectContaining({ series: [
+        { series_id: "ser-1", position: 7 },
+        { series_id: "ser-2", position: 0 },
+      ] }),
+    ));
   });
 });
 
@@ -314,7 +334,7 @@ describe("系列屏：混合系列不可读不连带清空独著系列", () => {
   const ownPost = {
     id: "p1", slug: "solo-1", title: "我的独著篇", status: "published",
     visibility: "public", version: 1, published_at: null, updated_at: "",
-    author_id: "me", series_order: 1,
+    author_id: "me", position: 1,
   };
 
   beforeEach(() => {

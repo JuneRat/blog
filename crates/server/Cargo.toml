@@ -14,13 +14,13 @@ interfaces = { path = "../interfaces" }
 tokio.workspace = true
 axum.workspace = true
 sqlx.workspace = true
+time.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
-time.workspace = true
 async-trait.workspace = true
 uuid.workspace = true
 serde_json.workspace = true

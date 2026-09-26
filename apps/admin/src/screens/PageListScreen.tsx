@@ -1,3 +1,4 @@
+import { statusLabel } from "../components/ContentLifecycleControls";
 import { Alert, Button, Flex, Table, Typography } from "antd";
 import type { TableProps } from "antd";
 import { useQuery } from "@tanstack/react-query";
@@ -30,7 +31,7 @@ export function PageListScreen() {
     {
       title: "状态",
       dataIndex: "status",
-      render: (status: string) => (status === "published" ? "已发布" : "草稿"),
+      render: (status: string) => statusLabel(status),
     },
     {
       title: "可见",
@@ -84,6 +85,7 @@ export function PageListScreen() {
         <Alert type="error" showIcon title={errorText} style={{ marginBottom: 16 }} />
       )}
 
+      <Button onClick={() => navigate(paths.pageTrash)} style={{marginBottom:16}}>页面回收站</Button>
       {canCreate && (
         <Flex justify="flex-end" style={{ marginBottom: 16 }}>
           <Button type="primary" onClick={() => navigate(paths.newPage)}>

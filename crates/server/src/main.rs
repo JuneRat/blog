@@ -32,7 +32,7 @@ async fn run(command: Command) -> Result<(), String> {
     // Keep automatic schema initialization, while website-specific configuration
     // and dependencies are evaluated only in the serve branch below.
     let migration = match &command {
-        Command::Migrate | Command::Post { .. } | Command::Serve { .. } => {
+        Command::Migrate | Command::PublishDue | Command::Post { .. } | Command::Serve { .. } => {
             infrastructure::migrate(&pool, database.migrations_dir).await
         }
         Command::User { .. }
@@ -54,6 +54,25 @@ async fn run(command: Command) -> Result<(), String> {
         .map_err(|error| format!("同步权限目录失败：{error}"))?;
     match command {
         Command::Migrate => unreachable!("migration returned above"),
+        Command::PublishDue => {
+            let mut total = 0;
+            loop {
+                let count = infrastructure::publish_due_content(
+                    &pool,
+                    time::OffsetDateTime::now_utc(),
+                    100,
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+                total += count;
+                // Either table may have filled its 100-row batch on its own.
+                if count < 100 {
+                    break;
+                }
+            }
+            println!("已发布 {total} 条到期内容。");
+            Ok(())
+        }
         Command::User { action } => {
             interfaces::cli::run_user(assembly::user_commands(&pool), action).await
         }
@@ -76,23 +95,49 @@ async fn run(command: Command) -> Result<(), String> {
             let app =
                 website::build_router(&pool, &site, roles, Arc::new(RenderingRuntime::default()))
                     .await?;
-            serve(app, &site.bind).await
+            serve(app, &site.bind, pool).await
         }
     }
 }
 
-async fn serve(app: axum::Router, bind: &str) -> Result<(), String> {
+async fn serve(app: axum::Router, bind: &str, pool: sqlx::PgPool) -> Result<(), String> {
     let listener = tokio::net::TcpListener::bind(bind)
         .await
         .map_err(|error| format!("绑定 {bind} 失败：{error}"))?;
     println!("公开站点已启动：http://{bind}");
-    axum::serve(
-        listener,
-        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
-    )
-    .with_graceful_shutdown(shutdown_signal())
-    .await
-    .map_err(|error| format!("服务退出：{error}"))
+    let server = async {
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .with_graceful_shutdown(shutdown_signal())
+        .await
+        .map_err(|error| format!("服务退出：{error}"))
+    };
+    let scheduler = async {
+        let mut ticks = tokio::time::interval(std::time::Duration::from_secs(30));
+        ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            ticks.tick().await;
+            loop {
+                match infrastructure::publish_due_content(
+                    &pool,
+                    time::OffsetDateTime::now_utc(),
+                    100,
+                )
+                .await
+                {
+                    Ok(count) if count >= 100 => continue,
+                    Ok(_) => break,
+                    Err(error) => {
+                        tracing::error!(%error,"到期内容发布失败，下次轮询重试");
+                        break;
+                    }
+                }
+            }
+        }
+    };
+    tokio::select! { result=server=>result, _=scheduler=>unreachable!("scheduler loops until server shuts down") }
 }
 
 async fn shutdown_signal() {

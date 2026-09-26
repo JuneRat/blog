@@ -2,7 +2,7 @@
 
 本文描述当前 HTTP 路由与通用请求约定。业务状态和可见性见[内容生命周期](content-lifecycle.md)，权限和会话见[身份、权限与后台](identity-and-admin.md)。项目仍在开发阶段，客户端应随接口变更同步更新。
 
-[新建库基线](database-current.md)已接入，身份、sessions 与媒体已适配。本文的单系列载荷、Page 物理删除与评论旧契约仍待切换，相关路由虽然保留，但尚不能在新库上完成全部操作。新接口在相应用例实施时同步调整。
+[新建库基线](database-current.md)已接入，身份、sessions、媒体、内容与目录已适配。评论旧契约仍待切换，尚不能在新库上完成评论操作。
 
 路由与传输 DTO 的实现入口：[内容和设置](../crates/interfaces/src/http_admin.rs)、[身份](../crates/interfaces/src/http_identity.rs)、[媒体](../crates/interfaces/src/http_media.rs)、[认证](../crates/interfaces/src/http_auth.rs)。
 
@@ -49,14 +49,16 @@
 | `POST /posts` | 创建草稿，返回 201 和详情 |
 | `GET /posts/{id}` | 详情，包含 Markdown `content` 和 `excerpt` |
 | `PATCH /posts/{id}` | 编辑并返回详情；编辑已发布文章会直接更新线上内容 |
-| `POST /posts/{id}/publish` | 发布，返回详情 |
-| `POST /posts/{id}/unpublish` | 撤回为草稿，返回详情 |
+| `POST /posts/{id}/publish` | 立即发布，返回详情 |
+| `POST /posts/{id}/schedule` | 预约或更新预约时间，返回详情；需发布权限 |
+| `POST /posts/{id}/unpublish` | 撤回、取消预约或解除归档，回到草稿；需撤回权限 |
+| `POST /posts/{id}/archive` | 归档，返回详情；沿用 `post.unpublish` / `post.unpublish_any` |
 | `POST /posts/{id}/trash` | 移入回收站，返回详情 |
 | `GET /post-trash?page=1` | 回收站分页，可带 `author`；返回 `items/total/page/per_page` |
-| `POST /posts/{id}/restore` | 恢复为草稿，归档记录保留终态；返回详情 |
+| `POST /posts/{id}/restore` | 一律恢复为草稿，返回详情 |
 | `POST /posts/{id}/purge` | 永久删除回收站文章，返回 204 |
 
-创建字段为 `slug`、`title`、`excerpt`、`content`、`visibility`、`tag_ids`、`category_id`、`series`、`cover_media_id`。`slug` 可省略生成临时值，草稿允许未完成的标题与正文；发布要求见[内容生命周期](content-lifecycle.md)。`series` 为 `{ "id": "UUID", "order": 1 }`。
+创建字段为 `slug`、`title`、`excerpt`、`content`、`visibility`、`tag_ids`、`category_id`、`series`、`cover_media_id`。`slug` 可省略生成临时值，草稿允许未完成的标题与正文；发布要求见[内容生命周期](content-lifecycle.md)。`series` 为数组，例如 `[{ "series_id": "UUID", "position": 0 }]`，省略时为空数组。position 省略时为 0，范围为 0–2147483647，同一系列内可重复；数组内不能重复指定同一系列 ID。文章详情使用相同数组格式。
 
 编辑支持 `new_slug`、`title`、`excerpt`、`content`、`visibility`、`tag_ids`、`category_id`、`series`、`cover_media_id` 和 `expected_version`。注意不同字段的更新语义：
 
@@ -64,10 +66,12 @@
 |---|---|---|---|
 | `tag_ids` | 保持 | `[]` | UUID 数组整体替换 |
 | `category_id` / `cover_media_id` | 保持 | `null` | UUID |
-| `series` | 保持 | `null` | `{ "id": "UUID", "order": 1 }` |
+| `series` | 保持（`null` 同义） | `[]` | `[{ "series_id": "UUID", "position": 0 }]` 整体替换 |
 | `excerpt` | 保持 | `""` | 字符串；`null` 与省略同义 |
 
 `visibility` 为 `public` 或 `private`。状态由动作端点变更，不通过编辑请求直接赋值。`content` 始终是 Markdown；`content_html` 由服务端派生并持久化，不是客户端可设置的字段，也不是管理详情的正文格式。
+
+Post/Page 的 schedule 请求为 `{ "published_at": "2026-10-01T10:00:00+08:00", "expected_version": 3 }`。时间必须为带时区的 RFC 3339 且晚于当前时间，只接受草稿或已预约状态；已发布或已归档内容须先退回草稿。内容 DTO 的 published_at 和 updated_at 同样使用 RFC 3339，后台输入按本地时间转换后提交。预约即锁定 slug，取消预约不解锁。
 
 ## 独立页面
 
@@ -79,11 +83,16 @@ Page 没有作者，使用站点级 `page.*` 权限。
 | `POST /pages` | 创建草稿，返回 201 和详情 |
 | `GET /pages/{id}` | 包含 Markdown 的详情 |
 | `PATCH /pages/{id}` | 编辑并返回详情 |
-| `POST /pages/{id}/publish` | 发布 |
-| `POST /pages/{id}/unpublish` | 撤回为草稿 |
-| `DELETE /pages/{id}` | 永久删除；JSON 必须含 `expected_version`，成功返回 204 |
+| `POST /pages/{id}/publish` | 立即发布；`page.publish` |
+| `POST /pages/{id}/schedule` | 预约或更新预约时间；`page.publish` |
+| `POST /pages/{id}/unpublish` | 撤回、取消预约或解除归档；`page.unpublish` |
+| `POST /pages/{id}/archive` | 归档；`page.archive` |
+| `POST /pages/{id}/trash` | 移入回收站；`page.delete`，JSON 必须含 `expected_version` |
+| `GET /page-trash?page=1` | 回收站分页，返回 `items/total/page/per_page`；`page.read` |
+| `POST /pages/{id}/restore` | 一律恢复为草稿；`page.delete`，JSON 必须含 `expected_version` |
+| `POST /pages/{id}/purge` | 永久删除回收站页面；`page.purge`，JSON 必须含 `expected_version`，成功 204 |
 
-创建字段为 `slug`、`title`、`content`、`visibility`；编辑改用 `new_slug` 并可带 `expected_version`。公开地址为 `/{slug}`，系统保留路径不可用，首次发布后 slug 锁定。Page 当前没有回收站接口。
+创建字段为 `slug`、`title`、`content`、`visibility`；编辑改用 `new_slug` 并可带 `expected_version`。公开地址为 `/{slug}`，系统保留路径不可用，首次预约或发布后 slug 锁定。详情包含 `deleted`，正常列表与 GET 详情排除回收站记录。永久删除权限默认仅授予 Owner，普通删除与恢复授予 Editor；旧 `DELETE /pages/{id}` 已移除。
 
 ## 标签、分类与系列
 
@@ -92,15 +101,17 @@ Page 没有作者，使用站点级 `page.*` 权限。
 | 方法与路径 | 行为 / 关键载荷 |
 |---|---|
 | `GET /tags`、`POST /tags` | 列表；创建需 `name`、`slug` |
-| `PATCH /tags/{slug}`、`DELETE /tags/{slug}` | 修改名称；删除未使用标签 |
+| `PATCH /tags/{slug}`、`DELETE /tags/{slug}` | 修改名称；删除标签并解除文章关联，保留文章 |
 | `GET /categories`、`POST /categories` | 列表；创建需 `name`、`slug`，可带 `parent`、`description` |
 | `PATCH /categories/{slug}`、`DELETE /categories/{slug}` | 修改名称、描述、父级；删除受文章与子分类引用保护 |
 | `GET /series`、`POST /series` | 列表；创建需 `name`、`slug`，可带 `description` |
-| `PATCH /series/{slug}`、`DELETE /series/{slug}` | 修改名称、描述、封面；删除空系列 |
+| `PATCH /series/{slug}`、`DELETE /series/{slug}` | 修改名称、描述、封面；删除系列并解除文章关联，保留文章 |
 | `GET /series/{slug}/members` | 需 `series.manage`，且逐篇检查 `post.read` / `post.read_any`；用于整体排序 |
 | `POST /series/{slug}/reorder` | `ordered_post_ids` 必须是全部成员的完整排列；可带 `expected_series_version` |
 
 目录修改不接受更换 slug。分类 `parent` 使用父分类 slug，PATCH 中省略为保持、`null` 为移到根。系列封面 `cover_media_id` 使用省略/`null`/UUID 三态。PATCH 请求仍需传 `name`，分类和系列的 `description` 省略或 `null` 都会清除，不能套用关联字段的“省略保持”。系列成员有任意一篇不可读时整体返回 403；排序需 `series.manage` 及对每篇成员文章的更新权限，不能只提交当前可见的一部分文章。
+
+成员 DTO 使用 `position`，按 position、post_id 排序，包含草稿、预约、私密及回收站成员。整体重排将权重写为 `0..n-1`，有实际变化时递增系列版本，并递增权重变化的文章版本。删除标签或系列也会递增所有受影响文章的版本，过期编辑副本须重新加载。
 
 ## 用户与角色
 
@@ -145,7 +156,7 @@ Page 没有作者，使用站点级 `page.*` 权限。
 
 ## 版本与请求限制
 
-一般编辑和动作请求可带 `expected_version`。文章、页面的发布/撤回及回收站动作可发送 `{ "expected_version": 3 }`；Page 与 Media 的 DELETE 必须发送版本。系列整体排序使用独立的 `expected_series_version`。
+一般编辑和动作请求可带 `expected_version`，例如 `{ "expected_version": 3 }`。Page 的 trash/restore/purge 及 Media 的删除/恢复必须提供版本；schedule 还必须提供发布时间。系列整体排序使用独立的 `expected_series_version`。
 
 显式版本过期返回 409 `version_conflict`，即使操作本身幂等也不会绕过版本检查。允许省略版本的用例会读取当前版本再条件写入，仍能检测读取后的并发变化，但不能识别客户端此前编辑的是旧副本。编辑器应总是提交已读取的版本，冲突后让用户选择重新加载或基于新版本再次提交。
 
@@ -171,7 +182,7 @@ Page 没有作者，使用站点级 `page.*` 权限。
 | 401 | `unauthenticated`、`invalid_credentials`；带 `WWW-Authenticate: Session` |
 | 403 | `forbidden`（含退出/自助改密的 CSRF 失败）、`last_owner` |
 | 404 | `not_found` |
-| 409 | `version_conflict`、`conflict`、`username_taken`、`email_taken`、`tag_in_use`、`category_in_use`、`series_in_use` |
+| 409 | `version_conflict`、`conflict`、`username_taken`、`email_taken`、`category_in_use` |
 | 429 | `rate_limited`；带 `Retry-After` |
 | 502 | `external_error` |
 | 500 | `internal_error`；响应不暴露内部错误细节 |

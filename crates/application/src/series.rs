@@ -3,14 +3,13 @@
 //! 权限约定（docs/identity-and-admin.md §2、content-lifecycle.md §3）：
 //! - 目录动作（创建/更新/删除/重排）要求 `series.manage`（Owner 与 Editor）；
 //! - 目录读取对已认证会话开放；
-//! - 重排会修改文章的 series_order：**每篇涉及文章仍按文章授权核验**
+//! - 重排会修改文章的 post_series.position：**每篇涉及文章仍按文章授权核验**
 //!   （post.update own / post.update_any any）——Author 不能借重排改他人文章；
 //! - 文章加入/退出系列走文章编辑授权（post.update/post.update_any）。
 //!
-//! 并发协议：重排在仓储的系列行锁内校验 series.version（防止用旧目录重排），
-//! 成员行按 id 序加锁，位置唯一约束延后到提交检查；成功递增涉及 posts.version
-//! 与 series.version。跨系列移动（文章编辑改 series_id）按 ID 序锁两个系列，
-//! 由仓储的保存事务实现。
+//! 并发协议：仓储先取得内容关系事务锁，再锁系列并校验 series.version，
+//! 成员文章按 id 序加锁；实际变化时递增系列及权重变化的文章版本。
+//! 文章保存和目录删除遵循同一关系锁协议，删除系列只解除关系并保留文章。
 
 use std::sync::Arc;
 
@@ -115,7 +114,7 @@ impl SeriesInteractor {
         let series =
             Series::new(cmd.name, slug, cmd.description, self.clock.now()).map_err(map_domain)?;
         let snapshot = series.snapshot();
-        self.series.insert(&series).await?;
+        self.series.insert(&series, actor.audit_actor_id()).await?;
         Ok(SeriesDto {
             id: snapshot.id,
             name: snapshot.name,
@@ -162,6 +161,7 @@ impl SeriesInteractor {
                 snapshot.description.as_deref(),
                 snapshot.cover_media_id,
                 expected,
+                actor.audit_actor_id(),
             )
             .await?
         {
@@ -182,10 +182,13 @@ impl SeriesInteractor {
         }
         let series = self.load(target_slug).await?;
         let expected = checked_version(series.version(), expected_version)?;
-        match self.series.delete(series.id(), expected).await? {
+        match self
+            .series
+            .delete(series.id(), expected, actor.audit_actor_id())
+            .await?
+        {
             SeriesDeleteOutcome::Deleted => Ok(()),
             SeriesDeleteOutcome::StaleVersion => Err(UseCaseError::VersionConflict),
-            SeriesDeleteOutcome::Referenced { count } => Err(UseCaseError::SeriesInUse(count)),
             SeriesDeleteOutcome::Gone => Err(UseCaseError::NotFound(format!("系列 {target_slug}"))),
         }
     }
@@ -218,7 +221,7 @@ impl SeriesInteractor {
         let series = self.load(target_slug).await?;
         let expected = checked_version(series.version(), cmd.expected_series_version)?;
 
-        // 逐篇授权：重排修改的是文章的 series_order。
+        // 逐篇授权：重排修改文章在本系列内的排序权重。
         let members = self.series.members_of(series.id()).await?;
         for member in &members {
             authorize_own_or_any(
@@ -245,7 +248,12 @@ impl SeriesInteractor {
 
         match self
             .series
-            .reorder(series.id(), expected, &cmd.ordered_post_ids)
+            .reorder(
+                series.id(),
+                expected,
+                &cmd.ordered_post_ids,
+                actor.audit_actor_id(),
+            )
             .await?
         {
             ReorderOutcome::Reordered { new_version } => Ok(ReorderedDto {

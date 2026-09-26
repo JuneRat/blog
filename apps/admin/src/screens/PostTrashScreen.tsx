@@ -1,3 +1,4 @@
+import { statusLabel } from "../components/ContentLifecycleControls";
 import { Alert, App as AntdApp, Button, Flex, Table, Typography } from "antd";
 import type { TableProps } from "antd";
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -6,7 +7,7 @@ import { api } from "../api";
 import { permissionMessageOf } from "../apiError";
 import { useAuth } from "../auth";
 import { queryKeys } from "../queryClient";
-import type { PostSummary } from "../types";
+import type { PostSummary, PageSummary } from "../types";
 
 /**
  * 文章回收站：恢复或永久删除已移入回收站的文章。
@@ -22,7 +23,9 @@ import type { PostSummary } from "../types";
  * - 翻页/重取期间用 `placeholderData` 留住上一页的行与页码，否则分页控件会闪没，
  *   「请求中禁用翻页」就变成了「请求中没有按钮」。
  */
-export function PostTrashScreen() {
+export function PostTrashScreen({kind = "post"}: {kind?: "post" | "page"} = {}) {
+  const isPage = kind === "page";
+  const label = isPage ? "页面" : "文章";
   const { me } = useAuth();
   const { modal } = AntdApp.useApp();
   const queryClient = useQueryClient();
@@ -31,11 +34,12 @@ export function PostTrashScreen() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
-  const canPurge = me?.permissions.includes("post.purge") ?? false;
+  const canPurge = me?.permissions.includes(isPage ? "page.purge" : "post.purge") ?? false;
 
+  const canRestore = me?.permissions.some((p) => isPage ? p === "page.delete" : p === "post.delete" || p === "post.delete_any") ?? false;
   const trash = useQuery({
-    queryKey: queryKeys.trash(requested),
-    queryFn: () => api.listTrash(requested),
+    queryKey: isPage ? queryKeys.pageTrash(requested) : queryKeys.trash(requested),
+    queryFn: (): Promise<{items: (PostSummary | PageSummary)[]; total: number; page: number; per_page: number}> => isPage ? api.listPageTrash(requested) : api.listTrash(requested),
     // 保留上一次成功的数据：页码与行都来自服务端回显，翻页期间两者始终自洽。
     placeholderData: keepPreviousData,
   });
@@ -56,13 +60,13 @@ export function PostTrashScreen() {
     }
   }, [data, requested]);
 
-  async function run(post: PostSummary, purge: boolean): Promise<void> {
+  async function run(post: PostSummary | PageSummary, purge: boolean): Promise<void> {
     setBusy(post.id);
     setActionError(null);
     setNotice(null);
     try {
-      if (purge) await api.purgePost(post.id, post.version);
-      else await api.restorePost(post.id, post.version);
+      if (purge) await (isPage ? api.purgePage(post.id, post.version) : api.purgePost(post.id, post.version));
+      else await (isPage ? api.restorePage(post.id, post.version) : api.restorePost(post.id, post.version));
       // 先给出成功反馈，再重取：即使重取失败，用户也知道操作已经生效。
       setNotice(purge ? `已永久删除「${post.title || post.slug}」。` : `已恢复「${post.title || post.slug}」。`);
       /**
@@ -70,12 +74,12 @@ export function PostTrashScreen() {
        * 只失效当前页会留下其他页的陈旧数据（总数与被删行都变了）。
        * 用 `queryKeys.trashAll()`（`["trash"]` 前缀），而不是当前页的键。
        */
-      await queryClient.invalidateQueries({ queryKey: queryKeys.trashAll() });
+      await queryClient.invalidateQueries({ queryKey: isPage ? queryKeys.pageTrashAll() : queryKeys.trashAll() });
       /**
        * 恢复会让文章重新出现在「我的文章」列表里，所以必须同时失效文章列表；
        * 永久删除不会改变列表（它本来就不在列表里），故只在恢复时做。
        */
-      if (!purge) await queryClient.invalidateQueries({ queryKey: queryKeys.posts() });
+      if (!purge) await queryClient.invalidateQueries({ queryKey: isPage ? queryKeys.pages() : queryKeys.posts() });
     } catch (e) {
       setActionError(permissionMessageOf(e));
     } finally {
@@ -83,20 +87,20 @@ export function PostTrashScreen() {
     }
   }
 
-  function act(post: PostSummary, purge: boolean): void {
+  function act(post: PostSummary | PageSummary, purge: boolean): void {
     if (!purge) {
       void run(post, false);
       return;
     }
     modal.confirm({
       title: `永久删除「${post.title || post.slug}」？`,
-      content: "文章、标签关联与系列位置将无法恢复。",
+      content: isPage ? "页面内容将无法恢复。" : "文章、评论和目录关联将无法恢复。",
       okButtonProps: { danger: true },
       onOk: () => run(post, true),
     });
   }
 
-  const columns: TableProps<PostSummary>["columns"] = [
+  const columns: TableProps<PostSummary | PageSummary>["columns"] = [
     {
       title: "标题",
       dataIndex: "title",
@@ -107,7 +111,7 @@ export function PostTrashScreen() {
       dataIndex: "slug",
       render: (slug: string) => <Typography.Text code>{slug}</Typography.Text>,
     },
-    { title: "原状态", dataIndex: "status" },
+    { title: "原状态", dataIndex: "status", render: statusLabel },
     {
       title: "版本",
       dataIndex: "version",
@@ -118,7 +122,7 @@ export function PostTrashScreen() {
       key: "actions",
       render: (_value, post) => (
         <Flex gap={8}>
-          <Button type="text" disabled={busy !== null} onClick={() => act(post, false)}>
+          <Button type="text" disabled={busy !== null || !canRestore} onClick={() => act(post, false)}>
             恢复
           </Button>
           {canPurge && (
@@ -133,10 +137,10 @@ export function PostTrashScreen() {
 
   return (
     <>
-      <Typography.Title level={3}>文章回收站</Typography.Title>
+      <Typography.Title level={3}>{label}回收站</Typography.Title>
 
       <Typography.Paragraph type="secondary">
-        恢复后的文章为草稿；原归档文章仍为归档，不会自动发布。永久删除不可撤销。
+        恢复后统一为草稿，不会自动发布。永久删除不可撤销。
       </Typography.Paragraph>
 
       {errorText !== null && (
@@ -150,7 +154,7 @@ export function PostTrashScreen() {
         <Typography.Paragraph type="secondary">共 {data.total} 篇</Typography.Paragraph>
       )}
 
-      <Table<PostSummary>
+      <Table<PostSummary | PageSummary>
         rowKey="id"
         size="middle"
         loading={trash.isFetching}

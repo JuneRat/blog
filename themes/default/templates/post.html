@@ -8,12 +8,11 @@
   </p>
   {% if post.cover_url %}<img class="cover" src="{{ post.cover_url | url }}" alt="{{ post.title }}">{% endif %}
   {% if post.excerpt %}<p class="excerpt">{{ post.excerpt }}</p>{% endif %}
-  {% if post.series %}
+  {% for series in post.series %}
   <p class="category-link">
-    系列：<a href="/series/{{ post.series.slug }}">{{ post.series.name }}</a>
-    <span class="muted">（阅读顺序 {{ post.series.order }}）</span>
+    系列：<a href="/series/{{ series.slug }}">{{ series.name }}</a>
   </p>
-  {% endif %}
+  {% endfor %}
   {% if post.category %}
   <p class="category-link">
     分类：<a href="/categories/{{ post.category.slug }}">{{ post.category.name }}</a>

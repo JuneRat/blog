@@ -10,7 +10,7 @@
 use uuid::Uuid;
 
 use application::category::{CategoryDto, CreateCategoryCmd, UpdateCategoryCmd};
-use application::content::{CreatePostCmd, EditPostCmd, PostDto, PostVisibility};
+use application::content::{CreatePostCmd, EditPostCmd, PostDto, PostVisibility, SeriesPlacement};
 use application::error::UseCaseError;
 use application::identity::Actor;
 use application::page::{CreatePageCmd, DeletePageCmd, EditPageCmd, PageDto};
@@ -56,8 +56,7 @@ struct PostJson {
     tag_ids: Vec<Uuid>,
     /// 所属分类 id（None = 未分类）。
     category_id: Option<Uuid>,
-    series_id: Option<Uuid>,
-    series_order: Option<i32>,
+    series: Vec<SeriesPlacement>,
     /// 封面媒体资产 id（None = 无封面）。
     cover_media_id: Option<Uuid>,
     /// 封面站内地址（`/media/{id}`）；None = 无封面。
@@ -73,15 +72,12 @@ impl From<&PostDto> for PostJson {
             status: dto.status.to_string(),
             visibility: dto.visibility.to_string(),
             version: dto.version,
-            published_at: dto
-                .published_at
-                .map(application::public_site::format_datetime),
-            updated_at: application::public_site::format_datetime(dto.updated_at),
+            published_at: dto.published_at.map(api_datetime),
+            updated_at: api_datetime(dto.updated_at),
             author_id: dto.author_id,
             tag_ids: dto.tag_ids.clone(),
             category_id: dto.category_id,
-            series_id: dto.series_id,
-            series_order: dto.series_order,
+            series: dto.series.clone(),
             cover_media_id: dto.cover_media_id,
             cover_url: dto.cover_media_id.map(application::media::media_url),
         }
@@ -198,7 +194,7 @@ pub struct CreatePostBody {
     pub category_id: Option<Uuid>,
     /// 初始系列与序号。
     #[serde(default)]
-    pub series: Option<SeriesBody>,
+    pub series: Vec<SeriesPlacement>,
     /// 初始封面媒体资产 id（缺省 = 无封面）。
     #[serde(default)]
     pub cover_media_id: Option<Uuid>,
@@ -216,20 +212,12 @@ pub struct EditPostBody {
     /// 三态：缺省不修改；null 清空分类；id 设置分类。
     #[serde(default, deserialize_with = "deserialize_double_option")]
     pub category_id: Option<Option<Uuid>>,
-    /// 三态：缺省不修改；null 退出系列；对象设置系列与序号。
-    #[serde(default, deserialize_with = "deserialize_double_option")]
-    pub series: Option<Option<SeriesBody>>,
+    /// 缺省保留，数组整体替换；空数组清空。
+    pub series: Option<Vec<SeriesPlacement>>,
     /// 封面三态：缺省不修改；null 移除封面；id 设置封面。
     #[serde(default, deserialize_with = "deserialize_double_option")]
     pub cover_media_id: Option<Option<Uuid>>,
     pub expected_version: Option<i64>,
-}
-
-/// 文章的系列归属载荷（同事务保存）。
-#[derive(Deserialize, Clone, Copy)]
-pub struct SeriesBody {
-    pub id: Uuid,
-    pub order: i32,
 }
 
 #[derive(Deserialize, Default)]
@@ -257,6 +245,8 @@ pub fn posts_router(state: AdminState) -> Router {
         .route("/api/admin/v1/posts/{id}/purge", post(purge_post))
         .route("/api/admin/v1/posts/{id}/publish", post(publish_post))
         .route("/api/admin/v1/posts/{id}/unpublish", post(unpublish_post))
+        .route("/api/admin/v1/posts/{id}/schedule", post(schedule_post))
+        .route("/api/admin/v1/posts/{id}/archive", post(archive_post))
         .layer(axum::extract::DefaultBodyLimit::max(ADMIN_BODY_LIMIT))
         .layer(middleware::from_fn(no_store))
         .with_state(state)
@@ -288,7 +278,7 @@ async fn create_post(
                 visibility,
                 tag_ids: body.tag_ids,
                 category_id: body.category_id,
-                series: body.series.map(|s| (s.id, s.order)),
+                series: body.series,
                 cover_media_id: body.cover_media_id,
             },
         )
@@ -449,7 +439,7 @@ async fn edit_post(
         visibility,
         tag_ids: body.tag_ids,
         category_id: body.category_id,
-        series: body.series.map(|opt| opt.map(|s| (s.id, s.order))),
+        series: body.series,
         cover_media_id: body.cover_media_id,
         expected_version: body.expected_version,
     };
@@ -528,10 +518,8 @@ impl From<&PageDto> for PageJson {
             status: dto.status.to_string(),
             visibility: dto.visibility.to_string(),
             version: dto.version,
-            published_at: dto
-                .published_at
-                .map(application::public_site::format_datetime),
-            updated_at: application::public_site::format_datetime(dto.updated_at),
+            published_at: dto.published_at.map(api_datetime),
+            updated_at: api_datetime(dto.updated_at),
         }
     }
 }
@@ -580,38 +568,18 @@ pub struct DeletePageBody {
 pub fn pages_router(state: AdminState) -> Router {
     Router::new()
         .route("/api/admin/v1/pages", get(list_pages).post(create_page))
-        .route(
-            "/api/admin/v1/pages/{id}",
-            get(get_page).patch(edit_page).delete(delete_page),
-        )
+        .route("/api/admin/v1/pages/{id}", get(get_page).patch(edit_page))
         .route("/api/admin/v1/pages/{id}/publish", post(publish_page))
         .route("/api/admin/v1/pages/{id}/unpublish", post(unpublish_page))
+        .route("/api/admin/v1/pages/{id}/schedule", post(schedule_page))
+        .route("/api/admin/v1/pages/{id}/archive", post(archive_page))
+        .route("/api/admin/v1/pages/{id}/trash", post(trash_page))
+        .route("/api/admin/v1/pages/{id}/restore", post(restore_page))
+        .route("/api/admin/v1/pages/{id}/purge", post(purge_page))
+        .route("/api/admin/v1/page-trash", get(list_page_trash))
         .layer(axum::extract::DefaultBodyLimit::max(ADMIN_BODY_LIMIT))
         .layer(middleware::from_fn(no_store))
         .with_state(state)
-}
-
-async fn delete_page(
-    AdminAuth { actor }: AdminAuth,
-    request_id: RequestId,
-    State(state): State<AdminState>,
-    Path(id): Path<Uuid>,
-    Json(body): Json<DeletePageBody>,
-) -> Response {
-    let result = state
-        .pages
-        .delete(
-            &actor,
-            DeletePageCmd {
-                id,
-                expected_version: body.expected_version,
-            },
-        )
-        .await;
-    match result {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => admin_error(e, &request_id),
-    }
 }
 
 async fn create_page(
@@ -1154,7 +1122,7 @@ struct SeriesMemberJson {
     deleted: bool,
     visibility: String,
     author_id: Uuid,
-    series_order: i32,
+    position: i32,
 }
 
 async fn series_members(
@@ -1177,7 +1145,7 @@ async fn series_members(
                         deleted: m.deleted,
                         visibility: m.visibility.clone(),
                         author_id: m.author_id,
-                        series_order: m.series_order,
+                        position: m.position,
                     })
                     .collect::<Vec<_>>(),
             ),
@@ -1349,4 +1317,186 @@ async fn put_site_settings(
         Ok(view) => (StatusCode::OK, Json(SiteSettingsJson::from(&view))).into_response(),
         Err(e) => admin_error(e, &request_id),
     }
+}
+
+#[derive(Deserialize)]
+struct ScheduleBody {
+    published_at: String,
+    expected_version: Option<i64>,
+}
+
+async fn schedule_post(
+    AdminAuth { actor }: AdminAuth,
+    request_id: RequestId,
+    State(state): State<AdminState>,
+    Path(id): Path<Uuid>,
+    Json(body): Json<ScheduleBody>,
+) -> Response {
+    let at = match time::OffsetDateTime::parse(
+        &body.published_at,
+        &time::format_description::well_known::Rfc3339,
+    ) {
+        Ok(at) => at,
+        Err(_) => {
+            return admin_error(
+                UseCaseError::Invalid("published_at 须包含时区的 RFC3339 时间".into()),
+                &request_id,
+            );
+        }
+    };
+    match state
+        .posts
+        .schedule(&actor, id, at, body.expected_version)
+        .await
+    {
+        Ok(dto) => (StatusCode::OK, Json(PostDetailJson::from(dto))).into_response(),
+        Err(e) => admin_error(e, &request_id),
+    }
+}
+async fn archive_post(
+    AdminAuth { actor }: AdminAuth,
+    request_id: RequestId,
+    State(state): State<AdminState>,
+    Path(id): Path<Uuid>,
+    body: Option<Json<VersionBody>>,
+) -> Response {
+    match state
+        .posts
+        .archive(&actor, id, body.and_then(|Json(b)| b.expected_version))
+        .await
+    {
+        Ok(dto) => (StatusCode::OK, Json(PostDetailJson::from(dto))).into_response(),
+        Err(e) => admin_error(e, &request_id),
+    }
+}
+
+async fn schedule_page(
+    AdminAuth { actor }: AdminAuth,
+    request_id: RequestId,
+    State(state): State<AdminState>,
+    Path(id): Path<Uuid>,
+    Json(body): Json<ScheduleBody>,
+) -> Response {
+    let at = match time::OffsetDateTime::parse(
+        &body.published_at,
+        &time::format_description::well_known::Rfc3339,
+    ) {
+        Ok(at) => at,
+        Err(_) => {
+            return admin_error(
+                UseCaseError::Invalid("published_at 须包含时区的 RFC3339 时间".into()),
+                &request_id,
+            );
+        }
+    };
+    match state
+        .pages
+        .schedule(&actor, id, at, body.expected_version)
+        .await
+    {
+        Ok(dto) => (StatusCode::OK, Json(PageDetailJson::from(dto))).into_response(),
+        Err(e) => admin_error(e, &request_id),
+    }
+}
+async fn archive_page(
+    AdminAuth { actor }: AdminAuth,
+    request_id: RequestId,
+    State(state): State<AdminState>,
+    Path(id): Path<Uuid>,
+    body: Option<Json<VersionBody>>,
+) -> Response {
+    match state
+        .pages
+        .archive(&actor, id, body.and_then(|Json(b)| b.expected_version))
+        .await
+    {
+        Ok(dto) => (StatusCode::OK, Json(PageDetailJson::from(dto))).into_response(),
+        Err(e) => admin_error(e, &request_id),
+    }
+}
+
+async fn trash_page(
+    AdminAuth { actor }: AdminAuth,
+    request_id: RequestId,
+    State(state): State<AdminState>,
+    Path(id): Path<Uuid>,
+    Json(body): Json<DeletePageBody>,
+) -> Response {
+    match state
+        .pages
+        .trash(
+            &actor,
+            DeletePageCmd {
+                id,
+                expected_version: body.expected_version,
+            },
+        )
+        .await
+    {
+        Ok(dto) => (StatusCode::OK, Json(PageDetailJson::from(dto))).into_response(),
+        Err(e) => admin_error(e, &request_id),
+    }
+}
+
+async fn restore_page(
+    AdminAuth { actor }: AdminAuth,
+    request_id: RequestId,
+    State(state): State<AdminState>,
+    Path(id): Path<Uuid>,
+    Json(body): Json<DeletePageBody>,
+) -> Response {
+    match state
+        .pages
+        .restore(
+            &actor,
+            DeletePageCmd {
+                id,
+                expected_version: body.expected_version,
+            },
+        )
+        .await
+    {
+        Ok(dto) => (StatusCode::OK, Json(PageDetailJson::from(dto))).into_response(),
+        Err(e) => admin_error(e, &request_id),
+    }
+}
+
+async fn purge_page(
+    AdminAuth { actor }: AdminAuth,
+    request_id: RequestId,
+    State(state): State<AdminState>,
+    Path(id): Path<Uuid>,
+    Json(body): Json<DeletePageBody>,
+) -> Response {
+    match state
+        .pages
+        .purge(
+            &actor,
+            DeletePageCmd {
+                id,
+                expected_version: body.expected_version,
+            },
+        )
+        .await
+    {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => admin_error(e, &request_id),
+    }
+}
+
+async fn list_page_trash(
+    AdminAuth { actor }: AdminAuth,
+    request_id: RequestId,
+    State(state): State<AdminState>,
+    Query(query): Query<ListQuery>,
+) -> Response {
+    match state.pages.list_trash(&actor,query.page.unwrap_or(1)).await {
+        Ok(page)=>Json(serde_json::json!({"items":page.items.iter().map(PageJson::from).collect::<Vec<_>>(),"total":page.total,"page":page.page,"per_page":page.per_page})).into_response(),
+        Err(e)=>admin_error(e,&request_id),
+    }
+}
+
+fn api_datetime(at: time::OffsetDateTime) -> String {
+    at.format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_else(|_| at.to_string())
 }

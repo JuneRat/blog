@@ -2,7 +2,7 @@
 
 本文描述当前 `domain` crate。内容的完整操作语义见[内容生命周期](content-lifecycle.md)，跨层依赖见[架构](architecture.md)，数据库并发与约束见[当前数据库实现](database-current.md)。
 
-[ADR-0016](adr/0016-confirmed-blog-schema.md) 已采纳新的领域规则：编辑/认证版本分离、系列多对多、定时发布、Page 回收站、媒体独立公开和多级评论。下文类型与方法仍对应现有代码；实施时按[目标数据库设计](database-design.md)更新，不再沿用旧规则作为新方案约束。
+[ADR-0016](adr/0016-confirmed-blog-schema.md) 采纳的编辑/认证版本分离、系列多对多、定时发布、Page 回收站和媒体独立公开已进入实现。多级评论仍待适配，评论类型尚对应旧流程；目标规则见[数据库设计](database-design.md)。
 
 ## 当前模块
 
@@ -25,20 +25,22 @@
 
 ## Post 与 Page
 
-两个聚合各维护一份当前 Markdown。草稿允许空标题/正文，发布要求两者非空；编辑已发布内容时不能清空。编辑先验证所有候选字段，再整体更新，失败不留下部分修改。
+两个聚合各维护一份当前 Markdown。草稿允许空标题/正文，发布和预约要求两者非空；编辑已发布或已预约内容时不能清空。编辑先验证所有候选字段，再整体更新，失败不留下部分修改。
 
-Post 的身份、作者和关联使用 ID；不嵌入完整 User、Category、Series 或 Media 聚合。`PostDraftMetadata` 让创建时的分类、系列、封面通过构造入口设置；`SeriesPlacement` 同时约束系列 ID 与正整数序号，创建与编辑复用相同规则。Page 无作者、分类、标签或系列字段。
+Post 的身份、作者和关联使用 ID；不嵌入完整 User、Category、Series 或 Media 聚合。`PostDraftMetadata` 让创建时的分类、系列、封面通过构造入口设置；`Vec<SeriesPlacement>` 保存多个系列及独立排序权重，权重非负、系列 ID 不重复，创建与编辑复用相同规则。Page 无作者、分类、标签或系列字段。
 
 | 行为 | 聚合规则 |
 |---|---|
 | `create_draft` / `create_draft_with_metadata` | 生成 UUIDv7 身份，初始 `version = 1`，验证可写字段 |
 | `edit` | 保留未提供字段；受支持的可空关联区分“不修改、清空、设置”；返回是否实际变化 |
-| `publish(now)` | draft → published；首次写入 `published_at`，再发布保留首次时间；已发布时无操作 |
-| `withdraw()` | published → draft；保留首次发布时间与 slug 锁定状态 |
-| Post `trash(now)` | 设置删除时间，保留状态和首次发布时间；重复操作无变化 |
-| Post `restore()` | 清除删除时间；非归档内容恢复为草稿，避免自动上线；归档仍保持终态 |
+| `publish(now)` | draft/scheduled → published；无发布时间或时间在未来则写入 now，过去的时间保留；已发布无操作 |
+| `schedule(at, now)` | draft/scheduled → scheduled；at 必须晚于 now，写入 `published_at` 并锁定 slug |
+| `withdraw()` | published/scheduled/archived → draft；保留发布时间与 slug 锁定状态 |
+| `archive()` | 变为 archived，不再公开；重复操作无变化 |
+| `trash(now)` | 设置删除时间，保留状态和发布时间；重复操作无变化 |
+| `restore()` | 清除删除时间，一律恢复为草稿，避免自动上线或重新预约 |
 
-`archived` 是已定义的终态：禁止编辑和重新发布。当前没有管理端归档动作，不能把枚举中存在该值等同于已交付归档流程。Page 不含 `deleted_at`，物理删除由应用用例和版本条件删除端口完成。
+`archived` 禁止直接编辑和发布，须先显式退回草稿。Post/Page 均有独立于状态的 `deleted_at`，回收站内容须先恢复才能编辑或发布；永久删除由应用授权与版本条件删除端口完成。预约到期由存储任务加锁复核状态、删除标记和时间后转换，聚合不自行运行时钟任务。
 
 Post/Page 聚合报告是否发生变化，提交后的版本与更新时间由仓储返回；标签单独变化也由应用识别为一次内容提交。并发版本比较、内容是否仍存在以及恢复/删除的数据库竞争不由聚合自行判断。
 
@@ -46,7 +48,7 @@ Post/Page 聚合报告是否发生变化，提交后的版本与更新时间由�
 
 `Slug` 是单段路径值对象：非空、最多 200 个 UTF-8 字节，只允许 Unicode 字母数字、`-`、`_`。它不查询数据库；各表唯一性由持久化约束保证。
 
-Post/Page 第一次发布后禁止改 slug，撤回不解锁。Page 在创建、改名和发布时另行拒绝[系统保留根路径](../crates/domain/src/content/page.rs)。分类、标签和系列的 slug 创建后始终不可变。
+Post/Page 第一次预约或发布后禁止改 slug，取消预约、撤回与恢复不解锁。Page 在创建、改名和发布时另行拒绝[系统保留根路径](../crates/domain/src/content/page.rs)。分类、标签和系列的 slug 创建后始终不可变。
 
 标题上限为 300 字符，文章摘要上限为 1,000 字符。分类和标签名称上限 100 字符，系列名称上限 200 字符；目录名称先 trim，不能为空。分类和系列描述允许为空，非空时最多 2,000 字符。具体常量与错误均保留在所属领域模块，不在 HTTP handler 重写另一套规则。
 
@@ -57,8 +59,8 @@ Post/Page 第一次发布后禁止改 slug，撤回不解锁。Page 在创建、
 | 规则 | 执行边界 |
 |---|---|
 | 分类父节点存在、移动后无环、含子节点或引用时拒绝删除 | 分类用例与分类树事务锁 |
-| 系列成员完整性、位置唯一、重排与跨系列移动 | 系列/文章用例、系列行锁、版本条件和数据库约束 |
-| 标签、分类、系列是否被文章引用 | 对应目录删除端口；聚合不查询其他内容 |
+| 系列成员完整性、可重复权重、重排与多系列关系 | 系列/文章用例、内容关系事务锁、行锁和版本条件 |
+| 删除标签/系列时解除关联、增版并保留文章 | 对应目录删除事务；聚合不查询其他内容 |
 | 新媒体引用可用性、软删除保留历史引用、禁止物理删除仍被引用资产 | 应用授权与媒体引用事务协议 |
 | 作者归属、own/any 权限、Page 站点权限 | 应用 `Actor` 与授权用例 |
 | 最后 Owner、最后登录方式、角色委派上限 | 身份用例与身份变更锁 |
@@ -69,7 +71,7 @@ Post 只引用 `identity::UserId`，不引用 User 聚合或权限实现。公�
 
 `User` 创建入口规范化用户名（trim、ASCII 小写），验证用户名、可选邮箱和展示名。`PermissionSet` 只表达权限并集、成员判断和子集关系；具体权限 key、内置角色与授权策略由应用层定义。密码策略也是纯规则，密码哈希、登录限流、会话和提供商协议在外层。详细身份流程见[身份与后台](identity-and-admin.md)。
 
-`UserSnapshot::version` 是身份修订号，用于会话有效性判定；凭据、角色和停用变更递增，头像修改不递增。它不能作为普通资料编辑的通用乐观锁版本。identity 按 user/password/permissions 拆分，通过 [mod.rs](../crates/domain/src/identity/mod.rs) 显式重导出；调用方继续从 `domain::identity` 导入。
+`UserSnapshot::version` 是资料及关联编辑版本，`auth_version` 是独立认证版本。资料、头像和角色修改保持登录，凭据变更递增认证版本并撤销会话；仅 active 且未删除用户允许认证。identity 按 user/password/permissions 拆分，通过 [mod.rs](../crates/domain/src/identity/mod.rs) 显式重导出；调用方继续从 `domain::identity` 导入。
 
 `Media` 在文件就位后登记，使用 deleted_at 表达回收站；软删除/恢复改变编辑版本，保留路径、文件与引用。链接独立公开；新引用要求未软删除，历史引用可继续使用。没有 staged/ready/pending_deletion 等持久化状态。
 

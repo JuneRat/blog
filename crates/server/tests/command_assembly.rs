@@ -219,7 +219,7 @@ async fn maintenance_does_not_require_a_working_website() {
     // Damaged legacy body content must not pull the HTML rebuild into password,
     // role or OAuth repair commands. There is intentionally no matching media.
     sqlx::query(
-        "UPDATE posts SET content = $1, content_render_version = 0 WHERE slug = 'assembly-post'",
+        "UPDATE posts SET content = $1, content_render_version = 2 WHERE slug = 'assembly-post'",
     )
     .bind(format!("![missing](/media/{})", uuid::Uuid::now_v7()))
     .execute(&pool)
@@ -244,7 +244,7 @@ async fn maintenance_does_not_require_a_working_website() {
             .fetch_one(&pool)
             .await
             .unwrap();
-    assert_eq!(pending, 0, "身份维护不得触发内容派生物重建");
+    assert_eq!(pending, 2, "身份维护不得触发内容派生物重建");
 
     // Restore valid content so serve reaches its own configuration validation.
     sqlx::query("UPDATE posts SET content = 'body' WHERE slug = 'assembly-post'")
@@ -313,4 +313,28 @@ async fn media_cleanup_staging_keeps_formal_objects_and_needs_no_website_config(
     );
     std::fs::remove_dir_all(dir).unwrap();
     pool.close().await;
+}
+
+#[tokio::test]
+async fn publish_due_runs_without_website_configuration_and_is_repeatable() {
+    let pool = common::fresh_database("blog_publish_due_test").await;
+    let database_url = common::test_db_url(&common::admin_url(), "blog_publish_due_test");
+    // More than one page batch with no due posts must still be fully drained.
+    sqlx::query("INSERT INTO pages (id,title,slug,content,content_html,content_render_version,status,published_at) SELECT gen_random_uuid(),'预约页面','due-page-' || n,'正文','<p>正文</p>',1,'scheduled',now()-interval '1 minute' FROM generate_series(1,101) n")
+        .execute(&pool).await.unwrap();
+    let invalid_url = "no-website-needed";
+    assert!(
+        assert_success(cli(&database_url, &["publish-due"], None, invalid_url))
+            .contains("已发布 101 条")
+    );
+    assert!(
+        assert_success(cli(&database_url, &["publish-due"], None, invalid_url))
+            .contains("已发布 0 条")
+    );
+    let published: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM pages WHERE status='published' AND version=2")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(published, 101);
 }

@@ -12,6 +12,7 @@ use application::ports::{
     TagDeleteOutcome, TagRepository, TagWithUsage,
 };
 
+use super::content::{audit_content, lock_content_relations};
 use super::media::{clear_media_refs, media_ids_for, sync_media_refs};
 use super::sql::{POST_PUBLIC_PREDICATE, map_row_error, map_sqlx_error};
 
@@ -44,12 +45,17 @@ fn tag_from_row(row: &sqlx::postgres::PgRow) -> Result<domain::content::TagSnaps
 /// 公开计数子查询：与公开文章谓词同口径（草稿/私密/回收站不计入）。
 const TAG_PUBLIC_COUNT: &str = "(SELECT count(*) FROM post_tags pt JOIN posts p ON p.id = pt.post_id \
       WHERE pt.tag_id = t.id AND p.status = 'published' AND p.visibility = 'public' \
-        AND p.deleted_at IS NULL)";
+        AND p.deleted_at IS NULL AND p.published_at <= now())";
 
 #[async_trait]
 impl TagRepository for PostgresTagRepository {
-    async fn insert(&self, aggregate: &domain::content::Tag) -> Result<(), UseCaseError> {
+    async fn insert(
+        &self,
+        aggregate: &domain::content::Tag,
+        actor_id: Option<Uuid>,
+    ) -> Result<(), UseCaseError> {
         let snapshot = aggregate.snapshot();
+        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
         sqlx::query(
             "INSERT INTO tags (id, name, slug, version, created_at) \
              VALUES ($1, $2, $3, $4, $5)",
@@ -59,9 +65,19 @@ impl TagRepository for PostgresTagRepository {
         .bind(&snapshot.slug)
         .bind(snapshot.version)
         .bind(snapshot.created_at)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(map_sqlx_error)?;
+        audit_content(
+            &mut tx,
+            actor_id,
+            "tag.create",
+            "tag",
+            snapshot.id,
+            serde_json::json!({"version": snapshot.version}),
+        )
+        .await?;
+        tx.commit().await.map_err(map_sqlx_error)?;
         Ok(())
     }
 
@@ -101,7 +117,9 @@ impl TagRepository for PostgresTagRepository {
         id: Uuid,
         new_name: &str,
         expected_version: i64,
+        actor_id: Option<Uuid>,
     ) -> Result<Option<domain::content::TagSnapshot>, UseCaseError> {
+        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
         let row = sqlx::query(
             "UPDATE tags SET name = $3, version = version + 1 \
              WHERE id = $1 AND version = $2 \
@@ -110,9 +128,21 @@ impl TagRepository for PostgresTagRepository {
         .bind(id)
         .bind(expected_version)
         .bind(new_name)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *tx)
         .await
         .map_err(map_sqlx_error)?;
+        if row.is_some() {
+            audit_content(
+                &mut tx,
+                actor_id,
+                "tag.update",
+                "tag",
+                id,
+                serde_json::json!({"version": expected_version+1}),
+            )
+            .await?;
+        }
+        tx.commit().await.map_err(map_sqlx_error)?;
         row.as_ref().map(tag_from_row).transpose()
     }
 
@@ -120,10 +150,10 @@ impl TagRepository for PostgresTagRepository {
         &self,
         id: Uuid,
         expected_version: i64,
+        actor_id: Option<Uuid>,
     ) -> Result<TagDeleteOutcome, UseCaseError> {
         let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
-        // 锁住标签行再数引用：并发「把该标签挂到文章」的写入会经
-        // post_tags.tag_id 的 FK KEY SHARE 锁与本事务互斥，引用检查因此不被写穿。
+        lock_content_relations(&mut tx).await?;
         let locked: Option<(i64,)> =
             sqlx::query_as("SELECT version FROM tags WHERE id = $1 FOR UPDATE")
                 .bind(id)
@@ -138,20 +168,34 @@ impl TagRepository for PostgresTagRepository {
             tx.commit().await.map_err(map_sqlx_error)?;
             return Ok(TagDeleteOutcome::StaleVersion);
         }
-        let (count,): (i64,) = sqlx::query_as("SELECT count(*) FROM post_tags WHERE tag_id = $1")
-            .bind(id)
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(map_sqlx_error)?;
-        if count > 0 {
-            tx.commit().await.map_err(map_sqlx_error)?;
-            return Ok(TagDeleteOutcome::Referenced { count });
+        // 删除目录仅移除关联；文章保留并递增版本，旧编辑器不能复活该关联。
+        let affected: Vec<(Uuid, i64)> = sqlx::query_as("UPDATE posts SET version=version+1, updated_at=now() WHERE id IN (SELECT post_id FROM post_tags WHERE tag_id=$1) RETURNING id,version")
+            .bind(id).fetch_all(&mut *tx).await.map_err(map_sqlx_error)?;
+        for (post_id, version) in &affected {
+            audit_content(
+                &mut tx,
+                actor_id,
+                "post.tag_removed",
+                "post",
+                *post_id,
+                serde_json::json!({"tag_id":id,"version":version}),
+            )
+            .await?;
         }
         sqlx::query("DELETE FROM tags WHERE id = $1")
             .bind(id)
             .execute(&mut *tx)
             .await
             .map_err(map_sqlx_error)?;
+        audit_content(
+            &mut tx,
+            actor_id,
+            "tag.delete",
+            "tag",
+            id,
+            serde_json::json!({"affected_posts":affected.len()}),
+        )
+        .await?;
         tx.commit().await.map_err(map_sqlx_error)?;
         Ok(TagDeleteOutcome::Deleted)
     }
@@ -174,7 +218,7 @@ impl TagRepository for PostgresTagRepository {
         let (count,): (i64,) = sqlx::query_as(
             "SELECT count(*) FROM post_tags pt JOIN posts p ON p.id = pt.post_id \
              WHERE pt.tag_id = $1 AND p.status = 'published' AND p.visibility = 'public' \
-               AND p.deleted_at IS NULL",
+               AND p.deleted_at IS NULL AND p.published_at <= now()",
         )
         .bind(id)
         .fetch_one(&self.pool)
@@ -350,7 +394,7 @@ fn category_from_row(
 
 /// 公开文章计数子查询（直接归属；与公开分类页同口径）。
 const CATEGORY_PUBLIC_COUNT: &str = "(SELECT count(*) FROM posts p WHERE p.category_id = t.id AND p.status = 'published' \
-      AND p.visibility = 'public' AND p.deleted_at IS NULL)";
+      AND p.visibility = 'public' AND p.deleted_at IS NULL AND p.published_at <= now())";
 
 /// 深度受限的祖先链检查：自 parent 向上走，链上出现 self 即成环。
 ///
@@ -590,7 +634,7 @@ impl CategoryRepository for PostgresCategoryRepository {
     async fn public_count(&self, id: Uuid) -> Result<i64, UseCaseError> {
         let (count,): (i64,) = sqlx::query_as(
             "SELECT count(*) FROM posts WHERE category_id = $1 AND status = 'published' \
-             AND visibility = 'public' AND deleted_at IS NULL",
+             AND visibility = 'public' AND deleted_at IS NULL AND published_at <= now()",
         )
         .bind(id)
         .fetch_one(&self.pool)
@@ -759,9 +803,14 @@ fn series_from_row(
 
 #[async_trait]
 impl SeriesRepository for PostgresSeriesRepository {
-    async fn insert(&self, aggregate: &domain::content::Series) -> Result<(), UseCaseError> {
+    async fn insert(
+        &self,
+        aggregate: &domain::content::Series,
+        actor_id: Option<Uuid>,
+    ) -> Result<(), UseCaseError> {
         let snapshot = aggregate.snapshot();
         let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        lock_content_relations(&mut tx).await?;
         sqlx::query(
             "INSERT INTO series (id, name, slug, description, cover_media_id, version, created_at, \
              updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
@@ -782,6 +831,15 @@ impl SeriesRepository for PostgresSeriesRepository {
             MediaContentKind::Series,
             snapshot.id,
             &media_ids_for(&[], snapshot.cover_media_id),
+        )
+        .await?;
+        audit_content(
+            &mut tx,
+            actor_id,
+            "series.create",
+            "series",
+            snapshot.id,
+            serde_json::json!({"version":snapshot.version}),
         )
         .await?;
         tx.commit().await.map_err(map_sqlx_error)
@@ -805,10 +863,10 @@ impl SeriesRepository for PostgresSeriesRepository {
         let rows = sqlx::query(
             "SELECT s.id, s.name, s.slug, s.description, s.cover_media_id, s.version, s.created_at, \
                     s.updated_at, \
-                    (SELECT count(*) FROM posts p WHERE p.series_id = s.id) AS post_count, \
-                    (SELECT count(*) FROM posts p WHERE p.series_id = s.id \
+                    (SELECT count(*) FROM post_series ps JOIN posts p ON p.id=ps.post_id WHERE ps.series_id = s.id) AS post_count, \
+                    (SELECT count(*) FROM post_series ps JOIN posts p ON p.id=ps.post_id WHERE ps.series_id = s.id \
                        AND p.status = 'published' AND p.visibility = 'public' \
-                       AND p.deleted_at IS NULL) AS public_post_count \
+                       AND p.deleted_at IS NULL AND p.published_at <= now()) AS public_post_count \
              FROM series s ORDER BY s.slug",
         )
         .fetch_all(&self.pool)
@@ -832,10 +890,12 @@ impl SeriesRepository for PostgresSeriesRepository {
         description: Option<&str>,
         cover_media_id: Option<Uuid>,
         expected_version: i64,
+        actor_id: Option<Uuid>,
     ) -> Result<Option<domain::content::SeriesSnapshot>, UseCaseError> {
         // name/描述/封面与引用行在同一事务：封面替换时旧图必须同时被释放，
         // 否则会出现「列里已换新图、引用表还占着旧图」的幽灵占用。
         let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        lock_content_relations(&mut tx).await?;
         let row = sqlx::query(
             "UPDATE series SET name = $3, description = $4, cover_media_id = $5, \
              version = version + 1, updated_at = now() WHERE id = $1 AND version = $2 \
@@ -862,6 +922,15 @@ impl SeriesRepository for PostgresSeriesRepository {
             &media_ids_for(&[], snapshot.cover_media_id),
         )
         .await?;
+        audit_content(
+            &mut tx,
+            actor_id,
+            "series.update",
+            "series",
+            id,
+            serde_json::json!({"version":snapshot.version}),
+        )
+        .await?;
         tx.commit().await.map_err(map_sqlx_error)?;
         Ok(Some(snapshot))
     }
@@ -870,10 +939,11 @@ impl SeriesRepository for PostgresSeriesRepository {
         &self,
         id: Uuid,
         expected_version: i64,
+        actor_id: Option<Uuid>,
     ) -> Result<SeriesDeleteOutcome, UseCaseError> {
         let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
-        // 锁系列行：与「文章加入该系列」的写入（posts 行上的系列引用）互斥，
-        // 引用检查与删除之间不会有并发加入。
+        lock_content_relations(&mut tx).await?;
+        // 关系锁阻止成员并发变化，系列行锁保护版本检查与删除。
         let locked: Option<(i64,)> =
             sqlx::query_as("SELECT version FROM series WHERE id = $1 FOR UPDATE")
                 .bind(id)
@@ -888,16 +958,20 @@ impl SeriesRepository for PostgresSeriesRepository {
             tx.commit().await.map_err(map_sqlx_error)?;
             return Ok(SeriesDeleteOutcome::StaleVersion);
         }
-        let (count,): (i64,) = sqlx::query_as("SELECT count(*) FROM posts WHERE series_id = $1")
-            .bind(id)
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(map_sqlx_error)?;
-        if count > 0 {
-            tx.commit().await.map_err(map_sqlx_error)?;
-            return Ok(SeriesDeleteOutcome::Referenced { count });
+        let affected: Vec<(Uuid,i64)> = sqlx::query_as("UPDATE posts SET version=version+1,updated_at=now() WHERE id IN (SELECT post_id FROM post_series WHERE series_id=$1) RETURNING id,version")
+            .bind(id).fetch_all(&mut *tx).await.map_err(map_sqlx_error)?;
+        for (post_id, version) in &affected {
+            audit_content(
+                &mut tx,
+                actor_id,
+                "post.series_removed",
+                "post",
+                *post_id,
+                serde_json::json!({"series_id":id,"version":version}),
+            )
+            .await?;
         }
-        // 内容物理删除：其媒体引用必须在同一事务清理（content_id 是多态引用，
+        // 内容物理删除：其媒体引用必须在同一事务清理（source_id 是多态引用，
         // 没有外键级联兜底）。系列只有封面一种引用来源。
         clear_media_refs(&mut tx, MediaContentKind::Series, id).await?;
         sqlx::query("DELETE FROM series WHERE id = $1")
@@ -905,6 +979,15 @@ impl SeriesRepository for PostgresSeriesRepository {
             .execute(&mut *tx)
             .await
             .map_err(map_sqlx_error)?;
+        audit_content(
+            &mut tx,
+            actor_id,
+            "series.delete",
+            "series",
+            id,
+            serde_json::json!({"affected_posts":affected.len()}),
+        )
+        .await?;
         tx.commit().await.map_err(map_sqlx_error)?;
         Ok(SeriesDeleteOutcome::Deleted)
     }
@@ -920,9 +1003,7 @@ impl SeriesRepository for PostgresSeriesRepository {
 
     async fn members_of(&self, series_id: Uuid) -> Result<Vec<SeriesMember>, UseCaseError> {
         let rows = sqlx::query(
-            "SELECT id, author_id, slug, title, status, visibility, series_order, deleted_at \
-             FROM posts WHERE series_id = $1 \
-             ORDER BY series_order, id",
+            "SELECT p.id, p.author_id, p.slug, p.title, p.status, p.visibility, ps.position, p.deleted_at FROM post_series ps JOIN posts p ON p.id=ps.post_id WHERE ps.series_id=$1 ORDER BY ps.position, p.id",
         )
         .bind(series_id)
         .fetch_all(&self.pool)
@@ -943,26 +1024,22 @@ impl SeriesRepository for PostgresSeriesRepository {
                     visibility: row
                         .try_get::<String, _>("visibility")
                         .map_err(map_row_error)?,
-                    series_order: row.try_get("series_order").map_err(map_row_error)?,
+                    position: row.try_get("position").map_err(map_row_error)?,
                 })
             })
             .collect()
     }
 
-    /// 重排锁协议（docs/database-design.md §4）：
-    /// 1. 锁系列行并校验 series.version（旧目录不得重排）；
-    /// 2. 校验成员集合与提交的完整排列一致；
-    /// 3. 按固定 id 序锁涉及文章（跨系列移动时两个系列都按 id 序）；
-    /// 4. `SET CONSTRAINTS posts_series_position_unique DEFERRED`，
-    ///    交换期间允许临时重复，提交时恢复唯一检查；
-    /// 5. 更新每篇文章 series_order 并递增 posts.version；递增 series.version。
+    /// 关系锁内校验版本与完整成员集合；仅改变 position 的成员递增文章版本。
     async fn reorder(
         &self,
         series_id: Uuid,
         expected_series_version: i64,
         ordered_post_ids: &[Uuid],
+        actor_id: Option<Uuid>,
     ) -> Result<ReorderOutcome, UseCaseError> {
         let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        lock_content_relations(&mut tx).await?;
         let locked: Option<(i64,)> =
             sqlx::query_as("SELECT version FROM series WHERE id = $1 FOR UPDATE")
                 .bind(series_id)
@@ -980,7 +1057,7 @@ impl SeriesRepository for PostgresSeriesRepository {
 
         // 固定 id 序锁定成员行，并读取当前成员集合。
         let members: Vec<(Uuid,)> =
-            sqlx::query_as("SELECT id FROM posts WHERE series_id = $1 ORDER BY id")
+            sqlx::query_as("SELECT post_id FROM post_series WHERE series_id=$1 ORDER BY post_id")
                 .bind(series_id)
                 .fetch_all(&mut *tx)
                 .await
@@ -1008,25 +1085,23 @@ impl SeriesRepository for PostgresSeriesRepository {
             return Ok(ReorderOutcome::MembershipMismatch);
         }
 
-        // 延后位置唯一约束：交换期间允许临时重复。
-        sqlx::query("SET CONSTRAINTS posts_series_position_unique DEFERRED")
-            .execute(&mut *tx)
-            .await
-            .map_err(map_sqlx_error)?;
-
-        // 按提交顺序写入序号（1 起）；每篇文章 version+1（顺序是文章内容的一部分）。
+        let mut changed = false;
         for (index, post_id) in ordered_post_ids.iter().enumerate() {
-            let order: i32 = (index + 1) as i32;
-            sqlx::query(
-                "UPDATE posts SET series_order = $2, version = version + 1, updated_at = now() \
-                 WHERE id = $1 AND series_id = $3",
-            )
-            .bind(post_id)
-            .bind(order)
-            .bind(series_id)
-            .execute(&mut *tx)
-            .await
-            .map_err(map_sqlx_error)?;
+            let position =
+                i32::try_from(index).map_err(|_| UseCaseError::Invalid("系列成员过多".into()))?;
+            let updated=sqlx::query("UPDATE post_series SET position=$2 WHERE post_id=$1 AND series_id=$3 AND position<>$2")
+                .bind(post_id).bind(position).bind(series_id).execute(&mut *tx).await.map_err(map_sqlx_error)?.rows_affected();
+            if updated > 0 {
+                changed = true;
+                let (version,):(i64,)=sqlx::query_as("UPDATE posts SET version=version+1,updated_at=now() WHERE id=$1 RETURNING version")
+                    .bind(post_id).fetch_one(&mut *tx).await.map_err(map_sqlx_error)?;
+                audit_content(&mut tx,actor_id,"post.series_reordered","post",*post_id,serde_json::json!({"series_id":series_id,"position":position,"version":version})).await?;
+            }
+        }
+        if !changed {
+            return Ok(ReorderOutcome::Reordered {
+                new_version: current_version,
+            });
         }
 
         let bumped: Option<(i64,)> = sqlx::query_as(
@@ -1037,6 +1112,15 @@ impl SeriesRepository for PostgresSeriesRepository {
         .fetch_optional(&mut *tx)
         .await
         .map_err(map_sqlx_error)?;
+        audit_content(
+            &mut tx,
+            actor_id,
+            "series.reorder",
+            "series",
+            series_id,
+            serde_json::json!({"version":current_version+1}),
+        )
+        .await?;
         tx.commit().await.map_err(map_sqlx_error)?;
         Ok(ReorderOutcome::Reordered {
             new_version: bumped.map(|(v,)| v).unwrap_or(current_version + 1),
@@ -1085,8 +1169,7 @@ impl PublishedSeriesQuery for PostgresPublishedSeriesQuery {
     ) -> Result<(Vec<PublicPostSummary>, i64), UseCaseError> {
         let limit = limit.clamp(1, 100);
         let offset = offset.max(0);
-        // 阅读顺序：series_order 升序；草稿/私密/回收站保留位置但不出现，
-        // 因此公开页的序号可能留空档（不强制重新编号）。
+        // 重复权重按文章 id 稳定排序；非公开成员保留关联但不出现在结果中。
         let rows = sqlx::query(&format!(
             r#"
             SELECT p.title, p.slug, p.excerpt, p.published_at,
@@ -1094,10 +1177,11 @@ impl PublishedSeriesQuery for PostgresPublishedSeriesQuery {
                    u.avatar_media_id AS author_avatar_media_id,
                    count(*) OVER() AS total
             FROM series s
-            JOIN posts p ON p.series_id = s.id
+            JOIN post_series ps ON ps.series_id = s.id
+            JOIN posts p ON p.id = ps.post_id
             JOIN users u ON u.id = p.author_id
             WHERE s.slug = $1 AND {POST_PUBLIC_PREDICATE}
-            ORDER BY p.series_order ASC, p.id ASC
+            ORDER BY ps.position ASC, p.id ASC
             LIMIT $2 OFFSET $3
             "#
         ))
@@ -1137,7 +1221,8 @@ impl PublishedSeriesQuery for PostgresPublishedSeriesQuery {
             r#"
             SELECT s.slug, GREATEST(s.updated_at, max(p.updated_at)) AS updated_at
             FROM series s
-            JOIN posts p ON p.series_id = s.id
+            JOIN post_series ps ON ps.series_id = s.id
+            JOIN posts p ON p.id = ps.post_id
             WHERE {POST_PUBLIC_PREDICATE}
             GROUP BY s.id, s.slug, s.updated_at
             ORDER BY s.slug

@@ -70,11 +70,15 @@ impl Fixtures {
                 slug: "category".into(),
                 name: "分类".into(),
             }),
-            series: self.optional.then(|| PublicSeriesRef {
-                slug: "series".into(),
-                name: "系列".into(),
-                order: 1,
-            }),
+            series: self
+                .optional
+                .then(|| PublicSeriesRef {
+                    slug: "series".into(),
+                    name: "系列".into(),
+                    position: 0,
+                })
+                .into_iter()
+                .collect(),
         }
     }
 }
@@ -222,11 +226,15 @@ pub(crate) async fn validate(
                 slug: c.slug,
                 name: c.name,
             }),
-            series: detail.series.map(|s| SeriesCard {
-                slug: s.slug,
-                name: s.name,
-                order: s.order,
-            }),
+            series: detail
+                .series
+                .into_iter()
+                .map(|s| SeriesCard {
+                    slug: s.slug,
+                    name: s.name,
+                    position: s.position,
+                })
+                .collect(),
         };
         if scenario == "maximum-body" {
             post.content_html = format!(

@@ -13,7 +13,8 @@ mod taxonomy;
 pub use connection::{PgHealthCheck, SystemClock, connect, migrate, migrate_schema};
 pub use content::{
     CONTENT_RENDER_VERSION, PostgresPageRepository, PostgresPostRepository,
-    PostgresPublishedPageQuery, PostgresPublishedPostQuery, rebuild_content_html,
+    PostgresPublishedPageQuery, PostgresPublishedPostQuery, publish_due_content,
+    rebuild_content_html,
 };
 pub use identity::PostgresUserRepository;
 pub use media::PostgresMediaRepository;

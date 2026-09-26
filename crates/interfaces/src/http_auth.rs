@@ -480,9 +480,7 @@ fn auth_error(e: UseCaseError) -> Response {
         UseCaseError::RateLimited { .. } => StatusCode::TOO_MANY_REQUESTS,
         UseCaseError::Invalid(_)
         | UseCaseError::Conflict(_)
-        | UseCaseError::TagInUse(_)
-        | UseCaseError::CategoryInUse { .. }
-        | UseCaseError::SeriesInUse(_) => StatusCode::BAD_REQUEST,
+        | UseCaseError::CategoryInUse { .. } => StatusCode::BAD_REQUEST,
         UseCaseError::NotFound(_) => StatusCode::NOT_FOUND,
         UseCaseError::Forbidden | UseCaseError::LastOwnerProtected => StatusCode::FORBIDDEN,
         UseCaseError::External(_) => StatusCode::BAD_GATEWAY,

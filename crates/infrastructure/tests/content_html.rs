@@ -64,7 +64,7 @@ async fn post_and_page_commit_sanitized_html_and_public_reads_use_it() {
     assert!(!expected.contains("javascript:"));
     let mut post = draft(author, source);
     post.publish(OffsetDateTime::now_utc()).unwrap();
-    let record = posts.insert_post(&post, &[]).await.unwrap();
+    let record = posts.insert_post(&post, &[], None).await.unwrap();
     let post_id = record.snapshot.id;
     let mut page = Page::create_draft(
         Slug::new("rendered-page").unwrap(),
@@ -75,7 +75,7 @@ async fn post_and_page_commit_sanitized_html_and_public_reads_use_it() {
     )
     .unwrap();
     page.publish(OffsetDateTime::now_utc()).unwrap();
-    let page_record = pages.insert_page(&page).await.unwrap();
+    let page_record = pages.insert_page(&page, None).await.unwrap();
     let page_id = page_record.id;
     for (table, id) in [("posts", post_id), ("pages", page_id)] {
         let (raw, html, render_version, version, _) = stored(&pool, table, id).await;
@@ -110,7 +110,7 @@ async fn post_and_page_commit_sanitized_html_and_public_reads_use_it() {
     .unwrap();
     assert!(matches!(
         posts
-            .commit_post(&post, 1, OffsetDateTime::now_utc(), None)
+            .commit_post(&post, 1, OffsetDateTime::now_utc(), None, None)
             .await
             .unwrap(),
         PostCommitOutcome::Saved(_)
@@ -122,7 +122,7 @@ async fn post_and_page_commit_sanitized_html_and_public_reads_use_it() {
     .unwrap();
     assert!(matches!(
         pages
-            .commit_page(&page, 1, OffsetDateTime::now_utc())
+            .commit_page(&page, 1, OffsetDateTime::now_utc(), None)
             .await
             .unwrap(),
         PageCommitOutcome::Saved(_)
@@ -167,7 +167,7 @@ async fn media_failure_and_stale_version_leave_source_html_and_refs_unchanged() 
         Uuid::now_v7()
     );
     let record = repo
-        .insert_post(&draft(author, &source), &[])
+        .insert_post(&draft(author, &source), &[], None)
         .await
         .unwrap();
     let id = record.snapshot.id;
@@ -179,7 +179,7 @@ async fn media_failure_and_stale_version_leave_source_html_and_refs_unchanged() 
     })
     .unwrap();
     assert!(
-        repo.commit_post(&post, 1, OffsetDateTime::now_utc(), None)
+        repo.commit_post(&post, 1, OffsetDateTime::now_utc(), None, None)
             .await
             .is_err()
     );
@@ -190,7 +190,7 @@ async fn media_failure_and_stale_version_leave_source_html_and_refs_unchanged() 
     })
     .unwrap();
     assert!(matches!(
-        repo.commit_post(&post, 0, OffsetDateTime::now_utc(), None)
+        repo.commit_post(&post, 0, OffsetDateTime::now_utc(), None, None)
             .await
             .unwrap(),
         PostCommitOutcome::StaleConflict
@@ -207,13 +207,13 @@ async fn media_failure_and_stale_version_leave_source_html_and_refs_unchanged() 
 }
 
 #[tokio::test]
-async fn migration_backfills_both_content_tables_without_editing_their_versions() {
+async fn migration_rebuilds_outdated_html_without_editing_business_versions() {
     let _guard = SERIAL.lock().await;
     let pool = database().await;
     let author = common::seed_user(&pool, "writer").await;
     let posts = PostgresPostRepository::new(pool.clone(), Arc::new(RenderingRuntime::default()));
     let record = posts
-        .insert_post(&draft(author, "# 既有文章"), &[])
+        .insert_post(&draft(author, "# 既有文章"), &[], None)
         .await
         .unwrap();
     let pages = PostgresPageRepository::new(pool.clone(), Arc::new(RenderingRuntime::default()));
@@ -225,11 +225,11 @@ async fn migration_backfills_both_content_tables_without_editing_their_versions(
         OffsetDateTime::now_utc(),
     )
     .unwrap();
-    let page_record = pages.insert_page(&page).await.unwrap();
+    let page_record = pages.insert_page(&page, None).await.unwrap();
     let before_post = stored(&pool, "posts", record.snapshot.id).await;
     let before_page = stored(&pool, "pages", page_record.id).await;
-    // 恢复本测试库的迁移 7 表结构，验证实际新增列与 Rust 补齐流程。
-    sqlx::raw_sql("ALTER TABLE posts DROP COLUMN content_html, DROP COLUMN content_render_version; ALTER TABLE pages DROP COLUMN content_html, DROP COLUMN content_render_version; DELETE FROM _sqlx_migrations WHERE version=8;")
+    // 基线直接包含派生列；模拟另一渲染规则版本，启动时重建但不改业务版本。
+    sqlx::raw_sql("UPDATE posts SET content_html='',content_render_version=2; UPDATE pages SET content_html='',content_render_version=2;")
         .execute(&pool).await.unwrap();
     infrastructure::migrate(&pool, "../../migrations/postgres")
         .await
@@ -268,11 +268,11 @@ async fn rebuild_cannot_overwrite_a_concurrent_editor_commit() {
     let author = common::seed_user(&pool, "writer").await;
     let repo = PostgresPostRepository::new(pool.clone(), Arc::new(RenderingRuntime::default()));
     let record = repo
-        .insert_post(&draft(author, "旧正文"), &[])
+        .insert_post(&draft(author, "旧正文"), &[], None)
         .await
         .unwrap();
     let id = record.snapshot.id;
-    sqlx::query("UPDATE posts SET content_render_version=0 WHERE id=$1")
+    sqlx::query("UPDATE posts SET content_render_version=2 WHERE id=$1")
         .bind(id)
         .execute(&pool)
         .await
@@ -293,7 +293,7 @@ async fn rebuild_cannot_overwrite_a_concurrent_editor_commit() {
         ..Default::default()
     })
     .unwrap();
-    repo.commit_post(&post, 1, OffsetDateTime::now_utc(), None)
+    repo.commit_post(&post, 1, OffsetDateTime::now_utc(), None, None)
         .await
         .unwrap();
     let committed = stored(&pool, "posts", id).await;

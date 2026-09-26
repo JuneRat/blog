@@ -1,3 +1,4 @@
+import { ContentLifecycleControls, statusLabel, type ContentAction } from "../components/ContentLifecycleControls";
 import { CommentSwitch } from "../components/CommentSwitch";
 import {
   Alert,
@@ -36,10 +37,10 @@ interface FormState {
   tagIds: string[];
   /** 分类 id（null = 未分类）。 */
   categoryId: string | null;
-  /** 系列 id（null = 不属于任何系列）。 */
-  seriesId: string | null;
-  /** 系列内序号（seriesId 非空时为正整数）。 */
-  seriesOrder: string;
+  /** 系列 id 集合（空数组 = 不属于任何系列）。 */
+  seriesIds: string[];
+  /** 每个已选系列内的排序权重（非负整数，可重复）。 */
+  seriesPositions: Record<string, string>;
   /**
    * 封面媒体 id（null = 无封面）。
    *
@@ -57,8 +58,8 @@ const EMPTY_FORM: FormState = {
   visibility: "public",
   tagIds: [],
   categoryId: null,
-  seriesId: null,
-  seriesOrder: "",
+  seriesIds: [],
+  seriesPositions: {},
   coverMediaId: null,
 };
 
@@ -71,25 +72,28 @@ function toForm(post: PostDetail): FormState {
     visibility: post.visibility,
     tagIds: [...post.tag_ids],
     categoryId: post.category_id,
-    seriesId: post.series_id,
-    seriesOrder: post.series_order === null ? "" : String(post.series_order),
+    seriesIds: post.series.map((s) => s.series_id),
+    seriesPositions: Object.fromEntries(post.series.map((s) => [s.series_id, String(s.position)])),
     coverMediaId: post.cover_media_id,
   };
 }
 
 /**
  * antd `Select` 的 `allowClear` 清空后给出 `undefined`，某些写法会给出 `""`；
- * `FormState` 用 `null` 表示「未分类 / 不属于系列」。这里统一收敛，
+ * `FormState` 用 `null` 表示未分类，空数组表示未选系列。这里统一收敛，
  * 否则 `pickServer`/`mergeServer` 会把 `undefined` 与 `null` 当成两种不同的值。
  */
 function normalizeForm(raw: FormState): FormState {
   const categoryId = raw.categoryId;
-  const seriesId = raw.seriesId;
+  const seriesIds = raw.seriesIds ?? [];
   const coverMediaId = raw.coverMediaId;
   return {
     ...raw,
     categoryId: typeof categoryId === "string" && categoryId.length > 0 ? categoryId : null,
-    seriesId: typeof seriesId === "string" && seriesId.length > 0 ? seriesId : null,
+    seriesIds,
+    seriesPositions: Object.fromEntries(
+      seriesIds.map((id) => [id, String(raw.seriesPositions?.[id] ?? "0")]),
+    ),
     // 封面选择器只上报 id 或 null；这里同样收敛 `""`/`undefined`，保持单值语义。
     coverMediaId:
       typeof coverMediaId === "string" && coverMediaId.length > 0 ? coverMediaId : null,
@@ -112,9 +116,14 @@ function formEquals(left: FormState, right: FormState): boolean {
     left.visibility === right.visibility &&
     sameTags(left.tagIds, right.tagIds) &&
     left.categoryId === right.categoryId &&
-    left.seriesId === right.seriesId &&
-    left.seriesOrder.trim() === right.seriesOrder.trim() &&
+    sameSeries(left, right) &&
     left.coverMediaId === right.coverMediaId
+  );
+}
+
+function sameSeries(left: FormState, right: FormState): boolean {
+  return sameTags(left.seriesIds, right.seriesIds) && left.seriesIds.every(
+    (id) => left.seriesPositions[id]?.trim() === right.seriesPositions[id]?.trim(),
   );
 }
 
@@ -139,10 +148,7 @@ function mergeServer(current: FormState, sent: FormState, server: FormState): Fo
   // 标签是集合字段：用户没动过勾选才接受服务器值，动过则保留本地选择。
   const tags = sameTags(current.tagIds, sent.tagIds) ? server.tagIds : current.tagIds;
   const categoryId = current.categoryId === sent.categoryId ? server.categoryId : current.categoryId;
-  const seriesChanged =
-    current.seriesId !== sent.seriesId || current.seriesOrder.trim() !== sent.seriesOrder.trim();
-  const seriesId = seriesChanged ? current.seriesId : server.seriesId;
-  const seriesOrder = seriesChanged ? current.seriesOrder : server.seriesOrder;
+  const seriesSource = sameSeries(current, sent) ? server : current;
   return {
     slug: pickServer("slug", current, sent, server),
     title: pickServer("title", current, sent, server),
@@ -151,8 +157,8 @@ function mergeServer(current: FormState, sent: FormState, server: FormState): Fo
     visibility: pickServer("visibility", current, sent, server),
     tagIds: tags,
     categoryId,
-    seriesId,
-    seriesOrder,
+    seriesIds: seriesSource.seriesIds,
+    seriesPositions: seriesSource.seriesPositions,
     // 封面与分类一样是单值字段：用户没在请求飞行期间改过才接受服务器值。
     coverMediaId: pickServer("coverMediaId", current, sent, server),
   };
@@ -191,6 +197,7 @@ export function PostEditScreen({ id }: { id: string | null }) {
   const [view, setView] = useState<FormState>(EMPTY_FORM);
   const [version, setVersion] = useState<number | null>(null);
   const [postStatus, setPostStatus] = useState<string>("draft");
+  const [publishedAt, setPublishedAt] = useState<string | null>(null);
   const [loading, setLoading] = useState(id !== null);
   const [busy, setBusy] = useState(false);
   /**
@@ -243,7 +250,7 @@ export function PostEditScreen({ id }: { id: string | null }) {
 
   /** 读当前值。字段尚未注册（例如「系列内序号」）时用 EMPTY_FORM 补齐成完整的 FormState。 */
   const readForm = useCallback(
-    (): FormState => normalizeForm({ ...EMPTY_FORM, ...formApi.getFieldsValue() }),
+    (): FormState => normalizeForm({ ...EMPTY_FORM, ...formApi.getFieldsValue(true) }),
     [formApi],
   );
 
@@ -272,6 +279,7 @@ export function PostEditScreen({ id }: { id: string | null }) {
       setFormId(post.id);
       setVersion(post.version);
       setPostStatus(post.status);
+      setPublishedAt(post.published_at);
       setConflict(false);
       return !formEquals(merged, server);
     },
@@ -285,6 +293,7 @@ export function PostEditScreen({ id }: { id: string | null }) {
   const applyStatus = useCallback((post: PostDetail): void => {
     setVersion(post.version);
     setPostStatus(post.status);
+      setPublishedAt(post.published_at);
     setConflict(false);
   }, []);
 
@@ -325,6 +334,7 @@ export function PostEditScreen({ id }: { id: string | null }) {
       setFormId(null);
       setVersion(null);
       setPostStatus("draft");
+      setPublishedAt(null);
       setBusy(false);
       setNotice(null);
       setError(null);
@@ -378,17 +388,20 @@ export function PostEditScreen({ id }: { id: string | null }) {
     };
   }
 
-  /** 系列序号严格校验：正整数。Number("1.5") 不是整数、parseInt 不会截断，
-   * 空白/0/负数/小数/非数字一律拒绝——非法值必须阻止提交而不是静默丢掉系列。 */
-  function validSeriesOrder(value: string): boolean {
-    const n = Number(value.trim());
-    return Number.isInteger(n) && n > 0;
+  /** 权重允许 0，拒绝空白、负数、小数和超出数据库整数范围的值。 */
+  function validSeries(current: FormState): boolean {
+    return current.seriesIds.every((id) => {
+      const raw = current.seriesPositions[id]?.trim() ?? "0";
+      const n = Number(raw);
+      return raw.length > 0 && Number.isInteger(n) && n >= 0 && n <= 2147483647;
+    });
   }
 
-  /** 系列载荷：未选系列 → null（退出）；选了系列 → 对象（调用前已通过校验）。 */
-  function seriesPayload(current: FormState): { id: string; order: number } | null {
-    if (current.seriesId === null) return null;
-    return { id: current.seriesId, order: Number(current.seriesOrder.trim()) };
+  function seriesPayload(current: FormState) {
+    return current.seriesIds.map((id) => ({
+      series_id: id,
+      position: Number(current.seriesPositions[id] ?? "0"),
+    }));
   }
 
   async function save(): Promise<void> {
@@ -399,8 +412,8 @@ export function PostEditScreen({ id }: { id: string | null }) {
       return;
     }
     // 系列序号是提交前提：非法值直接阻止，绝不静默丢弃系列选择。
-    if (readForm().seriesId !== null && !validSeriesOrder(readForm().seriesOrder)) {
-      setError("选择了系列时，系列内序号必须是正整数（如 1、2、3）。");
+    if (!validSeries(readForm())) {
+      setError("系列排序权重必须是非负整数。");
       return;
     }
     setError(null);
@@ -507,12 +520,12 @@ export function PostEditScreen({ id }: { id: string | null }) {
    * 本地未保存的编辑会被静默丢弃，线上发布的也仍是上一版内容。
    * 因此有未保存改动时先保存，再用保存得到的版本发布/撤回。
    */
-  async function setPublished(publish: boolean): Promise<void> {
+  async function changeStatus(action: ContentAction, at?: string): Promise<void> {
     // 表单不属于当前地址时不得改状态：没有可依据的版本号，等于盲写。
     if (id === null || formMismatch) return;
     // 保存未存编辑走同一前提校验。
-    if (readForm().seriesId !== null && !validSeriesOrder(readForm().seriesOrder)) {
-      setError("选择了系列时，系列内序号必须是正整数（如 1、2、3）。");
+    if (!validSeries(readForm())) {
+      setError("系列排序权重必须是非负整数。");
       return;
     }
     setError(null);
@@ -521,7 +534,7 @@ export function PostEditScreen({ id }: { id: string | null }) {
     const hadUnsavedEdits = hasUnsaved();
     try {
       let expected = version ?? undefined;
-      if (hadUnsavedEdits) {
+      if (hadUnsavedEdits && postStatus !== "archived") {
         const sent = readForm();
         const saved = await api.updatePost(id, {
           ...editPayload(),
@@ -537,19 +550,14 @@ export function PostEditScreen({ id }: { id: string | null }) {
         invalidateList();
       }
       // 发布/撤回不改正文：只同步状态，保留（可能还在变化的）表单。
-      const result = publish
+      const result = action === "publish"
         ? await api.publishPost(id, expected)
+        : action === "schedule" ? await api.schedulePost(id, at!, expected)
+        : action === "archive" ? await api.archivePost(id, expected)
         : await api.unpublishPost(id, expected);
       applyStatus(result);
       invalidateList();
-      const stillDirty = hasUnsaved();
-      if (publish) {
-        if (stillDirty) setNotice("已发布；等待期间的新改动尚未保存。");
-        else setNotice(hadUnsavedEdits ? "已保存并发布。" : "已发布。");
-      } else {
-        if (stillDirty) setNotice("已撤回为草稿；等待期间的新改动尚未保存。");
-        else setNotice(hadUnsavedEdits ? "已保存并撤回为草稿。" : "已撤回为草稿。");
-      }
+      setNotice(`状态已更新为${statusLabel(result.status)}。${hasUnsaved() ? "还有未保存的改动。" : ""}`);
     } catch (e) {
       if (isVersionConflict(e)) {
         setConflict(true);
@@ -561,6 +569,7 @@ export function PostEditScreen({ id }: { id: string | null }) {
     }
   }
 
+  const canUnpublish = me?.permissions.some((key) => key === "post.unpublish" || key === "post.unpublish_any") ?? false;
   const canPublish = me?.permissions.some((key) => key === "post.publish" || key === "post.publish_any") ?? false;
   const canReadMedia = me?.permissions.includes("media.read") ?? false;
   const canUploadMedia = me?.permissions.includes("media.upload") ?? false;
@@ -586,7 +595,7 @@ export function PostEditScreen({ id }: { id: string | null }) {
             {id === null ? "新建草稿" : view.slug}
           </Typography.Title>
           <Tag color={postStatus === "published" ? "green" : undefined}>
-            {postStatus === "published" ? "已发布" : "草稿"}
+            {statusLabel(postStatus)}
           </Tag>
           {version !== null && <Typography.Text type="secondary">v{version}</Typography.Text>}
         </Flex>
@@ -645,13 +654,14 @@ export function PostEditScreen({ id }: { id: string | null }) {
       {id !== null && <CommentSwitch key={id} post={id} />}
       <Form
         form={formApi}
+        disabled={postStatus === "archived" || formMismatch}
         layout="vertical"
         initialValues={EMPTY_FORM}
         onValuesChange={(_changed, all) => setView(normalizeForm({ ...EMPTY_FORM, ...all }))}
         onFinish={() => void save()}
       >
         <Form.Item label="slug" name="slug">
-          <Input placeholder="留空则自动生成（发布后锁定）" />
+          <Input placeholder="留空则自动生成（预约或发布后锁定）" />
         </Form.Item>
         <Form.Item label="标题" name="title">
           <Input />
@@ -692,21 +702,24 @@ export function PostEditScreen({ id }: { id: string | null }) {
             }))}
           />
         </Form.Item>
-        <Form.Item label="系列" name="seriesId">
+        <Form.Item label="系列" name="seriesIds">
           <Select
+            mode="multiple"
             allowClear
-            placeholder="（不属于系列）"
-            options={(seriesCatalog ?? []).map((series) => ({
-              value: series.id,
-              label: series.name,
-            }))}
+            placeholder="可加入多个系列"
+            options={(seriesCatalog ?? []).map((series) => ({ value: series.id, label: series.name }))}
           />
         </Form.Item>
-        {view.seriesId !== null && (
-          <Form.Item label="系列内序号" name="seriesOrder">
-            <Input inputMode="numeric" placeholder="正整数；同一系列内唯一" />
+        {view.seriesIds.map((seriesId) => (
+          <Form.Item
+            key={seriesId}
+            label={`${seriesCatalog?.find((s) => s.id === seriesId)?.name ?? seriesId} · 排序权重`}
+            name={["seriesPositions", seriesId]}
+            initialValue="0"
+          >
+            <Input inputMode="numeric" placeholder="0 起；数值越小越靠前，允许重复" />
           </Form.Item>
-        )}
+        ))}
         <Form.Item label="标签" name="tagIds">
           <Checkbox.Group
             options={(catalog ?? []).map((tag) => ({ label: tag.name, value: tag.id }))}
@@ -794,14 +807,12 @@ export function PostEditScreen({ id }: { id: string | null }) {
             查询更明显），其 `role="img" aria-label="loading"` 会污染按钮的无障碍名，
             让按名字定位变脆、读屏也会念出多余的 "loading"。
           */}
-          <Button type="primary" htmlType="submit" disabled={busy}>
+          <Button type="primary" htmlType="submit" disabled={busy || formMismatch || postStatus === "archived"}>
             {busy ? "处理中…" : "保存并更新线上"}
           </Button>
-          {canPublish && id !== null && (
-            <Button disabled={busy} onClick={() => void setPublished(postStatus !== "published")}>
-              {postStatus === "published" ? "撤回为草稿" : "发布"}
-            </Button>
-          )}
+          {id !== null && <ContentLifecycleControls status={postStatus} publishedAt={publishedAt} disabled={busy || formMismatch}
+            canPublish={canPublish} canUnpublish={canUnpublish} canArchive={canUnpublish} onAction={changeStatus} />}
+
         </Space>
       </Form>
     </>

@@ -9,7 +9,7 @@
   <div class="prose">{{ post.content_html | safe }}</div>
   <p class="article-meta">更新于 {{ post.updated_at }}</p>
   {% if post.tags %}<div class="tag-cloud">{% for tag in post.tags %}<a href="/tags/{{ tag.slug }}">{{ tag.name }}</a>{% endfor %}</div>{% endif %}
-  {% if post.series %}<p class="series-note">系列：<a href="/series/{{ post.series.slug }}">{{ post.series.name }}</a> · 第 {{ post.series.order }} 篇</p>{% endif %}
+  {% for series in post.series %}<p class="series-note">系列：<a href="/series/{{ series.slug }}">{{ series.name }}</a></p>{% endfor %}
 </article>
 {% if post.category %}
   {% set related = get_posts(limit=4, category=post.category.slug) %}

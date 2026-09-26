@@ -26,7 +26,8 @@ pub use persistence::{
     PostgresPageRepository, PostgresPostRepository, PostgresPublishedCategoryQuery,
     PostgresPublishedPageQuery, PostgresPublishedPostQuery, PostgresPublishedSeriesQuery,
     PostgresPublishedTagQuery, PostgresSeriesRepository, PostgresTagRepository,
-    PostgresUserRepository, SystemClock, connect, migrate, migrate_schema, rebuild_content_html,
+    PostgresUserRepository, SystemClock, connect, migrate, migrate_schema, publish_due_content,
+    rebuild_content_html,
 };
 pub use rbac::PostgresRbacStore;
 pub use rendering::{

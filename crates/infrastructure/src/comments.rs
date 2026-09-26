@@ -37,7 +37,7 @@ fn comment(row: PgRow) -> Comment {
     }
 }
 const FIELDS: &str = "c.*, p.slug AS post_slug, p.title AS post_title, COALESCE(c.user_id=p.author_id,false) AS is_author";
-const PUBLIC: &str = "p.status='published' AND p.visibility='public' AND p.deleted_at IS NULL";
+const PUBLIC: &str = "p.status='published' AND p.visibility='public' AND p.deleted_at IS NULL AND p.published_at<=now()";
 #[async_trait]
 impl CommentRepository for PostgresCommentRepository {
     async fn public_list(

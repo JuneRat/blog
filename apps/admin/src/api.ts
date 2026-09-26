@@ -1,3 +1,4 @@
+import type { SeriesPlacement, PageTrash } from "./types";
 import type {
   AdminUser,
   CreatedUser,
@@ -156,7 +157,7 @@ export interface CreatePostInput {
   /** 初始封面媒体 id；缺省/`null` = 不设封面。 */
   cover_media_id?: string | null;
   /** 初始系列与序号。 */
-  series?: { id: string; order: number };
+  series?: SeriesPlacement[];
 }
 
 export interface EditPostInput {
@@ -177,7 +178,7 @@ export interface EditPostInput {
    */
   cover_media_id?: string | null;
   /** null = 退出系列；对象 = 设置系列与序号；缺省不触碰。 */
-  series?: { id: string; order: number } | null;
+  series?: SeriesPlacement[];
   expected_version?: number;
 }
 
@@ -285,6 +286,10 @@ export const api = {
       body: JSON.stringify(input),
     }),
 
+  schedulePost: (id: string, publishedAt: string, expectedVersion?: number): Promise<PostDetail> =>
+    request(`/api/admin/v1/posts/${encodeURIComponent(id)}/schedule`, { method: "POST", body: JSON.stringify({published_at: publishedAt, expected_version: expectedVersion}) }),
+  archivePost: (id: string, expectedVersion?: number): Promise<PostDetail> =>
+    request(`/api/admin/v1/posts/${encodeURIComponent(id)}/archive`, { method: "POST", body: JSON.stringify({expected_version: expectedVersion}) }),
   publishPost: (id: string, expectedVersion?: number): Promise<PostDetail> =>
     request<PostDetail>(`/api/admin/v1/posts/${encodeURIComponent(id)}/publish`, {
       method: "POST",
@@ -314,6 +319,10 @@ export const api = {
       body: JSON.stringify(input),
     }),
 
+  schedulePage: (id: string, publishedAt: string, expectedVersion?: number): Promise<PageDetail> =>
+    request(`/api/admin/v1/pages/${encodeURIComponent(id)}/schedule`, { method: "POST", body: JSON.stringify({published_at: publishedAt, expected_version: expectedVersion}) }),
+  archivePage: (id: string, expectedVersion?: number): Promise<PageDetail> =>
+    request(`/api/admin/v1/pages/${encodeURIComponent(id)}/archive`, { method: "POST", body: JSON.stringify({expected_version: expectedVersion}) }),
   publishPage: (id: string, expectedVersion?: number): Promise<PageDetail> =>
     request<PageDetail>(`/api/admin/v1/pages/${encodeURIComponent(id)}/publish`, {
       method: "POST",
@@ -326,12 +335,13 @@ export const api = {
       body: JSON.stringify({ expected_version: expectedVersion }),
     }),
 
-  /** Page 没有回收站；稳定 ID 定位实体，版本前提保护并发删除。 */
-  deletePage: (id: string, expectedVersion: number): Promise<void> =>
-    request<void>(`/api/admin/v1/pages/${encodeURIComponent(id)}`, {
-      method: "DELETE",
-      body: JSON.stringify({ expected_version: expectedVersion }),
-    }),
+  listPageTrash: (page = 1): Promise<PageTrash> => request(`/api/admin/v1/page-trash?page=${page}`),
+  trashPage: (id: string, expectedVersion: number): Promise<PageDetail> =>
+    request(`/api/admin/v1/pages/${encodeURIComponent(id)}/trash`, { method: "POST", body: JSON.stringify({expected_version: expectedVersion}) }),
+  restorePage: (id: string, expectedVersion: number): Promise<PageDetail> =>
+    request(`/api/admin/v1/pages/${encodeURIComponent(id)}/restore`, { method: "POST", body: JSON.stringify({expected_version: expectedVersion}) }),
+  purgePage: (id: string, expectedVersion: number): Promise<void> =>
+    request(`/api/admin/v1/pages/${encodeURIComponent(id)}/purge`, { method: "POST", body: JSON.stringify({expected_version: expectedVersion}) }),
 
   /** 账号列表：需 `user.manage` 或 `role.manage`，否则 403 forbidden。 */
   listUsers: (limit?: number, offset?: number): Promise<AdminUser[]> => {
@@ -382,8 +392,7 @@ export const api = {
     }),
 
   /**
-   * 删除（需 `tag.manage`）。仍被文章引用（含草稿/私密/回收站）时
-   * 409 `tag_in_use`——先解除关联再删除；成功返回 204。
+   * 删除（需 `tag.manage`）。解除标签关联并保留文章；成功返回 204。
    */
   deleteTag: (slug: string, expectedVersion?: number): Promise<void> =>
     request<void>(`/api/admin/v1/tags/${encodeURIComponent(slug)}`, {
@@ -571,7 +580,7 @@ export const seriesApi = {
       body: JSON.stringify(input),
     }),
 
-  /** 删除：仍被文章引用时 409 series_in_use。 */
+  /** 删除系列并解除成员关联，文章保留。 */
   remove: (slug: string, expectedVersion?: number): Promise<void> =>
     request<void>(`/api/admin/v1/series/${encodeURIComponent(slug)}`, {
       method: "DELETE",

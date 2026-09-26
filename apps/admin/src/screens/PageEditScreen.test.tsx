@@ -42,8 +42,10 @@ vi.mock("../api", async (importOriginal) => {
       createPage: vi.fn(),
       updatePage: vi.fn(),
       publishPage: vi.fn(),
+      schedulePage: vi.fn(),
+      archivePage: vi.fn(),
       unpublishPage: vi.fn(),
-      deletePage: vi.fn(),
+      trashPage: vi.fn(),
     },
   };
 });
@@ -66,7 +68,7 @@ const getPage = vi.mocked(api.getPage);
 const createPage = vi.mocked(api.createPage);
 const updatePage = vi.mocked(api.updatePage);
 const publishPage = vi.mocked(api.publishPage);
-const deletePage = vi.mocked(api.deletePage);
+const trashPage = vi.mocked(api.trashPage);
 
 function pageDetail(overrides: Partial<PageDetail> = {}): PageDetail {
   return {
@@ -107,14 +109,14 @@ afterEach(() => {
 });
 
 describe("PageEditScreen 保存流程", () => {
-  it("物理删除必须确认，携带 id 与版本并返回列表", async () => {
+  it("移入回收站必须确认，携带 id 与版本并返回列表", async () => {
     await openExistingPage();
-    deletePage.mockResolvedValue();
-    fireEvent.click(screen.getByRole("button", { name: "永久删除页面" }));
+    trashPage.mockResolvedValue(pageDetail({version:2}));
+    fireEvent.click(screen.getByRole("button", { name: "移入页面回收站" }));
     // 确认弹窗由 antd 的 modal.confirm 渲染，文案里必须点明不可恢复。
-    expect(await screen.findByText(/无法恢复/)).toBeTruthy();
+    expect(await screen.findByText(/可从页面回收站恢复/)).toBeTruthy();
     fireEvent.click(await screen.findByRole("button", { name: "确定" }));
-    await waitFor(() => expect(deletePage).toHaveBeenCalledWith("p1", 1));
+    await waitFor(() => expect(trashPage).toHaveBeenCalledWith("p1", 1));
     await waitFor(() => expect(navigate).toHaveBeenCalledWith("/admin/pages", { replace: true }));
   });
 
@@ -122,16 +124,16 @@ describe("PageEditScreen 保存流程", () => {
   // 同一条用例里开两次会同时匹配到两个「确定」。
   it("删除确认被取消时不发请求", async () => {
     await openExistingPage();
-    fireEvent.click(screen.getByRole("button", { name: "永久删除页面" }));
+    fireEvent.click(screen.getByRole("button", { name: "移入页面回收站" }));
     fireEvent.click(await screen.findByRole("button", { name: "取消" }));
     await act(async () => {});
-    expect(deletePage).not.toHaveBeenCalled();
+    expect(trashPage).not.toHaveBeenCalled();
   });
 
   it("删除遇到旧版本时保留页面并要求重新核对", async () => {
     await openExistingPage();
-    deletePage.mockRejectedValue(new ApiError(409, "版本冲突", "version_conflict"));
-    fireEvent.click(screen.getByRole("button", { name: "永久删除页面" }));
+    trashPage.mockRejectedValue(new ApiError(409, "版本冲突", "version_conflict"));
+    fireEvent.click(screen.getByRole("button", { name: "移入页面回收站" }));
     fireEvent.click(await screen.findByRole("button", { name: "确定" }));
     await screen.findByText(/请重新加载并核对最新内容/);
     expect(navigate).not.toHaveBeenCalled();
@@ -228,7 +230,7 @@ describe("PageEditScreen 保存流程", () => {
       "p1",
       expect.objectContaining({ content: "新正文" }),
     );
-    await screen.findByText("已保存并发布。");
+    await screen.findByText("状态已更新为已发布。");
   });
 
   it("请求飞行期间的新输入不会被服务器响应覆盖", async () => {

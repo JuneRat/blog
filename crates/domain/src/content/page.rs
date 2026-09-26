@@ -1,10 +1,10 @@
 //! Page 聚合：无作者、无分类/标签/系列的独立页面（/about、/friends 等）。
 //!
 //! 规则来源 docs/content-lifecycle.md：
-//! - 与 Post 相同的一份当前正文、published_at 后锁定 slug、归档终态；
+//! - 与 Post 相同的一份当前正文、首次预约或发布后锁定 slug、可逆归档；
 //! - 但 Page **没有 author_id**，权限是站点范围（page.*），不套用 own/any；
 //! - 公开地址是根路径 `/{slug}`，因此必须避开系统保留路径；
-//! - schema 没有 deleted_at：删除是物理删除（本轮不做删除用例）。
+//! - 回收站独立于状态，恢复时统一回到草稿；物理清理仅限回收站。
 
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -59,6 +59,7 @@ impl PageId {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PageStatus {
     Draft,
+    Scheduled,
     Published,
     Archived,
 }
@@ -67,6 +68,7 @@ impl PageStatus {
     pub fn as_str(self) -> &'static str {
         match self {
             PageStatus::Draft => "draft",
+            PageStatus::Scheduled => "scheduled",
             PageStatus::Published => "published",
             PageStatus::Archived => "archived",
         }
@@ -75,6 +77,7 @@ impl PageStatus {
     pub fn parse(value: &str) -> Option<Self> {
         match value {
             "draft" => Some(PageStatus::Draft),
+            "scheduled" => Some(PageStatus::Scheduled),
             "published" => Some(PageStatus::Published),
             "archived" => Some(PageStatus::Archived),
             _ => None,
@@ -84,6 +87,12 @@ impl PageStatus {
 
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum PageError {
+    #[error("回收站内的页面须先恢复")]
+    InTrash,
+    #[error("预约时间必须晚于当前时间")]
+    ScheduleMustBeFuture,
+    #[error("已发布内容须先撤回再预约")]
+    AlreadyPublished,
     #[error(transparent)]
     ContentBudget(#[from] super::budget::ContentBudgetError),
     #[error("快照结构无效：{0}")]
@@ -94,7 +103,7 @@ pub enum PageError {
     ReservedSlug(String),
     #[error("标题长度不能超过 {TITLE_MAX_CHARS} 字符")]
     TitleTooLong,
-    #[error("首次发布后 slug 已锁定，撤回也不允许改名")]
+    #[error("首次预约或发布后 slug 已锁定，退回草稿也不允许改名")]
     SlugLocked,
     #[error("发布前标题不能为空")]
     EmptyTitleOnPublish,
@@ -102,13 +111,13 @@ pub enum PageError {
     EmptyContentOnPublish,
     #[error("已发布页面的标题与正文不能清空")]
     EmptyContentWhenPublished,
-    #[error("归档是终态，不能重新发布")]
-    ArchivedIsTerminal,
-    #[error("归档是终态，不能编辑；需要恢复为草稿的流程另行扩展")]
+    #[error("归档内容须先退回草稿")]
+    ArchivedRequiresDraft,
+    #[error("归档内容须先退回草稿再编辑")]
     ArchivedNotEditable,
 }
 
-/// 仓储重建聚合的受控快照载体。Page 无作者、摘要、封面与软删除字段。
+/// 仓储重建聚合的受控快照载体。Page 无作者、摘要与封面字段。
 #[derive(Debug, Clone, PartialEq)]
 pub struct PageSnapshot {
     pub id: Uuid,
@@ -121,6 +130,7 @@ pub struct PageSnapshot {
     pub version: i64,
     pub created_at: OffsetDateTime,
     pub updated_at: OffsetDateTime,
+    pub deleted_at: Option<OffsetDateTime>,
 }
 
 /// 编辑补丁：None 表示不修改该字段。
@@ -166,6 +176,7 @@ impl Page {
                 version: 1,
                 created_at: now,
                 updated_at: now,
+                deleted_at: None,
             },
         })
     }
@@ -182,9 +193,12 @@ impl Page {
         if snapshot.version < 1 {
             return Err(PageError::InvalidSnapshot("版本必须为正整数"));
         }
-        if snapshot.status == PageStatus::Published {
+        if matches!(
+            snapshot.status,
+            PageStatus::Published | PageStatus::Scheduled
+        ) {
             if snapshot.published_at.is_none() {
-                return Err(PageError::InvalidSnapshot("已发布页面缺少首次发布时间"));
+                return Err(PageError::InvalidSnapshot("已发布页面缺少发布时间"));
             }
             if snapshot.title.trim().is_empty() || snapshot.content.trim().is_empty() {
                 return Err(PageError::EmptyContentWhenPublished);
@@ -213,15 +227,20 @@ impl Page {
         self.snapshot.version
     }
 
-    /// 匿名公开条件：published + public（Page 无软删除）。
-    pub fn is_publicly_visible(&self) -> bool {
+    /// 匿名公开条件：published + public + 未删除 + 发布时间已到。
+    pub fn is_publicly_visible(&self, now: OffsetDateTime) -> bool {
         self.snapshot.status == PageStatus::Published
             && self.snapshot.visibility == Visibility::Public
+            && self.snapshot.deleted_at.is_none()
+            && self.snapshot.published_at.is_some_and(|at| at <= now)
     }
 
     /// 编辑当前正文。与 Post 相同的原子提交语义：先校验候选值，再整体写入，
     /// 任一校验失败聚合保持原状。返回是否存在实际变化。
     pub fn edit(&mut self, patch: PagePatch) -> Result<bool, PageError> {
+        if self.snapshot.deleted_at.is_some() {
+            return Err(PageError::InTrash);
+        }
         if self.snapshot.status == PageStatus::Archived {
             return Err(PageError::ArchivedNotEditable);
         }
@@ -252,8 +271,10 @@ impl Page {
                 return Err(PageError::ReservedSlug(raw.to_string()));
             }
         }
-        if self.snapshot.status == PageStatus::Published
-            && (new_title.trim().is_empty() || new_content.trim().is_empty())
+        if matches!(
+            self.snapshot.status,
+            PageStatus::Published | PageStatus::Scheduled
+        ) && (new_title.trim().is_empty() || new_content.trim().is_empty())
         {
             return Err(PageError::EmptyContentWhenPublished);
         }
@@ -279,14 +300,17 @@ impl Page {
         Ok(changed)
     }
 
-    /// 发布：draft → published（首次写入 published_at）；已发布幂等；归档终态。
+    /// 立即发布；保留过去的发布时间，未来预约改为当前时间；归档须先退回草稿。
     /// 发布时复核保留路径，避免历史数据或后续改名引入的系统路由占用。
     pub fn publish(&mut self, now: OffsetDateTime) -> Result<bool, PageError> {
+        if self.snapshot.deleted_at.is_some() {
+            return Err(PageError::InTrash);
+        }
         super::budget::validate_source(&self.snapshot.content)?;
         match self.snapshot.status {
             PageStatus::Published => Ok(false),
-            PageStatus::Archived => Err(PageError::ArchivedIsTerminal),
-            PageStatus::Draft => {
+            PageStatus::Archived => Err(PageError::ArchivedRequiresDraft),
+            PageStatus::Draft | PageStatus::Scheduled => {
                 if self.snapshot.title.trim().is_empty() {
                     return Err(PageError::EmptyTitleOnPublish);
                 }
@@ -297,7 +321,7 @@ impl Page {
                     return Err(PageError::ReservedSlug(self.snapshot.slug.clone()));
                 }
                 self.snapshot.status = PageStatus::Published;
-                if self.snapshot.published_at.is_none() {
+                if self.snapshot.published_at.is_none_or(|at| at > now) {
                     self.snapshot.published_at = Some(now);
                 }
                 Ok(true)
@@ -305,14 +329,72 @@ impl Page {
         }
     }
 
-    /// 撤回：published → draft，保留 published_at（slug 仍锁定）。非发布幂等。
+    /// 撤回、取消预约或解除归档：回到草稿，保留 published_at（slug 仍锁定）。
     pub fn withdraw(&mut self) -> bool {
-        if self.snapshot.status == PageStatus::Published {
+        if self.snapshot.deleted_at.is_none() && self.snapshot.status != PageStatus::Draft {
             self.snapshot.status = PageStatus::Draft;
             true
         } else {
             false
         }
+    }
+    /// 预约发布只接受草稿或已有预约；所有校验通过后才改变状态。
+    pub fn schedule(&mut self, at: OffsetDateTime, now: OffsetDateTime) -> Result<bool, PageError> {
+        if self.snapshot.deleted_at.is_some() {
+            return Err(PageError::InTrash);
+        }
+        if self.snapshot.status == PageStatus::Archived {
+            return Err(PageError::ArchivedRequiresDraft);
+        }
+        if self.snapshot.status == PageStatus::Published {
+            return Err(PageError::AlreadyPublished);
+        }
+        if at <= now {
+            return Err(PageError::ScheduleMustBeFuture);
+        }
+        super::budget::validate_source(&self.snapshot.content)?;
+        if self.snapshot.title.trim().is_empty() {
+            return Err(PageError::EmptyTitleOnPublish);
+        }
+        if self.snapshot.content.trim().is_empty() {
+            return Err(PageError::EmptyContentOnPublish);
+        }
+        let changed =
+            self.snapshot.status != PageStatus::Scheduled || self.snapshot.published_at != Some(at);
+        self.snapshot.status = PageStatus::Scheduled;
+        self.snapshot.published_at = Some(at);
+        Ok(changed)
+    }
+
+    pub fn archive(&mut self) -> Result<bool, PageError> {
+        if self.snapshot.deleted_at.is_some() {
+            return Err(PageError::InTrash);
+        }
+        let changed = self.snapshot.status != PageStatus::Archived;
+        self.snapshot.status = PageStatus::Archived;
+        Ok(changed)
+    }
+
+    /// 移入回收站，保留原状态与发布时间。重复操作幂等。
+    /// version 与 updated_at 由提交边界统一处理。
+    pub fn trash(&mut self, now: OffsetDateTime) -> bool {
+        if self.snapshot.deleted_at.is_some() {
+            return false;
+        }
+        self.snapshot.deleted_at = Some(now);
+        true
+    }
+
+    /// 从回收站恢复为草稿，避免意外重新上线。
+    /// 保留发布时间（slug 仍锁定）；非回收站内容幂等无操作。
+    /// version 与 updated_at 由提交边界统一处理。
+    pub fn restore(&mut self) -> bool {
+        if self.snapshot.deleted_at.is_none() {
+            return false;
+        }
+        self.snapshot.deleted_at = None;
+        self.snapshot.status = PageStatus::Draft;
+        true
     }
 }
 
@@ -439,27 +521,26 @@ mod tests {
     #[test]
     fn public_visibility_rules() {
         let mut page = draft("about");
-        assert!(!page.is_publicly_visible());
+        assert!(!page.is_publicly_visible(OffsetDateTime::now_utc()));
         page.publish(now()).unwrap();
-        assert!(page.is_publicly_visible());
+        assert!(page.is_publicly_visible(OffsetDateTime::now_utc()));
         page.edit(PagePatch {
             visibility: Some(Visibility::Private),
             ..Default::default()
         })
         .unwrap();
-        assert!(!page.is_publicly_visible());
+        assert!(!page.is_publicly_visible(OffsetDateTime::now_utc()));
     }
 
     #[test]
-    fn archived_is_terminal() {
+    fn archived_requires_return_to_draft() {
         let mut snapshot = draft("about").snapshot();
         snapshot.status = PageStatus::Archived;
         let mut archived = Page::reconstitute(snapshot).unwrap();
         assert_eq!(
             archived.publish(now()).unwrap_err(),
-            PageError::ArchivedIsTerminal
+            PageError::ArchivedRequiresDraft
         );
-        assert!(!archived.withdraw());
         assert_eq!(
             archived
                 .edit(PagePatch {
@@ -469,6 +550,8 @@ mod tests {
                 .unwrap_err(),
             PageError::ArchivedNotEditable
         );
+        assert!(archived.withdraw());
+        assert_eq!(archived.status(), PageStatus::Draft);
     }
 
     #[test]
@@ -481,5 +564,48 @@ mod tests {
         let mut snapshot = draft("about").snapshot();
         snapshot.status = PageStatus::Published;
         assert!(Page::reconstitute(snapshot).is_err());
+    }
+    #[test]
+    fn schedule_cancel_archive_and_restore_keep_slug_locked() {
+        let mut content = draft("scheduled-page");
+        let now = OffsetDateTime::UNIX_EPOCH;
+        let at = now + time::Duration::hours(1);
+        assert_eq!(
+            content.schedule(now, now),
+            Err(PageError::ScheduleMustBeFuture)
+        );
+        assert!(content.schedule(at, now).unwrap());
+        assert!(!content.schedule(at, now).unwrap());
+        assert!(!content.is_publicly_visible(at));
+        assert!(
+            content
+                .edit(PagePatch {
+                    content: Some(" ".into()),
+                    ..Default::default()
+                })
+                .is_err()
+        );
+        assert!(content.withdraw());
+        assert_eq!(content.snapshot().published_at, Some(at));
+        assert_eq!(
+            content.edit(PagePatch {
+                slug: Some("renamed".into()),
+                ..Default::default()
+            }),
+            Err(PageError::SlugLocked)
+        );
+        assert!(content.publish(now).unwrap());
+        assert_eq!(
+            content.snapshot().published_at,
+            Some(now),
+            "立即发布修正未来时间"
+        );
+        assert!(content.is_publicly_visible(now));
+        assert!(content.archive().unwrap());
+        assert!(!content.is_publicly_visible(now));
+        assert!(content.trash(now));
+        assert!(content.restore());
+        assert_eq!(content.status(), PageStatus::Draft);
+        assert_eq!(content.snapshot().published_at, Some(now));
     }
 }

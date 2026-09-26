@@ -28,15 +28,15 @@
 
 | 角色 | 默认权限范围 |
 |---|---|
-| Owner | 全部已注册权限，包括文章永久删除、OAuth 维护和所有权操作 |
+| Owner | 全部已注册权限，包括文章/页面永久删除、OAuth 维护和所有权操作 |
 | Administrator | `user.manage`、`role.manage`、`settings.manage` |
 | Editor | 文章 read/update/publish/unpublish/delete 的 any 权限；页面、分类、标签、系列管理；媒体 read/upload/delete_any |
 | Author | 创建文章及本人文章 read/update/publish/unpublish/delete；媒体 read/upload/delete |
 
 具体授权以动作检查为准，角色显示名称不能替代权限判断：
 
-- 文章 own 权限须匹配存储的 `author_id`，对应 any 权限覆盖本人及他人文章。回收站恢复沿用 `post.delete` / `post.delete_any`，永久删除另需 `post.purge`。
-- Page 无作者，使用站点范围的 `page.*` 权限。`page.archive` 已注册，但当前没有归档用例或接口。
+- 文章 own 权限须匹配存储的 `author_id`，对应 any 权限覆盖本人及他人文章。预约沿用发布权限，归档、取消预约和解除归档沿用撤回权限；回收站恢复沿用 `post.delete` / `post.delete_any`，永久删除另需 `post.purge`。
+- Page 无作者，使用站点范围的 `page.*` 权限。预约使用 `page.publish`，归档使用 `page.archive`，取消预约或解除归档使用 `page.unpublish`；删除/恢复使用 `page.delete`，永久删除另需 `page.purge`，默认仅授予 Owner。
 - 分类、标签、系列的管理分别需要对应 `*.manage`；系列成员列表逐篇检查读取权限，整体重排逐篇检查修改权限。目录读取对已认证用户开放，关联文章仍按文章权限检查。
 - 媒体库读取、上传、本人删除和任意删除分别授权。所有图片链接独立公开；使用位置权限、软删除与物理保护见 [内容生命周期](content-lifecycle.md)。
 - 自助头像不需要额外权限；站点 logo 保存需要 `settings.manage`。上传图片另需 `media.upload`，引用现有图片仍受附着规则检查。

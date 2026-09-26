@@ -1,4 +1,4 @@
-//! 标签管理用例测试：权限边界、slug 冲突、并发版本与引用保护。
+//! 标签管理用例测试：权限边界、slug 冲突、并发版本与关联解除。
 //! 复用 post_usecase 的 fake 模式；不依赖生产 infrastructure。
 
 use std::collections::HashMap;
@@ -29,8 +29,7 @@ impl Clock for FixedClock {
     }
 }
 
-/// 标签目录 fake：tags 按 slug 索引；references 模拟 post_tags 占用
-/// （含草稿/私密/回收站——引用保护不过滤可见性）。
+/// 标签目录 fake：tags 按 slug 索引；references 模拟 post_tags 关联数。
 struct FakeTagRepo {
     tags: Mutex<HashMap<String, TagSnapshot>>,
     references: Mutex<HashMap<Uuid, i64>>,
@@ -47,7 +46,11 @@ impl FakeTagRepo {
 
 #[async_trait::async_trait]
 impl TagRepository for FakeTagRepo {
-    async fn insert(&self, aggregate: &domain::content::Tag) -> Result<(), UseCaseError> {
+    async fn insert(
+        &self,
+        aggregate: &domain::content::Tag,
+        _actor_id: Option<uuid::Uuid>,
+    ) -> Result<(), UseCaseError> {
         let snapshot = aggregate.snapshot();
         let mut tags = self.tags.lock().unwrap();
         if tags.contains_key(&snapshot.slug) {
@@ -89,6 +92,7 @@ impl TagRepository for FakeTagRepo {
         id: Uuid,
         new_name: &str,
         expected_version: i64,
+        _actor_id: Option<uuid::Uuid>,
     ) -> Result<Option<TagSnapshot>, UseCaseError> {
         let mut tags = self.tags.lock().unwrap();
         let Some(tag) = tags.values_mut().find(|t| t.id == id) else {
@@ -106,6 +110,7 @@ impl TagRepository for FakeTagRepo {
         &self,
         id: Uuid,
         expected_version: i64,
+        _actor_id: Option<uuid::Uuid>,
     ) -> Result<TagDeleteOutcome, UseCaseError> {
         let mut tags = self.tags.lock().unwrap();
         let Some(tag) = tags.values().find(|t| t.id == id).cloned() else {
@@ -114,10 +119,7 @@ impl TagRepository for FakeTagRepo {
         if tag.version != expected_version {
             return Ok(TagDeleteOutcome::StaleVersion);
         }
-        let count = *self.references.lock().unwrap().get(&id).unwrap_or(&0);
-        if count > 0 {
-            return Ok(TagDeleteOutcome::Referenced { count });
-        }
+        self.references.lock().unwrap().remove(&id);
         tags.remove(&tag.slug);
         Ok(TagDeleteOutcome::Deleted)
     }
@@ -543,28 +545,18 @@ async fn rename_and_delete_check_expected_version() {
 }
 
 #[tokio::test]
-async fn referenced_tag_refuses_delete() {
+async fn referenced_tag_deletion_removes_associations() {
     let f = fixture().await;
     let created = f.tags.create(&f.editor, cmd("Rust", "rust")).await.unwrap();
     // 模拟被两篇文章引用（可见性无关：草稿/私密同样占用）。
     f.repo.references.lock().unwrap().insert(created.id, 2);
 
-    let err = f
-        .tags
-        .delete(&f.editor, "rust", Some(created.version))
-        .await
-        .unwrap_err();
-    match err {
-        UseCaseError::TagInUse(count) => assert_eq!(count, 2),
-        other => panic!("期望 TagInUse，得到 {other:?}"),
-    }
-
-    // 解除引用后同一版本可删。
-    f.repo.references.lock().unwrap().remove(&created.id);
     f.tags
         .delete(&f.editor, "rust", Some(created.version))
         .await
         .unwrap();
+    assert!(f.repo.find_by_slug("rust").await.unwrap().is_none());
+    assert!(!f.repo.references.lock().unwrap().contains_key(&created.id));
 }
 
 #[tokio::test]

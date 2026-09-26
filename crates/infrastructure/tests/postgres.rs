@@ -21,7 +21,7 @@ use infrastructure::{
     PostgresPublishedPageQuery, PostgresPublishedPostQuery, PostgresRbacStore,
     PostgresUserRepository, SanitizingMarkdownRenderer, connect,
 };
-use sqlx::{PgPool, Row};
+use sqlx::PgPool;
 use time::OffsetDateTime;
 use tokio::sync::Mutex;
 
@@ -140,6 +140,7 @@ async fn duplicate_slug_is_rejected_as_conflict() {
     repo.insert_post(
         &Post::reconstitute(draft_snapshot(author, "same-slug")).unwrap(),
         &[],
+        None,
     )
     .await
     .unwrap();
@@ -147,6 +148,7 @@ async fn duplicate_slug_is_rejected_as_conflict() {
         .insert_post(
             &Post::reconstitute(draft_snapshot(author, "same-slug")).unwrap(),
             &[],
+            None,
         )
         .await
         .unwrap_err();
@@ -170,6 +172,7 @@ async fn foreign_key_protects_author_reference() {
         .insert_post(
             &Post::reconstitute(draft_snapshot(ghost, "orphan")).unwrap(),
             &[],
+            None,
         )
         .await
         .unwrap_err();
@@ -184,98 +187,27 @@ async fn series_position_rules_enforced_by_constraints() {
     let _g = SERIAL.lock().await;
     let pool = fresh_database().await;
     let author = seed_user(&pool, "author").await;
-    let repo = PostgresPostRepository::new(
-        pool.clone(),
-        Arc::new(infrastructure::RenderingRuntime::default()),
+    let series = seed_series(&pool, "系列", "series-1").await;
+    let a = post_in_series(&pool, author, series.id, "series-a", 0).await;
+    let b = post_in_series(&pool, author, series.id, "series-b", 0).await;
+    assert_eq!(
+        repo_of(&pool).members_of(series.id).await.unwrap().len(),
+        2,
+        "允许重复的零权重"
     );
-
-    let series_id = uuid::Uuid::now_v7();
-    sqlx::query("INSERT INTO series (id, name, slug, version) VALUES ($1, '系列', 'series-1', 1)")
-        .bind(series_id)
+    let error = sqlx::query("UPDATE post_series SET position=-1 WHERE post_id=$1")
+        .bind(a.id)
         .execute(&pool)
         .await
-        .unwrap();
-
-    let mut a = draft_snapshot(author, "series-a");
-    a.series_id = Some(series_id);
-    a.series_order = Some(2);
-    repo.insert_post(&Post::reconstitute(a.clone()).unwrap(), &[])
-        .await
-        .unwrap();
-
-    // 同系列同位置：唯一约束拒绝。
-    let mut b = draft_snapshot(author, "series-b");
-    b.series_id = Some(series_id);
-    b.series_order = Some(2);
-    let err = repo
-        .insert_post(&Post::reconstitute(b.clone()).unwrap(), &[])
+        .unwrap_err();
+    assert!(matches!(&error,sqlx::Error::Database(e) if e.code().as_deref()==Some("23514")));
+    let error = sqlx::query("INSERT INTO post_series (post_id,series_id) VALUES ($1,$2)")
+        .bind(b.id)
+        .bind(series.id)
+        .execute(&pool)
         .await
         .unwrap_err();
-    match err {
-        UseCaseError::Conflict(ConflictKind::SeriesPosition) => {}
-        other => panic!("期望 Conflict(SeriesPosition)，得到 {other:?}"),
-    }
-
-    // 不同位置可以插入；留空档合法。
-    b.series_order = Some(5);
-    repo.insert_post(&Post::reconstitute(b.clone()).unwrap(), &[])
-        .await
-        .unwrap();
-
-    // 非法组合由数据库约束测试直接写 SQL，不通过生产领域写入口构造非法对象。
-    let err = sqlx::query(
-        "INSERT INTO posts (id, author_id, title, slug, content, series_order) \
-         VALUES ($1, $2, '非法系列位置', 'series-c', '正文', 1)",
-    )
-    .bind(uuid::Uuid::now_v7())
-    .bind(author)
-    .execute(&pool)
-    .await
-    .unwrap_err();
-    assert!(
-        matches!(&err, sqlx::Error::Database(error) if error.code().as_deref() == Some("23514")),
-        "series_id 与 series_order 必须同空同非空：{err}"
-    );
-
-    // 延后唯一约束：事务内交换位置，提交时必须恢复唯一。
-    sqlx::raw_sql(
-        "BEGIN; SET CONSTRAINTS posts_series_position_unique DEFERRED; \
-         UPDATE posts SET series_order = 5 WHERE slug = 'series-a'; \
-         UPDATE posts SET series_order = 2 WHERE slug = 'series-b'; \
-         COMMIT;",
-    )
-    .execute(&pool)
-    .await
-    .expect("交换系列位置");
-
-    let orders: Vec<(String, i32)> =
-        sqlx::query("SELECT slug, series_order FROM posts WHERE series_id = $1 ORDER BY slug")
-            .bind(series_id)
-            .fetch_all(&pool)
-            .await
-            .unwrap()
-            .into_iter()
-            .map(|row: sqlx::postgres::PgRow| {
-                (
-                    row.get::<String, _>("slug"),
-                    row.get::<i32, _>("series_order"),
-                )
-            })
-            .collect();
-    assert_eq!(orders, vec![("series-a".into(), 5), ("series-b".into(), 2)]);
-
-    // 延后后仍冲突的提交必须整体失败。
-    let err = sqlx::raw_sql(
-        "BEGIN; SET CONSTRAINTS posts_series_position_unique DEFERRED; \
-         UPDATE posts SET series_order = 5 WHERE slug = 'series-b'; COMMIT;",
-    )
-    .execute(&pool)
-    .await
-    .unwrap_err();
-    assert!(
-        err.to_string().contains("posts_series_position_unique"),
-        "冲突提交回滚：{err}"
-    );
+    assert!(matches!(&error,sqlx::Error::Database(e) if e.code().as_deref()==Some("23505")));
 }
 
 #[tokio::test]
@@ -289,7 +221,7 @@ async fn save_returns_three_states_and_new_version() {
     );
 
     let mut snapshot = draft_snapshot(author, "versioned");
-    repo.insert_post(&Post::reconstitute(snapshot.clone()).unwrap(), &[])
+    repo.insert_post(&Post::reconstitute(snapshot.clone()).unwrap(), &[], None)
         .await
         .unwrap();
     assert_eq!(snapshot.version, 1);
@@ -301,6 +233,7 @@ async fn save_returns_three_states_and_new_version() {
             &Post::reconstitute(snapshot.clone()).unwrap(),
             1,
             OffsetDateTime::now_utc(),
+            None,
             None,
         )
         .await
@@ -316,6 +249,7 @@ async fn save_returns_three_states_and_new_version() {
             &Post::reconstitute(stale_edit.clone()).unwrap(),
             1,
             OffsetDateTime::now_utc(),
+            None,
             None,
         )
         .await
@@ -338,6 +272,7 @@ async fn save_returns_three_states_and_new_version() {
             &Post::reconstitute(gone_edit.clone()).unwrap(),
             2,
             OffsetDateTime::now_utc(),
+            None,
             None,
         )
         .await
@@ -369,7 +304,7 @@ async fn truly_concurrent_saves_exactly_one_wins() {
 
     let snapshot = draft_snapshot(author, "race-real");
     repo_a
-        .insert_post(&Post::reconstitute(snapshot.clone()).unwrap(), &[])
+        .insert_post(&Post::reconstitute(snapshot.clone()).unwrap(), &[], None)
         .await
         .unwrap();
 
@@ -384,8 +319,8 @@ async fn truly_concurrent_saves_exactly_one_wins() {
 
     // 两条真实连接同时 UPDATE 同一行，都带 expected_version=1。
     let (outcome_a, outcome_b) = tokio::join!(
-        repo_a.commit_post(&edit_a, 1, now, None),
-        repo_b.commit_post(&edit_b, 1, now, None)
+        repo_a.commit_post(&edit_a, 1, now, None, None),
+        repo_b.commit_post(&edit_b, 1, now, None, None)
     );
     let outcomes = [outcome_a.unwrap(), outcome_b.unwrap()];
     let saved = outcomes
@@ -425,7 +360,7 @@ async fn public_query_filters_draft_private_and_deleted() {
         post.publish(OffsetDateTime::now_utc()).unwrap();
         published = post.snapshot();
     }
-    repo.insert_post(&Post::reconstitute(published.clone()).unwrap(), &[])
+    repo.insert_post(&Post::reconstitute(published.clone()).unwrap(), &[], None)
         .await
         .unwrap();
 
@@ -433,6 +368,7 @@ async fn public_query_filters_draft_private_and_deleted() {
     repo.insert_post(
         &Post::reconstitute(draft_snapshot(author, "draft-one")).unwrap(),
         &[],
+        None,
     )
     .await
     .unwrap();
@@ -445,7 +381,7 @@ async fn public_query_filters_draft_private_and_deleted() {
         post.publish(OffsetDateTime::now_utc()).unwrap();
         private = post.snapshot();
     }
-    repo.insert_post(&Post::reconstitute(private.clone()).unwrap(), &[])
+    repo.insert_post(&Post::reconstitute(private.clone()).unwrap(), &[], None)
         .await
         .unwrap();
 
@@ -456,7 +392,7 @@ async fn public_query_filters_draft_private_and_deleted() {
         post.publish(OffsetDateTime::now_utc()).unwrap();
         deleted = post.snapshot();
     }
-    repo.insert_post(&Post::reconstitute(deleted.clone()).unwrap(), &[])
+    repo.insert_post(&Post::reconstitute(deleted.clone()).unwrap(), &[], None)
         .await
         .unwrap();
     sqlx::raw_sql("UPDATE posts SET deleted_at = now() WHERE slug = 'deleted-one'")
@@ -490,14 +426,14 @@ async fn status_transitions_persisted_correctly() {
     );
 
     let snapshot = draft_snapshot(author, "lifecycle");
-    repo.insert_post(&Post::reconstitute(snapshot.clone()).unwrap(), &[])
+    repo.insert_post(&Post::reconstitute(snapshot.clone()).unwrap(), &[], None)
         .await
         .unwrap();
 
     let mut post =
         Post::reconstitute(repo.find_by_id(snapshot.id).await.unwrap().unwrap()).unwrap();
     post.publish(OffsetDateTime::now_utc()).unwrap();
-    repo.commit_post(&post, 1, OffsetDateTime::now_utc(), None)
+    repo.commit_post(&post, 1, OffsetDateTime::now_utc(), None, None)
         .await
         .unwrap();
 
@@ -507,7 +443,7 @@ async fn status_transitions_persisted_correctly() {
     let first_published_at = post.snapshot().published_at;
 
     post.withdraw();
-    repo.commit_post(&post, 2, OffsetDateTime::now_utc(), None)
+    repo.commit_post(&post, 2, OffsetDateTime::now_utc(), None, None)
         .await
         .unwrap();
 
@@ -950,7 +886,10 @@ async fn page_repository_crud_version_and_public_query() {
         now,
     )
     .unwrap();
-    assert_eq!(pages.insert_page(&page).await.unwrap(), page.snapshot());
+    assert_eq!(
+        pages.insert_page(&page, None).await.unwrap(),
+        page.snapshot()
+    );
 
     // pages.slug 唯一：不同 id、相同 slug 的插入映射为 Conflict(Slug)。
     let duplicate = Page::create_draft(
@@ -961,7 +900,7 @@ async fn page_repository_crud_version_and_public_query() {
         now,
     )
     .unwrap();
-    let err = pages.insert_page(&duplicate).await.unwrap_err();
+    let err = pages.insert_page(&duplicate, None).await.unwrap_err();
     assert!(
         matches!(err, UseCaseError::Conflict(ConflictKind::Slug)),
         "{err:?}"
@@ -975,13 +914,14 @@ async fn page_repository_crud_version_and_public_query() {
 
     // 过期版本：StaleConflict（可重试），不是 Gone。
     assert_eq!(
-        pages.commit_page(&page, 99, now).await.unwrap(),
+        pages.commit_page(&page, 99, now, None).await.unwrap(),
         PageCommitOutcome::StaleConflict
     );
 
     // 发布并写入：命中版本后 +1。
     page.publish(now).unwrap();
-    let PageCommitOutcome::Saved(snapshot) = pages.commit_page(&page, 1, now).await.unwrap() else {
+    let PageCommitOutcome::Saved(snapshot) = pages.commit_page(&page, 1, now, None).await.unwrap()
+    else {
         panic!("publish must succeed");
     };
     assert_eq!(snapshot.version, 2);
@@ -1006,7 +946,8 @@ async fn page_repository_crud_version_and_public_query() {
             ..Default::default()
         })
         .unwrap();
-    let PageCommitOutcome::Saved(private) = pages.commit_page(&private, 2, now).await.unwrap()
+    let PageCommitOutcome::Saved(private) =
+        pages.commit_page(&private, 2, now, None).await.unwrap()
     else {
         panic!("visibility edit must succeed");
     };
@@ -1015,20 +956,26 @@ async fn page_repository_crud_version_and_public_query() {
         public.find_public_by_slug("about").await.unwrap().is_none(),
         "private 页面不可公开读取"
     );
+    let mut trash = Page::reconstitute(private).unwrap();
+    trash.trash(now);
+    assert!(matches!(
+        pages.commit_lifecycle(&trash, 3, now, None).await.unwrap(),
+        PageCommitOutcome::Saved(_)
+    ));
     assert_eq!(
-        pages.delete(snapshot.id, 2).await.unwrap(),
+        pages.purge(snapshot.id, 2, None).await.unwrap(),
         PageDeleteOutcome::StaleVersion
     );
     assert_eq!(
-        pages.delete(snapshot.id, 3).await.unwrap(),
+        pages.purge(snapshot.id, 4, None).await.unwrap(),
         PageDeleteOutcome::Deleted
     );
     assert_eq!(
-        pages.delete(snapshot.id, 3).await.unwrap(),
+        pages.purge(snapshot.id, 4, None).await.unwrap(),
         PageDeleteOutcome::Gone
     );
     assert!(pages.find_by_id(snapshot.id).await.unwrap().is_none());
-    pages.insert_page(&duplicate).await.unwrap();
+    pages.insert_page(&duplicate, None).await.unwrap();
     assert_ne!(
         pages
             .find_by_id(duplicate.snapshot().id)
@@ -1048,8 +995,11 @@ async fn page_repository_crud_version_and_public_query() {
         now,
     )
     .unwrap();
-    let race = pages.insert_page(&race).await.unwrap();
-    let (left, right) = tokio::join!(pages.delete(race.id, 1), pages.delete(race.id, 1));
+    let race = pages.insert_page(&race, None).await.unwrap();
+    let mut trash = Page::reconstitute(race.clone()).unwrap();
+    trash.trash(now);
+    pages.commit_lifecycle(&trash, 1, now, None).await.unwrap();
+    let (left, right) = tokio::join!(pages.purge(race.id, 2, None), pages.purge(race.id, 2, None));
     let outcomes = [left.unwrap(), right.unwrap()];
     assert!(outcomes.contains(&PageDeleteOutcome::Deleted));
     assert!(outcomes.contains(&PageDeleteOutcome::Gone));
@@ -1486,7 +1436,7 @@ async fn seed_tag(pool: &sqlx::PgPool, name: &str, slug: &str) -> domain::conten
     )
     .unwrap();
     let snapshot = tag.snapshot();
-    tags.insert(&tag).await.unwrap();
+    tags.insert(&tag, None).await.unwrap();
     snapshot
 }
 
@@ -1503,7 +1453,7 @@ async fn tag_slug_unique_conflict_maps_to_slug_conflict() {
         OffsetDateTime::now_utc(),
     )
     .unwrap();
-    match repo.insert(&dup).await.unwrap_err() {
+    match repo.insert(&dup, None).await.unwrap_err() {
         UseCaseError::Conflict(ConflictKind::Slug) => {}
         other => panic!("期望 slug 冲突，得到 {other:?}"),
     }
@@ -1518,7 +1468,7 @@ async fn tag_rename_is_versioned_and_slug_immutable() {
 
     // 版本不匹配：CAS 未命中。
     assert!(
-        repo.rename(tag.id, "新名", tag.version + 1)
+        repo.rename(tag.id, "新名", tag.version + 1, None)
             .await
             .unwrap()
             .is_none(),
@@ -1526,7 +1476,7 @@ async fn tag_rename_is_versioned_and_slug_immutable() {
     );
     // 版本匹配：改名成功并递增版本。
     let renamed = repo
-        .rename(tag.id, "Rust 语言", tag.version)
+        .rename(tag.id, "Rust 语言", tag.version, None)
         .await
         .unwrap()
         .unwrap();
@@ -1536,7 +1486,7 @@ async fn tag_rename_is_versioned_and_slug_immutable() {
 }
 
 #[tokio::test]
-async fn tag_delete_refuses_references_including_drafts() {
+async fn tag_delete_removes_references_and_keeps_drafts() {
     let _g = SERIAL.lock().await;
     let pool = fresh_database().await;
     let author = seed_user(&pool, "author").await;
@@ -1550,31 +1500,18 @@ async fn tag_delete_refuses_references_including_drafts() {
     // 草稿文章（不可公开）也占用引用：引用保护不过滤可见性。
     let draft = draft_snapshot(author, "draft-tagged");
     posts
-        .insert_post(&Post::reconstitute(draft.clone()).unwrap(), &[tag.id])
+        .insert_post(&Post::reconstitute(draft.clone()).unwrap(), &[tag.id], None)
         .await
         .unwrap();
 
-    match repo.delete(tag.id, tag.version).await.unwrap() {
-        application::ports::TagDeleteOutcome::Referenced { count } => assert_eq!(count, 1),
-        other => panic!("期望引用保护，得到 {other:?}"),
-    }
-    // 数据库 RESTRICT 是兜底：即便绕过业务检查也删不掉。
-    let result = sqlx::query("DELETE FROM tags WHERE id = $1")
-        .bind(tag.id)
-        .execute(&pool)
-        .await;
-    assert!(result.is_err(), "FK RESTRICT 必须兜底拒绝");
-
-    // 解除引用后删除成功。
-    sqlx::query("DELETE FROM post_tags WHERE post_id = $1")
-        .bind(draft.id)
-        .execute(&pool)
-        .await
-        .unwrap();
-    match repo.delete(tag.id, tag.version).await.unwrap() {
-        application::ports::TagDeleteOutcome::Deleted => {}
-        other => panic!("期望删除成功，得到 {other:?}"),
-    }
+    assert_eq!(
+        repo.delete(tag.id, tag.version, None).await.unwrap(),
+        application::ports::TagDeleteOutcome::Deleted
+    );
+    let record = posts.find_record_by_id(draft.id).await.unwrap().unwrap();
+    assert_eq!(record.snapshot.version, draft.version + 1);
+    assert!(record.tag_ids.is_empty());
+    assert_eq!(record.snapshot.content, draft.content);
 }
 
 #[tokio::test]
@@ -1595,6 +1532,7 @@ async fn post_tags_saved_in_same_transaction_as_content() {
         .insert_post(
             &Post::reconstitute(snapshot.clone()).unwrap(),
             &[rust.id, rust.id, essay.id],
+            None,
         )
         .await
         .unwrap();
@@ -1621,6 +1559,7 @@ async fn post_tags_saved_in_same_transaction_as_content() {
             snapshot.version,
             OffsetDateTime::now_utc(),
             Some(&[essay.id]),
+            None,
         )
         .await
         .unwrap()
@@ -1656,6 +1595,7 @@ async fn post_tags_saved_in_same_transaction_as_content() {
             edit.version + 1,
             OffsetDateTime::now_utc(),
             Some(&[]),
+            None,
         )
         .await
         .unwrap();
@@ -1683,7 +1623,11 @@ async fn post_tag_association_rejects_unknown_tag_via_fk() {
 
     let snapshot = draft_snapshot(author, "ghost-tagged");
     match posts
-        .insert_post(&Post::reconstitute(snapshot.clone()).unwrap(), &[ghost])
+        .insert_post(
+            &Post::reconstitute(snapshot.clone()).unwrap(),
+            &[ghost],
+            None,
+        )
         .await
         .unwrap_err()
     {
@@ -1717,13 +1661,18 @@ async fn tag_directory_listing_counts_only_public_posts() {
         public = post.snapshot();
     }
     posts
-        .insert_post(&Post::reconstitute(public.clone()).unwrap(), &[tag.id])
+        .insert_post(
+            &Post::reconstitute(public.clone()).unwrap(),
+            &[tag.id],
+            None,
+        )
         .await
         .unwrap();
     posts
         .insert_post(
             &Post::reconstitute(draft_snapshot(author, "tag-draft")).unwrap(),
             &[tag.id],
+            None,
         )
         .await
         .unwrap();
@@ -1735,7 +1684,11 @@ async fn tag_directory_listing_counts_only_public_posts() {
         private = post.snapshot();
     }
     posts
-        .insert_post(&Post::reconstitute(private.clone()).unwrap(), &[tag.id])
+        .insert_post(
+            &Post::reconstitute(private.clone()).unwrap(),
+            &[tag.id],
+            None,
+        )
         .await
         .unwrap();
 
@@ -1770,7 +1723,11 @@ async fn public_tag_page_lists_only_public_posts_and_paginates() {
         post.publish(OffsetDateTime::now_utc()).unwrap();
         public = post.snapshot();
         posts
-            .insert_post(&Post::reconstitute(public.clone()).unwrap(), &[tag.id])
+            .insert_post(
+                &Post::reconstitute(public.clone()).unwrap(),
+                &[tag.id],
+                None,
+            )
             .await
             .unwrap();
     }
@@ -1778,6 +1735,7 @@ async fn public_tag_page_lists_only_public_posts_and_paginates() {
         .insert_post(
             &Post::reconstitute(draft_snapshot(author, "tag-page-draft")).unwrap(),
             &[tag.id],
+            None,
         )
         .await
         .unwrap();
@@ -1946,7 +1904,7 @@ async fn category_delete_protects_posts_and_children() {
     // 文章引用（含草稿）同样占用。
     let draft = draft_snapshot(author, "categorized-draft");
     posts
-        .insert_post(&Post::reconstitute(draft.clone()).unwrap(), &[])
+        .insert_post(&Post::reconstitute(draft.clone()).unwrap(), &[], None)
         .await
         .unwrap();
     sqlx::query("UPDATE posts SET category_id = $1 WHERE slug = 'categorized-draft'")
@@ -1993,7 +1951,7 @@ async fn post_category_saved_in_same_transaction_and_public_page_filters() {
     // 创建即带分类；仅改分类也递增 version。
     let snapshot = draft_snapshot(author, "cat-post");
     posts
-        .insert_post(&Post::reconstitute(snapshot.clone()).unwrap(), &[])
+        .insert_post(&Post::reconstitute(snapshot.clone()).unwrap(), &[], None)
         .await
         .unwrap();
     let edit = {
@@ -2006,6 +1964,7 @@ async fn post_category_saved_in_same_transaction_and_public_page_filters() {
             &Post::reconstitute(edit.clone()).unwrap(),
             snapshot.version,
             OffsetDateTime::now_utc(),
+            None,
             None,
         )
         .await
@@ -2034,6 +1993,7 @@ async fn post_category_saved_in_same_transaction_and_public_page_filters() {
             &Post::reconstitute(published.clone()).unwrap(),
             snapshot.version + 1,
             OffsetDateTime::now_utc(),
+            None,
             None,
         )
         .await
@@ -2069,7 +2029,7 @@ async fn post_category_saved_in_same_transaction_and_public_page_filters() {
         s
     };
     match posts
-        .insert_post(&Post::reconstitute(ghost_edit.clone()).unwrap(), &[])
+        .insert_post(&Post::reconstitute(ghost_edit.clone()).unwrap(), &[], None)
         .await
         .unwrap_err()
     {
@@ -2096,7 +2056,7 @@ async fn seed_series(
     )
     .unwrap();
     let snapshot = series.snapshot();
-    repo.insert(&series).await.unwrap();
+    repo.insert(&series, None).await.unwrap();
     snapshot
 }
 
@@ -2113,9 +2073,11 @@ async fn post_in_series(
         Arc::new(infrastructure::RenderingRuntime::default()),
     );
     let mut snapshot = draft_snapshot(author, slug);
-    snapshot.series_id = Some(series);
-    snapshot.series_order = Some(order);
-    repo.insert_post(&Post::reconstitute(snapshot.clone()).unwrap(), &[])
+    snapshot.series = vec![domain::content::SeriesPlacement {
+        series_id: series,
+        position: order,
+    }];
+    repo.insert_post(&Post::reconstitute(snapshot.clone()).unwrap(), &[], None)
         .await
         .unwrap();
     snapshot
@@ -2133,7 +2095,7 @@ async fn series_reorder_rewrites_orders_and_bumps_versions() {
     // 基线：两篇 post_in_series 的 insert 已递增系列版本两次。
     // 完整排列倒序。
     let outcome = repo_of(&pool)
-        .reorder(s.id, s.version + 2, &[b.id, a.id])
+        .reorder(s.id, s.version + 2, &[b.id, a.id], None)
         .await
         .unwrap();
     assert_eq!(
@@ -2145,7 +2107,7 @@ async fn series_reorder_rewrites_orders_and_bumps_versions() {
 
     // 顺序重写为 1..n；posts.version 与 series.version 递增。
     let rows: Vec<(String, i32, i64)> = sqlx::query_as(
-        "SELECT slug, series_order, version FROM posts WHERE series_id = $1 ORDER BY series_order",
+        "SELECT p.slug, ps.position, p.version FROM post_series ps JOIN posts p ON p.id=ps.post_id WHERE ps.series_id=$1 ORDER BY ps.position,p.id",
     )
     .bind(s.id)
     .fetch_all(&pool)
@@ -2154,8 +2116,8 @@ async fn series_reorder_rewrites_orders_and_bumps_versions() {
     assert_eq!(
         rows,
         vec![
-            ("part-2".into(), 1, b.version + 1),
-            ("part-1".into(), 2, a.version + 1),
+            ("part-2".into(), 0, b.version + 1),
+            ("part-1".into(), 1, a.version),
         ]
     );
     let (sv,): (i64,) = sqlx::query_as("SELECT version FROM series WHERE id = $1")
@@ -2182,7 +2144,7 @@ async fn series_reorder_rejects_stale_version_and_mismatched_membership() {
     // 旧 series.version：拒绝（防旧目录重排）。
     assert_eq!(
         repo_of(&pool)
-            .reorder(s.id, s.version + 99, &[a.id, b.id])
+            .reorder(s.id, s.version + 99, &[a.id, b.id], None)
             .await
             .unwrap(),
         application::ports::ReorderOutcome::StaleSeriesVersion
@@ -2190,7 +2152,7 @@ async fn series_reorder_rejects_stale_version_and_mismatched_membership() {
     // 不完整的集合：拒绝，不落任何写入。
     assert_eq!(
         repo_of(&pool)
-            .reorder(s.id, s.version + 2, &[a.id])
+            .reorder(s.id, s.version + 2, &[a.id], None)
             .await
             .unwrap(),
         application::ports::ReorderOutcome::MembershipMismatch
@@ -2218,13 +2180,13 @@ async fn concurrent_reorders_exactly_one_wins_on_series_version() {
     let (first, second) = tokio::join!(
         async {
             repo_of(&pool)
-                .reorder(s.id, base, &[a.id, b.id])
+                .reorder(s.id, base, &[a.id, b.id], None)
                 .await
                 .unwrap()
         },
         async {
             repo_of(&pool2)
-                .reorder(s.id, base, &[b.id, a.id])
+                .reorder(s.id, base, &[b.id, a.id], None)
                 .await
                 .unwrap()
         },
@@ -2246,37 +2208,30 @@ async fn concurrent_reorders_exactly_one_wins_on_series_version() {
 }
 
 #[tokio::test]
-async fn series_delete_protects_referenced_posts() {
+async fn series_delete_keeps_posts_and_bumps_versions() {
     let _g = SERIAL.lock().await;
     let pool = fresh_database().await;
     let author = seed_user(&pool, "author").await;
     let s = seed_series(&pool, "指南", "guide").await;
     post_in_series(&pool, author, s.id, "part-1", 1).await;
 
-    match repo_of(&pool).delete(s.id, s.version + 1).await.unwrap() {
-        application::ports::SeriesDeleteOutcome::Referenced { count } => assert_eq!(count, 1),
-        other => panic!("期望引用保护，得到 {other:?}"),
-    }
-    let result = sqlx::query("DELETE FROM series WHERE id = $1")
-        .bind(s.id)
-        .execute(&pool)
-        .await;
-    assert!(result.is_err(), "FK RESTRICT 兜底");
-
-    // 解除关联后可删。
-    sqlx::query("UPDATE posts SET series_id = NULL, series_order = NULL WHERE series_id = $1")
-        .bind(s.id)
-        .execute(&pool)
-        .await
-        .unwrap();
-    match repo_of(&pool).delete(s.id, s.version + 1).await.unwrap() {
-        application::ports::SeriesDeleteOutcome::Deleted => {}
-        other => panic!("期望删除成功，得到 {other:?}"),
-    }
+    assert_eq!(
+        repo_of(&pool)
+            .delete(s.id, s.version + 1, None)
+            .await
+            .unwrap(),
+        application::ports::SeriesDeleteOutcome::Deleted
+    );
+    let (count, version): (i64, i64) =
+        sqlx::query_as("SELECT count(*), max(version) FROM posts WHERE slug='part-1'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!((count, version), (1, 2));
 }
 
 #[tokio::test]
-async fn post_series_position_conflict_maps_to_series_position() {
+async fn post_series_accepts_duplicate_positions_on_edit() {
     let _g = SERIAL.lock().await;
     let pool = fresh_database().await;
     let author = seed_user(&pool, "author").await;
@@ -2287,38 +2242,31 @@ async fn post_series_position_conflict_maps_to_series_position() {
     );
     post_in_series(&pool, author, s.id, "occ-1", 1).await;
 
-    // 换到已占用的位置：unique 冲突翻译为 SeriesPosition。
+    // 多篇文章可以使用相同的排序权重。
     let snapshot = draft_snapshot(author, "occ-2");
-    repo.insert_post(&Post::reconstitute(snapshot.clone()).unwrap(), &[])
+    repo.insert_post(&Post::reconstitute(snapshot.clone()).unwrap(), &[], None)
         .await
         .unwrap();
     let edit = {
         let mut snap = snapshot.clone();
-        snap.series_id = Some(s.id);
-        snap.series_order = Some(1);
+        snap.series = vec![domain::content::SeriesPlacement {
+            series_id: s.id,
+            position: 1,
+        }];
         snap
     };
-    match repo
+    let outcome = repo
         .commit_post(
             &Post::reconstitute(edit.clone()).unwrap(),
             snapshot.version,
             OffsetDateTime::now_utc(),
             None,
+            None,
         )
         .await
-        .unwrap_err()
-    {
-        UseCaseError::Conflict(ConflictKind::SeriesPosition) => {}
-        other => panic!("期望系列位置冲突，得到 {other:?}"),
-    }
-
-    // 公开系列页：按序号升序、只列公开成员（草稿占位造成空档但不外泄）。
-    let query = infrastructure::PostgresPublishedSeriesQuery::new(pool.clone());
-    let (posts, total) = query
-        .list_public_posts_by_series("guide", 20, 0)
-        .await
         .unwrap();
-    assert_eq!((posts.len(), total), (0, 0), "草稿不出现在公开系列页");
+    assert!(matches!(outcome, PostCommitOutcome::Saved(_)));
+    assert_eq!(repo_of(&pool).members_of(s.id).await.unwrap().len(), 2);
 }
 
 #[tokio::test]
@@ -2339,7 +2287,7 @@ async fn post_series_edit_participates_in_series_version_protocol() {
     // 否则手持旧系列版本的重排仍会成功，覆盖刚保存的位置。
     let moved = {
         let mut snap = a.clone();
-        snap.series_order = Some(5);
+        snap.series[0].position = 5;
         snap
     };
     match repo
@@ -2347,6 +2295,7 @@ async fn post_series_edit_participates_in_series_version_protocol() {
             &Post::reconstitute(moved.clone()).unwrap(),
             a.version,
             OffsetDateTime::now_utc(),
+            None,
             None,
         )
         .await
@@ -2366,7 +2315,7 @@ async fn post_series_edit_participates_in_series_version_protocol() {
     // 用编辑前的系列版本重排：现在必须被拒（旧目录失效）。
     assert_eq!(
         series_repo
-            .reorder(s.id, s.version, &[a.id, b.id])
+            .reorder(s.id, s.version, &[a.id, b.id], None)
             .await
             .unwrap(),
         application::ports::ReorderOutcome::StaleSeriesVersion,
@@ -2376,14 +2325,14 @@ async fn post_series_edit_participates_in_series_version_protocol() {
     // 退出系列同样递增（旧目录成员集已变）。
     let left = {
         let mut snap = moved.clone();
-        snap.series_id = None;
-        snap.series_order = None;
+        snap.series.clear();
         snap
     };
     repo.commit_post(
         &Post::reconstitute(left.clone()).unwrap(),
         moved.version + 1,
         OffsetDateTime::now_utc(),
+        None,
         None,
     )
     .await
@@ -2405,6 +2354,7 @@ async fn post_series_edit_participates_in_series_version_protocol() {
         &Post::reconstitute(content_only.clone()).unwrap(),
         left.version + 1,
         OffsetDateTime::now_utc(),
+        None,
         None,
     )
     .await
@@ -2665,26 +2615,30 @@ async fn trash_restore_purge_and_series_reorder_obey_versions() {
     .await
     .unwrap();
     let mut a = draft_snapshot(author, "trash-a");
-    a.series_id = Some(series_id);
-    a.series_order = Some(1);
+    a.series = vec![domain::content::SeriesPlacement {
+        series_id,
+        position: 1,
+    }];
     a.status = PostStatus::Published;
     a.published_at = Some(OffsetDateTime::now_utc());
     let mut b = draft_snapshot(author, "trash-b");
-    b.series_id = Some(series_id);
-    b.series_order = Some(2);
+    b.series = vec![domain::content::SeriesPlacement {
+        series_id,
+        position: 2,
+    }];
     posts
-        .insert_post(&Post::reconstitute(a.clone()).unwrap(), &[])
+        .insert_post(&Post::reconstitute(a.clone()).unwrap(), &[], None)
         .await
         .unwrap();
     posts
-        .insert_post(&Post::reconstitute(b.clone()).unwrap(), &[])
+        .insert_post(&Post::reconstitute(b.clone()).unwrap(), &[], None)
         .await
         .unwrap();
     let now = OffsetDateTime::now_utc();
     let mut a_post = Post::reconstitute(a.clone()).unwrap();
     assert!(a_post.trash(now));
     assert!(matches!(
-        posts.commit_lifecycle(&a_post, a.version, now).await.unwrap(),
+        posts.commit_lifecycle(&a_post, a.version, now, None).await.unwrap(),
         PostCommitOutcome::Saved(record) if record.snapshot.version == 2
     ));
     assert!(
@@ -2725,11 +2679,11 @@ async fn trash_restore_purge_and_series_reorder_obey_versions() {
     );
     assert!(a_post.restore());
     assert_eq!(
-        posts.commit_lifecycle(&a_post, 1, now).await.unwrap(),
+        posts.commit_lifecycle(&a_post, 1, now, None).await.unwrap(),
         PostCommitOutcome::StaleConflict
     );
     assert!(matches!(
-        posts.commit_lifecycle(&a_post, 2, now).await.unwrap(),
+        posts.commit_lifecycle(&a_post, 2, now, None).await.unwrap(),
         PostCommitOutcome::Saved(record) if record.snapshot.version == 3
     ));
     let restored = posts.find_by_id(a.id).await.unwrap().unwrap();
@@ -2737,7 +2691,7 @@ async fn trash_restore_purge_and_series_reorder_obey_versions() {
     assert!(restored.published_at.is_some());
     assert!(a_post.trash(now));
     assert!(matches!(
-        posts.commit_lifecycle(&a_post, 3, now).await.unwrap(),
+        posts.commit_lifecycle(&a_post, 3, now, None).await.unwrap(),
         PostCommitOutcome::Saved(record) if record.snapshot.version == 4
     ));
     let (series_version,): (i64,) = sqlx::query_as("SELECT version FROM series WHERE id = $1")
@@ -2747,8 +2701,8 @@ async fn trash_restore_purge_and_series_reorder_obey_versions() {
         .unwrap();
     let order = [b.id, a.id];
     let (purge, reorder) = tokio::join!(
-        posts.purge(a.id, 4),
-        series.reorder(series_id, series_version, &order)
+        posts.purge(a.id, 4, None),
+        series.reorder(series_id, series_version, &order, None)
     );
     let purge = purge.unwrap();
     let reorder = reorder.unwrap();
@@ -2782,10 +2736,13 @@ async fn purge_releases_slug_and_cascades_tags_only_after_trash() {
         .unwrap();
     let post = draft_snapshot(author, "purge-slug");
     posts
-        .insert_post(&Post::reconstitute(post.clone()).unwrap(), &[tag_id])
+        .insert_post(&Post::reconstitute(post.clone()).unwrap(), &[tag_id], None)
         .await
         .unwrap();
-    assert_eq!(posts.purge(post.id, 1).await.unwrap(), SaveOutcome::Gone);
+    assert_eq!(
+        posts.purge(post.id, 1, None).await.unwrap(),
+        SaveOutcome::Gone
+    );
     assert_eq!(
         posts
             .find_record_by_id(post.id)
@@ -2799,15 +2756,15 @@ async fn purge_releases_slug_and_cascades_tags_only_after_trash() {
     let mut trashed = Post::reconstitute(post.clone()).unwrap();
     assert!(trashed.trash(now));
     assert!(matches!(
-        posts.commit_lifecycle(&trashed, 1, now).await.unwrap(),
+        posts.commit_lifecycle(&trashed, 1, now, None).await.unwrap(),
         PostCommitOutcome::Saved(record) if record.snapshot.version == 2
     ));
     assert_eq!(
-        posts.purge(post.id, 1).await.unwrap(),
+        posts.purge(post.id, 1, None).await.unwrap(),
         SaveOutcome::StaleConflict
     );
     assert!(matches!(
-        posts.purge(post.id, 2).await.unwrap(),
+        posts.purge(post.id, 2, None).await.unwrap(),
         SaveOutcome::Saved { .. }
     ));
     assert!(posts.find_record_by_id(post.id).await.unwrap().is_none());
@@ -2815,30 +2772,31 @@ async fn purge_releases_slug_and_cascades_tags_only_after_trash() {
         .insert_post(
             &Post::reconstitute(draft_snapshot(author, "purge-slug")).unwrap(),
             &[],
+            None,
         )
         .await
         .unwrap();
     let mut archived = draft_snapshot(author, "archived-trash");
     archived.status = PostStatus::Archived;
     posts
-        .insert_post(&Post::reconstitute(archived.clone()).unwrap(), &[])
+        .insert_post(&Post::reconstitute(archived.clone()).unwrap(), &[], None)
         .await
         .unwrap();
     let now = OffsetDateTime::now_utc();
     let mut archived_post = Post::reconstitute(archived.clone()).unwrap();
     assert!(archived_post.trash(now));
     posts
-        .commit_lifecycle(&archived_post, 1, now)
+        .commit_lifecycle(&archived_post, 1, now, None)
         .await
         .unwrap();
     assert!(archived_post.restore());
     posts
-        .commit_lifecycle(&archived_post, 2, now)
+        .commit_lifecycle(&archived_post, 2, now, None)
         .await
         .unwrap();
     assert_eq!(
         posts.find_by_id(archived.id).await.unwrap().unwrap().status,
-        PostStatus::Archived
+        PostStatus::Draft
     );
 }
 
@@ -2861,7 +2819,7 @@ async fn content_commit_returns_complete_record_and_rolls_back_failed_references
     );
     let post = Post::reconstitute(draft_snapshot(author, "commit-record")).unwrap();
     let inserted = repo
-        .insert_post(&post, &[tags[1], tags[0], tags[1]])
+        .insert_post(&post, &[tags[1], tags[0], tags[1]], None)
         .await
         .unwrap();
     let mut sorted = tags.to_vec();
@@ -2881,7 +2839,13 @@ async fn content_commit_returns_complete_record_and_rolls_back_failed_references
         .unwrap();
     let now = OffsetDateTime::now_utc().replace_nanosecond(0).unwrap();
     let PostCommitOutcome::Saved(committed) = repo
-        .commit_post(&edited, inserted.snapshot.version, now, Some(&[tags[1]]))
+        .commit_post(
+            &edited,
+            inserted.snapshot.version,
+            now,
+            Some(&[tags[1]]),
+            None,
+        )
         .await
         .unwrap()
     else {
@@ -2906,16 +2870,22 @@ async fn content_commit_returns_complete_record_and_rolls_back_failed_references
         })
         .unwrap();
     assert!(
-        repo.commit_post(&invalid, committed.snapshot.version, now, Some(&[tags[0]]))
-            .await
-            .is_err()
+        repo.commit_post(
+            &invalid,
+            committed.snapshot.version,
+            now,
+            Some(&[tags[0]]),
+            None
+        )
+        .await
+        .is_err()
     );
     assert_eq!(
         repo.find_record_by_id(committed.snapshot.id).await.unwrap(),
         Some((*committed).clone())
     );
     assert!(matches!(
-        repo.commit_post(&edited, inserted.snapshot.version, now, None)
+        repo.commit_post(&edited, inserted.snapshot.version, now, None, None)
             .await
             .unwrap(),
         PostCommitOutcome::StaleConflict
@@ -2939,7 +2909,7 @@ async fn content_commit_reads_never_mix_body_and_tags_during_concurrent_edits() 
         ..Default::default()
     })
     .unwrap();
-    let initial = repo.insert_post(&post, &[a]).await.unwrap();
+    let initial = repo.insert_post(&post, &[a], None).await.unwrap();
     let id = initial.snapshot.id;
     let barrier = Arc::new(tokio::sync::Barrier::new(2));
     let writer_repo = repo.clone();
@@ -2961,6 +2931,7 @@ async fn content_commit_reads_never_mix_body_and_tags_during_concurrent_edits() 
                     current.snapshot.version,
                     OffsetDateTime::now_utc(),
                     Some(&[tag]),
+                    None,
                 )
                 .await
                 .unwrap()
@@ -2998,17 +2969,17 @@ async fn content_commit_lifecycle_preserves_relations_and_checks_original_state(
     let mut post = Post::reconstitute(draft_snapshot(author, "lifecycle-record")).unwrap();
     let now = OffsetDateTime::now_utc();
     post.publish(now).unwrap();
-    let inserted = repo.insert_post(&post, &[tag]).await.unwrap();
+    let inserted = repo.insert_post(&post, &[tag], None).await.unwrap();
     let mut trashed = Post::reconstitute(inserted.snapshot.clone()).unwrap();
     assert!(trashed.trash(now));
     assert!(matches!(
-        repo.commit_lifecycle(&trashed, inserted.snapshot.version + 1, now)
+        repo.commit_lifecycle(&trashed, inserted.snapshot.version + 1, now, None)
             .await
             .unwrap(),
         PostCommitOutcome::StaleConflict
     ));
     let PostCommitOutcome::Saved(deleted) = repo
-        .commit_lifecycle(&trashed, inserted.snapshot.version, now)
+        .commit_lifecycle(&trashed, inserted.snapshot.version, now, None)
         .await
         .unwrap()
     else {
@@ -3019,7 +2990,7 @@ async fn content_commit_lifecycle_preserves_relations_and_checks_original_state(
     assert!(deleted.snapshot.deleted_at.is_some());
     // 即使携带最新版本，重复提交旧的移入操作也不能作用于已在回收站的记录。
     assert!(matches!(
-        repo.commit_lifecycle(&trashed, deleted.snapshot.version, now)
+        repo.commit_lifecycle(&trashed, deleted.snapshot.version, now, None)
             .await
             .unwrap(),
         PostCommitOutcome::Gone
@@ -3027,7 +2998,7 @@ async fn content_commit_lifecycle_preserves_relations_and_checks_original_state(
     let mut restored = Post::reconstitute(deleted.snapshot.clone()).unwrap();
     assert!(restored.restore());
     let PostCommitOutcome::Saved(restored) = repo
-        .commit_lifecycle(&restored, deleted.snapshot.version, now)
+        .commit_lifecycle(&restored, deleted.snapshot.version, now, None)
         .await
         .unwrap()
     else {

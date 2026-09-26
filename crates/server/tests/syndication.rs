@@ -169,7 +169,7 @@ fn cmd(slug: &str, title: &str) -> CreatePostCmd {
         visibility: application::content::PostVisibility::Public,
         tag_ids: Vec::new(),
         category_id: None,
-        series: None,
+        series: vec![],
         cover_media_id: None,
     }
 }
@@ -193,7 +193,10 @@ async fn seed_tag(stack: &Stack, name: &str, slug: &str) -> uuid::Uuid {
     let snapshot = tag.snapshot();
     stack
         .tags
-        .insert(&domain::content::Tag::reconstitute(snapshot.clone()).unwrap())
+        .insert(
+            &domain::content::Tag::reconstitute(snapshot.clone()).unwrap(),
+            None,
+        )
         .await
         .unwrap();
     snapshot.id
@@ -228,7 +231,10 @@ async fn seed_series(stack: &Stack, slug: &str) -> uuid::Uuid {
     let snapshot = series.snapshot();
     stack
         .series
-        .insert(&domain::content::Series::reconstitute(snapshot.clone()).unwrap())
+        .insert(
+            &domain::content::Series::reconstitute(snapshot.clone()).unwrap(),
+            None,
+        )
         .await
         .unwrap();
     snapshot.id
@@ -362,7 +368,10 @@ async fn sitemap_covers_public_urls_and_skips_empty_directories() {
         CreatePostCmd {
             tag_ids: vec![rust],
             category_id: Some(tech),
-            series: Some((guide, 1)),
+            series: vec![application::content::SeriesPlacement {
+                series_id: guide,
+                position: 1,
+            }],
             ..cmd("site-post", "公开文章")
         },
         true,
@@ -573,9 +582,9 @@ async fn sitemap_respects_the_whole_file_url_budget() {
     sqlx::raw_sql(
         r#"
         INSERT INTO posts (id, author_id, title, slug, content, status, visibility,
-                           published_at, version, created_at, updated_at)
+                           published_at, version, created_at, updated_at, content_html, content_render_version)
         SELECT gen_random_uuid(), u.id, '批量文章 ' || i, 'bulk-' || i, '正文',
-               'published', 'public', now(), 1, now(), now()
+               'published', 'public', now(), 1, now(), now(), '<p>正文</p>', 1
         FROM generate_series(1, 50001) AS i
         CROSS JOIN (SELECT id FROM users WHERE username = 'author') AS u
         "#,

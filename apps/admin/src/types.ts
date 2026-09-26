@@ -51,8 +51,7 @@ export interface PostSummary {
   author_id: string;
   tag_ids: string[];
   category_id: string | null;
-  series_id: string | null;
-  series_order: number | null;
+  series: SeriesPlacement[];
   /** 封面所引用的媒体资产 id（null = 无封面）；与封面地址同时出现。 */
   cover_media_id: string | null;
   /** 封面站内地址（`/media/{id}`；null = 无封面），由后端随 `cover_media_id` 下发。 */
@@ -165,7 +164,7 @@ export interface SeriesMemberRow {
   status: string;
   deleted: boolean;
   author_id: string;
-  series_order: number | null;
+  position: number;
 }
 
 /** 当前生效值的来源：database（settings.site 行）或 fallback（环境变量/默认值）。 */
@@ -250,3 +249,6 @@ export interface MediaUsageView {
    */
   hidden_references: number;
 }
+
+export interface SeriesPlacement { series_id: string; position: number; }
+export interface PageTrash { items: PageSummary[]; total: number; page: number; per_page: number; }

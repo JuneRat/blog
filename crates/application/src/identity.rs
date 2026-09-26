@@ -111,12 +111,17 @@ pub const PERMISSION_REGISTRY: &[PermissionDescriptor] = &[
     PermissionDescriptor {
         key: "page.archive",
         name: "归档页面",
-        description: "将页面归档为终态。",
+        description: "归档页面；可退回草稿。",
     },
     PermissionDescriptor {
         key: "page.delete",
         name: "删除页面",
-        description: "物理删除页面（没有回收站，不可恢复）。",
+        description: "移入或恢复页面回收站。",
+    },
+    PermissionDescriptor {
+        key: "page.purge",
+        name: "永久删除页面",
+        description: "仅永久删除回收站页面。",
     },
     PermissionDescriptor {
         key: "tag.manage",
@@ -218,6 +223,7 @@ pub const BUILTIN_ROLES: &[BuiltinRoleDef] = &[
             "page.unpublish",
             "page.archive",
             "page.delete",
+            "page.purge",
             "tag.manage",
             "category.manage",
             "series.manage",
@@ -299,6 +305,15 @@ pub enum ActorChannel {
 }
 
 impl Actor {
+    /// 安装/恢复 CLI 的空身份及系统任务不伪造用户外键。
+    pub fn audit_actor_id(&self) -> Option<Uuid> {
+        if self.channel == ActorChannel::ControlledCli && self.user_id.0.is_nil() {
+            None
+        } else {
+            Some(self.user_id.0)
+        }
+    }
+
     pub fn new(user_id: UserId, channel: ActorChannel, permissions: PermissionSet) -> Self {
         Self {
             user_id,

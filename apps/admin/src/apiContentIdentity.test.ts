@@ -19,7 +19,7 @@ describe("内容管理 API 的稳定身份契约", () => {
     { resource: "pages", action: "", method: "PATCH", run: () => api.updatePage(id, { new_slug: "renamed", expected_version: 7 }) },
     { resource: "pages", action: "/publish", method: "POST", run: () => api.publishPage(id, 7) },
     { resource: "pages", action: "/unpublish", method: "POST", run: () => api.unpublishPage(id, 7) },
-    { resource: "pages", action: "", method: "DELETE", run: () => api.deletePage(id, 7) },
+    { resource: "pages", action: "/trash", method: "POST", run: () => api.trashPage(id, 7) },
   ];
 
   it.each(calls)("$method v1/$resource/{id}$action", async ({ resource, action, method, run }) => {

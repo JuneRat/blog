@@ -1,3 +1,4 @@
+import { statusLabel } from "../components/ContentLifecycleControls";
 import {
   Alert,
   App as AntdApp,
@@ -103,7 +104,7 @@ export function SeriesListScreen() {
             // 无参 listPosts 只回当前作者的文章，多人系列会缺员）。
             const rows = await seriesApi.members(s.slug);
             bySeries[s.id] = [...rows].sort(
-              (a, b) => (a.series_order ?? 0) - (b.series_order ?? 0),
+              (a, b) => a.position - b.position || a.id.localeCompare(b.id),
             );
           } catch (e) {
             blocked[s.id] = permissionMessageOf(e);
@@ -142,6 +143,7 @@ export function SeriesListScreen() {
     // 确认按钮用默认文案「确定」：行内已有「删除」按钮，同名会让定位产生歧义。
     modal.confirm({
       title: `删除系列「${s.name}」（/series/${s.slug}）？`,
+      content: "只移除目录和文章的关联，文章内容会保留。",
       okButtonProps: { danger: true },
       onOk: async () => {
         setError(null);
@@ -149,10 +151,11 @@ export function SeriesListScreen() {
         setBusy(true);
         try {
           await seriesApi.remove(s.slug, s.version);
+          void queryClient.invalidateQueries({queryKey: queryKeys.posts()});
+          void queryClient.invalidateQueries({queryKey: queryKeys.trashAll()});
           setNotice(`已删除系列 ${s.name}。`);
           await load();
         } catch (e) {
-          // series_in_use 的服务端文案自带引用规模；直接展示。
           setError(permissionMessageOf(e));
         } finally {
           setBusy(false);
@@ -219,6 +222,8 @@ export function SeriesListScreen() {
         next.map((p) => p.id),
         s.version,
       );
+      void queryClient.invalidateQueries({queryKey: queryKeys.posts()});
+      void queryClient.invalidateQueries({queryKey: queryKeys.trashAll()});
       await load();
     } catch (e) {
       // 版本/权限/集合不一致：先重读目录（load 清错误位），再展示服务端原因。
@@ -269,7 +274,7 @@ export function SeriesListScreen() {
             )}
             <Typography.Text type="secondary">
               {post.deleted ? "回收站 · " : ""}
-              {post.status === "published" ? "已发布" : post.status === "archived" ? "已归档" : "草稿"}
+              {statusLabel(post.status)}
               {post.author_id !== me?.user_id ? " · 他人文章" : ""}
             </Typography.Text>
           </Space>

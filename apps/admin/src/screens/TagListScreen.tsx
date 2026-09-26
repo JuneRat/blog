@@ -20,11 +20,10 @@ const EMPTY_DRAFT: Draft = { name: "", slug: "" };
  *
  * - 目录读取对全部已登录会话开放（编辑文章需要选标签）；
  * - 创建/改名/删除需 `tag.manage`（后端判定；无权限时界面隐藏管理入口）；
- * - 删除被引用的标签会被后端拒绝（409 `tag_in_use`，含草稿/私密引用），
- *   错误文案直接来自服务端（带引用规模），不前端猜测。
+ * - 删除标签只解除文章关联，文章保留；服务端同时维护受影响文章的版本。
  *
  * 提示沿用**内联 Alert 而不是 message 吐司**：冲突与权限文案需要停留在屏幕上
- * （例如「标签仍被 3 篇引用」），3 秒后自动消失会让人来不及看清。
+ * （例如版本冲突），3 秒后自动消失会让人来不及看清。
  */
 export function TagListScreen() {
   const { me } = useAuth();
@@ -111,7 +110,7 @@ export function TagListScreen() {
     // 确认按钮用默认文案「确定」：行内已有「删除」按钮，同名会让定位产生歧义。
     modal.confirm({
       title: `删除标签「${tag.name}」？`,
-      content: `地址 /tags/${tag.slug} 将不再可用，且不可恢复。`,
+      content: `地址 /tags/${tag.slug} 将不再可用。删除会解除文章关联，文章内容仍保留。`,
       okButtonProps: { danger: true },
       onOk: async () => {
         setError(null);
@@ -119,10 +118,11 @@ export function TagListScreen() {
         setBusy(true);
         try {
           await api.deleteTag(tag.slug, tag.version);
+          void queryClient.invalidateQueries({queryKey: queryKeys.posts()});
+          void queryClient.invalidateQueries({queryKey: queryKeys.trashAll()});
           setNotice(`已删除标签 ${tag.name}。`);
           await load();
         } catch (e) {
-          // tag_in_use 的服务端文案自带引用规模；直接展示，不掩盖为通用错误。
           setError(permissionMessageOf(e));
         } finally {
           setBusy(false);
