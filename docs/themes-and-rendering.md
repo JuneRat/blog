@@ -21,7 +21,7 @@ themes/default/
     └── style.css
 ```
 
-七个模板都是必需文件。清单只接受以下字段；两个版本字段当前都必须为 `1`：
+六个页面入口（index/post/page/tag/category/series）是必需文件。`base.html` 是可选辅助模板；`templates/` 递归加载，包括 `partials/`、宏等辅助文件，禁止符号链接。所有模板在启动时编译并持有源码，不在请求中读取磁盘。清单只接受以下字段；两个版本字段当前都必须为 `1`：
 
 ```json
 {
@@ -35,9 +35,9 @@ themes/default/
 
 `slug` 只允许小写 ASCII 字母、数字、`-`，主题目录名必须与它一致，名称不能为空。`required_functions` 只能包含已注册函数；它声明所需能力，不授予额外权限。清单与模板校验在 [rendering.rs](../crates/infrastructure/src/rendering.rs)，加载和资源挂载在 [website.rs](../crates/server/src/website.rs)。
 
-`BLOG_THEME_DIR` 指定启动默认主题。启动时加载它及同级目录下有效的主题，解析模板并扫描静态资源；默认主题失败会阻止 `serve`，其他无效主题被跳过。请求复用已加载的模板，不扫描磁盘。新增或修改主题文件后需重启，使模板、资源清单和指纹一同生效；没有热安装、后台上传或样例预览发布流程。
+`BLOG_THEME_DIR` 指定启动默认主题。启动时加载它及同级目录下有效的主题，解析模板并读取静态资源快照；默认主题失败会阻止 `serve`，其他无效主题被跳过。通过统一的 `MiniJinjaThemeRenderer::load_checked` 入口，使用固定公开数据和真实执行器验证六类页面，覆盖空列表、缺少可选字段、50 篇首页、20 篇目录页及分页首/中/末页。校验沿用函数参数、查询和执行预算，不访问数据库；报错包含场景和页面入口。它是发布前契约检查，不穷尽任意数据相关分支。只有通过检查的快照进入可选主题注册表。请求复用已加载的模板与资源字节，不读取磁盘。新增或修改主题文件后需重启，使模板和资源快照一同生效；没有热安装、后台上传或样例预览发布流程。
 
-后台站点设置可以选择已加载主题，选择以版本条件保存到 `settings.theme`。公开请求每次读取活动选择，切换已安装主题无需重启；未配置或对应主题不在启动注册表中时，使用启动默认主题。设置查询或模板执行失败会返回错误，不触发这项回退。资源按 `/assets/{theme_slug}/{path}?v={hash}` 分开，hash 为文件 SHA-256 的前 12 个十六进制字符；资源扫描拒绝符号链接。URL 指纹不等于应用已经为主题资源配置长期缓存，响应与代理策略还需按部署环境核验。
+后台站点设置可以选择已加载主题，选择以版本条件保存到 `settings.theme`。公开请求每次读取活动选择，切换已安装主题无需重启；未配置或对应主题不在启动注册表中时，使用启动默认主题。设置查询或模板执行失败会返回错误，不触发这项回退。资源按 `/assets/{theme_slug}/{release}/{path}` 分开，release 为模板、资源路径及字节内容共同计算的完整 SHA-256。HTTP 仅返回同一快照中的资源字节，并为成功响应设置一年 immutable 缓存；不存在的版本或文件返回 404。进程内原地替换磁盘文件不会改变既有 URL 的内容。重启后旧版本若未继续部署则返回 404，不会返回新内容；需要跨版本保留资源时应在部署层保留旧版本或使用 CDN。快照占用的内存与全部已加载主题资源大小有关。
 
 配置项见[配置参考](configuration.md)，设置权限与版本契约见[管理 API](admin-api.md)。
 
@@ -49,7 +49,7 @@ themes/default/
 |---|---|---|
 | `site` | `title`、`description`、可空 `logo_url` | 全部 |
 | `seo` | `title`、`description`、`canonical_url`、`feed_url`、`og_type` | 全部 |
-| `posts` | 文章卡片列表：标题、slug、摘要、发布时间、作者展示名及可空头像 URL | index |
+| `posts` | 文章卡片列表：标题、slug、`url`、摘要、发布时间、作者展示名及可空头像 URL | index |
 | `post` | 文章详情、清洗后 `content_html`、标签、可空分类/系列/封面 | post |
 | `page` | 页面详情与清洗后 `content_html` | page |
 | `tag` / `category` | 目录名称、slug、页码、总页数和文章卡片 | tag / category |
@@ -84,7 +84,7 @@ sitemap 的 50,000 条限制是整个文件的预算：首页、文章、Page、
 | `asset_url` | `path` | 当前主题已扫描资源的带指纹 URL；不存在或越界报错 |
 | `post_url` | `slug` | 校验并按 UTF-8 百分号编码后的根相对文章 URL |
 
-文章摘要字段为 `title`、`slug`、`url`、`excerpt`、`published_at`、`author_display`。目录可以没有公开文章，不透出非公开引用量。函数没有 cursor、排序选择、任意字段查询或 SQL 参数。
+文章摘要字段为 `title`、`slug`、`url`、`excerpt`、`published_at`、`author_display`、`author_avatar_url`，与固定上下文 `PostCard` 使用同一个类型。详情上下文也提供 `url`；已有的 `updated_at` 可直接读取，无需再调用 `get_post`。目录可以没有公开文章，不透出非公开引用量。函数没有 cursor、排序选择、任意字段查询或 SQL 参数。
 
 ```jinja
 {% set recent = get_posts(limit=5, tag="rust") %}
@@ -112,19 +112,20 @@ sitemap 的 50,000 条限制是整个文件的预算：首页、文章、Page、
 
 ## 执行策略与实际预算
 
-[`RenderingRuntime`](../crates/infrastructure/src/render_executor.rs) 为正文渲染和全部主题共享一组许可。应用只调用异步端口，不持有 Tokio 信号量，也不自行使用 `spawn_blocking` 或超时。
+[`RenderingRuntime`](../crates/infrastructure/src/render_executor.rs) 为正文写入和公开主题分配独立的许可池：正文默认 4 个，全部主题共用 16 个。主题查询等待不会占用正文许可。两者仍共用 Tokio 阻塞线程池，许可隔离并非独立 CPU 或线程池。应用只调用异步端口，不持有 Tokio 信号量，也不自行使用 `spawn_blocking` 或超时。
 
 主题主体先异步预取；同步 MiniJinja 渲染在阻塞池内运行。模板函数缺少请求缓存时，才从该阻塞线程通过 Tokio Handle 驱动带剩余截止时间的公开查询。桥接不会新建 runtime，也不在异步工作线程中 `block_on`；每次查询等待会占用当前渲染许可。
 
 | 限制 | 当前默认值 | 作用范围 |
 |---|---|---|
-| 渲染并发 | 16 | 同一运行时的正文转换、引用提取及主题渲染 |
+| 主题渲染并发 | 16 | 全部公开主题共享 |
+| 正文渲染并发 | 4 | 正文转换与引用提取，独立于主题许可 |
 | 等待许可 | 250ms | 超时返回渲染错误；没有另设排队人数上限 |
 | 等待执行结果 | 2s | 从提交阻塞任务开始计时，包含阻塞池调度等待 |
 | MiniJinja fuel | 200,000 | 每次模板渲染 |
 | 模板递归深度 | 100 | MiniJinja 环境 |
 | 主题输出 | 1 MiB | 渲染完成后的长度检查，不是硬内存上限 |
-| 宿主函数调用 | 64 | 每次渲染，查询缓存命中也计数 |
+| 数据函数调用 | 64 | 每次渲染，查询缓存命中也计数；`asset_url` / `post_url` 仅受 fuel 和截止时间限制 |
 | 独立数据查询 | 10 | 每次渲染，重复查询命中缓存不再计数 |
 | 函数截止时间 | 500ms | 从 RenderScope 创建起；查询按剩余时间等待 |
 | Markdown LRU | 64 条、8 MiB | 源文、HTML 和媒体 UUID 合计，两个上限同时生效 |
@@ -137,7 +138,7 @@ sitemap 的 50,000 条限制是整个文件的预算：首页、文章、Page、
 
 ## 转义与公开性
 
-`.html` 模板采用 MiniJinja 的 HTML 自动转义和严格未定义模式。清洗后的 `post.content_html` / `page.content_html` 可使用 `|safe`；普通标题、描述和用户资料保持自动转义。`url` 过滤器保留 `/` 并转义 HTML 属性特殊字符，供宿主生成的地址使用；它不替代 JavaScript、CSS 或任意 URL 的专门校验。
+所有主题模板统一采用 MiniJinja 的 HTML 自动转义和严格未定义模式，不按文件扩展名切换转义策略；通过 `include`、继承或宏复用的 `.jinja`、`.j2` 及无扩展名辅助模板也使用 HTML 自动转义。清洗后的 `post.content_html` / `page.content_html` 可使用 `|safe`；普通标题、描述和用户资料保持自动转义。`url` 过滤器保留 `/` 并转义 HTML 属性特殊字符，供宿主生成的地址使用；它不替代 JavaScript、CSS 或任意 URL 的专门校验。
 
 公开查询只允许已发布、公开、未删除的文章及已发布、公开的 Page。缺失内容可以返回 none 或 404，数据库失败、参数错误、预算耗尽和模板错误则保留为错误。当前没有公开页面缓存、跨请求函数缓存、全站 generation 或主题失败页面缓存；主题资源版本与内容公开性分别管理。
 

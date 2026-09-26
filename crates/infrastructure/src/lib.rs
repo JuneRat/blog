@@ -12,6 +12,7 @@ pub mod rendering;
 pub mod sessions;
 pub mod settings;
 mod theme_functions;
+mod theme_validation;
 pub mod throttle;
 
 pub use media_storage::LocalMediaStorage;

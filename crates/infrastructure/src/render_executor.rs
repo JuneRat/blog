@@ -1,4 +1,4 @@
-//! 渲染执行策略：共享并发预算、有限等待与阻塞任务隔离。
+//! 渲染执行策略：分离正文与主题并发预算、有限等待与阻塞任务隔离。
 //!
 //! 超时或调用者取消不会终止已经开始的阻塞任务；许可随任务持有到真正完成，
 //! 防止客户端反复取消请求后绕过并发上限。只缓存纯 Markdown 结果，不缓存主题数据。
@@ -21,7 +21,10 @@ use crate::rendering::{MiniJinjaThemeRenderer, SanitizingMarkdownRenderer};
 
 #[derive(Debug, Clone)]
 pub struct RenderingLimits {
+    /// Public theme renders (including time spent waiting for data).
     pub concurrency: usize,
+    /// Reserved for content writes; public traffic cannot acquire these slots.
+    pub content_concurrency: usize,
     pub queue_timeout: Duration,
     pub execution_timeout: Duration,
     pub markdown_cache_entries: usize,
@@ -33,6 +36,7 @@ impl Default for RenderingLimits {
     fn default() -> Self {
         Self {
             concurrency: 16,
+            content_concurrency: 4,
             queue_timeout: Duration::from_millis(250),
             execution_timeout: Duration::from_secs(2),
             markdown_cache_entries: 64,
@@ -90,13 +94,20 @@ impl MarkdownCache {
     }
 }
 
+#[derive(Clone, Copy)]
+enum RenderPool {
+    Content,
+    Theme,
+}
+
 struct RuntimeState {
     limits: RenderingLimits,
-    slots: Arc<Semaphore>,
+    theme_slots: Arc<Semaphore>,
+    content_slots: Arc<Semaphore>,
     markdown: Mutex<MarkdownCache>,
 }
 
-/// 进程内共享实例：注入内容仓储，并为所有主题创建使用同一预算的执行器。
+/// 进程内共享实例：正文写入与公开主题各自使用独立的并发许可。
 #[derive(Clone)]
 pub struct RenderingRuntime {
     state: Arc<RuntimeState>,
@@ -112,6 +123,8 @@ impl RenderingRuntime {
     pub fn with_limits(limits: RenderingLimits) -> Result<Self, UseCaseError> {
         if limits.concurrency == 0
             || limits.concurrency > Semaphore::MAX_PERMITS
+            || limits.content_concurrency == 0
+            || limits.content_concurrency > Semaphore::MAX_PERMITS
             || limits.queue_timeout.is_zero()
             || limits.execution_timeout.is_zero()
         {
@@ -121,7 +134,8 @@ impl RenderingRuntime {
         }
         Ok(Self {
             state: Arc::new(RuntimeState {
-                slots: Arc::new(Semaphore::new(limits.concurrency)),
+                theme_slots: Arc::new(Semaphore::new(limits.concurrency)),
+                content_slots: Arc::new(Semaphore::new(limits.content_concurrency)),
                 limits,
                 markdown: Mutex::new(MarkdownCache::default()),
             }),
@@ -135,15 +149,24 @@ impl RenderingRuntime {
         })
     }
 
-    async fn execute<T, F>(&self, kind: &'static str, task: F) -> Result<T, UseCaseError>
+    async fn execute<T, F>(
+        &self,
+        pool: RenderPool,
+        kind: &'static str,
+        task: F,
+    ) -> Result<T, UseCaseError>
     where
         T: Send + 'static,
         F: FnOnce() -> Result<T, UseCaseError> + Send + 'static,
     {
+        let slots = match pool {
+            RenderPool::Content => &self.state.content_slots,
+            RenderPool::Theme => &self.state.theme_slots,
+        };
         let queued = Instant::now();
         let permit = tokio::time::timeout(
             self.state.limits.queue_timeout,
-            self.state.slots.clone().acquire_owned(),
+            slots.clone().acquire_owned(),
         )
         .await
         .map_err(|_| {
@@ -209,7 +232,7 @@ impl ContentRenderer for RenderingRuntime {
         }
         let source = source.to_owned();
         let state = self.state.clone();
-        self.execute("markdown", move || {
+        self.execute(RenderPool::Content, "markdown", move || {
             let content_html = SanitizingMarkdownRenderer::new().render_markdown(&source);
             let media_ids = extract_media_ids_from_html(&content_html);
             let rendered = RenderedContent {
@@ -248,7 +271,7 @@ impl ThemeRenderer for ThemeExecutor {
         let renderer = self.renderer.clone();
         let (site, seo, posts) = (site.clone(), seo.clone(), posts.to_vec());
         self.runtime
-            .execute("theme.index", move || {
+            .execute(RenderPool::Theme, "theme.index", move || {
                 renderer.render_index(&site, &seo, &posts)
             })
             .await
@@ -263,7 +286,7 @@ impl ThemeRenderer for ThemeExecutor {
         let renderer = self.renderer.clone();
         let (site, seo, view) = (site.clone(), seo.clone(), view.clone());
         self.runtime
-            .execute("theme.post", move || {
+            .execute(RenderPool::Theme, "theme.post", move || {
                 renderer.render_post(&site, &seo, &view)
             })
             .await
@@ -277,7 +300,7 @@ impl ThemeRenderer for ThemeExecutor {
         let renderer = self.renderer.clone();
         let (site, seo, view) = (site.clone(), seo.clone(), view.clone());
         self.runtime
-            .execute("theme.page", move || {
+            .execute(RenderPool::Theme, "theme.page", move || {
                 renderer.render_page(&site, &seo, &view)
             })
             .await
@@ -291,7 +314,9 @@ impl ThemeRenderer for ThemeExecutor {
         let renderer = self.renderer.clone();
         let (site, seo, view) = (site.clone(), seo.clone(), view.clone());
         self.runtime
-            .execute("theme.tag", move || renderer.render_tag(&site, &seo, &view))
+            .execute(RenderPool::Theme, "theme.tag", move || {
+                renderer.render_tag(&site, &seo, &view)
+            })
             .await
     }
     async fn render_category(
@@ -303,7 +328,7 @@ impl ThemeRenderer for ThemeExecutor {
         let renderer = self.renderer.clone();
         let (site, seo, view) = (site.clone(), seo.clone(), view.clone());
         self.runtime
-            .execute("theme.category", move || {
+            .execute(RenderPool::Theme, "theme.category", move || {
                 renderer.render_category(&site, &seo, &view)
             })
             .await
@@ -317,7 +342,7 @@ impl ThemeRenderer for ThemeExecutor {
         let renderer = self.renderer.clone();
         let (site, seo, view) = (site.clone(), seo.clone(), view.clone());
         self.runtime
-            .execute("theme.series", move || {
+            .execute(RenderPool::Theme, "theme.series", move || {
                 renderer.render_series(&site, &seo, &view)
             })
             .await
@@ -331,12 +356,45 @@ mod tests {
     fn limited() -> RenderingRuntime {
         RenderingRuntime::with_limits(RenderingLimits {
             concurrency: 1,
+            content_concurrency: 1,
             queue_timeout: Duration::from_millis(25),
             execution_timeout: Duration::from_millis(100),
             markdown_cache_entries: 2,
             markdown_cache_bytes: 40,
         })
         .unwrap()
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn saturated_public_theme_workers_leave_content_capacity_available() {
+        let runtime = RenderingRuntime::default();
+        let mut workers = Vec::new();
+        let mut releases = Vec::new();
+        for _ in 0..16 {
+            let (started, ready) = tokio::sync::oneshot::channel();
+            let (release, blocked) = std::sync::mpsc::channel();
+            releases.push(release);
+            let worker_runtime = runtime.clone();
+            workers.push(tokio::spawn(async move {
+                worker_runtime
+                    .execute(RenderPool::Theme, "theme.waiting", move || {
+                        let _ = started.send(());
+                        let _ = blocked.recv();
+                        Ok(())
+                    })
+                    .await
+            }));
+            ready.await.unwrap();
+        }
+        assert_eq!(runtime.state.theme_slots.available_permits(), 0);
+        let content = runtime.render_content("正文写入仍可运行").await;
+        for release in releases {
+            let _ = release.send(());
+        }
+        assert!(content.unwrap().content_html.contains("正文写入仍可运行"));
+        for worker in workers {
+            worker.await.unwrap().unwrap();
+        }
     }
 
     #[tokio::test]
@@ -347,7 +405,7 @@ mod tests {
         let worker_runtime = runtime.clone();
         let caller = tokio::spawn(async move {
             worker_runtime
-                .execute("test", move || {
+                .execute(RenderPool::Content, "test", move || {
                     let _ = started.send(());
                     let _ = blocked.recv();
                     Ok("complete".to_string())
@@ -357,15 +415,17 @@ mod tests {
         ready.await.unwrap();
         caller.abort();
         assert!(caller.await.unwrap_err().is_cancelled());
-        assert_eq!(runtime.state.slots.available_permits(), 0);
+        assert_eq!(runtime.state.content_slots.available_permits(), 0);
         let error = runtime
-            .execute("overload", || Ok("must not run".to_string()))
+            .execute(RenderPool::Content, "overload", || {
+                Ok("must not run".to_string())
+            })
             .await;
         assert!(matches!(error, Err(UseCaseError::Render(message)) if message == "渲染排队超时"));
         release.send(()).unwrap();
         assert_eq!(
             runtime
-                .execute("after", || Ok("available".to_string()))
+                .execute(RenderPool::Content, "after", || Ok("available".to_string()))
                 .await
                 .unwrap(),
             "available"
@@ -377,19 +437,26 @@ mod tests {
         let runtime = limited();
         let (release, blocked) = std::sync::mpsc::channel();
         let result = runtime
-            .execute("slow", move || {
+            .execute(RenderPool::Content, "slow", move || {
                 let _ = blocked.recv();
                 Ok("late".to_string())
             })
             .await;
         assert!(matches!(result, Err(UseCaseError::Render(message)) if message == "渲染执行超时"));
-        assert_eq!(runtime.state.slots.available_permits(), 0);
+        assert_eq!(runtime.state.content_slots.available_permits(), 0);
         let queued = runtime
-            .execute("queued", || Ok("must not run".to_string()))
+            .execute(RenderPool::Content, "queued", || {
+                Ok("must not run".to_string())
+            })
             .await;
         assert!(matches!(queued, Err(UseCaseError::Render(message)) if message == "渲染排队超时"));
         release.send(()).unwrap();
-        assert!(runtime.execute("after", || Ok(String::new())).await.is_ok());
+        assert!(
+            runtime
+                .execute(RenderPool::Content, "after", || Ok(String::new()))
+                .await
+                .is_ok()
+        );
     }
 
     #[tokio::test]
@@ -399,7 +466,13 @@ mod tests {
             runtime.render_content("a").await.unwrap().content_html,
             "<p>a</p>\n"
         );
-        let permit = runtime.state.slots.clone().acquire_owned().await.unwrap();
+        let permit = runtime
+            .state
+            .content_slots
+            .clone()
+            .acquire_owned()
+            .await
+            .unwrap();
         // 唯一执行槽正被占用：命中仍立即返回，未命中会排队超时。
         assert_eq!(
             runtime.render_content("a").await.unwrap().content_html,
@@ -452,9 +525,9 @@ mod tests {
         assert_eq!(rendered.media_ids, vec![first, second]);
         let permits = runtime
             .state
-            .slots
+            .content_slots
             .clone()
-            .acquire_many_owned(16)
+            .acquire_many_owned(4)
             .await
             .unwrap();
         assert_eq!(runtime.render_content(&source).await.unwrap(), rendered);
@@ -471,7 +544,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn theme_executor_uses_the_shared_budget_and_preserves_stored_html() {
+    async fn theme_executor_uses_its_own_budget_and_preserves_stored_html() {
         let runtime = limited();
         let theme = runtime.theme_renderer(
             MiniJinjaThemeRenderer::load(std::path::Path::new("../../themes/default")).unwrap(),
@@ -490,7 +563,13 @@ mod tests {
             updated_at: "2026-01-01".into(),
             content_html: "<p><strong>持久化 HTML</strong></p>".into(),
         };
-        let permit = runtime.state.slots.clone().acquire_owned().await.unwrap();
+        let permit = runtime
+            .state
+            .theme_slots
+            .clone()
+            .acquire_owned()
+            .await
+            .unwrap();
         let error = theme.render_page(&site, &seo, &page).await;
         assert!(matches!(error, Err(UseCaseError::Render(message)) if message == "渲染排队超时"));
         drop(permit);

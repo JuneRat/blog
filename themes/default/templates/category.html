@@ -6,7 +6,7 @@
   <ul class="post-list">
     {% for post in category.posts %}
     <li class="post-item">
-      <h2><a href="/posts/{{ post.slug }}">{{ post.title }}</a></h2>
+      <h2><a href="{{ post.url | url }}">{{ post.title }}</a></h2>
       {% if post.excerpt %}<p class="excerpt">{{ post.excerpt }}</p>{% endif %}
       <p class="meta">
         <time>{{ post.published_at }}</time>

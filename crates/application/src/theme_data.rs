@@ -8,15 +8,8 @@ use crate::ports::{PublishedCategoryQuery, PublishedPostQuery, PublishedTagQuery
 use crate::public_site::format_datetime;
 use domain::content::post::Slug;
 
-#[derive(Debug, Clone, Serialize)]
-pub struct ThemePostSummary {
-    pub title: String,
-    pub slug: String,
-    pub url: String,
-    pub excerpt: Option<String>,
-    pub published_at: Option<String>,
-    pub author_display: String,
-}
+/// All public article lists share one display contract.
+pub type ThemePostSummary = crate::public_site::PostCard;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ThemePostDetail {
@@ -87,17 +80,7 @@ impl ThemeData {
             self.posts.list_public(limit, 0).await?
         };
         Ok(ThemeList {
-            items: rows
-                .into_iter()
-                .map(|p| ThemePostSummary {
-                    url: crate::seo::post_path(&p.slug),
-                    title: p.title,
-                    slug: p.slug,
-                    excerpt: p.excerpt,
-                    published_at: p.published_at.map(format_datetime),
-                    author_display: p.author_display,
-                })
-                .collect(),
+            items: rows.into_iter().map(ThemePostSummary::from).collect(),
         })
     }
 
@@ -113,6 +96,7 @@ impl ThemeData {
                 excerpt: p.excerpt,
                 published_at: p.published_at.map(format_datetime),
                 author_display: p.author_display,
+                author_avatar_url: p.author_avatar_media_id.map(crate::media::media_url),
             },
         }))
     }

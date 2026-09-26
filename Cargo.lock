@@ -1011,6 +1011,7 @@ dependencies = [
  "application",
  "axum",
  "clap",
+ "mime_guess",
  "rpassword",
  "serde",
  "serde_json",

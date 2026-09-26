@@ -6,9 +6,9 @@
   {% for post in posts %}
   <article class="article-card">
     <p class="article-meta"><time>{{ post.published_at }}</time><span>·</span><span>{% if post.author_avatar_url %}<img class="avatar" src="{{ post.author_avatar_url | url }}" alt="">{% endif %}{{ post.author_display }}</span></p>
-    <h2><a href="{{ post_url(slug=post.slug) | url }}">{{ post.title }}</a></h2>
+    <h2><a href="{{ post.url | url }}">{{ post.title }}</a></h2>
     {% if post.excerpt %}<p>{{ post.excerpt }}</p>{% endif %}
-    <a class="read-more" href="{{ post_url(slug=post.slug) | url }}">阅读文章 <span aria-hidden="true">↗</span></a>
+    <a class="read-more" href="{{ post.url | url }}">阅读文章 <span aria-hidden="true">↗</span></a>
   </article>
   {% endfor %}
 </div>

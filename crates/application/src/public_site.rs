@@ -41,11 +41,26 @@ pub struct SiteInfo {
 pub struct PostCard {
     pub title: String,
     pub slug: String,
+    pub url: String,
     pub excerpt: Option<String>,
     pub published_at: Option<String>,
     pub author_display: String,
     /// 作者头像站内地址（None = 无头像）；匿名可读性跟随「账号未软删除」。
     pub author_avatar_url: Option<String>,
+}
+
+impl From<crate::ports::PublicPostSummary> for PostCard {
+    fn from(post: crate::ports::PublicPostSummary) -> Self {
+        Self {
+            url: seo::post_path(&post.slug),
+            title: post.title,
+            slug: post.slug,
+            excerpt: post.excerpt,
+            published_at: post.published_at.map(format_datetime),
+            author_display: post.author_display,
+            author_avatar_url: post.author_avatar_media_id.map(crate::media::media_url),
+        }
+    }
 }
 
 /// 详情页上的标签链接（目录公开；名称取当前值）。
@@ -75,6 +90,7 @@ pub struct SeriesCard {
 pub struct PostView {
     pub title: String,
     pub slug: String,
+    pub url: String,
     pub excerpt: Option<String>,
     pub published_at: Option<String>,
     pub updated_at: String,
@@ -237,14 +253,7 @@ impl PublicSiteInteractor {
             .list_public(limit, 0)
             .await?
             .into_iter()
-            .map(|s| PostCard {
-                title: s.title,
-                slug: s.slug,
-                excerpt: s.excerpt,
-                published_at: s.published_at.map(format_datetime),
-                author_display: s.author_display,
-                author_avatar_url: s.author_avatar_media_id.map(crate::media::media_url),
-            })
+            .map(PostCard::from)
             .collect();
         let site = self.site_info().await;
         let seo = SeoMeta::home(&site, &self.base_url);
@@ -262,6 +271,7 @@ impl PublicSiteInteractor {
             .await?
             .ok_or_else(|| UseCaseError::NotFound(format!("文章 {slug}")))?;
         let view = PostView {
+            url: seo::post_path(&detail.slug),
             title: detail.title.clone(),
             slug: detail.slug.clone(),
             excerpt: detail.excerpt.clone(),
@@ -354,17 +364,7 @@ impl PublicSiteInteractor {
             tag_name: tag.name,
             page,
             total_pages,
-            posts: posts
-                .into_iter()
-                .map(|s| PostCard {
-                    title: s.title,
-                    slug: s.slug,
-                    excerpt: s.excerpt,
-                    published_at: s.published_at.map(format_datetime),
-                    author_display: s.author_display,
-                    author_avatar_url: s.author_avatar_media_id.map(crate::media::media_url),
-                })
-                .collect(),
+            posts: posts.into_iter().map(PostCard::from).collect(),
         };
         let site = self.site_info().await;
         let seo = SeoMeta::tag(
@@ -400,17 +400,7 @@ impl PublicSiteInteractor {
             category_name: category.name,
             page,
             total_pages,
-            posts: posts
-                .into_iter()
-                .map(|s| PostCard {
-                    title: s.title,
-                    slug: s.slug,
-                    excerpt: s.excerpt,
-                    published_at: s.published_at.map(format_datetime),
-                    author_display: s.author_display,
-                    author_avatar_url: s.author_avatar_media_id.map(crate::media::media_url),
-                })
-                .collect(),
+            posts: posts.into_iter().map(PostCard::from).collect(),
         };
         let site = self.site_info().await;
         let seo = SeoMeta::category(
@@ -453,14 +443,7 @@ impl PublicSiteInteractor {
                 .enumerate()
                 .map(|(i, s)| SeriesPostCard {
                     index: offset + i as i64 + 1,
-                    card: PostCard {
-                        title: s.title,
-                        slug: s.slug,
-                        excerpt: s.excerpt,
-                        published_at: s.published_at.map(format_datetime),
-                        author_display: s.author_display,
-                        author_avatar_url: s.author_avatar_media_id.map(crate::media::media_url),
-                    },
+                    card: PostCard::from(s),
                 })
                 .collect(),
         };

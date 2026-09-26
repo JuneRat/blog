@@ -51,6 +51,11 @@ impl RenderScope {
         if self.calls.fetch_add(1, Ordering::Relaxed) >= CALL_BUDGET {
             return Err(failure("主题函数调用预算耗尽"));
         }
+        self.check_deadline()
+    }
+
+    // Pure helpers are bounded by MiniJinja fuel and the deadline, not the I/O budget.
+    fn check_deadline(&self) -> Result<(), Error> {
         if Instant::now() >= self.deadline {
             return Err(failure("主题渲染已超时"));
         }
@@ -163,7 +168,7 @@ pub fn register(env: &mut Environment<'static>, scope: Arc<RenderScope>) {
         move |kwargs: Kwargs| -> Result<String, Error> {
             let path = kwargs.get::<String>("path")?;
             kwargs.assert_all_used()?;
-            asset_scope.enter()?;
+            asset_scope.check_deadline()?;
             asset_scope
                 .assets
                 .get(&path)
@@ -176,7 +181,7 @@ pub fn register(env: &mut Environment<'static>, scope: Arc<RenderScope>) {
     env.add_function("post_url", move |kwargs: Kwargs| -> Result<String, Error> {
         let slug = kwargs.get::<String>("slug")?;
         kwargs.assert_all_used()?;
-        url_scope.enter()?;
+        url_scope.check_deadline()?;
         domain::content::post::Slug::new(&slug).map_err(|e| failure(e.to_string()))?;
         Ok(application::seo::post_path(&slug))
     });
@@ -217,16 +222,30 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn function_call_budget_is_per_render() {
+    async fn pure_helpers_do_not_spend_data_calls_but_still_consume_fuel() {
         tokio::task::spawn_blocking(|| {
             let mut env = Environment::new();
             let scope = RenderScope::new(None, Arc::new(HashMap::new())).unwrap();
-            register(&mut env, scope);
+            register(&mut env, scope.clone());
+            env.set_fuel(Some(200_000));
             env.add_template(
                 "loop",
-                "{% for _ in range(65) %}{{ post_url(slug='a') }}{% endfor %}",
+                "{% for _ in range(150) %}{{ post_url(slug='a') }}{% endfor %}",
             )
             .unwrap();
+            assert!(env.get_template("loop").unwrap().render(()).is_ok());
+            assert_eq!(scope.calls.load(Ordering::Relaxed), 0);
+            for _ in 0..CALL_BUDGET {
+                scope
+                    .query("same".into(), async { Ok::<_, UseCaseError>(1) })
+                    .unwrap();
+            }
+            assert!(
+                scope
+                    .query("same".into(), async { Ok::<_, UseCaseError>(1) })
+                    .is_err()
+            );
+            env.set_fuel(Some(10));
             assert!(env.get_template("loop").unwrap().render(()).is_err());
             let mut another = Environment::new();
             register(

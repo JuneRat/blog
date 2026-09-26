@@ -240,6 +240,7 @@ async fn build(pool: PgPool) -> Stack {
     let paper_theme = MiniJinjaThemeRenderer::load(std::path::Path::new("../../themes/paper"))
         .expect("Paper 主题加载失败")
         .with_data(theme_data);
+    let theme_assets = vec![default_theme.assets(), paper_theme.assets()];
     let mut registry = ThemeRegistry::new("default".into());
     registry
         .add(
@@ -311,10 +312,7 @@ async fn build(pool: PgPool) -> Stack {
             },
             None,
         ),
-        vec![
-            ("default".into(), "../../themes/default/assets".into()),
-            ("paper".into(), "../../themes/paper/assets".into()),
-        ],
+        theme_assets,
     )
     .merge(auth_router(auth_state))
     .merge(admin_router(admin_state.clone()))
@@ -965,7 +963,7 @@ async fn theme_switch_is_authorized_versioned_and_updates_html_and_assets() {
     assert!(
         public_home(&stack.router)
             .await
-            .contains("/assets/default/style.css?v=")
+            .contains("/assets/default/")
     );
 
     let (status, body) = put(
@@ -998,9 +996,14 @@ async fn theme_switch_is_authorized_versioned_and_updates_html_and_assets() {
     assert_eq!(saved["version"], 1);
     assert_eq!(saved["source"], "database");
     let html = public_home(&stack.router).await;
-    assert!(html.contains("/assets/paper/paper.css?v="));
-    assert!(!html.contains("/assets/default/style.css"));
-    let (status, _, _) = get(&stack.router, "/assets/paper/paper.css", None).await;
+    assert!(html.contains("/assets/paper/"));
+    assert!(!html.contains("/assets/default/"));
+    let asset_url = html
+        .split("href=\"")
+        .filter_map(|part| part.split('"').next())
+        .find(|url| url.starts_with("/assets/paper/"))
+        .unwrap();
+    let (status, _, _) = get(&stack.router, asset_url, None).await;
     assert_eq!(status, StatusCode::OK);
 
     let (status, stale) = put(
@@ -1035,7 +1038,7 @@ async fn theme_switch_is_authorized_versioned_and_updates_html_and_assets() {
     assert!(
         public_home(&stack.router)
             .await
-            .contains("/assets/default/style.css?v=")
+            .contains("/assets/default/")
     );
 }
 
@@ -1052,7 +1055,7 @@ async fn missing_saved_theme_falls_back_and_can_be_replaced() {
     assert!(
         public_home(&stack.router)
             .await
-            .contains("/assets/default/style.css?v=")
+            .contains("/assets/default/")
     );
     let (status, saved) = put(
         &stack.router,
@@ -1064,11 +1067,7 @@ async fn missing_saved_theme_falls_back_and_can_be_replaced() {
     .await;
     assert_eq!(status, StatusCode::OK, "{saved}");
     assert_eq!(saved["effective_slug"], "paper");
-    assert!(
-        public_home(&stack.router)
-            .await
-            .contains("/assets/paper/paper.css?v=")
-    );
+    assert!(public_home(&stack.router).await.contains("/assets/paper/"));
 }
 
 #[tokio::test]

@@ -1,7 +1,7 @@
 //! 渲染适配器：Markdown → 清洗 HTML，以及 MiniJinja 主题渲染。
 //! MiniJinja 仅存在于本层；interfaces 通过应用端口间接使用。
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -11,8 +11,10 @@ use application::public_site::{
 };
 use application::seo::SeoMeta;
 use application::theme_data::ThemeData;
-use minijinja::{Environment, UndefinedBehavior, Value};
+use application::themes::ThemeAssets;
+use minijinja::{AutoEscape, Environment, UndefinedBehavior, Value};
 use pulldown_cmark::{Options, Parser, html::push_html};
+use sha2::{Digest, Sha256};
 
 pub use crate::render_executor::{RenderingLimits, RenderingRuntime};
 
@@ -161,26 +163,50 @@ fn url_attr(value: String) -> Value {
 }
 
 /// MiniJinja 主题渲染器：启动时加载并解析主题模板，请求期复用。
+#[derive(Clone)]
 pub struct MiniJinjaThemeRenderer {
     env: Environment<'static>,
     data: Option<Arc<ThemeData>>,
     assets: Arc<HashMap<String, String>>,
+    release_assets: ThemeAssets,
     slug: String,
     name: String,
 }
 
 impl MiniJinjaThemeRenderer {
-    /// M1 最小模板集：base/index/post/page；M3 增加标签页 tag。
-    /// 模板在启动时一次性加载；Environment 复用要求 'static，故按启动期资源泄漏源码。
+    /// Load a release snapshot. Production registration uses load_checked below.
     pub fn load(theme_dir: &Path) -> Result<Self, UseCaseError> {
         let manifest = verify_manifest(theme_dir)?;
         let mut env = Environment::new();
+        // Every theme template emits HTML, including helpers without an .html suffix.
+        env.set_auto_escape_callback(|_| AutoEscape::Html);
         env.set_undefined_behavior(UndefinedBehavior::Strict);
         env.set_fuel(Some(200_000));
         env.set_recursion_limit(100);
         env.add_filter("url", url_attr);
+        let templates = read_theme_files(&theme_dir.join("templates"))?;
+        let asset_files = read_theme_files(&theme_dir.join("assets"))?;
+        // Length-prefix each name/body so distinct file trees cannot hash identically
+        // due to concatenation ambiguity. BTreeMap makes the release ID deterministic.
+        let mut digest = Sha256::new();
+        digest.update(THEME_API_VERSION.to_be_bytes());
+        digest.update(manifest.slug.as_bytes());
+        for (kind, files) in [("templates", &templates), ("assets", &asset_files)] {
+            digest.update(kind.as_bytes());
+            for (name, bytes) in files {
+                digest.update((name.len() as u64).to_be_bytes());
+                digest.update(name.as_bytes());
+                digest.update((bytes.len() as u64).to_be_bytes());
+                digest.update(bytes);
+            }
+        }
+        for (name, bytes) in templates {
+            let source = String::from_utf8(bytes.to_vec())
+                .map_err(|e| UseCaseError::Render(format!("模板 {name} 不是 UTF-8：{e}")))?;
+            env.add_template_owned(name.clone(), source)
+                .map_err(|e| UseCaseError::Render(format!("解析模板 {name} 失败：{e}")))?;
+        }
         for name in [
-            "base.html",
             "index.html",
             "post.html",
             "page.html",
@@ -188,21 +214,45 @@ impl MiniJinjaThemeRenderer {
             "category.html",
             "series.html",
         ] {
-            let path = theme_dir.join("templates").join(name);
-            let source = std::fs::read_to_string(&path)
-                .map_err(|e| UseCaseError::Render(format!("读取模板 {name} 失败：{e}")))?;
-            let source: &'static str = Box::leak(source.into_boxed_str());
-            env.add_template(name, source)
-                .map_err(|e| UseCaseError::Render(format!("解析模板 {name} 失败：{e}")))?;
+            env.get_template(name)
+                .map_err(|e| UseCaseError::Render(format!("缺少页面入口 {name}：{e}")))?;
         }
-        let assets = load_asset_urls(&theme_dir.join("assets"), &manifest.slug)?;
+        let release_assets = ThemeAssets {
+            slug: manifest.slug.clone(),
+            version: format!("{:x}", digest.finalize()),
+            files: Arc::new(asset_files),
+        };
+        let assets = release_assets
+            .files
+            .keys()
+            .map(|name| (name.clone(), release_assets.url(name)))
+            .collect();
         Ok(Self {
             env,
             data: None,
             assets: Arc::new(assets),
+            release_assets,
             slug: manifest.slug,
             name: manifest.name,
         })
+    }
+
+    /// Validate all page contracts with fixed public data before registering a release.
+    pub async fn load_checked(
+        theme_dir: &Path,
+        runtime: &RenderingRuntime,
+    ) -> Result<Self, UseCaseError> {
+        let renderer = Self::load(theme_dir)?;
+        renderer.validate(runtime).await?;
+        Ok(renderer)
+    }
+
+    pub async fn validate(&self, runtime: &RenderingRuntime) -> Result<(), UseCaseError> {
+        crate::theme_validation::validate(self, runtime).await
+    }
+
+    pub fn assets(&self) -> ThemeAssets {
+        self.release_assets.clone()
     }
 
     pub fn slug(&self) -> &str {
@@ -237,52 +287,46 @@ impl MiniJinjaThemeRenderer {
     }
 }
 
-fn load_asset_urls(dir: &Path, slug: &str) -> Result<HashMap<String, String>, UseCaseError> {
-    use sha2::{Digest, Sha256};
-    let mut urls = HashMap::new();
-    if !dir.is_dir() {
-        return Ok(urls);
-    }
+/// Snapshot both templates and assets, refusing links at every level including the root.
+fn read_theme_files(root: &Path) -> Result<BTreeMap<String, Arc<[u8]>>, UseCaseError> {
     fn visit(
         root: &Path,
-        dir: &Path,
-        slug: &str,
-        urls: &mut HashMap<String, String>,
+        path: &Path,
+        files: &mut BTreeMap<String, Arc<[u8]>>,
     ) -> Result<(), UseCaseError> {
-        for entry in std::fs::read_dir(dir).map_err(|e| UseCaseError::Render(e.to_string()))? {
-            let entry = entry.map_err(|e| UseCaseError::Render(e.to_string()))?;
-            let kind = entry
-                .file_type()
-                .map_err(|e| UseCaseError::Render(e.to_string()))?;
-            if kind.is_symlink() {
-                return Err(UseCaseError::Render("主题资源不允许符号链接".into()));
+        let meta = std::fs::symlink_metadata(path).map_err(|e| {
+            UseCaseError::Render(format!("读取主题文件 {} 失败：{e}", path.display()))
+        })?;
+        if meta.file_type().is_symlink() {
+            return Err(UseCaseError::Render("主题文件不允许符号链接".into()));
+        }
+        if meta.is_dir() {
+            for entry in std::fs::read_dir(path).map_err(|e| UseCaseError::Render(e.to_string()))? {
+                let entry = entry.map_err(|e| UseCaseError::Render(e.to_string()))?;
+                visit(root, &entry.path(), files)?;
             }
-            if kind.is_dir() {
-                visit(root, &entry.path(), slug, urls)?;
-            } else if kind.is_file() {
-                let path = entry.path();
-                let relative = path
-                    .strip_prefix(root)
-                    .map_err(|e| UseCaseError::Render(e.to_string()))?;
-                let name = relative
-                    .to_str()
-                    .ok_or_else(|| UseCaseError::Render("主题资源路径不是 UTF-8".into()))?
-                    .replace('\\', "/");
-                let bytes =
-                    std::fs::read(&path).map_err(|e| UseCaseError::Render(e.to_string()))?;
-                let hash = format!("{:x}", Sha256::digest(bytes));
-                let encoded = name
-                    .split('/')
-                    .map(application::seo::encode_path_segment)
-                    .collect::<Vec<_>>()
-                    .join("/");
-                urls.insert(name, format!("/assets/{slug}/{encoded}?v={}", &hash[..12]));
+        } else if meta.is_file() {
+            let name = path
+                .strip_prefix(root)
+                .ok()
+                .and_then(|p| p.to_str())
+                .ok_or_else(|| UseCaseError::Render("主题路径不是 UTF-8".into()))?;
+            if name.contains('\\') {
+                return Err(UseCaseError::Render("主题路径不允许反斜杠".into()));
             }
+            let bytes = std::fs::read(path).map_err(|e| UseCaseError::Render(e.to_string()))?;
+            files.insert(name.to_string(), bytes.into());
+        } else {
+            return Err(UseCaseError::Render("主题只允许普通文件和目录".into()));
         }
         Ok(())
     }
-    visit(dir, dir, slug, &mut urls)?;
-    Ok(urls)
+    let mut files = BTreeMap::new();
+    match std::fs::symlink_metadata(root) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(files),
+        _ => visit(root, root, &mut files)?,
+    }
+    Ok(files)
 }
 
 impl MiniJinjaThemeRenderer {
@@ -354,6 +398,222 @@ impl MiniJinjaThemeRenderer {
 #[cfg(test)]
 mod tests {
     use super::{url_attr, verify_manifest};
+
+    struct TestTheme(std::path::PathBuf);
+
+    impl TestTheme {
+        fn new() -> Self {
+            let dir =
+                std::env::temp_dir().join(format!("blog-theme-check-{}", uuid::Uuid::now_v7()));
+            std::fs::create_dir_all(dir.join("templates")).unwrap();
+            std::fs::create_dir_all(dir.join("assets")).unwrap();
+            std::fs::copy("../../themes/default/theme.json", dir.join("theme.json")).unwrap();
+            for kind in ["templates", "assets"] {
+                for entry in std::fs::read_dir(format!("../../themes/default/{kind}")).unwrap() {
+                    let entry = entry.unwrap();
+                    std::fs::copy(entry.path(), dir.join(kind).join(entry.file_name())).unwrap();
+                }
+            }
+            Self(dir)
+        }
+        fn write(&self, path: &str, body: &str) {
+            let path = self.0.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, body).unwrap();
+        }
+    }
+    impl Drop for TestTheme {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[tokio::test]
+    async fn builtin_themes_pass_all_page_contracts_including_fifty_posts() {
+        let runtime = super::RenderingRuntime::default();
+        for name in ["default", "paper"] {
+            super::MiniJinjaThemeRenderer::load_checked(
+                &std::path::PathBuf::from(format!("../../themes/{name}")),
+                &runtime,
+            )
+            .await
+            .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn nested_partials_macros_and_shared_function_cards_are_loaded() {
+        let theme = TestTheme::new();
+        theme.write("templates/partials/card.html", "{% macro card(post) %}<a href=\"{{ post.url | url }}\">{{ post.title }}</a>{% if post.author_avatar_url %}<img src=\"{{ post.author_avatar_url | url }}\">{% endif %}{% endmacro %}");
+        theme.write("templates/partials/list.html", "{% from 'partials/card.html' import card %}{% for post in posts %}{{ card(post) }}{% endfor %}{% for post in get_posts(limit=50).items %}{{ card(post) }}{% endfor %}{% set item = get_post(slug='示例-0') %}{% if item %}{{ card(item) }}{% endif %}");
+        theme.write("templates/index.html", "{% include 'partials/list.html' %}");
+        // base.html is a helper, not a mandatory entry point.
+        for entry in ["post", "page", "tag", "category", "series"] {
+            theme.write(&format!("templates/{entry}.html"), "Standalone page");
+        }
+        std::fs::remove_file(theme.0.join("templates/base.html")).unwrap();
+        super::MiniJinjaThemeRenderer::load_checked(&theme.0, &super::RenderingRuntime::default())
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn auxiliary_templates_escape_html_regardless_of_extension() {
+        let runtime = super::RenderingRuntime::default();
+        let site = application::public_site::SiteInfo {
+            title: "Site".into(),
+            description: String::new(),
+            logo_url: None,
+        };
+        let base = application::seo::PublicBaseUrl::parse("https://example.com").unwrap();
+        let title = "<img src=x onerror=\"alert(1)\">";
+        let escaped_title = "&lt;img src=x onerror=&quot;alert(1)&quot;&gt;";
+        let post = application::public_site::PostCard {
+            title: title.into(),
+            slug: "example".into(),
+            url: "/posts/example".into(),
+            excerpt: None,
+            published_at: None,
+            author_display: "Author".into(),
+            author_avatar_url: None,
+        };
+        let page = application::public_site::PageView {
+            title: title.into(),
+            slug: "about".into(),
+            published_at: None,
+            updated_at: "2026-01-01".into(),
+            content_html: "<p><strong>已清洗的正文</strong></p>".into(),
+        };
+        for suffix in [".html", ".jinja", ".j2", ""] {
+            let theme = TestTheme::new();
+            theme.write(
+                &format!("templates/partials/card{suffix}"),
+                "<h2>{{ post.title }}</h2>",
+            );
+            theme.write(
+                "templates/index.html",
+                &format!(
+                    "{{% for post in posts %}}{{% include 'partials/card{suffix}' %}}{{% endfor %}}"
+                ),
+            );
+            theme.write(
+                &format!("templates/partials/page{suffix}"),
+                "<h1>{{ page.title }}</h1>{{ page.content_html | safe }}",
+            );
+            theme.write(
+                "templates/page.html",
+                &format!("{{% include 'partials/page{suffix}' %}}"),
+            );
+            let renderer = super::MiniJinjaThemeRenderer::load_checked(&theme.0, &runtime)
+                .await
+                .unwrap();
+            let renderer = runtime.theme_renderer(renderer);
+            let index_html = renderer
+                .render_index(
+                    &site,
+                    &application::seo::SeoMeta::home(&site, &base),
+                    std::slice::from_ref(&post),
+                )
+                .await
+                .unwrap();
+            assert_eq!(index_html, format!("<h2>{escaped_title}</h2>"), "{suffix}");
+            let page_html = renderer
+                .render_page(
+                    &site,
+                    &application::seo::SeoMeta::page(&site, &base, &page.title, &page.slug),
+                    &page,
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                page_html,
+                format!("<h1>{escaped_title}</h1>{}", page.content_html),
+                "{suffix}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn validation_rejects_missing_assets_dependencies_and_conditional_contract_errors() {
+        let runtime = super::RenderingRuntime::default();
+        for (entry, body, scenario) in [
+            (
+                "index",
+                "{{ asset_url(path='absent.css') }}",
+                "empty/index.html",
+            ),
+            (
+                "page",
+                "{% include 'partials/missing.html' %}",
+                "empty/page.html",
+            ),
+            (
+                "index",
+                "{% if posts | length == 50 %}{{ posts[49].missing }}{% endif %}",
+                "maximum-first/index.html",
+            ),
+            ("post", "{{ post.category.name }}", "empty/post.html"),
+            (
+                "series",
+                "{% if series.cover_url %}{{ unknown }}{% endif %}",
+                "maximum-first/series.html",
+            ),
+            (
+                "category",
+                "{% if category.page == 2 %}{{ unknown }}{% endif %}",
+                "maximum-middle/category.html",
+            ),
+            (
+                "tag",
+                "{% if not tag.posts %}{{ unknown }}{% endif %}",
+                "empty/tag.html",
+            ),
+        ] {
+            let theme = TestTheme::new();
+            theme.write(&format!("templates/{entry}.html"), body);
+            let error = super::MiniJinjaThemeRenderer::load_checked(&theme.0, &runtime)
+                .await
+                .err()
+                .unwrap()
+                .to_string();
+            assert!(error.contains(scenario), "{error}");
+        }
+    }
+
+    #[test]
+    fn release_snapshot_and_version_bind_templates_to_asset_bytes() {
+        let theme = TestTheme::new();
+        let old = super::MiniJinjaThemeRenderer::load(&theme.0).unwrap();
+        let same = super::MiniJinjaThemeRenderer::load(&theme.0).unwrap();
+        assert_eq!(old.assets().version, same.assets().version);
+        let original = old.assets().files["style.css"].clone();
+        theme.write("assets/style.css", "new css");
+        let changed_asset = super::MiniJinjaThemeRenderer::load(&theme.0).unwrap();
+        assert_ne!(old.assets().version, changed_asset.assets().version);
+        assert_eq!(old.assets().files["style.css"], original);
+        theme.write("templates/index.html", "new template");
+        let changed_template = super::MiniJinjaThemeRenderer::load(&theme.0).unwrap();
+        assert_ne!(
+            changed_asset.assets().version,
+            changed_template.assets().version
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn snapshots_reject_symlinks_including_directory_roots() {
+        for path in ["templates/linked.html", "assets/linked.css"] {
+            let theme = TestTheme::new();
+            std::os::unix::fs::symlink("../theme.json", theme.0.join(path)).unwrap();
+            assert!(super::MiniJinjaThemeRenderer::load(&theme.0).is_err());
+        }
+        for root in ["templates", "assets"] {
+            let theme = TestTheme::new();
+            std::fs::rename(theme.0.join(root), theme.0.join("original")).unwrap();
+            std::os::unix::fs::symlink("original", theme.0.join(root)).unwrap();
+            assert!(super::MiniJinjaThemeRenderer::load(&theme.0).is_err());
+        }
+    }
 
     #[test]
     fn url_attr_keeps_slashes_and_escapes_attribute_specials() {

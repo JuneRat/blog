@@ -33,7 +33,7 @@ pub struct AppState {
 }
 
 pub struct HttpAssets {
-    pub themes: Vec<(String, PathBuf)>,
+    pub themes: Vec<application::themes::ThemeAssets>,
     pub admin_dist: PathBuf,
 }
 
@@ -85,10 +85,41 @@ pub fn public_router(state: PublicSiteState, assets_dir: Option<PathBuf>) -> Rou
     router
 }
 
-/// Mount each installed theme under its own stable asset namespace.
-pub fn mount_theme_assets(mut router: Router, themes: Vec<(String, PathBuf)>) -> Router {
-    for (slug, dir) in themes {
-        router = router.nest_service(&format!("/assets/{slug}"), ServeDir::new(dir));
+/// Serve only the immutable bytes loaded with each template release.
+pub fn mount_theme_assets(
+    mut router: Router,
+    themes: Vec<application::themes::ThemeAssets>,
+) -> Router {
+    for theme in themes {
+        let route = format!("/assets/{}/{}/{{*path}}", theme.slug, theme.version);
+        let files = theme.files;
+        router = router.route(
+            &route,
+            get(move |Path(path): Path<String>| {
+                let files = files.clone();
+                async move {
+                    let Some(bytes) = files.get(&path) else {
+                        return StatusCode::NOT_FOUND.into_response();
+                    };
+                    (
+                        [
+                            (
+                                header::CONTENT_TYPE,
+                                mime_guess::from_path(&path)
+                                    .first_or_octet_stream()
+                                    .to_string(),
+                            ),
+                            (
+                                header::CACHE_CONTROL,
+                                "public, max-age=31536000, immutable".into(),
+                            ),
+                        ],
+                        axum::body::Bytes::from_owner(bytes.clone()),
+                    )
+                        .into_response()
+                }
+            }),
+        );
     }
     router
 }

@@ -21,7 +21,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "time", "uuid", "migrate", "json"] }
 axum = "0.8"
 clap = { version = "4", features = ["derive"] }
-minijinja = { version = "2", features = ["fuel"] }
+minijinja = { version = "2", features = ["fuel", "loader"] }
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
 ammonia = "4"
 tracing = "0.1"

@@ -7,6 +7,25 @@ use serde::Serialize;
 use crate::error::UseCaseError;
 use crate::ports::ThemeRenderer;
 
+/// Immutable asset bytes from the same loaded release as the templates.
+#[derive(Clone)]
+pub struct ThemeAssets {
+    pub slug: String,
+    pub version: String,
+    pub files: Arc<BTreeMap<String, Arc<[u8]>>>,
+}
+
+impl ThemeAssets {
+    pub fn url(&self, path: &str) -> String {
+        let encoded = path
+            .split('/')
+            .map(crate::seo::encode_path_segment)
+            .collect::<Vec<_>>()
+            .join("/");
+        format!("/assets/{}/{}/{encoded}", self.slug, self.version)
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ThemeOption {
     pub slug: String,

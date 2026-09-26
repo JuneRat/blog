@@ -1,7 +1,7 @@
 //! Full HTTP assembly. Theme files, static assets, public URLs and browser
 //! authentication belong exclusively to `serve`.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use application::category::CategoryInteractor;
@@ -26,7 +26,7 @@ use sqlx::PgPool;
 use crate::assembly;
 use crate::config::SiteConfig;
 
-pub fn build_router(
+pub async fn build_router(
     pool: &PgPool,
     config: &SiteConfig,
     roles: Arc<RoleInteractor>,
@@ -42,7 +42,7 @@ pub fn build_router(
         public_tags.clone(),
         public_categories.clone(),
     ));
-    let installed = load_themes(&config.theme_dir, theme_data, &runtime)?;
+    let installed = load_themes(&config.theme_dir, theme_data, &runtime).await?;
     let fallback = installed
         .registry
         .renderer(installed.registry.fallback())
@@ -149,22 +149,23 @@ pub fn build_router(
 
 struct InstalledThemes {
     registry: Arc<ThemeRegistry>,
-    assets: Vec<(String, PathBuf)>,
+    assets: Vec<application::themes::ThemeAssets>,
 }
 
-fn load_themes(
+async fn load_themes(
     theme_dir: &Path,
     data: Arc<ThemeData>,
     runtime: &Arc<RenderingRuntime>,
 ) -> Result<InstalledThemes, String> {
-    let fallback = MiniJinjaThemeRenderer::load(theme_dir)
+    let fallback = MiniJinjaThemeRenderer::load_checked(theme_dir, runtime)
+        .await
         .map_err(|error| format!("加载默认主题模板失败：{error}"))?;
     if theme_dir.file_name().and_then(|name| name.to_str()) != Some(fallback.slug()) {
         return Err("默认主题目录名必须与清单 slug 一致".into());
     }
     let fallback_slug = fallback.slug().to_string();
     let mut registry = ThemeRegistry::new(fallback_slug.clone());
-    let mut assets = vec![(fallback_slug.clone(), theme_dir.join("assets"))];
+    let mut assets = vec![fallback.assets()];
     registry
         .add(
             fallback_slug,
@@ -185,12 +186,13 @@ fn load_themes(
             {
                 continue;
             }
-            match MiniJinjaThemeRenderer::load(&dir) {
+            match MiniJinjaThemeRenderer::load_checked(&dir, runtime).await {
                 Ok(renderer)
                     if dir.file_name().and_then(|name| name.to_str()) == Some(renderer.slug()) =>
                 {
                     let slug = renderer.slug().to_string();
                     let name = renderer.name().to_string();
+                    let release_assets = renderer.assets();
                     if registry
                         .add(
                             slug.clone(),
@@ -199,7 +201,7 @@ fn load_themes(
                         )
                         .is_ok()
                     {
-                        assets.push((slug, dir.join("assets")));
+                        assets.push(release_assets);
                     }
                 }
                 Ok(_) => eprintln!("跳过主题 {}：目录名与清单 slug 不一致", dir.display()),

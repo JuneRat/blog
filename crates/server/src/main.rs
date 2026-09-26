@@ -74,7 +74,8 @@ async fn run(command: Command) -> Result<(), String> {
         Command::Serve { addr } => {
             let site = config::SiteConfig::from_env(addr)?;
             let app =
-                website::build_router(&pool, &site, roles, Arc::new(RenderingRuntime::default()))?;
+                website::build_router(&pool, &site, roles, Arc::new(RenderingRuntime::default()))
+                    .await?;
             serve(app, &site.bind).await
         }
     }
