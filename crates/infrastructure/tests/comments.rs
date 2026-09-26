@@ -65,7 +65,14 @@ async fn comments_visibility_authorization_concurrency_and_lifecycle() {
     assert!(!root.is_author);
     assert_eq!(service.list(&other, None, None, 1).await.unwrap().total, 0);
     assert!(matches!(
-        service.moderate(&other, root.id, 1, Some("approved")).await,
+        service
+            .moderate(
+                &other,
+                root.id,
+                1,
+                ModerationAction::SetStatus(CommentStatus::Approved)
+            )
+            .await,
         Err(UseCaseError::Forbidden)
     ));
     assert!(matches!(
@@ -84,11 +91,23 @@ async fn comments_visibility_authorization_concurrency_and_lifecycle() {
             .is_err()
     );
     service
-        .moderate(&author, root.id, 1, Some("approved"))
+        .moderate(
+            &author,
+            root.id,
+            1,
+            ModerationAction::SetStatus(CommentStatus::Approved),
+        )
         .await
         .unwrap();
     assert!(matches!(
-        service.moderate(&author, root.id, 1, Some("spam")).await,
+        service
+            .moderate(
+                &author,
+                root.id,
+                1,
+                ModerationAction::SetStatus(CommentStatus::Spam)
+            )
+            .await,
         Err(UseCaseError::VersionConflict)
     ));
     assert_eq!(
@@ -118,7 +137,12 @@ async fn comments_visibility_authorization_concurrency_and_lifecycle() {
     assert!(reply.is_author);
     assert_eq!(reply.nickname, "comments_owner的展示名");
     service
-        .moderate(&admin, reply.id, 1, Some("approved"))
+        .moderate(
+            &admin,
+            reply.id,
+            1,
+            ModerationAction::SetStatus(CommentStatus::Approved),
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -150,7 +174,12 @@ async fn comments_visibility_authorization_concurrency_and_lifecycle() {
             .is_err()
     );
     service
-        .moderate(&author, root.id, 2, Some("rejected"))
+        .moderate(
+            &author,
+            root.id,
+            2,
+            ModerationAction::SetStatus(CommentStatus::Rejected),
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -166,7 +195,12 @@ async fn comments_visibility_authorization_concurrency_and_lifecycle() {
         Err(UseCaseError::NotFound(_))
     ));
     service
-        .moderate(&author, root.id, 3, Some("approved"))
+        .moderate(
+            &author,
+            root.id,
+            3,
+            ModerationAction::SetStatus(CommentStatus::Approved),
+        )
         .await
         .unwrap();
     // Own policy has its own CAS, keeping historical comments readable.
@@ -378,7 +412,12 @@ async fn comments_visibility_authorization_concurrency_and_lifecycle() {
         .await
         .unwrap();
     service
-        .moderate(&author, root.id, version, None)
+        .moderate(
+            &author,
+            root.id,
+            version,
+            ModerationAction::DeletePermanently,
+        )
         .await
         .unwrap();
     let replies: i64 = sqlx::query_scalar("SELECT count(*) FROM comments WHERE parent_id=$1")
@@ -398,4 +437,38 @@ async fn comments_visibility_authorization_concurrency_and_lifecycle() {
         .await
         .unwrap();
     assert_eq!(remaining, 0);
+}
+
+#[tokio::test]
+async fn authenticated_comment_names_cannot_persist_account_control_characters() {
+    let pool = common::fresh_database("blog_test_comment_names").await;
+    let owner = common::seed_user(&pool, "comment_name_owner").await;
+    sqlx::query("UPDATE users SET display_name=$2 WHERE id=$1")
+        .bind(owner)
+        .bind("  Alice\nAdmin\u{7}  ")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO posts(id,author_id,slug,title,status,published_at) VALUES($1,$2,'names','Names','published',now())")
+        .bind(Uuid::now_v7()).bind(owner).execute(&pool).await.unwrap();
+    let service = CommentInteractor::new(Arc::new(PostgresCommentRepository::new(pool.clone())));
+    let author = actor(owner, false);
+    service
+        .submit(
+            "names",
+            Some(&author),
+            "account-name",
+            cmd("Account comment", None),
+        )
+        .await
+        .unwrap();
+    let page = service.list(&author, None, None, 1).await.unwrap();
+    assert_eq!(page.items[0].nickname, "AliceAdmin");
+    let mut guest = cmd("Guest comment", None);
+    guest.nickname = "Alice\nAdmin".into();
+    assert!(matches!(
+        service.submit("names", None, "guest-name", guest).await,
+        Err(UseCaseError::Invalid(_))
+    ));
+    pool.close().await;
 }

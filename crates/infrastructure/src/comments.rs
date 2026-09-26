@@ -76,13 +76,15 @@ impl CommentRepository for PostgresCommentRepository {
             enabled: post.get("enabled"),
         })
     }
-    async fn submit(
-        &self,
-        slug: &str,
-        user: Option<Uuid>,
-        client: &str,
-        cmd: SubmitComment,
-    ) -> Result<(), UseCaseError> {
+    async fn submit(&self, slug: &str, client: &str, cmd: NewComment) -> Result<(), UseCaseError> {
+        let user = match &cmd.author {
+            CommentAuthor::Account(id) => Some(*id),
+            CommentAuthor::Guest(_) => None,
+        };
+        let guest_nickname = match &cmd.author {
+            CommentAuthor::Guest(name) => Some(name.as_str()),
+            _ => None,
+        };
         let client = format!("{:x}", Sha256::digest(client.as_bytes()));
         let mut tx = self.pool.begin().await.map_err(db)?;
         // All instances share this per-client lock and database clock/rate window.
@@ -110,7 +112,7 @@ impl CommentRepository for PostgresCommentRepository {
             .bind(cmd.request_id).fetch_optional(&mut *tx).await.map_err(db)? {
             if prior.get::<Uuid,_>("post_id") == id && prior.get::<Option<Uuid>,_>("parent_id") == cmd.parent_id
                 && prior.get::<Option<Uuid>,_>("user_id") == user && prior.get::<String,_>("client_hash") == client
-                && prior.get::<String,_>("body") == cmd.body && (user.is_some() || prior.get::<String,_>("nickname") == cmd.nickname) {
+                && prior.get::<String,_>("body") == cmd.body.as_str() && (user.is_some() || Some(prior.get::<String,_>("nickname").as_str()) == guest_nickname) {
                 return Ok(());
             }
             return Err(UseCaseError::Invalid("重复请求标识与原评论不一致".into()));
@@ -135,25 +137,37 @@ impl CommentRepository for PostgresCommentRepository {
             });
         }
         let duplicate: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM comments WHERE client_hash=$1 AND post_id=$2 AND parent_id IS NOT DISTINCT FROM $3 AND body=$4 AND created_at > now()-interval '10 minutes')")
-            .bind(&client).bind(id).bind(cmd.parent_id).bind(&cmd.body).fetch_one(&mut *tx).await.map_err(db)?;
+            .bind(&client).bind(id).bind(cmd.parent_id).bind(cmd.body.as_str()).fetch_one(&mut *tx).await.map_err(db)?;
         if duplicate {
             return Err(UseCaseError::Invalid("请勿重复提交相同评论".into()));
         }
-        let nickname = if let Some(user) = user {
-            sqlx::query_scalar::<_,String>("SELECT left(COALESCE(display_name,username),64) FROM users WHERE id=$1 AND deleted_at IS NULL")
-                .bind(user).fetch_optional(&mut *tx).await.map_err(db)?.ok_or(UseCaseError::Unauthenticated)?
-        } else {
-            cmd.nickname
+        let nickname = match cmd.author {
+            CommentAuthor::Account(user) => {
+                let account = sqlx::query(
+                    "SELECT display_name, username FROM users WHERE id=$1 AND deleted_at IS NULL",
+                )
+                .bind(user)
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(db)?
+                .ok_or(UseCaseError::Unauthenticated)?;
+                CommentNickname::from_account(
+                    account.get::<Option<&str>, _>("display_name"),
+                    account.get("username"),
+                )
+                .map_err(|e| UseCaseError::Invalid(e.into()))?
+            }
+            CommentAuthor::Guest(name) => name,
         };
         sqlx::query("INSERT INTO comments(id,post_id,parent_id,user_id,nickname,body,request_id,client_hash) VALUES($1,$2,$3,$4,$5,$6,$7,$8)")
-            .bind(Uuid::now_v7()).bind(id).bind(cmd.parent_id).bind(user).bind(nickname).bind(cmd.body).bind(cmd.request_id).bind(client)
+            .bind(Uuid::now_v7()).bind(id).bind(cmd.parent_id).bind(user).bind(nickname.as_str()).bind(cmd.body.as_str()).bind(cmd.request_id).bind(client)
             .execute(&mut *tx).await.map_err(|e| if e.as_database_error().is_some_and(|e| e.is_unique_violation()) { UseCaseError::Invalid("请求标识已使用".into()) } else { db(e) })?;
         tx.commit().await.map_err(db)
     }
     async fn list(
         &self,
         scope: CommentScope,
-        status: Option<&str>,
+        status: Option<CommentStatus>,
         post: Option<Uuid>,
         page: i64,
     ) -> Result<CommentPage, UseCaseError> {
@@ -168,13 +182,13 @@ impl CommentRepository for PostgresCommentRepository {
         ))
         .bind(scope.all)
         .bind(scope.user_id)
-        .bind(status)
+        .bind(status.map(CommentStatus::as_str))
         .bind(post)
         .fetch_one(&mut *tx)
         .await
         .map_err(db)?;
         let items = sqlx::query(&format!("SELECT {FIELDS} FROM comments c JOIN posts p ON p.id=c.post_id WHERE {filter} ORDER BY c.created_at DESC,c.id DESC LIMIT 20 OFFSET $5"))
-            .bind(scope.all).bind(scope.user_id).bind(status).bind(post).bind((page-1)*20).fetch_all(&mut *tx).await.map_err(db)?.into_iter().map(comment).collect();
+            .bind(scope.all).bind(scope.user_id).bind(status.map(CommentStatus::as_str)).bind(post).bind((page-1)*20).fetch_all(&mut *tx).await.map_err(db)?.into_iter().map(comment).collect();
         tx.commit().await.map_err(db)?;
         Ok(CommentPage {
             items,
@@ -187,7 +201,7 @@ impl CommentRepository for PostgresCommentRepository {
         scope: CommentScope,
         id: Uuid,
         version: i64,
-        status: Option<&str>,
+        action: ModerationAction,
     ) -> Result<(), UseCaseError> {
         let mut tx = self.pool.begin().await.map_err(db)?;
         // Lock the post before its comments (same lock order as submit).
@@ -196,17 +210,26 @@ impl CommentRepository for PostgresCommentRepository {
         if !scope.all && post.get::<Uuid, _>("author_id") != scope.user_id {
             return Err(UseCaseError::Forbidden);
         }
-        let changed = if let Some(status) = status {
-            sqlx::query("UPDATE comments SET status=$3,version=version+1,updated_at=now() WHERE id=$1 AND version=$2")
-                .bind(id).bind(version).bind(status).execute(&mut *tx).await.map_err(db)?.rows_affected()
-        } else {
-            sqlx::query("DELETE FROM comments WHERE id=$1 AND version=$2")
-                .bind(id)
-                .bind(version)
-                .execute(&mut *tx)
-                .await
-                .map_err(db)?
-                .rows_affected()
+        let changed = match action {
+            ModerationAction::SetStatus(status) => {
+                sqlx::query("UPDATE comments SET status=$3,version=version+1,updated_at=now() WHERE id=$1 AND version=$2")
+                    .bind(id)
+                    .bind(version)
+                    .bind(status.as_str())
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(db)?
+                    .rows_affected()
+            }
+            ModerationAction::DeletePermanently => {
+                sqlx::query("DELETE FROM comments WHERE id=$1 AND version=$2")
+                    .bind(id)
+                    .bind(version)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(db)?
+                    .rows_affected()
+            }
         };
         if changed == 0 {
             return Err(UseCaseError::VersionConflict);

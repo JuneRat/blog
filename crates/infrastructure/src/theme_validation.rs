@@ -177,6 +177,7 @@ pub(crate) async fn validate(
         ("maximum-first", 50, true, 1, 3),
         ("maximum-middle", 50, true, 2, 3),
         ("maximum-last", 50, true, 3, 3),
+        ("maximum-body", 50, true, 1, 3),
     ] {
         let fixtures = Arc::new(Fixtures { count, optional });
         let data = Arc::new(ThemeData::new(
@@ -196,7 +197,7 @@ pub(crate) async fn validate(
             .map(PostCard::from)
             .collect();
         let detail = fixtures.detail("示例-0");
-        let post = PostView {
+        let mut post = PostView {
             url: application::seo::post_path(&detail.slug),
             title: detail.title,
             slug: detail.slug,
@@ -227,6 +228,12 @@ pub(crate) async fn validate(
                 order: s.order,
             }),
         };
+        if scenario == "maximum-body" {
+            post.content_html = format!(
+                "<p>{}</p>",
+                "x".repeat(domain::content::budget::MAX_CONTENT_HTML_BYTES - 7)
+            );
+        }
         let page_view = PageView {
             title: "示例页面".into(),
             slug: "about".into(),

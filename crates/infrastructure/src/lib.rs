@@ -38,3 +38,5 @@ pub use sessions::{
 pub use settings::PostgresSettingsStore;
 pub use throttle::{InMemoryLoginThrottle, ThrottleConfig};
 pub mod comments;
+
+pub mod image_inspection;

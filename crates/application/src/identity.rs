@@ -625,7 +625,8 @@ impl UserInteractor {
             .await?
             .ok_or_else(|| UseCaseError::NotFound("作者用户".into()))?;
         let version = snapshot.version;
-        let user = User::reconstitute(snapshot);
+        let user =
+            User::reconstitute(snapshot).map_err(|e| UseCaseError::Repository(e.to_string()))?;
         if !user.is_active() {
             return Err(UseCaseError::Forbidden);
         }
@@ -638,7 +639,8 @@ impl UserInteractor {
     }
 
     async fn actor_from_snapshot(&self, snapshot: UserSnapshot) -> Result<Actor, UseCaseError> {
-        let user = User::reconstitute(snapshot);
+        let user =
+            User::reconstitute(snapshot).map_err(|e| UseCaseError::Repository(e.to_string()))?;
         if !user.is_active() {
             return Err(UseCaseError::Forbidden);
         }
@@ -757,8 +759,9 @@ fn normalize_email(raw: Option<String>) -> Result<Option<String>, UseCaseError> 
             if email.is_empty() {
                 return Ok(None);
             }
-            User::validate_email_shape(email).map_err(|e| UseCaseError::Invalid(e.to_string()))?;
-            Ok(Some(email.to_string()))
+            domain::identity::Email::new(email)
+                .map(|email| Some(email.into_string()))
+                .map_err(|e| UseCaseError::Invalid(e.to_string()))
         }
     }
 }

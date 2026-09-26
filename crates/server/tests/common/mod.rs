@@ -25,6 +25,7 @@ pub fn media_interactor(
     root: std::path::PathBuf,
 ) -> Arc<application::media::MediaInteractor> {
     Arc::new(application::media::MediaInteractor::new(
+        Arc::new(infrastructure::image_inspection::HeaderImageInspector),
         Arc::new(infrastructure::PostgresMediaRepository::new(pool)),
         Arc::new(infrastructure::LocalMediaStorage::new(root)),
         Arc::new(infrastructure::SystemClock),

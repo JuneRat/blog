@@ -84,6 +84,7 @@ pub fn post_commands(pool: &PgPool, renderer: Arc<dyn ContentRenderer>) -> PostC
 
 pub fn media(pool: &PgPool, root: PathBuf) -> Arc<MediaInteractor> {
     Arc::new(MediaInteractor::new(
+        Arc::new(infrastructure::image_inspection::HeaderImageInspector),
         Arc::new(PostgresMediaRepository::new(pool.clone())),
         Arc::new(infrastructure::LocalMediaStorage::new(root)),
         Arc::new(SystemClock),

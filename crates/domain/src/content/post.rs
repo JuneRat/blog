@@ -77,6 +77,12 @@ impl Visibility {
 
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum PostError {
+    #[error("回收站内的文章须先恢复才能编辑或发布")]
+    InTrash,
+    #[error(transparent)]
+    ContentBudget(#[from] super::budget::ContentBudgetError),
+    #[error("快照结构无效：{0}")]
+    InvalidSnapshot(&'static str),
     #[error("slug 不合法：{0}")]
     InvalidSlug(String),
     #[error("标题长度不能超过 {TITLE_MAX_CHARS} 字符")]
@@ -257,6 +263,7 @@ impl Post {
         metadata: PostDraftMetadata,
         now: OffsetDateTime,
     ) -> Result<Self, PostError> {
+        super::budget::validate_source(&content)?;
         Self::validate_mutation_fields(&title, excerpt.as_deref())?;
         let series = metadata
             .series
@@ -286,8 +293,28 @@ impl Post {
     }
 
     /// 受控重建入口：仅供持久化适配器从数据库恢复聚合。
-    pub fn reconstitute(snapshot: PostSnapshot) -> Self {
-        Self { snapshot }
+    pub fn reconstitute(snapshot: PostSnapshot) -> Result<Self, PostError> {
+        Slug::new(&snapshot.slug)?;
+        Self::validate_mutation_fields(&snapshot.title, snapshot.excerpt.as_deref())?;
+        match (snapshot.series_id, snapshot.series_order) {
+            (Some(id), Some(order)) => {
+                SeriesPlacement::new(id, order)?;
+            }
+            (None, None) => {}
+            _ => return Err(PostError::InvalidSnapshot("系列与序号必须同时存在")),
+        }
+        if snapshot.version < 1 {
+            return Err(PostError::InvalidSnapshot("版本必须为正整数"));
+        }
+        if snapshot.status == PostStatus::Published {
+            if snapshot.published_at.is_none() {
+                return Err(PostError::InvalidSnapshot("已发布文章缺少首次发布时间"));
+            }
+            if snapshot.title.trim().is_empty() || snapshot.content.trim().is_empty() {
+                return Err(PostError::EmptyContentWhenPublished);
+            }
+        }
+        Ok(Self { snapshot })
     }
 
     pub fn snapshot(&self) -> PostSnapshot {
@@ -339,6 +366,9 @@ impl Post {
     /// 实现：先在候选值上完成全部校验，再整体提交——任一校验失败时
     /// 聚合保持原状，不会留下半套修改。
     pub fn edit(&mut self, patch: PostPatch) -> Result<bool, PostError> {
+        if self.snapshot.deleted_at.is_some() {
+            return Err(PostError::InTrash);
+        }
         if self.snapshot.status == PostStatus::Archived {
             return Err(PostError::ArchivedNotEditable);
         }
@@ -369,6 +399,7 @@ impl Post {
         let new_cover_media_id = patch.cover_media_id.unwrap_or(self.snapshot.cover_media_id);
 
         // 2. 全量校验候选值（不写任何字段）。
+        super::budget::validate_source(&new_content)?;
         Self::validate_mutation_fields(&new_title, new_excerpt_owned.as_deref())?;
         if slug_changed {
             // 首次发布产生 published_at 后 slug 锁定；撤回不解锁。
@@ -433,6 +464,10 @@ impl Post {
     /// 发布：draft → published（首次发布写入 published_at，之后保持不变）。
     /// 已发布时幂等无操作。归档为终态。
     pub fn publish(&mut self, now: OffsetDateTime) -> Result<bool, PostError> {
+        super::budget::validate_source(&self.snapshot.content)?;
+        if self.snapshot.deleted_at.is_some() {
+            return Err(PostError::InTrash);
+        }
         match self.snapshot.status {
             PostStatus::Published => Ok(false),
             PostStatus::Archived => Err(PostError::ArchivedIsTerminal),
@@ -455,7 +490,7 @@ impl Post {
     /// 撤回：published → draft，保留 published_at（slug 仍锁定）。
     /// 非发布状态幂等无操作。
     pub fn withdraw(&mut self) -> bool {
-        if self.snapshot.status == PostStatus::Published {
+        if self.snapshot.deleted_at.is_none() && self.snapshot.status == PostStatus::Published {
             self.snapshot.status = PostStatus::Draft;
             true
         } else {
@@ -698,7 +733,7 @@ mod tests {
             post.publish(now).unwrap();
             let mut original = post.snapshot();
             original.status = original_status;
-            let mut post = Post::reconstitute(original.clone());
+            let mut post = Post::reconstitute(original.clone()).unwrap();
 
             assert!(post.trash(now));
             assert_eq!(post.snapshot().deleted_at, Some(now));
@@ -804,7 +839,7 @@ mod tests {
         post.publish(OffsetDateTime::now_utc()).unwrap();
         let mut snapshot = post.snapshot();
         snapshot.status = PostStatus::Archived;
-        let mut archived = Post::reconstitute(snapshot);
+        let mut archived = Post::reconstitute(snapshot).unwrap();
         assert_eq!(
             archived.publish(OffsetDateTime::now_utc()).unwrap_err(),
             PostError::ArchivedIsTerminal
@@ -901,5 +936,76 @@ mod tests {
             .unwrap()
         );
         assert_eq!(post.snapshot().cover_media_id, None);
+    }
+
+    #[test]
+    fn trash_blocks_edit_publish_and_withdraw_without_mutating() {
+        for published in [false, true] {
+            let mut post = draft();
+            if published {
+                post.publish(OffsetDateTime::UNIX_EPOCH).unwrap();
+            }
+            post.trash(OffsetDateTime::UNIX_EPOCH);
+            let before = post.snapshot();
+            assert_eq!(
+                post.edit(PostPatch {
+                    title: Some("new".into()),
+                    ..Default::default()
+                }),
+                Err(PostError::InTrash)
+            );
+            assert_eq!(
+                post.publish(OffsetDateTime::UNIX_EPOCH),
+                Err(PostError::InTrash)
+            );
+            assert!(!post.withdraw());
+            assert_eq!(post.snapshot(), before);
+        }
+    }
+
+    #[test]
+    fn reconstitution_rejects_invalid_slug_series_version_and_published_state() {
+        for field in 0..5 {
+            let mut snapshot = draft().snapshot();
+            match field {
+                0 => snapshot.slug = "bad/path".into(),
+                1 => snapshot.series_order = Some(1),
+                2 => {
+                    snapshot.series_id = Some(Uuid::now_v7());
+                    snapshot.series_order = Some(0);
+                }
+                3 => snapshot.version = 0,
+                _ => snapshot.status = PostStatus::Published,
+            }
+            assert!(Post::reconstitute(snapshot).is_err());
+        }
+    }
+
+    #[test]
+    fn oversized_source_is_rejected_atomically() {
+        let mut post = draft();
+        let before = post.snapshot();
+        assert!(
+            post.edit(PostPatch {
+                content: Some("x".repeat(1_100_000)),
+                ..Default::default()
+            })
+            .is_err()
+        );
+        assert_eq!(post.snapshot(), before);
+    }
+
+    #[test]
+    fn legacy_large_content_can_be_loaded_and_shortened_but_not_published() {
+        let mut snapshot = draft().snapshot();
+        snapshot.content = "x".repeat(1_100_000);
+        let mut post = Post::reconstitute(snapshot).unwrap();
+        assert!(post.publish(OffsetDateTime::UNIX_EPOCH).is_err());
+        post.edit(PostPatch {
+            content: Some("shorter".into()),
+            ..Default::default()
+        })
+        .unwrap();
+        assert!(post.publish(OffsetDateTime::UNIX_EPOCH).unwrap());
     }
 }

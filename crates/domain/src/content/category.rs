@@ -17,6 +17,8 @@ pub const CATEGORY_DESCRIPTION_MAX_CHARS: usize = 2000;
 
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum CategoryError {
+    #[error("快照结构无效")]
+    InvalidSnapshot,
     #[error("分类名称不能为空")]
     EmptyName,
     #[error("分类名称长度不能超过 {CATEGORY_NAME_MAX_CHARS} 字符")]
@@ -69,8 +71,18 @@ impl Category {
     }
 
     /// 受控重建入口：仅供持久化适配器从数据库恢复聚合。
-    pub fn reconstitute(snapshot: CategorySnapshot) -> Self {
-        Self { snapshot }
+    pub fn reconstitute(snapshot: CategorySnapshot) -> Result<Self, CategoryError> {
+        super::post::Slug::new(&snapshot.slug).map_err(|_| CategoryError::InvalidSnapshot)?;
+        if normalize_name(snapshot.name.clone())? != snapshot.name || snapshot.version < 1 {
+            return Err(CategoryError::InvalidSnapshot);
+        }
+        if normalize_description(snapshot.description.clone())? != snapshot.description {
+            return Err(CategoryError::InvalidSnapshot);
+        }
+        if snapshot.parent_id == Some(snapshot.id) {
+            return Err(CategoryError::InvalidSnapshot);
+        }
+        Ok(Self { snapshot })
     }
 
     pub fn snapshot(&self) -> CategorySnapshot {
@@ -209,5 +221,23 @@ mod tests {
             CategoryError::NameTooLong
         );
         assert_eq!(c.snapshot(), before);
+    }
+
+    #[test]
+    fn reconstitution_checks_structural_fields_without_normalizing_them() {
+        let original = category().snapshot();
+        assert_eq!(
+            Category::reconstitute(original.clone()).unwrap().snapshot(),
+            original
+        );
+        for field in 0..3 {
+            let mut invalid = original.clone();
+            match field {
+                0 => invalid.slug = "bad/path".into(),
+                1 => invalid.version = 0,
+                _ => invalid.name = " ".into(),
+            }
+            assert!(Category::reconstitute(invalid).is_err());
+        }
     }
 }

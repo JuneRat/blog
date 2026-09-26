@@ -84,6 +84,10 @@ impl PageStatus {
 
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum PageError {
+    #[error(transparent)]
+    ContentBudget(#[from] super::budget::ContentBudgetError),
+    #[error("快照结构无效：{0}")]
+    InvalidSnapshot(&'static str),
     #[error("slug 不合法：{0}")]
     InvalidSlug(String),
     #[error("slug「{0}」是系统保留路径，不能用于页面")]
@@ -150,6 +154,7 @@ impl Page {
         visibility: Visibility,
         now: OffsetDateTime,
     ) -> Result<Self, PageError> {
+        super::budget::validate_source(&content)?;
         if title.chars().count() > TITLE_MAX_CHARS {
             return Err(PageError::TitleTooLong);
         }
@@ -173,8 +178,26 @@ impl Page {
     }
 
     /// 受控重建入口：仅供持久化适配器从数据库恢复聚合。
-    pub fn reconstitute(snapshot: PageSnapshot) -> Self {
-        Self { snapshot }
+    pub fn reconstitute(snapshot: PageSnapshot) -> Result<Self, PageError> {
+        Slug::new(&snapshot.slug).map_err(map_slug_error)?;
+        if is_reserved_root_slug(&snapshot.slug) {
+            return Err(PageError::ReservedSlug(snapshot.slug.clone()));
+        }
+        if snapshot.title.chars().count() > TITLE_MAX_CHARS {
+            return Err(PageError::TitleTooLong);
+        }
+        if snapshot.version < 1 {
+            return Err(PageError::InvalidSnapshot("版本必须为正整数"));
+        }
+        if snapshot.status == PageStatus::Published {
+            if snapshot.published_at.is_none() {
+                return Err(PageError::InvalidSnapshot("已发布页面缺少首次发布时间"));
+            }
+            if snapshot.title.trim().is_empty() || snapshot.content.trim().is_empty() {
+                return Err(PageError::EmptyContentWhenPublished);
+            }
+        }
+        Ok(Self { snapshot })
     }
 
     pub fn snapshot(&self) -> PageSnapshot {
@@ -222,6 +245,7 @@ impl Page {
         };
 
         // 2. 全量校验候选值（不写任何字段）。
+        super::budget::validate_source(&new_content)?;
         if new_title.chars().count() > TITLE_MAX_CHARS {
             return Err(PageError::TitleTooLong);
         }
@@ -265,6 +289,7 @@ impl Page {
     /// 发布：draft → published（首次写入 published_at）；已发布幂等；归档终态。
     /// 发布时复核保留路径，避免历史数据或后续改名引入的系统路由占用。
     pub fn publish(&mut self, now: OffsetDateTime) -> Result<bool, PageError> {
+        super::budget::validate_source(&self.snapshot.content)?;
         match self.snapshot.status {
             PageStatus::Published => Ok(false),
             PageStatus::Archived => Err(PageError::ArchivedIsTerminal),
@@ -436,7 +461,7 @@ mod tests {
     fn archived_is_terminal() {
         let mut snapshot = draft("about").snapshot();
         snapshot.status = PageStatus::Archived;
-        let mut archived = Page::reconstitute(snapshot);
+        let mut archived = Page::reconstitute(snapshot).unwrap();
         assert_eq!(
             archived.publish(now()).unwrap_err(),
             PageError::ArchivedIsTerminal
@@ -451,5 +476,17 @@ mod tests {
                 .unwrap_err(),
             PageError::ArchivedNotEditable
         );
+    }
+
+    #[test]
+    fn reconstitution_rejects_invalid_and_reserved_paths() {
+        for slug in ["bad/path", "Admin", ""] {
+            let mut snapshot = draft("about").snapshot();
+            snapshot.slug = slug.into();
+            assert!(Page::reconstitute(snapshot).is_err());
+        }
+        let mut snapshot = draft("about").snapshot();
+        snapshot.status = PageStatus::Published;
+        assert!(Page::reconstitute(snapshot).is_err());
     }
 }

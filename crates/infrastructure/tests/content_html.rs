@@ -172,7 +172,7 @@ async fn media_failure_and_stale_version_leave_source_html_and_refs_unchanged() 
         .unwrap();
     let id = record.snapshot.id;
     let before = stored(&pool, "posts", id).await;
-    let mut post = Post::reconstitute(record.snapshot);
+    let mut post = Post::reconstitute(record.snapshot).unwrap();
     post.edit(PostPatch {
         content: Some(format!("![不存在](/media/{})", Uuid::now_v7())),
         ..Default::default()
@@ -287,7 +287,7 @@ async fn rebuild_cannot_overwrite_a_concurrent_editor_commit() {
     let rebuild =
         tokio::spawn(async move { rebuild_content_html(&rebuilding_pool, &renderer).await });
     entered.notified().await;
-    let mut post = Post::reconstitute(record.snapshot);
+    let mut post = Post::reconstitute(record.snapshot).unwrap();
     post.edit(PostPatch {
         content: Some("新 **正文**".into()),
         ..Default::default()

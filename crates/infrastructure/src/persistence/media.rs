@@ -7,7 +7,7 @@ use application::error::UseCaseError;
 use application::ports::{
     MediaContentKind, MediaDeleteOutcome, MediaRepository, MediaUsageRow, MediaWithUsage,
 };
-use domain::media::{MediaSnapshot, MediaStatus};
+use domain::media::{MediaSnapshot, MediaStatus, MediaTransition};
 
 use super::sql::{map_row_error, map_sqlx_error};
 
@@ -190,6 +190,8 @@ fn media_view_from_row(row: &sqlx::postgres::PgRow) -> Result<MediaWithUsage, Us
 #[async_trait]
 impl MediaRepository for PostgresMediaRepository {
     async fn insert_staged(&self, snapshot: &MediaSnapshot) -> Result<(), UseCaseError> {
+        domain::media::Media::reconstitute(snapshot.clone())
+            .map_err(|e| UseCaseError::Invalid(e.to_string()))?;
         sqlx::query(
             r#"
             INSERT INTO media_assets (
@@ -219,12 +221,15 @@ impl MediaRepository for PostgresMediaRepository {
 
     async fn mark_ready(&self, id: Uuid, now: OffsetDateTime) -> Result<bool, UseCaseError> {
         // 只允许 staged → ready：并发回收已把行推进到 deleted 时不得复活。
+        let action = MediaTransition::Ready;
         let updated = sqlx::query(
-            "UPDATE media_assets SET status = 'ready', version = version + 1, updated_at = $2 \
-             WHERE id = $1 AND status = 'staged' RETURNING id",
+            "UPDATE media_assets SET status = $3, version = version + 1, updated_at = $2 \
+             WHERE id = $1 AND status = $4 RETURNING id",
         )
         .bind(id)
         .bind(now)
+        .bind(action.target().as_str())
+        .bind(action.source().as_str())
         .fetch_optional(&self.pool)
         .await
         .map_err(map_sqlx_error)?;
@@ -368,22 +373,20 @@ impl MediaRepository for PostgresMediaRepository {
             tx.commit().await.map_err(map_sqlx_error)?;
             return Ok(MediaDeleteOutcome::Gone);
         };
-        match status.as_str() {
-            // 已删除或从未就绪：对调用方等同于不存在。
-            "deleted" | "staged" => {
+        let status = MediaStatus::parse(&status)
+            .ok_or_else(|| UseCaseError::Repository(format!("未知媒体状态 {status}")))?;
+        let action = MediaTransition::RequestDeletion;
+        let next = match action.apply(status) {
+            Err(_) => {
                 tx.commit().await.map_err(map_sqlx_error)?;
                 return Ok(MediaDeleteOutcome::Gone);
             }
-            // 上次回收中途失败：重放直接进入删除流程，不再要求版本匹配。
-            "pending_deletion" => {
+            Ok(next) if next == status => {
                 tx.commit().await.map_err(map_sqlx_error)?;
                 return Ok(MediaDeleteOutcome::Marked);
             }
-            "ready" => {}
-            other => {
-                return Err(UseCaseError::Repository(format!("未知媒体状态 {other}")));
-            }
-        }
+            Ok(next) => next,
+        };
         if version != expected_version {
             tx.commit().await.map_err(map_sqlx_error)?;
             return Ok(MediaDeleteOutcome::StaleVersion);
@@ -399,11 +402,14 @@ impl MediaRepository for PostgresMediaRepository {
             return Ok(MediaDeleteOutcome::Referenced { count });
         }
         sqlx::query(
-            "UPDATE media_assets SET status = 'pending_deletion', version = version + 1, \
-             updated_at = $2 WHERE id = $1",
+            "UPDATE media_assets SET status = $3, version = version + 1, \
+             updated_at = $2 WHERE id = $1 AND status = $4 AND version = $5",
         )
         .bind(id)
         .bind(now)
+        .bind(next.as_str())
+        .bind(action.source().as_str())
+        .bind(expected_version)
         .execute(&mut *tx)
         .await
         .map_err(map_sqlx_error)?;
@@ -412,12 +418,15 @@ impl MediaRepository for PostgresMediaRepository {
     }
 
     async fn confirm_deleted(&self, id: Uuid, now: OffsetDateTime) -> Result<bool, UseCaseError> {
+        let action = MediaTransition::ConfirmDeleted;
         let updated = sqlx::query(
-            "UPDATE media_assets SET status = 'deleted', version = version + 1, updated_at = $2 \
-             WHERE id = $1 AND status = 'pending_deletion' RETURNING id",
+            "UPDATE media_assets SET status = $3, version = version + 1, updated_at = $2 \
+             WHERE id = $1 AND status = $4 RETURNING id",
         )
         .bind(id)
         .bind(now)
+        .bind(action.target().as_str())
+        .bind(action.source().as_str())
         .fetch_optional(&self.pool)
         .await
         .map_err(map_sqlx_error)?;
@@ -432,18 +441,19 @@ impl MediaRepository for PostgresMediaRepository {
     ) -> Result<Vec<MediaSnapshot>, UseCaseError> {
         // 单语句「认领」：先按宽限期与上限选出候选，再在**外层**重新校验 status。
         //
-        // 外层 `status = 'staged'` 是并发正确性的关键：两个回收进程同时执行时，
+        // 外层 `status = $5` 是并发正确性的关键：两个回收进程同时执行时，
         // 后到者在行锁上等待，锁释放后重新求值会看到 `pending_deletion` 而跳过，
         // 不会重复认领（也不会重复计入报告）。
         //
-        // 与 `mark_ready` 的互斥同理：两者都是 `AND status = 'staged'` 的条件更新，
+        // 与 `mark_ready` 的互斥同理：两者都是 `AND status = $5` 的条件更新，
         // 只有一个能命中——因此不会出现「回收删掉刚就绪资产的文件」。
+        let action = MediaTransition::AbandonStaged;
         let rows = sqlx::query(&format!(
-            "UPDATE media_assets SET status = 'pending_deletion', version = version + 1, \
+            "UPDATE media_assets SET status = $4, version = version + 1, \
                  updated_at = $2 \
-             WHERE status = 'staged' AND id IN ( \
+             WHERE status = $5 AND id IN ( \
                  SELECT id FROM media_assets \
-                 WHERE status = 'staged' AND created_at < $1 \
+                 WHERE status = $5 AND created_at < $1 \
                  ORDER BY created_at, id LIMIT $3 \
              ) \
              RETURNING {MEDIA_RETURNING_COLUMNS}"
@@ -451,6 +461,8 @@ impl MediaRepository for PostgresMediaRepository {
         .bind(created_before)
         .bind(now)
         .bind(limit)
+        .bind(action.target().as_str())
+        .bind(action.source().as_str())
         .fetch_all(&self.pool)
         .await
         .map_err(map_sqlx_error)?;

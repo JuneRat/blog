@@ -46,6 +46,8 @@ pub async fn rebuild_content_html(
             }
             for (id, source, version, cover_media_id) in rows {
                 let rendered = renderer.render_content(&source).await?;
+                domain::content::budget::validate_html(&rendered.content_html)
+                    .map_err(|e| UseCaseError::Invalid(e.to_string()))?;
                 let media_ids = media_ids_for(&rendered.media_ids, cover_media_id);
                 let mut tx = pool.begin().await.map_err(map_sqlx_error)?;
                 let changed = sqlx::query(&format!(
@@ -111,7 +113,11 @@ impl PostgresPostRepository {
     ) -> Result<PostRecord, UseCaseError> {
         // 引用集合在事务外推导：正文图片与封面求并集（提取要完整渲染 + 清洗正文，
         // 不应占用事务）。
+        domain::content::budget::validate_source(&snapshot.content)
+            .map_err(|e| UseCaseError::Invalid(e.to_string()))?;
         let rendered = self.renderer.render_content(&snapshot.content).await?;
+        domain::content::budget::validate_html(&rendered.content_html)
+            .map_err(|e| UseCaseError::Invalid(e.to_string()))?;
         let media_ids = media_ids_for(&rendered.media_ids, snapshot.cover_media_id);
         // 正文与初始标签/系列关系同一事务：半套写入不应对外可见。
         let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
@@ -174,7 +180,11 @@ impl PostgresPostRepository {
     ) -> Result<PostCommitOutcome, UseCaseError> {
         // 引用集合在事务外推导：正文图片与封面求并集（渲染 + 清洗是纯 CPU 工作，
         // 不应占用事务）。封面变化同样反映到引用行，因此替换封面会释放旧图。
+        domain::content::budget::validate_source(&snapshot.content)
+            .map_err(|e| UseCaseError::Invalid(e.to_string()))?;
         let rendered = self.renderer.render_content(&snapshot.content).await?;
+        domain::content::budget::validate_html(&rendered.content_html)
+            .map_err(|e| UseCaseError::Invalid(e.to_string()))?;
         let media_ids = media_ids_for(&rendered.media_ids, snapshot.cover_media_id);
         // 正文（或仅标签/系列关系）与 version 递增在同一事务：
         // 观察者不会看到新正文配旧标签（或反之）的混合状态。
@@ -716,7 +726,11 @@ impl PostgresPageRepository {
     async fn insert_record(&self, snapshot: &PageSnapshot) -> Result<(), UseCaseError> {
         // 引用集合在事务外推导：提取要完整渲染 + 清洗正文，不应占用事务。
         // Page 没有封面列，因此引用集合只由正文推导。
+        domain::content::budget::validate_source(&snapshot.content)
+            .map_err(|e| UseCaseError::Invalid(e.to_string()))?;
         let rendered = self.renderer.render_content(&snapshot.content).await?;
+        domain::content::budget::validate_html(&rendered.content_html)
+            .map_err(|e| UseCaseError::Invalid(e.to_string()))?;
         let media_ids = media_ids_for(&rendered.media_ids, None);
         // 正文与正文引用同一事务：引用校验失败则整页不落库。
         let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
@@ -756,7 +770,11 @@ impl PostgresPageRepository {
     ) -> Result<SaveOutcome, UseCaseError> {
         // 引用集合在事务外推导（渲染 + 清洗是纯 CPU 工作，不应占用事务）。
         // Page 没有封面列，因此引用集合只由正文推导。
+        domain::content::budget::validate_source(&snapshot.content)
+            .map_err(|e| UseCaseError::Invalid(e.to_string()))?;
         let rendered = self.renderer.render_content(&snapshot.content).await?;
+        domain::content::budget::validate_html(&rendered.content_html)
+            .map_err(|e| UseCaseError::Invalid(e.to_string()))?;
         let media_ids = media_ids_for(&rendered.media_ids, None);
         // 条件更新与引用替换同一事务：观察者不会看到新正文配旧引用。
         let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;

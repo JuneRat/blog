@@ -17,6 +17,8 @@ pub const SERIES_DESCRIPTION_MAX_CHARS: usize = 2000;
 
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum SeriesError {
+    #[error("快照结构无效")]
+    InvalidSnapshot,
     #[error("系列名称不能为空")]
     EmptyName,
     #[error("系列名称长度不能超过 {SERIES_NAME_MAX_CHARS} 字符")]
@@ -66,8 +68,15 @@ impl Series {
         })
     }
 
-    pub fn reconstitute(snapshot: SeriesSnapshot) -> Self {
-        Self { snapshot }
+    pub fn reconstitute(snapshot: SeriesSnapshot) -> Result<Self, SeriesError> {
+        super::post::Slug::new(&snapshot.slug).map_err(|_| SeriesError::InvalidSnapshot)?;
+        if normalize_name(snapshot.name.clone())? != snapshot.name || snapshot.version < 1 {
+            return Err(SeriesError::InvalidSnapshot);
+        }
+        if normalize_description(snapshot.description.clone())? != snapshot.description {
+            return Err(SeriesError::InvalidSnapshot);
+        }
+        Ok(Self { snapshot })
     }
 
     pub fn snapshot(&self) -> SeriesSnapshot {
@@ -234,5 +243,23 @@ mod tests {
             !s.update("Rust 入门".into(), Some("从零开始".into()), Some(None))
                 .unwrap()
         );
+    }
+
+    #[test]
+    fn reconstitution_checks_structural_fields_without_normalizing_them() {
+        let original = series().snapshot();
+        assert_eq!(
+            Series::reconstitute(original.clone()).unwrap().snapshot(),
+            original
+        );
+        for field in 0..3 {
+            let mut invalid = original.clone();
+            match field {
+                0 => invalid.slug = "bad/path".into(),
+                1 => invalid.version = 0,
+                _ => invalid.name = " ".into(),
+            }
+            assert!(Series::reconstitute(invalid).is_err());
+        }
     }
 }

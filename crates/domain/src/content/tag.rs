@@ -13,6 +13,8 @@ pub const TAG_NAME_MAX_CHARS: usize = 100;
 
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum TagError {
+    #[error("快照结构无效")]
+    InvalidSnapshot,
     #[error("标签名称不能为空")]
     EmptyName,
     #[error("标签名称长度不能超过 {TAG_NAME_MAX_CHARS} 字符")]
@@ -55,8 +57,12 @@ impl Tag {
     }
 
     /// 受控重建入口：仅供持久化适配器从数据库恢复聚合。
-    pub fn reconstitute(snapshot: TagSnapshot) -> Self {
-        Self { snapshot }
+    pub fn reconstitute(snapshot: TagSnapshot) -> Result<Self, TagError> {
+        super::post::Slug::new(&snapshot.slug).map_err(|_| TagError::InvalidSnapshot)?;
+        if normalize_name(snapshot.name.clone())? != snapshot.name || snapshot.version < 1 {
+            return Err(TagError::InvalidSnapshot);
+        }
+        Ok(Self { snapshot })
     }
 
     pub fn snapshot(&self) -> TagSnapshot {
@@ -170,5 +176,23 @@ mod tests {
         // Slug 规则与文章一致（复用同一实现）：路径分隔与符号被拒绝。
         assert!(Slug::new("a/b").is_err());
         assert!(Slug::new("你好-标签").is_ok());
+    }
+
+    #[test]
+    fn reconstitution_checks_structural_fields_without_normalizing_them() {
+        let original = tag().snapshot();
+        assert_eq!(
+            Tag::reconstitute(original.clone()).unwrap().snapshot(),
+            original
+        );
+        for field in 0..3 {
+            let mut invalid = original.clone();
+            match field {
+                0 => invalid.slug = "bad/path".into(),
+                1 => invalid.version = 0,
+                _ => invalid.name = " ".into(),
+            }
+            assert!(Tag::reconstitute(invalid).is_err());
+        }
     }
 }

@@ -220,3 +220,8 @@ pub trait MediaStorage: Send + Sync {
         older_than: OffsetDateTime,
     ) -> Result<i64, UseCaseError>;
 }
+
+/// Inspect binary image headers without coupling the domain to file formats.
+pub trait ImageInspector: Send + Sync {
+    fn inspect(&self, bytes: &[u8]) -> Result<domain::media::ImageInfo, domain::media::MediaError>;
+}

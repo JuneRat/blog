@@ -388,7 +388,8 @@ impl PostInteractor {
             return Err(UseCaseError::NotFound(format!("回收站文章 {id}")));
         }
         let expected = checked_version(record.snapshot.version, version)?;
-        let mut post = Post::reconstitute(record.snapshot);
+        let mut post = Post::reconstitute(record.snapshot)
+            .map_err(|e| UseCaseError::Repository(e.to_string()))?;
         post.restore();
         Self::committed(
             self.posts
@@ -505,7 +506,11 @@ impl PostInteractor {
             return Err(UseCaseError::NotFound(format!("文章 {id}")));
         }
         authorize_own_or_any(actor, own_key, any_key, UserId(record.snapshot.author_id))?;
-        Ok((Post::reconstitute(record.snapshot.clone()), record))
+        Ok((
+            Post::reconstitute(record.snapshot.clone())
+                .map_err(|e| UseCaseError::Repository(e.to_string()))?,
+            record,
+        ))
     }
 }
 

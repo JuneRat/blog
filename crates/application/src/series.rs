@@ -297,7 +297,7 @@ impl SeriesInteractor {
             .find_by_slug(slug)
             .await?
             .ok_or_else(|| UseCaseError::NotFound(format!("系列 {slug}")))?;
-        Ok(Series::reconstitute(snapshot))
+        Series::reconstitute(snapshot).map_err(|e| UseCaseError::Repository(e.to_string()))
     }
 
     async fn dto_of(&self, id: Uuid) -> Result<SeriesDto, UseCaseError> {

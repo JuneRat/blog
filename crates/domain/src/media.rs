@@ -76,6 +76,38 @@ impl MediaStatus {
     }
 }
 
+/// One transition table shared by the aggregate and conditional SQL writes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MediaTransition {
+    Ready,
+    RequestDeletion,
+    ConfirmDeleted,
+    AbandonStaged,
+}
+impl MediaTransition {
+    pub fn source(self) -> MediaStatus {
+        match self {
+            Self::Ready | Self::AbandonStaged => MediaStatus::Staged,
+            Self::RequestDeletion => MediaStatus::Ready,
+            Self::ConfirmDeleted => MediaStatus::PendingDeletion,
+        }
+    }
+    pub fn target(self) -> MediaStatus {
+        match self {
+            Self::Ready => MediaStatus::Ready,
+            Self::RequestDeletion | Self::AbandonStaged => MediaStatus::PendingDeletion,
+            Self::ConfirmDeleted => MediaStatus::Deleted,
+        }
+    }
+    pub fn apply(self, current: MediaStatus) -> Result<MediaStatus, MediaError> {
+        if current == self.source() || (self != Self::Ready && current == self.target()) {
+            Ok(self.target())
+        } else {
+            Err(MediaError::InvalidState("当前状态不允许该迁移"))
+        }
+    }
+}
+
 /// 允许上传的位图格式。格式由**文件内容**判定，不信扩展名与 Content-Type。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImageFormat {
@@ -103,58 +135,41 @@ impl ImageFormat {
             Self::WebP => "webp",
         }
     }
-
-    /// 从文件头识别格式并读出声明尺寸；无法识别返回 None。
-    pub fn sniff(bytes: &[u8]) -> Option<(Self, u32, u32)> {
-        if let Some((width, height)) = sniff_png(bytes) {
-            return Some((Self::Png, width, height));
-        }
-        if let Some((width, height)) = sniff_jpeg(bytes) {
-            return Some((Self::Jpeg, width, height));
-        }
-        if let Some((width, height)) = sniff_webp(bytes) {
-            return Some((Self::WebP, width, height));
-        }
-        if let Some((width, height)) = sniff_gif(bytes) {
-            return Some((Self::Gif, width, height));
-        }
-        None
-    }
 }
 
 /// 通过内容校验的图片信息。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ImageInfo {
-    pub format: ImageFormat,
-    pub width: u32,
-    pub height: u32,
+    format: ImageFormat,
+    width: u32,
+    height: u32,
 }
 
-/// 校验上传字节：非空、未超限、格式可识别、尺寸在界内。
-///
-/// 只解析文件头，不完整解码；损坏的文件仍可能通过这里——但格式、声明尺寸与
-/// 大小是后续处理与展示的先决条件，必须在入库前确定。
-pub fn inspect_image(bytes: &[u8]) -> Result<ImageInfo, MediaError> {
-    if bytes.is_empty() {
-        return Err(MediaError::Empty);
+impl ImageInfo {
+    pub fn new(format: ImageFormat, width: u32, height: u32) -> Result<Self, MediaError> {
+        if width == 0
+            || height == 0
+            || width > MAX_IMAGE_DIMENSION
+            || height > MAX_IMAGE_DIMENSION
+            || u64::from(width) * u64::from(height) > MAX_IMAGE_PIXELS
+        {
+            return Err(MediaError::InvalidDimensions);
+        }
+        Ok(Self {
+            format,
+            width,
+            height,
+        })
     }
-    if bytes.len() as u64 > MAX_IMAGE_BYTES {
-        return Err(MediaError::TooLarge);
+    pub fn format(self) -> ImageFormat {
+        self.format
     }
-    let (format, width, height) = ImageFormat::sniff(bytes).ok_or(MediaError::UnsupportedFormat)?;
-    if width == 0
-        || height == 0
-        || width > MAX_IMAGE_DIMENSION
-        || height > MAX_IMAGE_DIMENSION
-        || u64::from(width) * u64::from(height) > MAX_IMAGE_PIXELS
-    {
-        return Err(MediaError::InvalidDimensions);
+    pub fn width(self) -> u32 {
+        self.width
     }
-    Ok(ImageInfo {
-        format,
-        width,
-        height,
-    })
+    pub fn height(self) -> u32 {
+        self.height
+    }
 }
 
 /// 只保留展示所需的文件名：去掉任何目录成分与控制字符。
@@ -253,47 +268,61 @@ impl Media {
         })
     }
 
-    pub fn reconstitute(snapshot: MediaSnapshot) -> Self {
-        Self { snapshot }
+    pub fn reconstitute(snapshot: MediaSnapshot) -> Result<Self, MediaError> {
+        let format = [
+            ImageFormat::Png,
+            ImageFormat::Jpeg,
+            ImageFormat::Gif,
+            ImageFormat::WebP,
+        ]
+        .into_iter()
+        .find(|format| format.mime() == snapshot.mime)
+        .ok_or(MediaError::UnsupportedFormat)?;
+        ImageInfo::new(
+            format,
+            u32::try_from(snapshot.width).map_err(|_| MediaError::InvalidDimensions)?,
+            u32::try_from(snapshot.height).map_err(|_| MediaError::InvalidDimensions)?,
+        )?;
+        if snapshot.byte_size <= 0 {
+            return Err(MediaError::Empty);
+        }
+        if snapshot.byte_size as u64 > MAX_IMAGE_BYTES {
+            return Err(MediaError::TooLarge);
+        }
+        if snapshot.version < 1 {
+            return Err(MediaError::InvalidState("版本必须为正整数"));
+        }
+        Ok(Self { snapshot })
     }
 
-    /// `staged → ready`：文件已原子移入正式位置。
-    pub fn mark_ready(&mut self, now: OffsetDateTime) -> Result<bool, MediaError> {
-        if self.snapshot.status != MediaStatus::Staged {
-            return Err(MediaError::InvalidState("只有暂存中的媒体可以就绪"));
+    fn transition(
+        &mut self,
+        action: MediaTransition,
+        now: OffsetDateTime,
+    ) -> Result<bool, MediaError> {
+        let next = action.apply(self.snapshot.status)?;
+        if next == self.snapshot.status {
+            return Ok(false);
         }
-        self.snapshot.status = MediaStatus::Ready;
+        self.snapshot.status = next;
         self.snapshot.version += 1;
         self.snapshot.updated_at = now;
         Ok(true)
     }
 
+    /// `staged → ready`：文件已原子移入正式位置。
+    pub fn mark_ready(&mut self, now: OffsetDateTime) -> Result<bool, MediaError> {
+        self.transition(MediaTransition::Ready, now)
+    }
+
     /// `ready → pending_deletion`：已决定删除，等待文件删除完成。
     pub fn mark_pending_deletion(&mut self, now: OffsetDateTime) -> Result<bool, MediaError> {
-        match self.snapshot.status {
-            MediaStatus::PendingDeletion => Ok(false),
-            MediaStatus::Ready => {
-                self.snapshot.status = MediaStatus::PendingDeletion;
-                self.snapshot.version += 1;
-                self.snapshot.updated_at = now;
-                Ok(true)
-            }
-            _ => Err(MediaError::InvalidState("只有可用中的媒体可以删除")),
-        }
+        self.transition(MediaTransition::RequestDeletion, now)
     }
 
     /// `pending_deletion → deleted`：文件删除已确认完成。
     pub fn mark_deleted(&mut self, now: OffsetDateTime) -> Result<bool, MediaError> {
-        match self.snapshot.status {
-            MediaStatus::Deleted => Ok(false),
-            MediaStatus::PendingDeletion => {
-                self.snapshot.status = MediaStatus::Deleted;
-                self.snapshot.version += 1;
-                self.snapshot.updated_at = now;
-                Ok(true)
-            }
-            _ => Err(MediaError::InvalidState("只有待回收的媒体可以确认删除")),
-        }
+        self.transition(MediaTransition::ConfirmDeleted, now)
     }
 
     /// `staged → pending_deletion`：放弃一次未完成的上传（回收流程的补偿起点）。
@@ -303,16 +332,7 @@ impl Media {
     /// 这也是与上传互斥的关键：本迁移与 `staged → ready` 都是对同一行的条件更新，
     /// 两者只有一个能成功；拿到 `staged` 的一方负责文件，另一方绝不能碰。
     pub fn abandon_staged(&mut self, now: OffsetDateTime) -> Result<bool, MediaError> {
-        match self.snapshot.status {
-            MediaStatus::PendingDeletion => Ok(false),
-            MediaStatus::Staged => {
-                self.snapshot.status = MediaStatus::PendingDeletion;
-                self.snapshot.version += 1;
-                self.snapshot.updated_at = now;
-                Ok(true)
-            }
-            _ => Err(MediaError::InvalidState("只有暂存中的上传可以放弃")),
-        }
+        self.transition(MediaTransition::AbandonStaged, now)
     }
 
     pub fn id(&self) -> Uuid {
@@ -349,217 +369,9 @@ pub enum MediaError {
     InvalidState(&'static str),
 }
 
-// ---------------------------------------------------------------------------
-// 文件头解析：只读取声明尺寸，不做完整解码。
-// ---------------------------------------------------------------------------
-
-fn be_u32(bytes: &[u8], at: usize) -> Option<u32> {
-    Some(u32::from_be_bytes(bytes.get(at..at + 4)?.try_into().ok()?))
-}
-
-fn be_u16(bytes: &[u8], at: usize) -> Option<u16> {
-    Some(u16::from_be_bytes(bytes.get(at..at + 2)?.try_into().ok()?))
-}
-
-fn le_u16(bytes: &[u8], at: usize) -> Option<u16> {
-    Some(u16::from_le_bytes(bytes.get(at..at + 2)?.try_into().ok()?))
-}
-
-fn le_u32(bytes: &[u8], at: usize) -> Option<u32> {
-    Some(u32::from_le_bytes(bytes.get(at..at + 4)?.try_into().ok()?))
-}
-
-fn le_u24(bytes: &[u8], at: usize) -> Option<u32> {
-    let slice = bytes.get(at..at + 3)?;
-    Some(u32::from(slice[0]) | (u32::from(slice[1]) << 8) | (u32::from(slice[2]) << 16))
-}
-
-fn sniff_png(bytes: &[u8]) -> Option<(u32, u32)> {
-    if bytes.get(..8)? != b"\x89PNG\r\n\x1a\n" {
-        return None;
-    }
-    // 第一个块必须是 IHDR（长度 13 + 类型），尺寸紧跟在类型之后。
-    if bytes.get(8..16)? != b"\x00\x00\x00\x0dIHDR" {
-        return None;
-    }
-    Some((be_u32(bytes, 16)?, be_u32(bytes, 20)?))
-}
-
-fn sniff_jpeg(bytes: &[u8]) -> Option<(u32, u32)> {
-    if bytes.get(..2)? != b"\xff\xd8" {
-        return None;
-    }
-    let mut pos = 2usize;
-    loop {
-        // 允许 0xFF 填充；随后一个字节是标记本身。
-        while *bytes.get(pos)? == 0xff {
-            pos += 1;
-        }
-        let marker = *bytes.get(pos)?;
-        pos += 1;
-        match marker {
-            // 无长度字段的标记：TEM 与 RSTn/SOI。
-            0x01 | 0xd0..=0xd8 => continue,
-            // EOI 与 SOS：之后不会再有 SOF。
-            0xd9 | 0xda => return None,
-            _ => {}
-        }
-        let length = usize::from(be_u16(bytes, pos)?);
-        if length < 2 {
-            return None;
-        }
-        // SOF0–SOF15，排除 DHT(0xC4)、JPG(0xC8)、DAC(0xCC)。
-        if matches!(marker, 0xc0..=0xcf) && !matches!(marker, 0xc4 | 0xc8 | 0xcc) {
-            let height = be_u16(bytes, pos + 3)?;
-            let width = be_u16(bytes, pos + 5)?;
-            return Some((u32::from(width), u32::from(height)));
-        }
-        pos = pos.checked_add(length)?;
-    }
-}
-
-fn sniff_gif(bytes: &[u8]) -> Option<(u32, u32)> {
-    let header = bytes.get(..6)?;
-    if header != b"GIF87a" && header != b"GIF89a" {
-        return None;
-    }
-    Some((u32::from(le_u16(bytes, 6)?), u32::from(le_u16(bytes, 8)?)))
-}
-
-fn sniff_webp(bytes: &[u8]) -> Option<(u32, u32)> {
-    if bytes.get(..4)? != b"RIFF" || bytes.get(8..12)? != b"WEBP" {
-        return None;
-    }
-    let chunk = bytes.get(12..16)?;
-    if chunk == b"VP8 " {
-        // 有损：关键帧起始码之后是 14 位宽、14 位高。
-        if bytes.get(20..23)? != b"\x9d\x01\x2a" {
-            return None;
-        }
-        Some((
-            u32::from(le_u16(bytes, 26)? & 0x3fff),
-            u32::from(le_u16(bytes, 28)? & 0x3fff),
-        ))
-    } else if chunk == b"VP8L" {
-        // 无损：位流中先宽后高，各 14 位。
-        if *bytes.get(20)? != 0x2f {
-            return None;
-        }
-        let bits = le_u32(bytes, 21)?;
-        Some(((bits & 0x3fff) + 1, ((bits >> 14) & 0x3fff) + 1))
-    } else if chunk == b"VP8X" {
-        // 扩展：画布尺寸以「减一」的 24 位小端保存。
-        Some((le_u24(bytes, 24)? + 1, le_u24(bytes, 27)? + 1))
-    } else {
-        None
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn png(width: u32, height: u32) -> Vec<u8> {
-        let mut bytes = b"\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR".to_vec();
-        bytes.extend_from_slice(&width.to_be_bytes());
-        bytes.extend_from_slice(&height.to_be_bytes());
-        bytes.extend_from_slice(&[8, 6, 0, 0, 0]);
-        bytes
-    }
-
-    fn jpeg(width: u16, height: u16) -> Vec<u8> {
-        let mut bytes = b"\xff\xd8".to_vec();
-        // APP0 段，用于验证解析器会按长度跳过非 SOF 段。
-        bytes.extend_from_slice(&[0xff, 0xe0, 0x00, 0x10]);
-        bytes.extend_from_slice(b"JFIF\0\x01\x02\x00\x00\x01\x00\x01\x00\x00");
-        bytes.extend_from_slice(&[0xff, 0xc0, 0x00, 0x11, 0x08]);
-        bytes.extend_from_slice(&height.to_be_bytes());
-        bytes.extend_from_slice(&width.to_be_bytes());
-        bytes.extend_from_slice(&[0x03, 0x01, 0x11, 0x00, 0x02, 0x11, 0x01, 0x03, 0x11, 0x01]);
-        bytes
-    }
-
-    fn gif(width: u16, height: u16) -> Vec<u8> {
-        let mut bytes = b"GIF89a".to_vec();
-        bytes.extend_from_slice(&width.to_le_bytes());
-        bytes.extend_from_slice(&height.to_le_bytes());
-        bytes.extend_from_slice(&[0x00, 0x00, 0x00]);
-        bytes
-    }
-
-    #[test]
-    fn sniffs_each_supported_bitmap_format() {
-        assert_eq!(
-            ImageFormat::sniff(&png(320, 200)),
-            Some((ImageFormat::Png, 320, 200))
-        );
-        assert_eq!(
-            ImageFormat::sniff(&jpeg(1024, 768)),
-            Some((ImageFormat::Jpeg, 1024, 768))
-        );
-        assert_eq!(
-            ImageFormat::sniff(&gif(64, 48)),
-            Some((ImageFormat::Gif, 64, 48))
-        );
-
-        // VP8X 扩展格式：画布尺寸以「减一」保存。
-        // 布局：RIFF(4) size(4) WEBP(4) "VP8X"(4) chunk_size(4) flags+reserved(4) 之后是宽高。
-        let mut vp8x = b"RIFF".to_vec();
-        vp8x.extend_from_slice(&[0, 0, 0, 0]);
-        vp8x.extend_from_slice(b"WEBPVP8X");
-        vp8x.extend_from_slice(&[10, 0, 0, 0]);
-        vp8x.extend_from_slice(&[0, 0, 0, 0]);
-        vp8x.extend_from_slice(&(800u32 - 1).to_le_bytes()[..3]);
-        vp8x.extend_from_slice(&(600u32 - 1).to_le_bytes()[..3]);
-        assert_eq!(
-            ImageFormat::sniff(&vp8x),
-            Some((ImageFormat::WebP, 800, 600))
-        );
-    }
-
-    #[test]
-    fn rejects_non_image_and_truncated_input() {
-        assert_eq!(ImageFormat::sniff(b""), None);
-        assert_eq!(
-            ImageFormat::sniff(b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>"),
-            None
-        );
-        assert_eq!(ImageFormat::sniff(b"GIF89a"), None, "截断的 GIF 头不能通过");
-        assert_eq!(ImageFormat::sniff(b"\x89PNG\r\n\x1a\n"), None);
-        // JPEG 只有 SOI，没有 SOF：无法确定尺寸。
-        assert_eq!(ImageFormat::sniff(b"\xff\xd8\xff\xd9"), None);
-    }
-
-    #[test]
-    fn inspect_enforces_size_and_dimension_limits() {
-        assert_eq!(inspect_image(b""), Err(MediaError::Empty));
-        assert_eq!(
-            inspect_image(&png(1, 1)).unwrap().format,
-            ImageFormat::Png,
-            "合法最小图片应通过"
-        );
-        assert_eq!(
-            inspect_image(&png(0, 10)),
-            Err(MediaError::InvalidDimensions)
-        );
-        assert_eq!(
-            inspect_image(&png(MAX_IMAGE_DIMENSION + 1, 1)),
-            Err(MediaError::InvalidDimensions)
-        );
-        assert_eq!(
-            inspect_image(&png(10_000, 10_000)),
-            Err(MediaError::InvalidDimensions),
-            "总像素超限必须拒绝"
-        );
-        assert_eq!(
-            inspect_image(&b"\x00".repeat((MAX_IMAGE_BYTES + 1) as usize)),
-            Err(MediaError::TooLarge)
-        );
-        assert_eq!(
-            inspect_image(b"not an image at all"),
-            Err(MediaError::UnsupportedFormat)
-        );
-    }
 
     #[test]
     fn original_name_is_stripped_to_a_safe_display_value() {
@@ -576,7 +388,7 @@ mod tests {
     #[test]
     fn lifecycle_only_allows_staged_to_ready_to_deleted() {
         let now = OffsetDateTime::UNIX_EPOCH;
-        let info = inspect_image(&png(4, 4)).unwrap();
+        let info = ImageInfo::new(ImageFormat::Png, 4, 4).unwrap();
         let mut media = Media::stage(
             Uuid::now_v7(),
             Uuid::now_v7(),
@@ -604,7 +416,7 @@ mod tests {
     #[test]
     fn abandoning_a_staged_upload_goes_through_pending_deletion_so_removal_is_retryable() {
         let now = OffsetDateTime::UNIX_EPOCH;
-        let info = inspect_image(&png(4, 4)).unwrap();
+        let info = ImageInfo::new(ImageFormat::Png, 4, 4).unwrap();
         let mut media = Media::stage(
             Uuid::now_v7(),
             Uuid::now_v7(),
@@ -626,7 +438,7 @@ mod tests {
         // 幂等：重复放弃不报错、不再递增版本。
         assert!(!media.abandon_staged(now).unwrap());
         // 已就绪的资产不能被当成「未完成上传」放弃。
-        let mut ready = Media::reconstitute(media.snapshot());
+        let mut ready = Media::reconstitute(media.snapshot()).unwrap();
         ready.snapshot.status = MediaStatus::Ready;
         assert!(ready.abandon_staged(now).is_err());
         assert!(media.mark_deleted(now).unwrap());
@@ -634,7 +446,7 @@ mod tests {
 
     #[test]
     fn stage_normalizes_storage_key_suffix_to_the_detected_format() {
-        let info = inspect_image(&png(4, 4)).unwrap();
+        let info = ImageInfo::new(ImageFormat::Png, 4, 4).unwrap();
         let media = Media::stage(
             Uuid::now_v7(),
             Uuid::now_v7(),
@@ -647,5 +459,42 @@ mod tests {
         )
         .unwrap();
         assert!(media.snapshot().storage_key.ends_with(".png"));
+    }
+
+    #[test]
+    fn image_info_and_reconstitution_enforce_dimensions() {
+        for (width, height) in [
+            (0, 1),
+            (1, 0),
+            (u32::MAX, 1),
+            (1, u32::MAX),
+            (10_000, 10_000),
+        ] {
+            assert_eq!(
+                ImageInfo::new(ImageFormat::WebP, width, height),
+                Err(MediaError::InvalidDimensions)
+            );
+        }
+        assert!(ImageInfo::new(ImageFormat::Png, MAX_IMAGE_DIMENSION, 5000).is_ok());
+        let media = Media::stage(
+            Uuid::now_v7(),
+            Uuid::now_v7(),
+            "objects/x.png".into(),
+            "x",
+            ImageInfo::new(ImageFormat::Png, 1, 1).unwrap(),
+            10,
+            "a".repeat(64),
+            OffsetDateTime::UNIX_EPOCH,
+        )
+        .unwrap();
+        for (width, height) in [(0, 1), (1, -1)] {
+            let mut invalid = media.snapshot();
+            invalid.width = width;
+            invalid.height = height;
+            assert_eq!(
+                Media::reconstitute(invalid).unwrap_err(),
+                MediaError::InvalidDimensions
+            );
+        }
     }
 }

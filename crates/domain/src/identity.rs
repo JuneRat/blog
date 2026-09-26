@@ -74,6 +74,8 @@ pub struct UserSnapshot {
 
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum UserError {
+    #[error("用户快照结构无效")]
+    InvalidSnapshot,
     #[error("username 长度须在 1-64 个字符之间")]
     InvalidUsernameLength,
     #[error("username 只允许 ASCII 字母、数字、- 和 _")]
@@ -84,12 +86,44 @@ pub enum UserError {
     InvalidDisplayName,
 }
 
+/// Canonical username; every constructor normalizes and validates.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Username(String);
+impl Username {
+    pub fn new(raw: &str) -> Result<Self, UserError> {
+        let value = raw.trim().to_ascii_lowercase();
+        validate_username(&value)?;
+        Ok(Self(value))
+    }
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+    pub fn into_string(self) -> String {
+        self.0
+    }
+}
+
+/// Optionality belongs to the caller; an Email itself can never be empty.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Email(String);
+impl Email {
+    pub fn new(raw: &str) -> Result<Self, UserError> {
+        let value = raw.trim();
+        validate_email(value)?;
+        Ok(Self(value.to_owned()))
+    }
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+    pub fn into_string(self) -> String {
+        self.0
+    }
+}
+
 /// username 固定规范化策略：trim + ASCII 小写。
 /// 创建与查询必须走同一函数，保证 COLLATE "C" 下的唯一键行为一致。
 pub fn normalize_username(raw: &str) -> Result<String, UserError> {
-    let normalized = raw.trim().to_ascii_lowercase();
-    validate_username(&normalized)?;
-    Ok(normalized)
+    Username::new(raw).map(Username::into_string)
 }
 
 fn validate_username(username: &str) -> Result<(), UserError> {
@@ -109,11 +143,11 @@ fn validate_username(username: &str) -> Result<(), UserError> {
 /// email 形状校验：`local@domain`，domain 的每个点分段都非空。
 /// 拒绝 `a@.com`、`a@b.`、`@b.com` 等。
 fn validate_email(email: &str) -> Result<(), UserError> {
-    if email.chars().any(|c| c.is_whitespace()) {
+    if email.chars().any(|c| c.is_whitespace() || c.is_control()) {
         return Err(UserError::InvalidEmail);
     }
     let (local, domain) = email.split_once('@').ok_or(UserError::InvalidEmail)?;
-    if local.is_empty() || domain.is_empty() || !domain.contains('.') {
+    if local.is_empty() || domain.is_empty() || domain.contains('@') || !domain.contains('.') {
         return Err(UserError::InvalidEmail);
     }
     if domain.split('.').any(|label| label.is_empty()) {
@@ -215,18 +249,19 @@ pub struct User {
 }
 
 impl User {
-    /// 创建新用户；username/email/display_name 应已由调用方规范化，
-    /// 这里兜底校验形状（空展示名拒绝，空字符串不允许落库）。
+    /// 创建新用户；用户名与邮箱由值对象统一规范化和校验。
     pub fn new(
         username: &str,
         email: Option<String>,
         display_name: Option<String>,
         now: OffsetDateTime,
     ) -> Result<Self, UserError> {
-        validate_username(username)?;
-        if let Some(email) = email.as_deref() {
-            validate_email(email)?;
-        }
+        let username = Username::new(username)?;
+        let email = email
+            .as_deref()
+            .map(Email::new)
+            .transpose()?
+            .map(Email::into_string);
         if let Some(name) = display_name.as_deref()
             && name.trim().is_empty()
         {
@@ -235,7 +270,7 @@ impl User {
         Ok(Self {
             snapshot: UserSnapshot {
                 id: UserId::generate().0,
-                username: username.to_string(),
+                username: username.into_string(),
                 email,
                 display_name,
                 avatar_media_id: None,
@@ -252,9 +287,25 @@ impl User {
         validate_email(email)
     }
 
-    /// 受控重建入口：仅供持久化适配器从数据库恢复，不再重复业务校验。
-    pub fn reconstitute(snapshot: UserSnapshot) -> Self {
-        Self { snapshot }
+    /// Validate persisted structure without silently changing stored identity keys.
+    pub fn reconstitute(snapshot: UserSnapshot) -> Result<Self, UserError> {
+        if Username::new(&snapshot.username)?.as_str() != snapshot.username || snapshot.version < 1
+        {
+            return Err(UserError::InvalidSnapshot);
+        }
+        if let Some(email) = &snapshot.email
+            && Email::new(email)?.as_str() != email
+        {
+            return Err(UserError::InvalidSnapshot);
+        }
+        if snapshot
+            .display_name
+            .as_deref()
+            .is_some_and(|name| name.trim().is_empty())
+        {
+            return Err(UserError::InvalidDisplayName);
+        }
+        Ok(Self { snapshot })
     }
 
     pub fn snapshot(&self) -> UserSnapshot {
@@ -390,5 +441,23 @@ mod tests {
         // 首尾空格是合法字符，不得被 trim 掉。
         assert!(validate_password("  correct horse battery  ", "sun").is_ok());
         assert!(validate_password("安静的书桌-2026-长密码", "sun").is_ok());
+    }
+
+    #[test]
+    fn value_objects_normalize_and_reject_ambiguous_email() {
+        assert_eq!(
+            Username::new("  Alice-DEV_01 ").unwrap().as_str(),
+            "alice-dev_01"
+        );
+        assert_eq!(Email::new(" a@b.com ").unwrap().as_str(), "a@b.com");
+        for bad in ["a@b@c.com", "a@@c.com", "a\u{0}@b.com", "a@b..com", ""] {
+            assert_eq!(Email::new(bad), Err(UserError::InvalidEmail));
+        }
+        let user = User::new(" SUN ", Some(" sun@example.com ".into()), None, now()).unwrap();
+        assert_eq!(user.username(), "sun");
+        assert_eq!(user.snapshot().email.as_deref(), Some("sun@example.com"));
+        let mut invalid = user.snapshot();
+        invalid.email = Some("a@b@c.com".into());
+        assert!(User::reconstitute(invalid).is_err());
     }
 }

@@ -213,6 +213,8 @@ impl RenderingRuntime {
 #[async_trait]
 impl ContentRenderer for RenderingRuntime {
     async fn render_content(&self, source: &str) -> Result<RenderedContent, UseCaseError> {
+        domain::content::budget::validate_source(source)
+            .map_err(|e| UseCaseError::Invalid(e.to_string()))?;
         let started = Instant::now();
         let cached = self
             .state
@@ -234,6 +236,8 @@ impl ContentRenderer for RenderingRuntime {
         let state = self.state.clone();
         self.execute(RenderPool::Content, "markdown", move || {
             let content_html = SanitizingMarkdownRenderer::new().render_markdown(&source);
+            domain::content::budget::validate_html(&content_html)
+                .map_err(|e| UseCaseError::Invalid(e.to_string()))?;
             let media_ids = extract_media_ids_from_html(&content_html);
             let rendered = RenderedContent {
                 content_html,
@@ -575,5 +579,30 @@ mod tests {
         drop(permit);
         let html = theme.render_page(&site, &seo, &page).await.unwrap();
         assert!(html.contains(&page.content_html));
+    }
+
+    #[tokio::test]
+    async fn source_and_html_budgets_cover_boundaries_and_expansion() {
+        use domain::content::budget::{MAX_CONTENT_HTML_BYTES, MAX_SOURCE_BYTES};
+        let runtime = RenderingRuntime::default();
+        let content = "x".repeat(MAX_CONTENT_HTML_BYTES - 8);
+        let rendered = runtime.render_content(&content).await.unwrap();
+        assert_eq!(rendered.content_html.len(), MAX_CONTENT_HTML_BYTES);
+        assert!(matches!(
+            runtime.render_content(&(content + "x")).await,
+            Err(UseCaseError::Invalid(_))
+        ));
+        assert!(matches!(
+            runtime
+                .render_content(&format!("{}& ", "a".repeat(1024)).repeat(765))
+                .await,
+            Err(UseCaseError::Invalid(_))
+        ));
+        assert!(matches!(
+            runtime
+                .render_content(&"x".repeat(MAX_SOURCE_BYTES + 1))
+                .await,
+            Err(UseCaseError::Invalid(_))
+        ));
     }
 }

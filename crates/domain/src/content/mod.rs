@@ -1,5 +1,6 @@
 //! 内容上下文：文章、独立页面聚合与公开阅读的业务规则。
 
+pub mod budget;
 pub mod category;
 pub mod page;
 pub mod post;

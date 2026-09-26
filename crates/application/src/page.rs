@@ -230,7 +230,7 @@ impl PageInteractor {
             .find_by_id(id)
             .await?
             .ok_or_else(|| UseCaseError::NotFound(format!("页面 {id}")))?;
-        Ok(Page::reconstitute(snapshot))
+        Page::reconstitute(snapshot).map_err(|e| UseCaseError::Repository(e.to_string()))
     }
 
     async fn load_versioned(

@@ -280,7 +280,7 @@ impl MiniJinjaThemeRenderer {
             .get_template(template)
             .and_then(|t| t.render(context))
             .map_err(|e| UseCaseError::Render(e.to_string()))?;
-        if html.len() > 1024 * 1024 {
+        if html.len() > domain::content::budget::MAX_PAGE_HTML_BYTES {
             return Err(UseCaseError::Render("主题输出超过 1 MiB".into()));
         }
         Ok(html)
@@ -646,5 +646,23 @@ mod tests {
         std::fs::write(&path, r#"{"schema_version":1,"slug":"x","name":"X","theme_api_version":1,"required_functions":["admin_sql"]}"#).unwrap();
         assert!(verify_manifest(&dir).is_err());
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn theme_registration_rejects_excessive_body_expansion() {
+        let theme = TestTheme::new();
+        theme.write(
+            "templates/post.html",
+            "{{ post.content_html | safe }}{{ post.content_html | safe }}",
+        );
+        let error = super::MiniJinjaThemeRenderer::load_checked(
+            &theme.0,
+            &super::RenderingRuntime::default(),
+        )
+        .await
+        .err()
+        .unwrap()
+        .to_string();
+        assert!(error.contains("maximum-body/post.html"), "{error}");
     }
 }

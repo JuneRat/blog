@@ -396,6 +396,18 @@ impl MediaStorage for FakeStorage {
     }
 }
 
+struct FakeInspector;
+impl application::ports::ImageInspector for FakeInspector {
+    fn inspect(&self, bytes: &[u8]) -> Result<domain::media::ImageInfo, domain::media::MediaError> {
+        // Only the fixture payload is accepted; binary parsing is tested by the adapter.
+        if bytes == png_bytes(10, 10) || bytes == png_bytes(4, 4) {
+            domain::media::ImageInfo::new(domain::media::ImageFormat::Png, 10, 10)
+        } else {
+            Err(domain::media::MediaError::UnsupportedFormat)
+        }
+    }
+}
+
 struct Fixture {
     interactor: MediaInteractor,
     repo: Arc<FakeMediaRepo>,
@@ -408,7 +420,12 @@ fn fixture() -> Fixture {
     let repo = Arc::new(FakeMediaRepo::default());
     let storage = Arc::new(FakeStorage::new(clock.clone()));
     Fixture {
-        interactor: MediaInteractor::new(repo.clone(), storage.clone(), clock.clone()),
+        interactor: MediaInteractor::new(
+            Arc::new(FakeInspector),
+            repo.clone(),
+            storage.clone(),
+            clock.clone(),
+        ),
         repo,
         storage,
         clock,
@@ -602,7 +619,7 @@ async fn reclaim_reports_failures_and_discards_interrupted_uploads() {
     let operator = actor(owner, &["media.delete_any"]);
 
     // 人工制造一条停在 staged 的资产（模拟上传在 promote 之前中断）。
-    let info = domain::media::inspect_image(&png_bytes(4, 4)).unwrap();
+    let info = domain::media::ImageInfo::new(domain::media::ImageFormat::Png, 4, 4).unwrap();
     let id = Uuid::now_v7();
     let key = format!("objects/{id}.png");
     let staged = domain::media::Media::stage(

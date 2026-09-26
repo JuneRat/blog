@@ -15,10 +15,10 @@ use uuid::Uuid;
 
 use crate::error::UseCaseError;
 use crate::identity::Actor;
+use crate::ports::ImageInspector;
 use crate::ports::{
     Clock, MediaDeleteOutcome, MediaRepository, MediaStorage, MediaUsageRow, MediaWithUsage,
 };
-use domain::media::inspect_image;
 
 /// 媒体库每页条目数。
 pub const MEDIA_PAGE_SIZE: i64 = 24;
@@ -212,6 +212,7 @@ pub struct ReclaimReport {
 }
 
 pub struct MediaInteractor {
+    inspector: Arc<dyn ImageInspector>,
     media: Arc<dyn MediaRepository>,
     storage: Arc<dyn MediaStorage>,
     clock: Arc<dyn Clock>,
@@ -219,11 +220,13 @@ pub struct MediaInteractor {
 
 impl MediaInteractor {
     pub fn new(
+        inspector: Arc<dyn ImageInspector>,
         media: Arc<dyn MediaRepository>,
         storage: Arc<dyn MediaStorage>,
         clock: Arc<dyn Clock>,
     ) -> Self {
         Self {
+            inspector,
             media,
             storage,
             clock,
@@ -243,9 +246,12 @@ impl MediaInteractor {
         if !actor.has_permission("media.upload") {
             return Err(UseCaseError::Forbidden);
         }
-        let info = inspect_image(&cmd.bytes).map_err(|e| UseCaseError::Invalid(e.to_string()))?;
+        let info = self
+            .inspector
+            .inspect(&cmd.bytes)
+            .map_err(|e| UseCaseError::Invalid(e.to_string()))?;
         let id = Uuid::now_v7();
-        let key = storage_key_for(id, info.format.extension());
+        let key = storage_key_for(id, info.format().extension());
         let now = self.clock.now();
 
         let checksum = self.storage.put_staged(&key, &cmd.bytes).await?;

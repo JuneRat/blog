@@ -182,9 +182,18 @@ async fn moderate(
     if cmd.delete == cmd.status.is_some() {
         return admin_error(UseCaseError::Invalid("请选择审核状态或删除".into()), &id);
     }
+    let action = if cmd.delete {
+        application::comments::ModerationAction::DeletePermanently
+    } else {
+        match application::comments::CommentStatus::parse(cmd.status.as_deref().unwrap_or_default())
+        {
+            Ok(status) => application::comments::ModerationAction::SetStatus(status),
+            Err(e) => return admin_error(UseCaseError::Invalid(e.into()), &id),
+        }
+    };
     match s
         .comments
-        .moderate(&auth.actor, cid, cmd.version, cmd.status.as_deref())
+        .moderate(&auth.actor, cid, cmd.version, action)
         .await
     {
         Ok(()) => axum::http::StatusCode::NO_CONTENT.into_response(),

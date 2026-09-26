@@ -133,7 +133,7 @@ fn repo(pool: &PgPool) -> PostgresMediaRepository {
 
 /// 直接落一条 `ready` 资产（不经上传用例，聚焦仓储语义）。
 async fn ready_media(pool: &PgPool, owner: Uuid, width: u32, height: u32) -> MediaSnapshot {
-    let info = domain::media::inspect_image(&png_bytes(width, height)).unwrap();
+    let info = infrastructure::image_inspection::inspect_image(&png_bytes(width, height)).unwrap();
     let id = Uuid::now_v7();
     let key = format!("objects/{id}.png");
     let media = Media::stage(
@@ -211,7 +211,7 @@ async fn save_post_content(
     .await?
     .expect("文章应存在");
     let expected = current.version;
-    let mut next = Post::reconstitute(current);
+    let mut next = Post::reconstitute(current).unwrap();
     next.edit(PostPatch {
         content: Some(content),
         ..Default::default()
@@ -708,7 +708,7 @@ async fn purge_clears_post_references_before_the_media_can_be_deleted() {
     let row = seeded_post(&pool, author, "purgeme", markdown_with(&[media.id])).await;
     // 永久删除只对回收站文章生效。
     let now = OffsetDateTime::now_utc();
-    let mut post = Post::reconstitute(posts.find_by_id(row.id).await.unwrap().unwrap());
+    let mut post = Post::reconstitute(posts.find_by_id(row.id).await.unwrap().unwrap()).unwrap();
     assert!(post.trash(now));
     let trashed = posts
         .commit_lifecycle(&post, row.version, now)
@@ -760,6 +760,7 @@ async fn reclaim_discards_interrupted_uploads_and_retries_file_deletion() {
     let dir = media_dir("reclaim");
     let storage: Arc<dyn MediaStorage> = Arc::new(LocalMediaStorage::new(&dir));
     let interactor = MediaInteractor::new(
+        Arc::new(infrastructure::image_inspection::HeaderImageInspector),
         Arc::new(PostgresMediaRepository::new(pool.clone())),
         storage.clone(),
         Arc::new(infrastructure::SystemClock),
@@ -767,7 +768,7 @@ async fn reclaim_discards_interrupted_uploads_and_retries_file_deletion() {
     let actor = cli_actor(author);
 
     // 中断的上传：文件在暂存区，数据库行停在 staged，且都已超过宽限期。
-    let info = domain::media::inspect_image(&png_bytes(4, 4)).unwrap();
+    let info = infrastructure::image_inspection::inspect_image(&png_bytes(4, 4)).unwrap();
     let broken_id = Uuid::now_v7();
     let broken_key = format!("objects/{broken_id}.png");
     storage
@@ -856,6 +857,7 @@ async fn upload_rejects_non_image_bytes_and_records_metadata() {
     let dir = media_dir("upload");
     let storage = Arc::new(LocalMediaStorage::new(&dir));
     let interactor = MediaInteractor::new(
+        Arc::new(infrastructure::image_inspection::HeaderImageInspector),
         Arc::new(PostgresMediaRepository::new(pool.clone())),
         storage.clone(),
         Arc::new(infrastructure::SystemClock),
@@ -967,7 +969,7 @@ async fn staged_assets_are_not_listed_and_ready_assets_are_paginated() {
         ready_media(&pool, author, 4 + index, 4).await;
     }
     // 一条从未就绪的暂存行：不得出现在媒体库中。
-    let info = domain::media::inspect_image(&png_bytes(2, 2)).unwrap();
+    let info = infrastructure::image_inspection::inspect_image(&png_bytes(2, 2)).unwrap();
     let staged_id = Uuid::now_v7();
     let staged = Media::stage(
         staged_id,
@@ -1045,6 +1047,7 @@ async fn reclaim_never_touches_an_asset_whose_upload_won_the_race() {
     let storage: Arc<dyn MediaStorage> = Arc::new(LocalMediaStorage::new(&dir));
     let store = repo(&pool);
     let interactor = MediaInteractor::new(
+        Arc::new(infrastructure::image_inspection::HeaderImageInspector),
         Arc::new(PostgresMediaRepository::new(pool.clone())),
         storage.clone(),
         Arc::new(infrastructure::SystemClock),
@@ -1060,7 +1063,7 @@ async fn reclaim_never_touches_an_asset_whose_upload_won_the_race() {
         author,
         key.clone(),
         "slow.png",
-        domain::media::inspect_image(&png_bytes(6, 6)).unwrap(),
+        infrastructure::image_inspection::inspect_image(&png_bytes(6, 6)).unwrap(),
         png_bytes(6, 6).len() as u64,
         "d".repeat(64),
         OffsetDateTime::now_utc() - time::Duration::seconds(STAGED_GRACE * 4),
@@ -1110,6 +1113,7 @@ async fn upload_cannot_become_ready_after_reclaim_claimed_it() {
     let storage: Arc<dyn MediaStorage> = Arc::new(LocalMediaStorage::new(&dir));
     let store = repo(&pool);
     let interactor = MediaInteractor::new(
+        Arc::new(infrastructure::image_inspection::HeaderImageInspector),
         Arc::new(PostgresMediaRepository::new(pool.clone())),
         storage.clone(),
         Arc::new(infrastructure::SystemClock),
@@ -1128,7 +1132,7 @@ async fn upload_cannot_become_ready_after_reclaim_claimed_it() {
         author,
         key.clone(),
         "slow.png",
-        domain::media::inspect_image(&png_bytes(6, 6)).unwrap(),
+        infrastructure::image_inspection::inspect_image(&png_bytes(6, 6)).unwrap(),
         png_bytes(6, 6).len() as u64,
         "d".repeat(64),
         OffsetDateTime::now_utc() - time::Duration::seconds(STAGED_GRACE * 4),
@@ -1175,7 +1179,7 @@ async fn concurrent_ready_and_reclaim_claim_are_mutually_exclusive() {
             author,
             key.clone(),
             "race.png",
-            domain::media::inspect_image(&png_bytes(6, 6)).unwrap(),
+            infrastructure::image_inspection::inspect_image(&png_bytes(6, 6)).unwrap(),
             png_bytes(6, 6).len() as u64,
             "f".repeat(64),
             old,
@@ -1231,6 +1235,7 @@ async fn reclaim_leaves_fresh_staged_uploads_alone() {
     let storage: Arc<dyn MediaStorage> = Arc::new(LocalMediaStorage::new(&dir));
     let store = repo(&pool);
     let interactor = MediaInteractor::new(
+        Arc::new(infrastructure::image_inspection::HeaderImageInspector),
         Arc::new(PostgresMediaRepository::new(pool.clone())),
         storage.clone(),
         Arc::new(infrastructure::SystemClock),
@@ -1246,7 +1251,7 @@ async fn reclaim_leaves_fresh_staged_uploads_alone() {
         author,
         key.clone(),
         "fresh.png",
-        domain::media::inspect_image(&png_bytes(5, 5)).unwrap(),
+        infrastructure::image_inspection::inspect_image(&png_bytes(5, 5)).unwrap(),
         png_bytes(5, 5).len() as u64,
         "e".repeat(64),
         OffsetDateTime::now_utc(),
@@ -1283,6 +1288,7 @@ async fn reclaim_sweeps_staging_orphans_without_a_database_row() {
     let dir = media_dir("orphan");
     let storage = Arc::new(LocalMediaStorage::new(&dir));
     let interactor = MediaInteractor::new(
+        Arc::new(infrastructure::image_inspection::HeaderImageInspector),
         Arc::new(PostgresMediaRepository::new(pool.clone())),
         storage.clone(),
         Arc::new(infrastructure::SystemClock),
@@ -1348,6 +1354,7 @@ async fn failing_to_record_an_upload_removes_its_staged_file() {
     let storage = Arc::new(LocalMediaStorage::new(&dir));
     // 让 insert_staged 失败：owner_id 对 users 有外键，用一个不存在的用户 id。
     let interactor = MediaInteractor::new(
+        Arc::new(infrastructure::image_inspection::HeaderImageInspector),
         Arc::new(PostgresMediaRepository::new(pool.clone())),
         storage.clone(),
         Arc::new(infrastructure::SystemClock),

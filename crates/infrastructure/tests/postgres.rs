@@ -130,14 +130,14 @@ async fn duplicate_slug_is_rejected_as_conflict() {
     );
 
     repo.insert_post(
-        &Post::reconstitute(draft_snapshot(author, "same-slug")),
+        &Post::reconstitute(draft_snapshot(author, "same-slug")).unwrap(),
         &[],
     )
     .await
     .unwrap();
     let err = repo
         .insert_post(
-            &Post::reconstitute(draft_snapshot(author, "same-slug")),
+            &Post::reconstitute(draft_snapshot(author, "same-slug")).unwrap(),
             &[],
         )
         .await
@@ -159,7 +159,10 @@ async fn foreign_key_protects_author_reference() {
 
     let ghost = uuid::Uuid::now_v7();
     let err = repo
-        .insert_post(&Post::reconstitute(draft_snapshot(ghost, "orphan")), &[])
+        .insert_post(
+            &Post::reconstitute(draft_snapshot(ghost, "orphan")).unwrap(),
+            &[],
+        )
         .await
         .unwrap_err();
     assert!(
@@ -188,7 +191,7 @@ async fn series_position_rules_enforced_by_constraints() {
     let mut a = draft_snapshot(author, "series-a");
     a.series_id = Some(series_id);
     a.series_order = Some(2);
-    repo.insert_post(&Post::reconstitute(a.clone()), &[])
+    repo.insert_post(&Post::reconstitute(a.clone()).unwrap(), &[])
         .await
         .unwrap();
 
@@ -197,7 +200,7 @@ async fn series_position_rules_enforced_by_constraints() {
     b.series_id = Some(series_id);
     b.series_order = Some(2);
     let err = repo
-        .insert_post(&Post::reconstitute(b.clone()), &[])
+        .insert_post(&Post::reconstitute(b.clone()).unwrap(), &[])
         .await
         .unwrap_err();
     match err {
@@ -207,7 +210,7 @@ async fn series_position_rules_enforced_by_constraints() {
 
     // 不同位置可以插入；留空档合法。
     b.series_order = Some(5);
-    repo.insert_post(&Post::reconstitute(b.clone()), &[])
+    repo.insert_post(&Post::reconstitute(b.clone()).unwrap(), &[])
         .await
         .unwrap();
 
@@ -278,7 +281,7 @@ async fn save_returns_three_states_and_new_version() {
     );
 
     let mut snapshot = draft_snapshot(author, "versioned");
-    repo.insert_post(&Post::reconstitute(snapshot.clone()), &[])
+    repo.insert_post(&Post::reconstitute(snapshot.clone()).unwrap(), &[])
         .await
         .unwrap();
     assert_eq!(snapshot.version, 1);
@@ -287,7 +290,7 @@ async fn save_returns_three_states_and_new_version() {
     snapshot.title = "第一次修改".into();
     let outcome = repo
         .commit_post(
-            &Post::reconstitute(snapshot.clone()),
+            &Post::reconstitute(snapshot.clone()).unwrap(),
             1,
             OffsetDateTime::now_utc(),
             None,
@@ -302,7 +305,7 @@ async fn save_returns_three_states_and_new_version() {
     stale_edit.version = 1;
     let outcome = repo
         .commit_post(
-            &Post::reconstitute(stale_edit.clone()),
+            &Post::reconstitute(stale_edit.clone()).unwrap(),
             1,
             OffsetDateTime::now_utc(),
             None,
@@ -324,7 +327,7 @@ async fn save_returns_three_states_and_new_version() {
     gone_edit.title = "写给已删除文章".into();
     let outcome = repo
         .commit_post(
-            &Post::reconstitute(gone_edit.clone()),
+            &Post::reconstitute(gone_edit.clone()).unwrap(),
             2,
             OffsetDateTime::now_utc(),
             None,
@@ -358,7 +361,7 @@ async fn truly_concurrent_saves_exactly_one_wins() {
 
     let snapshot = draft_snapshot(author, "race-real");
     repo_a
-        .insert_post(&Post::reconstitute(snapshot.clone()), &[])
+        .insert_post(&Post::reconstitute(snapshot.clone()).unwrap(), &[])
         .await
         .unwrap();
 
@@ -368,8 +371,8 @@ async fn truly_concurrent_saves_exactly_one_wins() {
     edit_b.title = "并发B".into();
     let now = OffsetDateTime::now_utc();
 
-    let edit_a = Post::reconstitute(edit_a);
-    let edit_b = Post::reconstitute(edit_b);
+    let edit_a = Post::reconstitute(edit_a).unwrap();
+    let edit_b = Post::reconstitute(edit_b).unwrap();
 
     // 两条真实连接同时 UPDATE 同一行，都带 expected_version=1。
     let (outcome_a, outcome_b) = tokio::join!(
@@ -410,17 +413,17 @@ async fn public_query_filters_draft_private_and_deleted() {
     // 1. 公开发布
     let mut published = draft_snapshot(author, "public-one");
     {
-        let mut post = Post::reconstitute(published.clone());
+        let mut post = Post::reconstitute(published.clone()).unwrap();
         post.publish(OffsetDateTime::now_utc()).unwrap();
         published = post.snapshot();
     }
-    repo.insert_post(&Post::reconstitute(published.clone()), &[])
+    repo.insert_post(&Post::reconstitute(published.clone()).unwrap(), &[])
         .await
         .unwrap();
 
     // 2. 草稿
     repo.insert_post(
-        &Post::reconstitute(draft_snapshot(author, "draft-one")),
+        &Post::reconstitute(draft_snapshot(author, "draft-one")).unwrap(),
         &[],
     )
     .await
@@ -430,22 +433,22 @@ async fn public_query_filters_draft_private_and_deleted() {
     let mut private = draft_snapshot(author, "private-one");
     private.visibility = Visibility::Private;
     {
-        let mut post = Post::reconstitute(private.clone());
+        let mut post = Post::reconstitute(private.clone()).unwrap();
         post.publish(OffsetDateTime::now_utc()).unwrap();
         private = post.snapshot();
     }
-    repo.insert_post(&Post::reconstitute(private.clone()), &[])
+    repo.insert_post(&Post::reconstitute(private.clone()).unwrap(), &[])
         .await
         .unwrap();
 
     // 4. 软删除的已发布文章
     let mut deleted = draft_snapshot(author, "deleted-one");
     {
-        let mut post = Post::reconstitute(deleted.clone());
+        let mut post = Post::reconstitute(deleted.clone()).unwrap();
         post.publish(OffsetDateTime::now_utc()).unwrap();
         deleted = post.snapshot();
     }
-    repo.insert_post(&Post::reconstitute(deleted.clone()), &[])
+    repo.insert_post(&Post::reconstitute(deleted.clone()).unwrap(), &[])
         .await
         .unwrap();
     sqlx::raw_sql("UPDATE posts SET deleted_at = now() WHERE slug = 'deleted-one'")
@@ -479,17 +482,19 @@ async fn status_transitions_persisted_correctly() {
     );
 
     let snapshot = draft_snapshot(author, "lifecycle");
-    repo.insert_post(&Post::reconstitute(snapshot.clone()), &[])
+    repo.insert_post(&Post::reconstitute(snapshot.clone()).unwrap(), &[])
         .await
         .unwrap();
 
-    let mut post = Post::reconstitute(repo.find_by_id(snapshot.id).await.unwrap().unwrap());
+    let mut post =
+        Post::reconstitute(repo.find_by_id(snapshot.id).await.unwrap().unwrap()).unwrap();
     post.publish(OffsetDateTime::now_utc()).unwrap();
     repo.commit_post(&post, 1, OffsetDateTime::now_utc(), None)
         .await
         .unwrap();
 
-    let mut post = Post::reconstitute(repo.find_by_id(snapshot.id).await.unwrap().unwrap());
+    let mut post =
+        Post::reconstitute(repo.find_by_id(snapshot.id).await.unwrap().unwrap()).unwrap();
     assert_eq!(post.status(), PostStatus::Published);
     let first_published_at = post.snapshot().published_at;
 
@@ -498,7 +503,7 @@ async fn status_transitions_persisted_correctly() {
         .await
         .unwrap();
 
-    let post = Post::reconstitute(repo.find_by_id(snapshot.id).await.unwrap().unwrap());
+    let post = Post::reconstitute(repo.find_by_id(snapshot.id).await.unwrap().unwrap()).unwrap();
     assert_eq!(post.status(), PostStatus::Draft);
     assert_eq!(
         post.snapshot().published_at,
@@ -986,7 +991,7 @@ async fn page_repository_crud_version_and_public_query() {
     assert_eq!(pages.list().await.unwrap().len(), 1);
 
     // 改为 private：立即退出公开集合（页面无软删除，只有状态与可见性）。
-    let mut private = Page::reconstitute(snapshot.clone());
+    let mut private = Page::reconstitute(snapshot.clone()).unwrap();
     private
         .edit(PagePatch {
             visibility: Some(Visibility::Private),
@@ -1526,7 +1531,7 @@ async fn tag_delete_refuses_references_including_drafts() {
     // 草稿文章（不可公开）也占用引用：引用保护不过滤可见性。
     let draft = draft_snapshot(author, "draft-tagged");
     posts
-        .insert_post(&Post::reconstitute(draft.clone()), &[tag.id])
+        .insert_post(&Post::reconstitute(draft.clone()).unwrap(), &[tag.id])
         .await
         .unwrap();
 
@@ -1569,7 +1574,7 @@ async fn post_tags_saved_in_same_transaction_as_content() {
     let snapshot = draft_snapshot(author, "tagged-post");
     posts
         .insert_post(
-            &Post::reconstitute(snapshot.clone()),
+            &Post::reconstitute(snapshot.clone()).unwrap(),
             &[rust.id, rust.id, essay.id],
         )
         .await
@@ -1587,14 +1592,14 @@ async fn post_tags_saved_in_same_transaction_as_content() {
 
     // 仅替换标签（正文不变）：version 也递增。
     let edit = {
-        let mut post = domain::content::Post::reconstitute(snapshot.clone());
+        let mut post = domain::content::Post::reconstitute(snapshot.clone()).unwrap();
         post.edit(domain::content::post::PostPatch::default())
             .unwrap();
         post.snapshot()
     };
     match posts
         .commit_post(
-            &Post::reconstitute(edit.clone()),
+            &Post::reconstitute(edit.clone()).unwrap(),
             snapshot.version,
             OffsetDateTime::now_utc(),
             Some(&[essay.id]),
@@ -1623,14 +1628,14 @@ async fn post_tags_saved_in_same_transaction_as_content() {
 
     // 清空标签。
     let edit2 = {
-        let mut post = domain::content::Post::reconstitute(edit.clone());
+        let mut post = domain::content::Post::reconstitute(edit.clone()).unwrap();
         post.edit(domain::content::post::PostPatch::default())
             .unwrap();
         post.snapshot()
     };
     posts
         .commit_post(
-            &Post::reconstitute(edit2.clone()),
+            &Post::reconstitute(edit2.clone()).unwrap(),
             edit.version + 1,
             OffsetDateTime::now_utc(),
             Some(&[]),
@@ -1661,7 +1666,7 @@ async fn post_tag_association_rejects_unknown_tag_via_fk() {
 
     let snapshot = draft_snapshot(author, "ghost-tagged");
     match posts
-        .insert_post(&Post::reconstitute(snapshot.clone()), &[ghost])
+        .insert_post(&Post::reconstitute(snapshot.clone()).unwrap(), &[ghost])
         .await
         .unwrap_err()
     {
@@ -1690,17 +1695,17 @@ async fn tag_directory_listing_counts_only_public_posts() {
     // 三篇挂同一标签：公开已发布、草稿、发布但 private。
     let mut public = draft_snapshot(author, "tag-public");
     {
-        let mut post = domain::content::Post::reconstitute(public.clone());
+        let mut post = domain::content::Post::reconstitute(public.clone()).unwrap();
         post.publish(OffsetDateTime::now_utc()).unwrap();
         public = post.snapshot();
     }
     posts
-        .insert_post(&Post::reconstitute(public.clone()), &[tag.id])
+        .insert_post(&Post::reconstitute(public.clone()).unwrap(), &[tag.id])
         .await
         .unwrap();
     posts
         .insert_post(
-            &Post::reconstitute(draft_snapshot(author, "tag-draft")),
+            &Post::reconstitute(draft_snapshot(author, "tag-draft")).unwrap(),
             &[tag.id],
         )
         .await
@@ -1708,12 +1713,12 @@ async fn tag_directory_listing_counts_only_public_posts() {
     let mut private = draft_snapshot(author, "tag-private");
     private.visibility = Visibility::Private;
     {
-        let mut post = domain::content::Post::reconstitute(private.clone());
+        let mut post = domain::content::Post::reconstitute(private.clone()).unwrap();
         post.publish(OffsetDateTime::now_utc()).unwrap();
         private = post.snapshot();
     }
     posts
-        .insert_post(&Post::reconstitute(private.clone()), &[tag.id])
+        .insert_post(&Post::reconstitute(private.clone()).unwrap(), &[tag.id])
         .await
         .unwrap();
 
@@ -1744,17 +1749,17 @@ async fn public_tag_page_lists_only_public_posts_and_paginates() {
     // 3 篇公开 + 1 草稿（挂同标签）。
     for i in 1..=3 {
         let mut public = draft_snapshot(author, &format!("tag-page-{i}"));
-        let mut post = domain::content::Post::reconstitute(public.clone());
+        let mut post = domain::content::Post::reconstitute(public.clone()).unwrap();
         post.publish(OffsetDateTime::now_utc()).unwrap();
         public = post.snapshot();
         posts
-            .insert_post(&Post::reconstitute(public.clone()), &[tag.id])
+            .insert_post(&Post::reconstitute(public.clone()).unwrap(), &[tag.id])
             .await
             .unwrap();
     }
     posts
         .insert_post(
-            &Post::reconstitute(draft_snapshot(author, "tag-page-draft")),
+            &Post::reconstitute(draft_snapshot(author, "tag-page-draft")).unwrap(),
             &[tag.id],
         )
         .await
@@ -1924,7 +1929,7 @@ async fn category_delete_protects_posts_and_children() {
     // 文章引用（含草稿）同样占用。
     let draft = draft_snapshot(author, "categorized-draft");
     posts
-        .insert_post(&Post::reconstitute(draft.clone()), &[])
+        .insert_post(&Post::reconstitute(draft.clone()).unwrap(), &[])
         .await
         .unwrap();
     sqlx::query("UPDATE posts SET category_id = $1 WHERE slug = 'categorized-draft'")
@@ -1971,7 +1976,7 @@ async fn post_category_saved_in_same_transaction_and_public_page_filters() {
     // 创建即带分类；仅改分类也递增 version。
     let snapshot = draft_snapshot(author, "cat-post");
     posts
-        .insert_post(&Post::reconstitute(snapshot.clone()), &[])
+        .insert_post(&Post::reconstitute(snapshot.clone()).unwrap(), &[])
         .await
         .unwrap();
     let edit = {
@@ -1981,7 +1986,7 @@ async fn post_category_saved_in_same_transaction_and_public_page_filters() {
     };
     match posts
         .commit_post(
-            &Post::reconstitute(edit.clone()),
+            &Post::reconstitute(edit.clone()).unwrap(),
             snapshot.version,
             OffsetDateTime::now_utc(),
             None,
@@ -2003,13 +2008,13 @@ async fn post_category_saved_in_same_transaction_and_public_page_filters() {
     assert_eq!((page0.len(), total0), (0, 0), "草稿不出现在分类页");
     let mut published = edit.clone();
     {
-        let mut post = domain::content::Post::reconstitute(published.clone());
+        let mut post = domain::content::Post::reconstitute(published.clone()).unwrap();
         post.publish(OffsetDateTime::now_utc()).unwrap();
         published = post.snapshot();
     }
     posts
         .commit_post(
-            &Post::reconstitute(published.clone()),
+            &Post::reconstitute(published.clone()).unwrap(),
             snapshot.version + 1,
             OffsetDateTime::now_utc(),
             None,
@@ -2047,7 +2052,7 @@ async fn post_category_saved_in_same_transaction_and_public_page_filters() {
         s
     };
     match posts
-        .insert_post(&Post::reconstitute(ghost_edit.clone()), &[])
+        .insert_post(&Post::reconstitute(ghost_edit.clone()).unwrap(), &[])
         .await
         .unwrap_err()
     {
@@ -2093,7 +2098,7 @@ async fn post_in_series(
     let mut snapshot = draft_snapshot(author, slug);
     snapshot.series_id = Some(series);
     snapshot.series_order = Some(order);
-    repo.insert_post(&Post::reconstitute(snapshot.clone()), &[])
+    repo.insert_post(&Post::reconstitute(snapshot.clone()).unwrap(), &[])
         .await
         .unwrap();
     snapshot
@@ -2267,7 +2272,7 @@ async fn post_series_position_conflict_maps_to_series_position() {
 
     // 换到已占用的位置：unique 冲突翻译为 SeriesPosition。
     let snapshot = draft_snapshot(author, "occ-2");
-    repo.insert_post(&Post::reconstitute(snapshot.clone()), &[])
+    repo.insert_post(&Post::reconstitute(snapshot.clone()).unwrap(), &[])
         .await
         .unwrap();
     let edit = {
@@ -2278,7 +2283,7 @@ async fn post_series_position_conflict_maps_to_series_position() {
     };
     match repo
         .commit_post(
-            &Post::reconstitute(edit.clone()),
+            &Post::reconstitute(edit.clone()).unwrap(),
             snapshot.version,
             OffsetDateTime::now_utc(),
             None,
@@ -2322,7 +2327,7 @@ async fn post_series_edit_participates_in_series_version_protocol() {
     };
     match repo
         .commit_post(
-            &Post::reconstitute(moved.clone()),
+            &Post::reconstitute(moved.clone()).unwrap(),
             a.version,
             OffsetDateTime::now_utc(),
             None,
@@ -2359,7 +2364,7 @@ async fn post_series_edit_participates_in_series_version_protocol() {
         snap
     };
     repo.commit_post(
-        &Post::reconstitute(left.clone()),
+        &Post::reconstitute(left.clone()).unwrap(),
         moved.version + 1,
         OffsetDateTime::now_utc(),
         None,
@@ -2380,7 +2385,7 @@ async fn post_series_edit_participates_in_series_version_protocol() {
         snap
     };
     repo.commit_post(
-        &Post::reconstitute(content_only.clone()),
+        &Post::reconstitute(content_only.clone()).unwrap(),
         left.version + 1,
         OffsetDateTime::now_utc(),
         None,
@@ -2651,15 +2656,15 @@ async fn trash_restore_purge_and_series_reorder_obey_versions() {
     b.series_id = Some(series_id);
     b.series_order = Some(2);
     posts
-        .insert_post(&Post::reconstitute(a.clone()), &[])
+        .insert_post(&Post::reconstitute(a.clone()).unwrap(), &[])
         .await
         .unwrap();
     posts
-        .insert_post(&Post::reconstitute(b.clone()), &[])
+        .insert_post(&Post::reconstitute(b.clone()).unwrap(), &[])
         .await
         .unwrap();
     let now = OffsetDateTime::now_utc();
-    let mut a_post = Post::reconstitute(a.clone());
+    let mut a_post = Post::reconstitute(a.clone()).unwrap();
     assert!(a_post.trash(now));
     assert!(matches!(
         posts.commit_lifecycle(&a_post, a.version, now).await.unwrap(),
@@ -2760,7 +2765,7 @@ async fn purge_releases_slug_and_cascades_tags_only_after_trash() {
         .unwrap();
     let post = draft_snapshot(author, "purge-slug");
     posts
-        .insert_post(&Post::reconstitute(post.clone()), &[tag_id])
+        .insert_post(&Post::reconstitute(post.clone()).unwrap(), &[tag_id])
         .await
         .unwrap();
     assert_eq!(posts.purge(post.id, 1).await.unwrap(), SaveOutcome::Gone);
@@ -2774,7 +2779,7 @@ async fn purge_releases_slug_and_cascades_tags_only_after_trash() {
         vec![tag_id]
     );
     let now = OffsetDateTime::now_utc();
-    let mut trashed = Post::reconstitute(post.clone());
+    let mut trashed = Post::reconstitute(post.clone()).unwrap();
     assert!(trashed.trash(now));
     assert!(matches!(
         posts.commit_lifecycle(&trashed, 1, now).await.unwrap(),
@@ -2791,7 +2796,7 @@ async fn purge_releases_slug_and_cascades_tags_only_after_trash() {
     assert!(posts.find_record_by_id(post.id).await.unwrap().is_none());
     posts
         .insert_post(
-            &Post::reconstitute(draft_snapshot(author, "purge-slug")),
+            &Post::reconstitute(draft_snapshot(author, "purge-slug")).unwrap(),
             &[],
         )
         .await
@@ -2799,11 +2804,11 @@ async fn purge_releases_slug_and_cascades_tags_only_after_trash() {
     let mut archived = draft_snapshot(author, "archived-trash");
     archived.status = PostStatus::Archived;
     posts
-        .insert_post(&Post::reconstitute(archived.clone()), &[])
+        .insert_post(&Post::reconstitute(archived.clone()).unwrap(), &[])
         .await
         .unwrap();
     let now = OffsetDateTime::now_utc();
-    let mut archived_post = Post::reconstitute(archived.clone());
+    let mut archived_post = Post::reconstitute(archived.clone()).unwrap();
     assert!(archived_post.trash(now));
     posts
         .commit_lifecycle(&archived_post, 1, now)
@@ -2837,7 +2842,7 @@ async fn content_commit_returns_complete_record_and_rolls_back_failed_references
         pool.clone(),
         Arc::new(infrastructure::RenderingRuntime::default()),
     );
-    let post = Post::reconstitute(draft_snapshot(author, "commit-record"));
+    let post = Post::reconstitute(draft_snapshot(author, "commit-record")).unwrap();
     let inserted = repo
         .insert_post(&post, &[tags[1], tags[0], tags[1]])
         .await
@@ -2850,7 +2855,7 @@ async fn content_commit_returns_complete_record_and_rolls_back_failed_references
         Some(inserted.clone())
     );
 
-    let mut edited = Post::reconstitute(inserted.snapshot.clone());
+    let mut edited = Post::reconstitute(inserted.snapshot.clone()).unwrap();
     edited
         .edit(PostPatch {
             title: Some("新标题".into()),
@@ -2875,7 +2880,7 @@ async fn content_commit_returns_complete_record_and_rolls_back_failed_references
     );
 
     // 引用在正文/标签写入后校验；失败必须把版本、正文和标签一起回滚。
-    let mut invalid = Post::reconstitute(committed.snapshot.clone());
+    let mut invalid = Post::reconstitute(committed.snapshot.clone()).unwrap();
     invalid
         .edit(PostPatch {
             title: Some("不能落库".into()),
@@ -2911,7 +2916,7 @@ async fn content_commit_reads_never_mix_body_and_tags_during_concurrent_edits() 
         pool,
         Arc::new(infrastructure::RenderingRuntime::default()),
     ));
-    let mut post = Post::reconstitute(draft_snapshot(author, "coherent-record"));
+    let mut post = Post::reconstitute(draft_snapshot(author, "coherent-record")).unwrap();
     post.edit(PostPatch {
         title: Some("A".into()),
         ..Default::default()
@@ -2927,7 +2932,7 @@ async fn content_commit_reads_never_mix_body_and_tags_during_concurrent_edits() 
         writer_barrier.wait().await;
         for index in 0..40 {
             let (title, tag) = if index % 2 == 0 { ("B", b) } else { ("A", a) };
-            let mut post = Post::reconstitute(current.snapshot.clone());
+            let mut post = Post::reconstitute(current.snapshot.clone()).unwrap();
             post.edit(PostPatch {
                 title: Some(title.into()),
                 ..Default::default()
@@ -2973,11 +2978,11 @@ async fn content_commit_lifecycle_preserves_relations_and_checks_original_state(
     let tag = seed_tag(&pool, "保留标签", "lifecycle-record-tag").await.id;
     let repo =
         PostgresPostRepository::new(pool, Arc::new(infrastructure::RenderingRuntime::default()));
-    let mut post = Post::reconstitute(draft_snapshot(author, "lifecycle-record"));
+    let mut post = Post::reconstitute(draft_snapshot(author, "lifecycle-record")).unwrap();
     let now = OffsetDateTime::now_utc();
     post.publish(now).unwrap();
     let inserted = repo.insert_post(&post, &[tag]).await.unwrap();
-    let mut trashed = Post::reconstitute(inserted.snapshot.clone());
+    let mut trashed = Post::reconstitute(inserted.snapshot.clone()).unwrap();
     assert!(trashed.trash(now));
     assert!(matches!(
         repo.commit_lifecycle(&trashed, inserted.snapshot.version + 1, now)
@@ -3002,7 +3007,7 @@ async fn content_commit_lifecycle_preserves_relations_and_checks_original_state(
             .unwrap(),
         PostCommitOutcome::Gone
     ));
-    let mut restored = Post::reconstitute(deleted.snapshot.clone());
+    let mut restored = Post::reconstitute(deleted.snapshot.clone()).unwrap();
     assert!(restored.restore());
     let PostCommitOutcome::Saved(restored) = repo
         .commit_lifecycle(&restored, deleted.snapshot.version, now)
