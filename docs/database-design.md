@@ -1,6 +1,6 @@
 # 数据库设计
 
-当前 PostgreSQL schema 有 **16 张业务表**，不含 sqlx 的迁移记录表。本文说明数据关系、主要字段、数据库约束和提交边界；内容状态见[内容生命周期](content-lifecycle.md)，认证授权见[身份与后台](identity-and-admin.md)。
+当前 PostgreSQL schema 有 **19 张业务表**，不含 sqlx 的迁移记录表。本文说明数据关系、主要字段、数据库约束和提交边界；内容状态见[内容生命周期](content-lifecycle.md)，认证授权见[身份与后台](identity-and-admin.md)。
 
 ## 1. 权威来源与迁移
 
@@ -16,6 +16,7 @@
 | `0006_media_covers.sql` | Post/Series 文本封面替换为媒体外键 |
 | `0007_media_avatar_logo.sql` | 用户头像媒体外键，扩展头像与站点引用类型 |
 | `0008_content_html.sql` | Post/Page 持久化清洗 HTML 与生成规则版本 |
+| `0009_comments.sql` | 评论、全站及单篇评论开关 |
 
 迁移不包含种子账号。权限目录和内置角色由可信注册表同步，不由任意配置或用户输入创造可执行权限。
 
@@ -127,3 +128,10 @@ site 生效顺序为数据库、装配环境值、内置默认。缺失/空白�
 - 校验刷新活跃时间但不延长绝对期限；应用另比对 `user_version` 与账号当前版本。期限、Cookie 和改密行为见[身份与后台](identity-and-admin.md)。
 
 会话随数据库备份恢复，旧会话可能随之重新出现；恢复流程必须显式撤销，见[运维与恢复](operations-and-recovery.md)。OAuth 尝试和登录限流目前在有界内存，不存入 settings。
+
+## 原生评论
+
+`0009_comments.sql` 新增 `comments`、`comment_settings` 和 `post_comment_settings`。
+评论以文章 UUID 关联，文章物理删除时级联清除；复合外键保证父评论属于同篇文章，触发器限制一层回复并禁止移动讨论关系。
+评论状态为 pending / approved / rejected / spam；正文与昵称使用纯文本。评论、全站开关与单篇开关各自有版本，不更新文章版本。
+请求 UUID 唯一，客户端摘要及创建时间索引用于事务内去重与限流。约束和 API 详见[评论](comments.md)。

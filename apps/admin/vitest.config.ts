@@ -15,6 +15,8 @@ import { defineConfig } from "vitest/config";
  */
 export default defineConfig({
   plugins: [react()],
+  // Public comment behavior uses the exact Rust-served browser bundle.
+  server: { fs: { allow: [".", "../../crates/interfaces/assets"] } },
   test: {
     environment: "jsdom",
     setupFiles: ["src/testSetup.ts"],

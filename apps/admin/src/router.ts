@@ -13,6 +13,7 @@ import { useEffect, useState } from "react";
  */
 export type Route =
   | { name: "list" }
+  | { name: "comments" }
   | { name: "postTrash" }
   | { name: "postNew" }
   | { name: "postEdit"; id: string }
@@ -61,6 +62,7 @@ export function parseRoute(pathname: string): Route {
   const rest = underBase ? pathname.slice(BASE.length) : pathname;
   const segments = rest.split("/").filter((segment) => segment.length > 0);
 
+  if (segments[0] === "comments") return segments.length === 1 ? { name: "comments" } : { name: "invalid" };
   if (segments.length === 0) return { name: "list" };
   if (segments[0] === "trash") return segments.length === 1 ? { name: "postTrash" } : { name: "invalid" };
 
@@ -102,6 +104,7 @@ export function parseRoute(pathname: string): Route {
 
 export const paths = {
   list: `${BASE}/`,
+  comments: `${BASE}/comments`,
   newPost: `${BASE}/posts/new`,
   postTrash: `${BASE}/trash`,
   editPost: (id: string): string => `${BASE}/posts/${encodeURIComponent(id)}/edit`,

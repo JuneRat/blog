@@ -1,0 +1,14 @@
+.comments { margin: 3rem 0; padding-top: 1.5rem; border-top: 1px solid #8885; }
+.comments label { display: block; margin: 1rem 0; }
+.comments input,.comments textarea { display:block; box-sizing:border-box; width:100%; padding:.7rem; margin-top:.4rem; font:inherit; color:inherit; background:transparent; border:1px solid #8888; border-radius:4px; }
+.comments input { max-width:24rem; }
+.comments button { font:inherit; cursor:pointer; padding:.4rem .8rem; margin:.3rem .4rem .3rem 0; }
+.comments button:disabled { cursor:default; opacity:.5; }
+.comment-item { padding:1rem 0; border-bottom:1px solid #8884; }
+.comment-identity { display:flex; align-items:center; flex-wrap:wrap; gap:.5rem; }
+.comment-identity strong { overflow-wrap:anywhere; }
+.comment-author-badge { display:inline-block; padding:.1rem .45rem; border:1px solid currentColor; border-radius:1rem; font-size:.75em; font-weight:600; }
+.comment-item time { display:block; font-size:.85em; opacity:.7; }
+.comment-body { white-space:pre-wrap; overflow-wrap:anywhere; }
+.comment-replies { margin-left:1.5rem; }
+.comment-pagination { display:flex; align-items:center; flex-wrap:wrap; gap:.4rem; margin:1rem 0; }

@@ -1,3 +1,4 @@
+import { CommentSwitch } from "../components/CommentSwitch";
 import {
   Alert,
   App as AntdApp,
@@ -641,6 +642,7 @@ export function PostEditScreen({ id }: { id: string | null }) {
         />
       )}
 
+      {id !== null && <CommentSwitch key={id} post={id} />}
       <Form
         form={formApi}
         layout="vertical"

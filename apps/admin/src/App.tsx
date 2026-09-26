@@ -13,6 +13,7 @@ import { UnsavedChangesProvider } from "./unsaved";
  *
  * 命名导出用 `.then()` 转成 default，避免为了懒加载改动各屏的导出形状。
  */
+const CommentListScreen = lazy(() => import("./screens/CommentListScreen").then(m => ({default:m.CommentListScreen})));
 const PostListScreen = lazy(() =>
   import("./screens/PostListScreen").then((m) => ({ default: m.PostListScreen })),
 );
@@ -111,6 +112,8 @@ function AdminRoutes() {
               </Button>
             }
           />
+        ) : route.name === "comments" ? (
+          <CommentListScreen />
         ) : route.name === "postEdit" ? (
           // 创建后由编辑器保留已经合并的输入；切换实体按稳定 ID 重新加载。
           <PostEditScreen id={route.id} />

@@ -11,6 +11,7 @@
 | 修改后端或判断代码应放在哪一层 | [架构](architecture.md) → [领域模型](domain.md) |
 | 修改编辑、发布、删除或媒体引用行为 | [内容生命周期](content-lifecycle.md) → [数据库设计](database-design.md) |
 | 开发后台或接入管理接口 | [管理 API](admin-api.md) → [身份、权限与后台](identity-and-admin.md) |
+| 使用或开发原生评论 | [评论](comments.md) |
 | 开发公开页面、主题或 SEO | [主题与渲染](themes-and-rendering.md) |
 | 备份、恢复或处置账号问题 | [运维与恢复](operations-and-recovery.md) |
 | 确认交付范围或选择下一步工作 | [产品路线图](product-roadmap.md) |

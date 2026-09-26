@@ -300,6 +300,16 @@ async fn me(
     };
     let (record, actor) = match state.auth.session_actor(&token).await {
         Ok(pair) => pair,
+        Err(UseCaseError::Unauthenticated) => {
+            // The public comment form also checks /me. Remove a confirmed stale
+            // cookie so its next, explicitly anonymous submission can proceed.
+            let mut response = admin_error(UseCaseError::Unauthenticated, &request_id);
+            response.headers_mut().append(
+                header::SET_COOKIE,
+                cookie_header(session_cookie("", state.secure_cookies, 0)),
+            );
+            return response;
+        }
         Err(e) => return admin_error(e, &request_id),
     };
     request_id.set_actor(actor.user_id.0);

@@ -13,6 +13,18 @@ import recovery
 
 
 class RecoveryTests(unittest.TestCase):
+    def test_comment_tables_are_counted_and_required_for_restore(self):
+        class Pg:
+            def query(self, sql, database):
+                for table in ("comments", "comment_settings", "post_comment_settings"):
+                    assert f"FROM {table})" in sql
+                return "|".join(str(n) for n in range(14))
+        counts = recovery.database_counts(Pg())
+        self.assertEqual(counts["comments"], 11)
+        self.assertEqual(counts["comment_settings"], 12)
+        self.assertEqual(counts["post_comment_settings"], 13)
+        self.assertTrue({"comments", "comment_settings", "post_comment_settings"}.issubset(recovery.SCHEMA_TABLES))
+
     def bundle(self, root):
         data = root / "data"
         (data / "theme" / "templates").mkdir(parents=True, exist_ok=True)

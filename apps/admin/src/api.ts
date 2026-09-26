@@ -596,3 +596,36 @@ export const seriesApi = {
       }),
     }),
 };
+
+export interface CommentItem {
+  id: string; post_id: string; post_slug: string; post_title: string; parent_id: string | null;
+  nickname: string; body: string; is_author: boolean; status: string; version: number; created_at: string;
+}
+export interface CommentPage { items: CommentItem[]; total: number; enabled: boolean }
+export interface CommentPolicy { enabled: boolean; version: number }
+const commentPolicyPath = (post?: string) => post ? `/api/admin/v1/posts/${encodeURIComponent(post)}/comment-settings` : '/api/admin/v1/comment-settings';
+export const commentsApi = {
+  list: (page: number, status: string, post?: string) => {
+    const params = new URLSearchParams({ page: String(page) });
+    if (status) params.set('status', status);
+    if (post) params.set('post_id', post);
+    return request<CommentPage>(`/api/admin/v1/comments?${params}`);
+  },
+  moderate: (item: CommentItem, status: string | null) => request<void>(`/api/admin/v1/comments/${item.id}`, {
+    method: 'POST', body: JSON.stringify({ version: item.version, ...(status ? { status } : { delete: true }) }),
+  }),
+  reply: (item: CommentItem, body: string, requestId: string) => request<{message: string}>(`/api/v1/posts/${encodeURIComponent(item.post_slug)}/comments`, {
+    method: 'POST', body: JSON.stringify({ nickname: '作者', body, parent_id: item.id, request_id: requestId }),
+  }),
+  policy: (post?: string) => request<CommentPolicy>(commentPolicyPath(post)),
+  savePolicy: (policy: CommentPolicy, post?: string) => request<CommentPolicy>(commentPolicyPath(post), { method: 'PUT', body: JSON.stringify(policy) }),
+};
+
+/** UUIDv4 using getRandomValues, including non-HTTPS local previews. */
+export function commentRequestId(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 15) | 64;
+  bytes[8] = (bytes[8] & 63) | 128;
+  const hex = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;
+}

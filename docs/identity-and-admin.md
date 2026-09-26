@@ -14,6 +14,8 @@
 - 缺少 `Origin` 时放行；因此当前并未强制所有客户端发送 Origin，也未按外部站点配置强制校验协议。
 - 匿名密码登录尚无会话 CSRF token，使用上述 Origin 检查和 Cookie 策略。
 
+`GET /api/admin/v1/me` 确认 Cookie 对应的会话失效时，返回 401 并清除该 Cookie，使后续游客评论可以使用匿名身份。账号或权限存储故障返回内部错误并保留 Cookie，不将查询失败视为会话失效。
+
 客户端应按稳定的 `code` 处理错误，并在报障时保留 `x-request-id` 响应头；应用错误体也包含 `request_id`。错误码、非 JSON 拒绝和当前编号不一致的例外集中在 [管理 API](admin-api.md)。
 
 ## 2. 账号与权限模型

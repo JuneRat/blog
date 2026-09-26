@@ -8,7 +8,7 @@
 
 - Rust 模块化单体：四层加 server 装配入口，共五个 crate。
 - 单站点多人协作，公开 MiniJinja SSR，后台 React + TypeScript + Vite SPA；作者可直接发布自己的文章，无强制审核。
-- PostgreSQL 为当前唯一数据库。按用户确认的 13 表核心实施，媒体与持久会话按需增加 3 表；表数不是未来功能的约束。
+- PostgreSQL 为当前唯一数据库。按用户确认的 13 表核心实施，媒体、持久会话与评论按需增加 6 表；表数不是未来功能的约束。
 - Post 单分类、单系列、多标签；分类可有父节点，系列有阅读顺序。Page 独立，不承载文章组织关系。
 - RBAC、内置与自定义角色的方向保留；首批外部身份为通用 OIDC 与 GitHub。本地密码与持久会话按后续决策纳入。
 - 扩展采用主题、Webhook 和外部服务等受限入口；多数据库、搜索、统计及其他扩展按使用场景分别立项，不提供通用可执行插件安装器。
@@ -27,6 +27,7 @@
 | 站点设置 | 已实现 `settings.site` 与 `settings.theme`，含版本冲突处理、站点标题/描述/logo 与已安装主题切换。其他设置分组未开放 | [配置](configuration.md) |
 | 公开发现 | 已实现 RSS、sitemap、robots 与基础 SEO；使用统一公开条件，不收录草稿、私密或回收站内容 | [内容生命周期](content-lifecycle.md)、[主题与渲染](themes-and-rendering.md) |
 | 主题 | 已实现受控只读函数、请求级预算、第二主题 `paper` 与后台切换；桥接原型验证完成。cursor、导航及公开作者函数未实现 | [主题与渲染](themes-and-rendering.md)、[原型报告](../spikes/template-bridge/README.md) |
+| 原生评论 | 已实现游客提交、审核、公开展示、一层回复、分页、后台管理、独立版本与评论开关；依赖 JavaScript，暂无读者注册 | [评论](comments.md) |
 | 媒体 | 已实现正文图片、Post/Series 封面、用户头像和站点 logo，以及上传、引用保护、公开访问边界与回收 | [内容生命周期](content-lifecycle.md) |
 | 渲染与模块边界 | 已实现持久化清洗 HTML、集中渲染运行时、按命令装配、业务模块拆分和 CI 依赖检查；未启用跨请求整页缓存 | [架构](architecture.md)、[ADR-0015](adr/0015-rendered-content-runtime-and-module-boundaries.md) |
 | 备份恢复 | 已有维护备份、隔离恢复工具及本机核心数据往返演练。媒体目录需显式附加；完整媒体恢复与生产维护/RPO/RTO 尚未验收 | [备份与恢复](operations-and-recovery.md) |
@@ -73,5 +74,5 @@
 | Webhook、搜索、统计、邮件/订阅 | 提供商与使用场景；outbox、重试、授权过滤、隐私及恢复后的外部副作用 |
 | MFA/Passkey、自助邮箱找回 | 凭据、限流、会话撤销、账号恢复与通知投递 |
 | 完整多实例支持 | OAuth 一次性状态、限流及后台任务的共享/协调；不能仅凭共享会话上线多实例 |
-| 评论、多语言、第二数据库、代码插件 | 各自业务身份、路径、隔离、迁移和恢复契约；技术边界见[扩展设计候选](extensions-and-data.md) |
+| 多语言、第二数据库、代码插件 | 各自业务身份、路径、隔离、迁移和恢复契约；技术边界见[扩展设计候选](extensions-and-data.md) |
 | 跨请求公开缓存 | 有实际测量证明必要，先验证新鲜度、失效与撤回语义；[ADR-0004](adr/0004-public-cache-generation.md) 仍是提议 |

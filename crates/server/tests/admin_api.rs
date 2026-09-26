@@ -293,6 +293,18 @@ async fn fresh_stack() -> Stack {
             admin_state.clone(),
         ))
         .merge(interfaces::http_admin::series_router(admin_state.clone()))
+        .merge(interfaces::http_comments::comments_router(
+            interfaces::http_comments::CommentState {
+                comments: Arc::new(application::comments::CommentInteractor::new(Arc::new(
+                    infrastructure::comments::PostgresCommentRepository::new(pool.clone()),
+                ))),
+                admin: admin_state.clone(),
+                origin: "http://127.0.0.1:18099".into(),
+            },
+        ))
+        .layer(axum::Extension(axum::extract::ConnectInfo(
+            "127.0.0.1:12345".parse::<std::net::SocketAddr>().unwrap(),
+        )))
         .merge(interfaces::http_identity::identity_router(admin_state))
         // 与生产装配一致：最外层请求编号/日志中间件。
         .layer(middleware::from_fn(request_context));
@@ -3511,5 +3523,399 @@ async fn management_rejects_slug_addresses_without_changing_content() {
             serde_json::from_str::<serde_json::Value>(&body).unwrap(),
             created
         );
+    }
+}
+
+#[tokio::test]
+async fn native_comments_guest_moderation_and_http_boundaries() {
+    let _g = SERIAL.lock().await;
+    let stack = fresh_stack().await;
+    let (cookie, csrf) = login_as(&stack.router, &stack.idp, "author").await;
+    let (status, body) = api(
+        &stack.router,
+        "POST",
+        "/api/admin/v1/posts",
+        Some(&cookie),
+        Some(&csrf),
+        Some(r#"{"slug":"comments-http","title":"Comments","content":"Body"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let post_id = response_id(&body);
+    let (status, body) = api(
+        &stack.router,
+        "POST",
+        &format!("/api/admin/v1/posts/{post_id}/publish"),
+        Some(&cookie),
+        Some(&csrf),
+        Some(r#"{"expected_version":1}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let endpoint = "/api/v1/posts/comments-http/comments";
+    let payload=serde_json::json!({"nickname":"<script>guest</script>","body":"<img src=x onerror=alert(1)>\nText", "request_id":Uuid::now_v7()}).to_string();
+    // Anonymous writes require the configured origin (not arbitrary Host matching).
+    for origin in [None, Some("http://evil.test")] {
+        let mut req = Request::builder()
+            .method("POST")
+            .uri(endpoint)
+            .header("content-type", "application/json");
+        if let Some(origin) = origin {
+            req = req.header("origin", origin);
+        }
+        let response = stack
+            .router
+            .clone()
+            .oneshot(req.body(Body::from(payload.clone())).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+    let guest_request = || {
+        Request::builder()
+            .method("POST")
+            .uri(endpoint)
+            .header("content-type", "application/json")
+            .header("host", "127.0.0.1:18099")
+            .header("origin", "http://127.0.0.1:18099")
+    };
+    let response = stack
+        .router
+        .clone()
+        .oneshot(guest_request().body(Body::from(payload.clone())).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    assert_eq!(response.headers()["cache-control"], "no-store");
+    let (_, body) = api(&stack.router, "GET", endpoint, None, None, None).await;
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&body).unwrap()["total"],
+        0
+    );
+    let (_, body) = api(
+        &stack.router,
+        "GET",
+        "/api/admin/v1/comments?status=pending",
+        Some(&cookie),
+        None,
+        None,
+    )
+    .await;
+    let data: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let cid = data["items"][0]["id"].as_str().unwrap();
+    assert_eq!(data["items"][0]["nickname"], "<script>guest</script>");
+    let uri = format!("/api/admin/v1/comments/{cid}");
+    let moderation = r#"{"version":1,"status":"approved"}"#;
+    assert_eq!(
+        api(
+            &stack.router,
+            "POST",
+            &uri,
+            Some(&cookie),
+            None,
+            Some(moderation)
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        api(
+            &stack.router,
+            "POST",
+            &uri,
+            Some(&cookie),
+            Some(&csrf),
+            Some(moderation)
+        )
+        .await
+        .0,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        api(
+            &stack.router,
+            "POST",
+            &uri,
+            Some(&cookie),
+            Some(&csrf),
+            Some(moderation)
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    let (_, body) = api(&stack.router, "GET", endpoint, None, None, None).await;
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&body).unwrap()["total"],
+        1
+    );
+    // A cookie-bearing public submission must also pass session CSRF.
+    let response = stack
+        .router
+        .clone()
+        .oneshot(
+            guest_request()
+                .header("cookie", format!("blog_session={cookie}"))
+                .body(Body::from(payload.clone()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let payload=serde_json::json!({"nickname":"spoof","body":"Author reply","parent_id":cid,"request_id":Uuid::now_v7()}).to_string();
+    let response = stack
+        .router
+        .clone()
+        .oneshot(
+            guest_request()
+                .header("cookie", format!("blog_session={cookie}"))
+                .header("x-csrf-token", &csrf)
+                .body(Body::from(payload))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    let (_, body) = api(
+        &stack.router,
+        "GET",
+        "/api/admin/v1/comments?status=pending",
+        Some(&cookie),
+        None,
+        None,
+    )
+    .await;
+    let data: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(data["items"][0]["is_author"], true);
+    assert_eq!(data["items"][0]["nickname"], "author");
+    // Body limits and unknown fields cannot bypass the public contract.
+    let response = stack
+        .router
+        .clone()
+        .oneshot(guest_request().body(Body::from("x".repeat(17000))).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    sqlx::query("UPDATE posts SET visibility='private' WHERE id=$1")
+        .bind(post_id)
+        .execute(&stack.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        api(&stack.router, "GET", endpoint, None, None, None)
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+}
+
+async fn published_comment_endpoint(stack: &Stack, cookie: &str, csrf: &str) -> String {
+    let (status, body) = api(
+        &stack.router,
+        "POST",
+        "/api/admin/v1/posts",
+        Some(cookie),
+        Some(csrf),
+        Some(r#"{"slug":"comment-regression","title":"Comments","content":"Body"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let post_id = response_id(&body);
+    let (status, body) = api(
+        &stack.router,
+        "POST",
+        &format!("/api/admin/v1/posts/{post_id}/publish"),
+        Some(cookie),
+        Some(csrf),
+        Some(r#"{"expected_version":1}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    "/api/v1/posts/comment-regression/comments".into()
+}
+
+fn comment_submit_request(
+    endpoint: &str,
+    payload: serde_json::Value,
+    cookie: Option<&str>,
+    csrf: Option<&str>,
+) -> Request<Body> {
+    let mut request = Request::builder()
+        .method("POST")
+        .uri(endpoint)
+        .header("host", "127.0.0.1:18099")
+        .header("origin", "http://127.0.0.1:18099")
+        .header("content-type", "application/json");
+    if let Some(cookie) = cookie {
+        request = request.header("cookie", format!("blog_session={cookie}"));
+    }
+    if let Some(csrf) = csrf {
+        request = request.header("x-csrf-token", csrf);
+    }
+    request.body(Body::from(payload.to_string())).unwrap()
+}
+
+#[tokio::test]
+async fn native_comments_clear_stale_cookie_before_explicit_guest_retry() {
+    let _g = SERIAL.lock().await;
+    let stack = fresh_stack().await;
+    let (cookie, csrf) = login_as(&stack.router, &stack.idp, "author").await;
+    let endpoint = published_comment_endpoint(&stack, &cookie, &csrf).await;
+    sqlx::query("UPDATE users SET version=version+1 WHERE username='author'")
+        .execute(&stack.pool)
+        .await
+        .unwrap();
+    let payload = serde_json::json!({
+        "nickname":"Guest", "body":"A preserved draft", "request_id":Uuid::now_v7(),
+    });
+    // A failed authenticated write must never silently become an anonymous write.
+    let response = stack
+        .router
+        .clone()
+        .oneshot(comment_submit_request(
+            &endpoint,
+            payload.clone(),
+            Some(&cookie),
+            Some(&csrf),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM comments")
+        .fetch_one(&stack.pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 0);
+
+    let response = stack
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/admin/v1/me")
+                .header("cookie", format!("blog_session={cookie}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(response.headers()["cache-control"], "no-store");
+    let clear = response
+        .headers()
+        .get("set-cookie")
+        .unwrap()
+        .to_str()
+        .unwrap();
+    assert!(clear.starts_with("blog_session=;"));
+    assert!(clear.contains("Path=/"));
+    assert!(clear.contains("HttpOnly"));
+    assert!(clear.contains("SameSite=Lax"));
+    assert!(clear.contains("Max-Age=0"));
+    // The browser applies Set-Cookie; only an explicit retry now omits it.
+    let response = stack
+        .router
+        .clone()
+        .oneshot(comment_submit_request(&endpoint, payload, None, None))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    let row: (Option<Uuid>, String, String) =
+        sqlx::query_as("SELECT user_id,nickname,body FROM comments")
+            .fetch_one(&stack.pool)
+            .await
+            .unwrap();
+    assert_eq!(row, (None, "Guest".into(), "A preserved draft".into()));
+}
+
+#[tokio::test]
+async fn me_keeps_session_cookie_when_identity_storage_fails() {
+    let _g = SERIAL.lock().await;
+    let stack = fresh_stack().await;
+    let (cookie, _) = login_as(&stack.router, &stack.idp, "author").await;
+    // Session validation succeeds in memory, but the identity lookup cannot run.
+    stack.pool.close().await;
+    let response = stack
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/admin/v1/me")
+                .header("cookie", format!("blog_session={cookie}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(response.headers().get("set-cookie").is_none());
+}
+
+#[tokio::test]
+async fn native_comments_use_server_name_before_guest_nickname_validation() {
+    let _g = SERIAL.lock().await;
+    let stack = fresh_stack().await;
+    let (cookie, csrf) = login_as(&stack.router, &stack.idp, "author").await;
+    let endpoint = published_comment_endpoint(&stack, &cookie, &csrf).await;
+    let display_name = format!("{}😀尾", "字".repeat(63));
+    sqlx::query("UPDATE users SET display_name=$1 WHERE username='author'")
+        .bind(&display_name)
+        .execute(&stack.pool)
+        .await
+        .unwrap();
+    let request_id = Uuid::now_v7();
+    for nickname in [&display_name, "ignored\n<script>", ""] {
+        let response = stack
+            .router
+            .clone()
+            .oneshot(comment_submit_request(
+                &endpoint,
+                serde_json::json!({"nickname":nickname,"body":"Signed in","request_id":request_id}),
+                Some(&cookie),
+                Some(&csrf),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+    }
+    let (_, body) = api(
+        &stack.router,
+        "GET",
+        "/api/admin/v1/comments?status=pending",
+        Some(&cookie),
+        None,
+        None,
+    )
+    .await;
+    let data: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(data["total"], 1);
+    assert_eq!(
+        data["items"][0]["nickname"],
+        format!("{}😀", "字".repeat(63))
+    );
+    assert_eq!(data["items"][0]["is_author"], true);
+    for body in [" ".to_string(), "字".repeat(2001), "nul\0".to_string()] {
+        let response = stack.router.clone().oneshot(comment_submit_request(
+            &endpoint,
+            serde_json::json!({"nickname":display_name,"body":body,"request_id":Uuid::now_v7()}),
+            Some(&cookie), Some(&csrf),
+        )).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+    // Ignoring authenticated nicknames must not relax the anonymous input rules.
+    for nickname in [&display_name, "", "name\nspoof"] {
+        let response = stack
+            .router
+            .clone()
+            .oneshot(comment_submit_request(
+                &endpoint,
+                serde_json::json!({"nickname":nickname,"body":"Guest","request_id":Uuid::now_v7()}),
+                None,
+                None,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 }

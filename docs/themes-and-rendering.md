@@ -142,3 +142,7 @@ sitemap 的 50,000 条限制是整个文件的预算：首页、文章、Page、
 公开查询只允许已发布、公开、未删除的文章及已发布、公开的 Page。缺失内容可以返回 none 或 404，数据库失败、参数错误、预算耗尽和模板错误则保留为错误。当前没有公开页面缓存、跨请求函数缓存、全站 generation 或主题失败页面缓存；主题资源版本与内容公开性分别管理。
 
 关于页面缓存、模板 API 扩展及外部集成的后续取舍，见[产品路线图](product-roadmap.md)与[扩展设计](extensions-and-data.md)。历史桥接、缓存方案及执行边界决策保留在 [ADR-0002](adr/0002-template-data-functions.md)、[ADR-0004](adr/0004-public-cache-generation.md)、[ADR-0015](adr/0015-rendered-content-runtime-and-module-boundaries.md)；其中规划方案不等于当前实现。
+
+## 文章评论组件
+
+内置 default / paper 的文章模板通过 `data-comments-slug="{{ post.slug }}"` 挂载原生评论，加载 `/assets/comments.js` 与 `/assets/comments.css`。这些共享资源由 Rust 提供，文本使用 DOM `textContent`；不得改为正文的 `safe` 输出。公开列表和提交开关由同源 API 实时检查文章可见性。行为、分页及接口见[评论](comments.md)。

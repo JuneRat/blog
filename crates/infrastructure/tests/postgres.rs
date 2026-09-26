@@ -78,14 +78,14 @@ async fn migrations_create_core_tables() {
     let _g = SERIAL.lock().await;
     let pool = fresh_database().await;
 
-    // 13 张核心内容/身份表 + 媒体 2 张 + 持久会话 1 张（docs/database-design.md）。
+    // 13 张核心内容/身份表 + 媒体 2 张 + 持久会话 1 张 + 评论 3 张（docs/database-design.md）。
     let count: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename <> '_sqlx_migrations'",
     )
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(count, 16, "13 张核心表 + 媒体 2 张 + 会话 1 张");
+    assert_eq!(count, 19, "13 张核心表 + 媒体 2 张 + 会话 1 张 + 评论 3 张");
 
     let tables: Vec<String> = sqlx::query_scalar(
         "SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename <> '_sqlx_migrations' ORDER BY tablename",
@@ -95,11 +95,14 @@ async fn migrations_create_core_tables() {
     .unwrap();
     let expected = [
         "categories",
+        "comment_settings",
+        "comments",
         "content_media_refs",
         "media_assets",
         "oauth_accounts",
         "pages",
         "permissions",
+        "post_comment_settings",
         "post_tags",
         "posts",
         "role_permissions",

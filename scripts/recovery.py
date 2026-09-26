@@ -27,7 +27,7 @@ RESTORE_NAME = re.compile(r"^blog_restore_[A-Za-z0-9_]{1,48}$")
 SCHEMA_TABLES = (
     "users", "oauth_accounts", "roles", "permissions", "user_roles",
     "role_permissions", "posts", "pages", "categories", "series",
-    "tags", "post_tags", "settings",
+    "tags", "post_tags", "settings", "comments", "comment_settings", "post_comment_settings",
 )
 
 
@@ -138,7 +138,7 @@ def assert_secret_refs(refs):
 
 def database_counts(pg, database=None):
     keys = ("users", "posts", "public_posts", "private_posts", "draft_posts",
-            "trash_posts", "pages", "categories", "series", "tags", "post_tags")
+            "trash_posts", "pages", "categories", "series", "tags", "post_tags", "comments", "comment_settings", "post_comment_settings")
     sql = "SELECT " + ", ".join((
         "(SELECT count(*) FROM users)",
         "(SELECT count(*) FROM posts)",
@@ -151,6 +151,9 @@ def database_counts(pg, database=None):
         "(SELECT count(*) FROM series)",
         "(SELECT count(*) FROM tags)",
         "(SELECT count(*) FROM post_tags)",
+        "(SELECT count(*) FROM comments)",
+        "(SELECT count(*) FROM comment_settings)",
+        "(SELECT count(*) FROM post_comment_settings)",
     ))
     values = pg.query(sql, database).split("|")
     if len(values) != len(keys):

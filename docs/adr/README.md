@@ -11,7 +11,7 @@
 | [0001 Workspace 与边界](0001-workspace-boundaries.md) | 已采纳；五个 crate 已实现，依赖检查由 0015 落实。正文“未实现依赖连线”是历史状态 |
 | [0002 MiniJinja 与数据函数](0002-template-data-functions.md) | 已采纳；桥接原型已验证可行，受控函数已进入生产代码。正文首段“待原型验证”由文末结论及[原型报告](../../spikes/template-bridge/README.md)更新；执行边界进一步见 0015 |
 | [0003 产品与接入基线](0003-product-baseline.md) | 产品方向仍有效；存储与交付分期由 0008 及后续 ADR 细化，邀请/外部集成等不能据此推定已实现 |
-| [0008 用户确认的 13 表核心](0008-thirteen-table-blog-core.md) | 已采纳并实现，替代 0007。正文“待实施”已过时；按需扩展原则下增加媒体 2 表与会话 1 表，密码与会话分别由 0009/0010 更新 |
+| [0008 用户确认的 13 表核心](0008-thirteen-table-blog-core.md) | 已采纳并实现，替代 0007。正文“待实施”已过时；按需扩展原则下增加媒体 2 表、会话 1 表及评论 3 表，密码与会话分别由 0009/0010 更新 |
 | [0009 本地密码认证](0009-local-password-authentication.md) | 已采纳并实现；启用 Argon2id、限流及受控重置 |
 | [0010 PostgreSQL 持久会话](0010-persistent-postgres-sessions.md) | 已采纳并实现；替代初期会话重启失效的边界，不代表完整多实例支持 |
 | [0011 Ant Design v6 后台](0011-admin-ui-library.md) | 已采纳并实现 |

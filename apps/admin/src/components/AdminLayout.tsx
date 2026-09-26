@@ -29,6 +29,7 @@ const NAV: MenuProps["items"] = [
     label: "内容",
     children: [
       { key: paths.list, label: "文章" },
+      { key: paths.comments, label: "评论管理" },
       { key: paths.pages, label: "独立页面" },
       { key: paths.media, label: "媒体库" },
       { key: paths.postTrash, label: "回收站" },
@@ -57,6 +58,7 @@ const NAV: MenuProps["items"] = [
 /** 路由 → 面包屑末级标题。 */
 const TITLES: Record<Route["name"], string> = {
   list: "我的文章",
+  comments: "评论管理",
   postTrash: "文章回收站",
   postNew: "新建草稿",
   postEdit: "编辑文章",
@@ -76,6 +78,8 @@ const TITLES: Record<Route["name"], string> = {
 /** 路由 → 菜单选中项（编辑页归属它所属的列表）。 */
 function selectedKey(route: Route): string {
   switch (route.name) {
+    case "comments":
+      return paths.comments;
     case "list":
     case "postTrash":
     case "postNew":

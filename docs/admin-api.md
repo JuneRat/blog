@@ -13,6 +13,10 @@
 - Post、Page 和 Media 的路径标识是 UUID。Tag、Category、Series 使用 slug；角色分配路径使用 username 和 role key。管理身份不应统一推断为 slug 或 UUID。
 - 每个响应有 `x-request-id`，应用错误体也有 `request_id`。报障优先保留响应头编号，当前存在媒体上传错误体编号不同的例外，见下方追踪说明。
 
+## 评论
+
+评论管理位于 `/admin/comments`。评论接口、开关和独立版本规则见[评论 API](comments.md#接口)。
+
 ## 认证与本人资料
 
 此表列出完整路径，不应用管理前缀。

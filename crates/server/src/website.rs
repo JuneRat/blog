@@ -116,6 +116,18 @@ pub fn build_router(
         media: assembly::media(pool, config.media_dir.clone()),
         secure_cookies: config.secure_cookies,
     };
+    let comments =
+        interfaces::http_comments::comments_router(interfaces::http_comments::CommentState {
+            comments: Arc::new(application::comments::CommentInteractor::new(Arc::new(
+                infrastructure::comments::PostgresCommentRepository::new(pool.clone()),
+            ))),
+            admin: admin.clone(),
+            origin: config
+                .public_base_url
+                .as_str()
+                .trim_end_matches('/')
+                .to_string(),
+        });
     Ok(interfaces::http::app_router(
         AppState {
             public: PublicSiteState {
@@ -129,7 +141,10 @@ pub fn build_router(
             themes: installed.assets,
             admin_dist: config.admin_dist.clone(),
         },
-    ))
+    )
+    .merge(comments.layer(axum::middleware::from_fn(
+        interfaces::http_support::request_context,
+    ))))
 }
 
 struct InstalledThemes {

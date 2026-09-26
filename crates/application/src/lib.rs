@@ -21,3 +21,4 @@ pub mod themes;
 pub mod version;
 
 pub use error::UseCaseError;
+pub mod comments;

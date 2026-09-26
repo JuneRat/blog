@@ -256,7 +256,13 @@ impl AuthInteractor {
             .users
             .actor_with_revision(record.user_id, ActorChannel::Session)
             .await
-            .map_err(|_| UseCaseError::Unauthenticated)?;
+            .map_err(|error| match error {
+                UseCaseError::NotFound(_) | UseCaseError::Forbidden => {
+                    UseCaseError::Unauthenticated
+                }
+                // A failed lookup does not prove that the session is invalid.
+                other => other,
+            })?;
         if revision != record.user_version {
             // 账号身份材料已变化（改密/改角色/软删除）：旧会话立即失效。
             return Err(UseCaseError::Unauthenticated);
