@@ -94,7 +94,7 @@ function field(
 
 async function openExistingPage() {
   getPage.mockResolvedValue(pageDetail());
-  renderPage(<PageEditScreen slug="about" />);
+  renderPage(<PageEditScreen id="p1" />);
   await screen.findByDisplayValue("关于");
 }
 
@@ -114,7 +114,7 @@ describe("PageEditScreen 保存流程", () => {
     // 确认弹窗由 antd 的 modal.confirm 渲染，文案里必须点明不可恢复。
     expect(await screen.findByText(/无法恢复/)).toBeTruthy();
     fireEvent.click(await screen.findByRole("button", { name: "确定" }));
-    await waitFor(() => expect(deletePage).toHaveBeenCalledWith("about", "p1", 1));
+    await waitFor(() => expect(deletePage).toHaveBeenCalledWith("p1", 1));
     await waitFor(() => expect(navigate).toHaveBeenCalledWith("/admin/pages", { replace: true }));
   });
 
@@ -142,7 +142,7 @@ describe("PageEditScreen 保存流程", () => {
   });
   it("新建页面：提交后跳转到编辑地址", async () => {
     createPage.mockResolvedValue(pageDetail({ slug: "contact", title: "联系" }));
-    renderPage(<PageEditScreen slug={null} />);
+    renderPage(<PageEditScreen id={null} />);
 
     fireEvent.change(field(/slug/), { target: { value: "contact" } });
     fireEvent.change(field("标题"), { target: { value: "联系" } });
@@ -156,7 +156,7 @@ describe("PageEditScreen 保存流程", () => {
       content: "# 联系",
       visibility: "public",
     });
-    await waitFor(() => expect(navigate).toHaveBeenCalledWith("/admin/pages/contact/edit"));
+    await waitFor(() => expect(navigate).toHaveBeenCalledWith("/admin/pages/p1/edit"));
   });
 
   it("保存已存在页面：携带 expected_version 并采用服务器新版本", async () => {
@@ -168,11 +168,49 @@ describe("PageEditScreen 保存流程", () => {
 
     await waitFor(() => expect(updatePage).toHaveBeenCalledTimes(1));
     expect(updatePage).toHaveBeenCalledWith(
-      "about",
+      "p1",
       expect.objectContaining({ content: "新正文", expected_version: 1 }),
     );
     await screen.findByText(/已保存/);
     expect(screen.getByText("v2")).toBeTruthy();
+  });
+
+  it("页面改名不切换编辑地址，后续保存继续定位同一 ID", async () => {
+    await openExistingPage();
+    updatePage.mockResolvedValueOnce(pageDetail({ slug: "about-us", version: 2 }));
+    fireEvent.change(field(/slug/), { target: { value: "about-us" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存并更新线上" }));
+    await screen.findByText(/已保存/);
+    expect(navigate).not.toHaveBeenCalled();
+    expect(updatePage).toHaveBeenLastCalledWith("p1", expect.objectContaining({
+      new_slug: "about-us", expected_version: 1,
+    }));
+
+    updatePage.mockResolvedValueOnce(pageDetail({ slug: "about-us", title: "改名后的更新", version: 3 }));
+    fireEvent.change(field("标题"), { target: { value: "改名后的更新" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存并更新线上" }));
+    await screen.findByText("v3");
+    expect(updatePage).toHaveBeenLastCalledWith("p1", expect.objectContaining({
+      new_slug: undefined, expected_version: 2, title: "改名后的更新",
+    }));
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it("原 slug 被另一页面占用后，冲突重载仍读取原 ID", async () => {
+    await openExistingPage();
+    const original = pageDetail({ slug: "about-us", title: "原页面的新版本", version: 2 });
+    const replacement = pageDetail({ id: "p2", title: "占用 about 的新页面" });
+    getPage.mockImplementation(async (id) => id === original.id ? original : replacement);
+    updatePage.mockRejectedValueOnce(new ApiError(409, "版本冲突", "version_conflict"));
+    fireEvent.change(field("标题"), { target: { value: "尚未保存的编辑" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存并更新线上" }));
+    await screen.findByText("内容已在别处修改。");
+    fireEvent.click(screen.getByRole("button", { name: "重新加载（丢弃本地改动）" }));
+    await screen.findByDisplayValue(original.title);
+    expect(getPage).toHaveBeenLastCalledWith(original.id);
+    expect((field(/slug/) as HTMLInputElement).value).toBe(original.slug);
+    expect(screen.queryByDisplayValue(replacement.title)).toBeNull();
+    expect(navigate).not.toHaveBeenCalled();
   });
 
   it("有未保存改动时发布：先保存再用保存后的版本发布", async () => {
@@ -185,9 +223,9 @@ describe("PageEditScreen 保存流程", () => {
     fireEvent.change(field(/正文/), { target: { value: "新正文" } });
     fireEvent.click(screen.getByRole("button", { name: "发布" }));
 
-    await waitFor(() => expect(publishPage).toHaveBeenCalledWith("about", 2));
+    await waitFor(() => expect(publishPage).toHaveBeenCalledWith("p1", 2));
     expect(updatePage).toHaveBeenCalledWith(
-      "about",
+      "p1",
       expect.objectContaining({ content: "新正文" }),
     );
     await screen.findByText("已保存并发布。");
@@ -218,14 +256,14 @@ describe("PageEditScreen 保存流程", () => {
     getPage.mockResolvedValue(
       pageDetail({ status: "published", visibility: "private", version: 7 }),
     );
-    const view = renderPage(<PageEditScreen slug="about" />);
+    const view = renderPage(<PageEditScreen id="p1" />);
     await screen.findByDisplayValue("关于");
     fireEvent.change(field("标题"), { target: { value: "改过的标题" } });
 
-    // 模拟浏览器后退到 /admin/pages/new：App 不按 slug 加 key，复用同一实例。
+    // 模拟浏览器后退到 /admin/pages/new：App 不按 ID 加 key，复用同一实例。
     view.rerender(
       <AdminProviders>
-        <PageEditScreen slug={null} />
+        <PageEditScreen id={null} />
       </AdminProviders>,
     );
 
@@ -241,14 +279,14 @@ describe("PageEditScreen 保存流程", () => {
 
   it("切换到加载失败的页面时拒绝提交上一篇内容", async () => {
     getPage.mockResolvedValueOnce(pageDetail());
-    const view = renderPage(<PageEditScreen slug="about" />);
+    const view = renderPage(<PageEditScreen id="p1" />);
     await screen.findByDisplayValue("关于");
 
     // 切到另一页但加载失败：表单里仍是 about 的内容与版本。
     getPage.mockRejectedValueOnce(new ApiError(404, "未找到", "not_found"));
     view.rerender(
       <AdminProviders>
-        <PageEditScreen slug="missing" />
+        <PageEditScreen id="missing" />
       </AdminProviders>,
     );
     await screen.findByText(/页面未能加载/);
@@ -264,10 +302,10 @@ describe("PageEditScreen 保存流程", () => {
 
   it("加载失败后可用重试按钮恢复编辑", async () => {
     getPage.mockRejectedValueOnce(new ApiError(404, "未找到", "not_found"));
-    renderPage(<PageEditScreen slug="missing" />);
+    renderPage(<PageEditScreen id="missing" />);
     await screen.findByText(/页面未能加载/);
 
-    getPage.mockResolvedValueOnce(pageDetail({ slug: "missing", title: "补回" }));
+    getPage.mockResolvedValueOnce(pageDetail({ id: "missing", slug: "missing", title: "补回" }));
     fireEvent.click(screen.getByRole("button", { name: "重新加载" }));
 
     await screen.findByDisplayValue("补回");

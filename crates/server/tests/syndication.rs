@@ -27,7 +27,7 @@ use infrastructure::{
     PostgresPostRepository, PostgresPublishedCategoryQuery, PostgresPublishedPageQuery,
     PostgresPublishedPostQuery, PostgresPublishedSeriesQuery, PostgresPublishedTagQuery,
     PostgresRbacStore, PostgresSeriesRepository, PostgresSettingsStore, PostgresTagRepository,
-    PostgresUserRepository, SanitizingMarkdownRenderer, SystemClock,
+    PostgresUserRepository, RenderingRuntime, SystemClock,
 };
 use interfaces::http::public_router_minimal;
 use sqlx::PgPool;
@@ -55,10 +55,13 @@ struct Stack {
 async fn stack() -> Stack {
     let pool = common::fresh_database("blog_syndication_test").await;
     let clock = Arc::new(SystemClock);
+    let rendering = Arc::new(RenderingRuntime::default());
 
     let user_repo: Arc<dyn UserRepository> = Arc::new(PostgresUserRepository::new(pool.clone()));
-    let post_repo: Arc<dyn PostRepository> = Arc::new(PostgresPostRepository::new(pool.clone()));
-    let page_repo: Arc<dyn PageRepository> = Arc::new(PostgresPageRepository::new(pool.clone()));
+    let post_repo: Arc<dyn PostRepository> =
+        Arc::new(PostgresPostRepository::new(pool.clone(), rendering.clone()));
+    let page_repo: Arc<dyn PageRepository> =
+        Arc::new(PostgresPageRepository::new(pool.clone(), rendering.clone()));
     let rbac = Arc::new(PostgresRbacStore::new(pool.clone()));
     let roles = Arc::new(RoleInteractor::new(rbac.clone(), user_repo.clone()));
     roles.sync_registry().await.expect("同步权限目录失败");
@@ -70,7 +73,7 @@ async fn stack() -> Stack {
         Arc::new(PostgresSeriesRepository::new(pool.clone()));
     let settings: Arc<dyn SettingsStore> = Arc::new(PostgresSettingsStore::new(pool.clone()));
 
-    let theme = Arc::new(
+    let theme = rendering.theme_renderer(
         MiniJinjaThemeRenderer::load(std::path::Path::new("../../themes/default"))
             .expect("模板加载失败"),
     );
@@ -80,7 +83,6 @@ async fn stack() -> Stack {
         Arc::new(PostgresPublishedTagQuery::new(pool.clone())),
         Arc::new(PostgresPublishedCategoryQuery::new(pool.clone())),
         Arc::new(PostgresPublishedSeriesQuery::new(pool.clone())),
-        Arc::new(SanitizingMarkdownRenderer::new()),
         theme,
         settings.clone(),
         SiteInfo {
@@ -221,17 +223,16 @@ async fn seed_series(stack: &Stack, slug: &str) -> uuid::Uuid {
 }
 
 /// 建文章；`publish` 为 true 时立刻发布。
-async fn post(stack: &Stack, cmd: CreatePostCmd, publish: bool) -> String {
-    let slug = cmd.slug.clone().unwrap();
-    stack.posts.create(&stack.author, cmd).await.unwrap();
+async fn post(stack: &Stack, cmd: CreatePostCmd, publish: bool) -> uuid::Uuid {
+    let created = stack.posts.create(&stack.author, cmd).await.unwrap();
     if publish {
         stack
             .posts
-            .publish(&stack.author, &slug, None)
+            .publish(&stack.author, created.id, None)
             .await
             .unwrap();
     }
-    slug
+    created.id
 }
 
 fn content_type(headers: &HeaderMap) -> String {
@@ -247,7 +248,7 @@ async fn feed_exposes_only_public_posts_and_follows_content_changes() {
     let _g = SERIAL.lock().await;
     let s = stack().await;
 
-    post(&s, cmd("feed-visible", "公开文章"), true).await;
+    let visible_id = post(&s, cmd("feed-visible", "公开文章"), true).await;
     post(&s, cmd("feed-draft", "草稿文章"), false).await;
 
     let mut private = cmd("feed-private", "私密文章");
@@ -289,10 +290,7 @@ async fn feed_exposes_only_public_posts_and_follows_content_changes() {
     assert!(newer < older, "按发布时间倒序：{body}");
 
     // 撤回 → 下一次请求立刻消失。
-    s.posts
-        .withdraw(&s.author, "feed-visible", None)
-        .await
-        .unwrap();
+    s.posts.withdraw(&s.author, visible_id, None).await.unwrap();
     let (_, _, body) = get(&s.router, "/feed.xml").await;
     assert!(
         !body.contains("feed-visible"),
@@ -347,7 +345,7 @@ async fn sitemap_covers_public_urls_and_skips_empty_directories() {
     let guide = seed_series(&s, "guide").await;
     seed_series(&s, "empty-series").await;
 
-    post(
+    let post_id = post(
         &s,
         CreatePostCmd {
             tag_ids: vec![rust],
@@ -360,12 +358,14 @@ async fn sitemap_covers_public_urls_and_skips_empty_directories() {
     .await;
     post(&s, cmd("site-draft", "草稿文章"), false).await;
 
-    s.pages
+    let _created = s
+        .pages
         .create(&s.editor, page_cmd("about", "关于"))
         .await
         .unwrap();
-    s.pages.publish(&s.editor, "about", None).await.unwrap();
-    s.pages
+    s.pages.publish(&s.editor, _created.id, None).await.unwrap();
+    let _created = s
+        .pages
         .create(&s.editor, page_cmd("draft-page", "草稿页面"))
         .await
         .unwrap();
@@ -400,10 +400,7 @@ async fn sitemap_covers_public_urls_and_skips_empty_directories() {
     }
 
     // 撤回文章后立即退出 sitemap（与 feed 同一公开谓词）。
-    s.posts
-        .withdraw(&s.author, "site-post", None)
-        .await
-        .unwrap();
+    s.posts.withdraw(&s.author, post_id, None).await.unwrap();
     let (_, _, body) = get(&s.router, "/sitemap.xml").await;
     assert!(
         !body.contains("site-post"),
@@ -418,11 +415,12 @@ async fn html_pages_expose_title_description_and_canonical() {
 
     seed_tag(&s, "Rust", "rust").await;
     post(&s, cmd("seo-post", "SEO 文章"), true).await;
-    s.pages
+    let _created = s
+        .pages
         .create(&s.editor, page_cmd("about", "关于"))
         .await
         .unwrap();
-    s.pages.publish(&s.editor, "about", None).await.unwrap();
+    s.pages.publish(&s.editor, _created.id, None).await.unwrap();
 
     // 首页：标题即站点标题，canonical 是站点根，带 feed 自动发现。
     let (_, _, home) = get(&s.router, "/").await;
@@ -552,14 +550,12 @@ async fn sitemap_respects_the_whole_file_url_budget() {
     let s = stack().await;
 
     // Page 排在文章之后：文章吃满预算时它应被省略。
-    s.pages
+    let _created = s
+        .pages
         .create(&s.editor, page_cmd("budget-page", "预算页面"))
         .await
         .unwrap();
-    s.pages
-        .publish(&s.editor, "budget-page", None)
-        .await
-        .unwrap();
+    s.pages.publish(&s.editor, _created.id, None).await.unwrap();
 
     // generate_series 一次插入 50,001 篇：单条语句，比循环建文章快得多。
     sqlx::raw_sql(

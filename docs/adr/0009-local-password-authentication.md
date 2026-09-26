@@ -2,7 +2,7 @@
 
 记录日期：2026-09-22。
 
-状态：已采纳并实现。来源：用户要求在 M2 之后优先启用 `users.password_hash` 预留的本地密码能力，并明确要求一次补齐哈希参数、限流/锁定、重置与恢复、泄露处置。细化契约见 [身份、RBAC 与后台 §7](../identity-and-admin.md)，运维处置见 [备份与恢复 §6](../operations-and-recovery.md)。
+状态：已采纳并实现。来源：用户要求在 M2 之后优先启用 `users.password_hash` 预留的本地密码能力，并明确要求一次补齐哈希参数、限流/锁定、重置与恢复、泄露处置。细化契约见 [本地密码](../identity-and-admin.md#5-本地密码)，运维处置见 [凭据泄露处置](../operations-and-recovery.md#6-凭据泄露处置)。
 
 ## 背景
 

@@ -1000,6 +1000,7 @@ dependencies = [
  "sqlx",
  "time",
  "tokio",
+ "tracing",
  "uuid",
 ]
 

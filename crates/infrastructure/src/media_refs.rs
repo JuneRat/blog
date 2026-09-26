@@ -28,7 +28,6 @@
 use std::cell::RefCell;
 use std::collections::BTreeSet;
 
-use application::ports::ContentRenderer;
 use html5ever::tendril::StrTendril;
 use html5ever::tokenizer::{
     BufferQueue, TagKind, Token, TokenSink, TokenSinkResult, Tokenizer, TokenizerOpts,
@@ -36,17 +35,22 @@ use html5ever::tokenizer::{
 use uuid::Uuid;
 
 /// 站内媒体地址前缀，与 `application::media::MEDIA_URL_PREFIX` 一致。
-pub const MEDIA_URL_PREFIX: &str = "/media/";
+const MEDIA_URL_PREFIX: &str = "/media/";
 
 /// 提取正文中会渲染成站内图片的媒体 id（去重、按 id 升序）。
 ///
 /// 只认 `<img src>`：正文里作为普通链接或纯文本出现的 `/media/...` 不会渲染成图片，
 /// 也就不需要保证文件可读。
-pub fn extract_media_ids(markdown: &str) -> Vec<Uuid> {
-    // 与公开页面完全相同的渲染 + 清洗步骤：任何清洗策略变化都会自动反映到引用上。
+#[cfg(test)]
+fn extract_media_ids(markdown: &str) -> Vec<Uuid> {
     let html = crate::rendering::SanitizingMarkdownRenderer::new().render_markdown(markdown);
+    extract_media_ids_from_html(&html)
+}
+
+/// 从已清洗、将与正文一起落库的 HTML 中提取图片引用，不重复渲染。
+pub(crate) fn extract_media_ids_from_html(html: &str) -> Vec<Uuid> {
     let mut ids = BTreeSet::new();
-    for src in img_srcs_in_html(&html) {
+    for src in img_srcs_in_html(html) {
         if let Some(id) = parse_media_url(&src) {
             ids.insert(id);
         }

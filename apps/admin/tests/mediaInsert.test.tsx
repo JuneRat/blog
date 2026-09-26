@@ -90,7 +90,7 @@ async function openPanel(): Promise<void> {
 beforeEach(() => {
   vi.resetAllMocks();
   state.permissions = ["post.update", "media.read", "media.upload"];
-  window.history.replaceState(null, "", paths.editPost(post.slug));
+  window.history.replaceState(null, "", paths.editPost(post.id));
   vi.mocked(api.getPost).mockResolvedValue(post);
   vi.mocked(api.listTags).mockResolvedValue([]);
   vi.mocked(categoryApi.list).mockResolvedValue([]);
@@ -202,7 +202,7 @@ describe("编辑器内插入图片", () => {
   });
 
   it("页面编辑器同样支持插入（Page 无作者，共用同一实现）", async () => {
-    window.history.replaceState(null, "", paths.editPage("about"));
+    window.history.replaceState(null, "", paths.editPage("page-id"));
     vi.mocked(api.getPage).mockResolvedValue({
       id: "page-id",
       slug: "about",

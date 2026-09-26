@@ -7,8 +7,8 @@ use time::OffsetDateTime;
 
 use crate::error::UseCaseError;
 use crate::ports::{
-    ContentRenderer, PublishedCategoryQuery, PublishedPageQuery, PublishedPostQuery,
-    PublishedSeriesQuery, PublishedTagQuery, SettingsStore, ThemeSettingsStore,
+    PublishedCategoryQuery, PublishedPageQuery, PublishedPostQuery, PublishedSeriesQuery,
+    PublishedTagQuery, SettingsStore, ThemeRenderer, ThemeSettingsStore,
 };
 use crate::seo::{self, PublicBaseUrl, SeoMeta};
 use crate::settings::effective_site;
@@ -147,49 +147,6 @@ pub struct TagView {
     pub posts: Vec<PostCard>,
 }
 
-/// 主题渲染端口：入站层不得绕过此端口直接使用模板引擎。
-///
-/// 每个方法都接收本次渲染的 [`SeoMeta`]：canonical/title/description 由应用层
-/// 按可信站点地址计算，模板只负责输出，避免同一规则在多个模板里各写一遍。
-pub trait ThemeRenderer: Send + Sync {
-    fn render_index(
-        &self,
-        site: &SiteInfo,
-        seo: &SeoMeta,
-        posts: &[PostCard],
-    ) -> Result<String, UseCaseError>;
-    fn render_post(
-        &self,
-        site: &SiteInfo,
-        seo: &SeoMeta,
-        post: &PostView,
-    ) -> Result<String, UseCaseError>;
-    fn render_page(
-        &self,
-        site: &SiteInfo,
-        seo: &SeoMeta,
-        page: &PageView,
-    ) -> Result<String, UseCaseError>;
-    fn render_tag(
-        &self,
-        site: &SiteInfo,
-        seo: &SeoMeta,
-        tag: &TagView,
-    ) -> Result<String, UseCaseError>;
-    fn render_category(
-        &self,
-        site: &SiteInfo,
-        seo: &SeoMeta,
-        category: &CategoryView,
-    ) -> Result<String, UseCaseError>;
-    fn render_series(
-        &self,
-        site: &SiteInfo,
-        seo: &SeoMeta,
-        series: &SeriesView,
-    ) -> Result<String, UseCaseError>;
-}
-
 /// 公开列表页（标签页/分类页/系列页）分页大小。
 pub const TAG_PAGE_SIZE: i64 = 20;
 pub const CATEGORY_PAGE_SIZE: i64 = 20;
@@ -201,10 +158,8 @@ pub struct PublicSiteInteractor {
     tags: Arc<dyn PublishedTagQuery>,
     categories: Arc<dyn PublishedCategoryQuery>,
     series: Arc<dyn PublishedSeriesQuery>,
-    markdown: Arc<dyn ContentRenderer>,
     theme: Arc<dyn ThemeRenderer>,
     themes: Option<(Arc<dyn ThemeSettingsStore>, Arc<ThemeRegistry>)>,
-    render_limit: Arc<tokio::sync::Semaphore>,
     /// settings 的 site 分组（数据库未配置时整体回退）。
     settings: Arc<dyn SettingsStore>,
     /// 装配回退值：环境变量/内置默认值（进程内不变）。
@@ -221,7 +176,6 @@ impl PublicSiteInteractor {
         tags: Arc<dyn PublishedTagQuery>,
         categories: Arc<dyn PublishedCategoryQuery>,
         series: Arc<dyn PublishedSeriesQuery>,
-        markdown: Arc<dyn ContentRenderer>,
         theme: Arc<dyn ThemeRenderer>,
         settings: Arc<dyn SettingsStore>,
         fallback: SiteInfo,
@@ -233,10 +187,8 @@ impl PublicSiteInteractor {
             tags,
             categories,
             series,
-            markdown,
             theme,
             themes: None,
-            render_limit: Arc::new(tokio::sync::Semaphore::new(16)),
             settings,
             fallback,
             base_url,
@@ -252,11 +204,8 @@ impl PublicSiteInteractor {
         self
     }
 
-    async fn render_theme<F>(&self, task: F) -> Result<String, UseCaseError>
-    where
-        F: FnOnce(Arc<dyn ThemeRenderer>) -> Result<String, UseCaseError> + Send + 'static,
-    {
-        let theme = if let Some((store, registry)) = &self.themes {
+    async fn active_theme(&self) -> Result<Arc<dyn ThemeRenderer>, UseCaseError> {
+        if let Some((store, registry)) = &self.themes {
             let slug = store
                 .find_theme()
                 .await?
@@ -264,23 +213,10 @@ impl PublicSiteInteractor {
                 .unwrap_or_else(|| registry.fallback().to_string());
             registry
                 .renderer(&slug)
-                .or_else(|_| registry.renderer(registry.fallback()))?
+                .or_else(|_| registry.renderer(registry.fallback()))
         } else {
-            self.theme.clone()
-        };
-        let permit = tokio::time::timeout(
-            std::time::Duration::from_millis(250),
-            self.render_limit.clone().acquire_owned(),
-        )
-        .await
-        .map_err(|_| UseCaseError::Render("主题渲染队列已满".into()))?
-        .map_err(|e| UseCaseError::Render(e.to_string()))?;
-        tokio::task::spawn_blocking(move || {
-            let _permit = permit;
-            task(theme)
-        })
-        .await
-        .map_err(|e| UseCaseError::Render(format!("主题渲染任务失败：{e}")))?
+            Ok(self.theme.clone())
+        }
     }
 
     /// 本次渲染的生效站点信息：**每次请求解析**，不缓存。
@@ -312,7 +248,9 @@ impl PublicSiteInteractor {
             .collect();
         let site = self.site_info().await;
         let seo = SeoMeta::home(&site, &self.base_url);
-        self.render_theme(move |theme| theme.render_index(&site, &seo, &summaries))
+        self.active_theme()
+            .await?
+            .render_index(&site, &seo, &summaries)
             .await
     }
 
@@ -331,7 +269,7 @@ impl PublicSiteInteractor {
             updated_at: format_datetime(detail.updated_at),
             author_display: detail.author_display.clone(),
             author_avatar_url: detail.author_avatar_media_id.map(crate::media::media_url),
-            content_html: self.markdown.render_markdown(&detail.content),
+            content_html: detail.content_html,
             cover_url: detail.cover_media_id.map(crate::media::media_url),
             tags: detail
                 .tags
@@ -359,7 +297,9 @@ impl PublicSiteInteractor {
             &view.slug,
             view.excerpt.as_deref(),
         );
-        self.render_theme(move |theme| theme.render_post(&site, &seo, &view))
+        self.active_theme()
+            .await?
+            .render_post(&site, &seo, &view)
             .await
     }
 
@@ -381,11 +321,13 @@ impl PublicSiteInteractor {
             slug: detail.slug.clone(),
             published_at: detail.published_at.map(format_datetime),
             updated_at: format_datetime(detail.updated_at),
-            content_html: self.markdown.render_markdown(&detail.content),
+            content_html: detail.content_html,
         };
         let site = self.site_info().await;
         let seo = SeoMeta::page(&site, &self.base_url, &view.title, &view.slug);
-        self.render_theme(move |theme| theme.render_page(&site, &seo, &view))
+        self.active_theme()
+            .await?
+            .render_page(&site, &seo, &view)
             .await
     }
 
@@ -432,7 +374,9 @@ impl PublicSiteInteractor {
             &view.tag_slug,
             view.page,
         );
-        self.render_theme(move |theme| theme.render_tag(&site, &seo, &view))
+        self.active_theme()
+            .await?
+            .render_tag(&site, &seo, &view)
             .await
     }
 
@@ -476,7 +420,9 @@ impl PublicSiteInteractor {
             &view.category_slug,
             view.page,
         );
-        self.render_theme(move |theme| theme.render_category(&site, &seo, &view))
+        self.active_theme()
+            .await?
+            .render_category(&site, &seo, &view)
             .await
     }
 
@@ -526,7 +472,9 @@ impl PublicSiteInteractor {
             &view.series_slug,
             view.page,
         );
-        self.render_theme(move |theme| theme.render_series(&site, &seo, &view))
+        self.active_theme()
+            .await?
+            .render_series(&site, &seo, &view)
             .await
     }
 

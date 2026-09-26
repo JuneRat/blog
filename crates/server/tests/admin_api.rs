@@ -203,7 +203,10 @@ async fn fresh_stack() -> Stack {
     let series_repo: Arc<dyn application::ports::SeriesRepository> =
         Arc::new(infrastructure::PostgresSeriesRepository::new(pool.clone()));
     let posts = Arc::new(PostInteractor::new(
-        Arc::new(PostgresPostRepository::new(pool.clone())),
+        Arc::new(PostgresPostRepository::new(
+            pool.clone(),
+            Arc::new(infrastructure::RenderingRuntime::default()),
+        )),
         tag_repo.clone(),
         category_repo.clone(),
         series_repo.clone(),
@@ -211,7 +214,10 @@ async fn fresh_stack() -> Stack {
         common::media_guard(pool.clone()),
     ));
     let pages = Arc::new(PageInteractor::new(
-        Arc::new(PostgresPageRepository::new(pool.clone())),
+        Arc::new(PostgresPageRepository::new(
+            pool.clone(),
+            Arc::new(infrastructure::RenderingRuntime::default()),
+        )),
         clock.clone(),
     ));
     let tags = Arc::new(application::tag::TagInteractor::new(
@@ -419,6 +425,14 @@ async fn api(
     (status, String::from_utf8_lossy(&bytes).to_string())
 }
 
+fn response_id(body: &str) -> Uuid {
+    serde_json::from_str::<serde_json::Value>(body).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap()
+}
+
 /// 管理请求只校验一次会话：提取器不再「先取记录、再解析 Actor」各校验一次。
 /// 持久存储下每次 validate 都会写一次 `last_seen_at`，两次就是双倍写。
 #[tokio::test]
@@ -461,6 +475,7 @@ async fn author_full_crud_round_trip() {
         Some(r##"{"slug":"admin-post","title":"管理端文章","content":"# 你好\n正文","excerpt":"摘要"}"##),
     )
     .await;
+    let post_id = response_id(&body);
     assert_eq!(status, StatusCode::CREATED, "{body}");
     assert!(body.contains("\"slug\":\"admin-post\""));
     assert!(body.contains("\"version\":1"));
@@ -469,7 +484,7 @@ async fn author_full_crud_round_trip() {
     let (status, body) = api(
         &stack.router,
         "GET",
-        "/api/admin/v1/posts/admin-post",
+        &format!("/api/admin/v1/posts/{post_id}"),
         Some(&cookie),
         None,
         None,
@@ -482,7 +497,7 @@ async fn author_full_crud_round_trip() {
     let (status, body) = api(
         &stack.router,
         "PATCH",
-        "/api/admin/v1/posts/admin-post",
+        &format!("/api/admin/v1/posts/{post_id}"),
         Some(&cookie),
         Some(&csrf),
         Some(r#"{"title":"管理端文章（改）","expected_version":1}"#),
@@ -495,7 +510,7 @@ async fn author_full_crud_round_trip() {
     let (status, body) = api(
         &stack.router,
         "POST",
-        "/api/admin/v1/posts/admin-post/publish",
+        &format!("/api/admin/v1/posts/{post_id}/publish"),
         Some(&cookie),
         Some(&csrf),
         Some(r#"{"expected_version":2}"#),
@@ -508,7 +523,7 @@ async fn author_full_crud_round_trip() {
     let (status, body) = api(
         &stack.router,
         "POST",
-        "/api/admin/v1/posts/admin-post/publish",
+        &format!("/api/admin/v1/posts/{post_id}/publish"),
         Some(&cookie),
         Some(&csrf),
         None,
@@ -521,7 +536,7 @@ async fn author_full_crud_round_trip() {
     let (status, body) = api(
         &stack.router,
         "POST",
-        "/api/admin/v1/posts/admin-post/publish",
+        &format!("/api/admin/v1/posts/{post_id}/publish"),
         Some(&cookie),
         Some(&csrf),
         Some(r#"{"expected_version":1}"#),
@@ -534,7 +549,7 @@ async fn author_full_crud_round_trip() {
     let (status, body) = api(
         &stack.router,
         "PATCH",
-        "/api/admin/v1/posts/admin-post",
+        &format!("/api/admin/v1/posts/{post_id}"),
         Some(&cookie),
         Some(&csrf),
         Some(r#"{"title":"基于旧版本","expected_version":1}"#),
@@ -550,7 +565,7 @@ async fn author_full_crud_round_trip() {
     let (status, body) = api(
         &stack.router,
         "POST",
-        "/api/admin/v1/posts/admin-post/unpublish",
+        &format!("/api/admin/v1/posts/{post_id}/unpublish"),
         Some(&cookie),
         Some(&csrf),
         None,
@@ -618,7 +633,7 @@ async fn request_id_is_present_on_auth_rejection_and_json_error() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/api/admin/v1/posts/nope")
+                .uri(format!("/api/admin/v1/posts/{}", Uuid::now_v7()))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -640,7 +655,7 @@ async fn request_id_is_present_on_auth_rejection_and_json_error() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/api/admin/v1/posts/ghost-slug")
+                .uri(format!("/api/admin/v1/posts/{}", Uuid::now_v7()))
                 .header("cookie", format!("blog_session={cookie}"))
                 .body(Body::empty())
                 .unwrap(),
@@ -673,7 +688,7 @@ async fn csrf_and_session_are_enforced() {
     let (status, _) = api(
         &stack.router,
         "GET",
-        "/api/admin/v1/posts/x",
+        &format!("/api/admin/v1/posts/{}", Uuid::now_v7()),
         None,
         None,
         None,
@@ -727,7 +742,7 @@ async fn own_any_authorization_matrix() {
     let (author_cookie, author_csrf) = login_as(&stack.router, &stack.idp, "author").await;
 
     // author 建文章。
-    let (status, _) = api(
+    let (status, body) = api(
         &stack.router,
         "POST",
         "/api/admin/v1/posts",
@@ -736,6 +751,7 @@ async fn own_any_authorization_matrix() {
         Some(r#"{"slug":"matrix-post","title":"越权矩阵","content":"内容"}"#),
     )
     .await;
+    let post_id = response_id(&body);
     assert_eq!(status, StatusCode::CREATED);
 
     // author2 有 own 权限但不是本人：读/改他人文章必须 403（测的是“不是本人”，不是“无权限”）。
@@ -743,7 +759,7 @@ async fn own_any_authorization_matrix() {
     let (status, body) = api(
         &stack.router,
         "GET",
-        "/api/admin/v1/posts/matrix-post",
+        &format!("/api/admin/v1/posts/{post_id}"),
         Some(&author2_cookie),
         None,
         None,
@@ -757,7 +773,7 @@ async fn own_any_authorization_matrix() {
     let (status, body) = api(
         &stack.router,
         "PATCH",
-        "/api/admin/v1/posts/matrix-post",
+        &format!("/api/admin/v1/posts/{post_id}"),
         Some(&author2_cookie),
         Some(&author2_csrf),
         Some(r#"{"title":"越权编辑他人文章"}"#),
@@ -771,7 +787,7 @@ async fn own_any_authorization_matrix() {
     let (status, body) = api(
         &stack.router,
         "POST",
-        "/api/admin/v1/posts/matrix-post/publish",
+        &format!("/api/admin/v1/posts/{post_id}/publish"),
         Some(&author2_cookie),
         Some(&author2_csrf),
         None,
@@ -786,9 +802,13 @@ async fn own_any_authorization_matrix() {
     // stranger（无角色）：读/改/发都 403。
     let (stranger_cookie, stranger_csrf) = login_as(&stack.router, &stack.idp, "stranger").await;
     for (method, uri, with_csrf) in [
-        ("GET", "/api/admin/v1/posts/matrix-post", false),
-        ("PATCH", "/api/admin/v1/posts/matrix-post", true),
-        ("POST", "/api/admin/v1/posts/matrix-post/publish", true),
+        ("GET", &format!("/api/admin/v1/posts/{post_id}"), false),
+        ("PATCH", &format!("/api/admin/v1/posts/{post_id}"), true),
+        (
+            "POST",
+            &format!("/api/admin/v1/posts/{post_id}/publish"),
+            true,
+        ),
     ] {
         let (status, body) = api(
             &stack.router,
@@ -819,7 +839,7 @@ async fn own_any_authorization_matrix() {
     let (status, body) = api(
         &stack.router,
         "GET",
-        "/api/admin/v1/posts/matrix-post",
+        &format!("/api/admin/v1/posts/{post_id}"),
         Some(&editor_cookie),
         None,
         None,
@@ -830,7 +850,7 @@ async fn own_any_authorization_matrix() {
     let (status, body) = api(
         &stack.router,
         "PATCH",
-        "/api/admin/v1/posts/matrix-post",
+        &format!("/api/admin/v1/posts/{post_id}"),
         Some(&editor_cookie),
         Some(&editor_csrf),
         Some(r#"{"title":"编辑改写他人文章"}"#),
@@ -841,7 +861,7 @@ async fn own_any_authorization_matrix() {
     let (status, _) = api(
         &stack.router,
         "POST",
-        "/api/admin/v1/posts/matrix-post/publish",
+        &format!("/api/admin/v1/posts/{post_id}/publish"),
         Some(&editor_cookie),
         Some(&editor_csrf),
         None,
@@ -893,7 +913,7 @@ async fn validation_and_no_store_headers() {
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
 
     // 发布空标题草稿 → 400（领域校验）。
-    let (_, _) = api(
+    let (_, body) = api(
         &stack.router,
         "POST",
         "/api/admin/v1/posts",
@@ -902,10 +922,11 @@ async fn validation_and_no_store_headers() {
         Some(r#"{"slug":"empty-title","title":"","content":""}"#),
     )
     .await;
+    let post_id = response_id(&body);
     let (status, body) = api(
         &stack.router,
         "POST",
-        "/api/admin/v1/posts/empty-title/publish",
+        &format!("/api/admin/v1/posts/{post_id}/publish"),
         Some(&cookie),
         Some(&csrf),
         None,
@@ -1103,13 +1124,14 @@ async fn revoked_role_takes_effect_on_existing_session() {
         Some(r#"{"slug":"revoke-post","title":"撤权测试","content":"正文"}"#),
     )
     .await;
+    let post_id = response_id(&body);
     assert_eq!(status, StatusCode::CREATED, "{body}");
 
     let (editor_cookie, _) = login_as(&stack.router, &stack.idp, "editor").await;
     let (status, body) = api(
         &stack.router,
         "GET",
-        "/api/admin/v1/posts/revoke-post",
+        &format!("/api/admin/v1/posts/{post_id}"),
         Some(&editor_cookie),
         None,
         None,
@@ -1129,7 +1151,7 @@ async fn revoked_role_takes_effect_on_existing_session() {
     let (status, body) = api(
         &stack.router,
         "GET",
-        "/api/admin/v1/posts/revoke-post",
+        &format!("/api/admin/v1/posts/{post_id}"),
         Some(&editor_cookie),
         None,
         None,
@@ -1160,7 +1182,7 @@ async fn revoked_role_takes_effect_on_existing_session() {
     let (status, body) = api(
         &stack.router,
         "GET",
-        "/api/admin/v1/posts/revoke-post",
+        &format!("/api/admin/v1/posts/{post_id}"),
         Some(&editor_cookie),
         None,
         None,
@@ -1270,6 +1292,7 @@ async fn detail_returns_markdown_body_while_list_stays_summary() {
         Some(r##"{"slug":"body-check","title":"正文","excerpt":"摘要","content":"# 标题\n\nBODYMARKER"}"##),
     )
     .await;
+    let post_id = response_id(&body);
     assert_eq!(status, StatusCode::CREATED, "{body}");
     assert!(body.contains("BODYMARKER"), "创建响应带正文：{body}");
     assert!(body.contains(r#""excerpt":"摘要""#), "{body}");
@@ -1278,7 +1301,7 @@ async fn detail_returns_markdown_body_while_list_stays_summary() {
     let (status, body) = api(
         &stack.router,
         "GET",
-        "/api/admin/v1/posts/body-check",
+        &format!("/api/admin/v1/posts/{post_id}"),
         Some(&cookie),
         None,
         None,
@@ -1338,6 +1361,7 @@ async fn page_full_crud_round_trip_with_site_level_permissions() {
         Some(r##"{"slug":"about","title":"关于","content":"# 关于\n正文"}"##),
     )
     .await;
+    let page_id = response_id(&body);
     assert_eq!(status, StatusCode::CREATED, "{body}");
     assert!(body.contains("\"slug\":\"about\""), "{body}");
     assert!(body.contains("\"version\":1"), "{body}");
@@ -1360,7 +1384,7 @@ async fn page_full_crud_round_trip_with_site_level_permissions() {
     let (status, body) = api(
         &stack.router,
         "GET",
-        "/api/admin/v1/pages/about",
+        &format!("/api/admin/v1/pages/{page_id}"),
         Some(&cookie),
         None,
         None,
@@ -1385,7 +1409,7 @@ async fn page_full_crud_round_trip_with_site_level_permissions() {
     let (status, body) = api(
         &stack.router,
         "PATCH",
-        "/api/admin/v1/pages/about",
+        &format!("/api/admin/v1/pages/{page_id}"),
         Some(&cookie),
         Some(&csrf),
         Some(r#"{"title":"关于我们","expected_version":1}"#),
@@ -1398,7 +1422,7 @@ async fn page_full_crud_round_trip_with_site_level_permissions() {
     let (status, body) = api(
         &stack.router,
         "PATCH",
-        "/api/admin/v1/pages/about",
+        &format!("/api/admin/v1/pages/{page_id}"),
         Some(&cookie),
         Some(&csrf),
         Some(r#"{"title":"基于旧版本","expected_version":1}"#),
@@ -1411,7 +1435,7 @@ async fn page_full_crud_round_trip_with_site_level_permissions() {
     let (status, body) = api(
         &stack.router,
         "POST",
-        "/api/admin/v1/pages/about/publish",
+        &format!("/api/admin/v1/pages/{page_id}/publish"),
         Some(&cookie),
         Some(&csrf),
         Some(r#"{"expected_version":2}"#),
@@ -1422,7 +1446,7 @@ async fn page_full_crud_round_trip_with_site_level_permissions() {
     let (status, body) = api(
         &stack.router,
         "POST",
-        "/api/admin/v1/pages/about/publish",
+        &format!("/api/admin/v1/pages/{page_id}/publish"),
         Some(&cookie),
         Some(&csrf),
         None,
@@ -1435,7 +1459,7 @@ async fn page_full_crud_round_trip_with_site_level_permissions() {
     let (status, body) = api(
         &stack.router,
         "POST",
-        "/api/admin/v1/pages/about/unpublish",
+        &format!("/api/admin/v1/pages/{page_id}/unpublish"),
         Some(&cookie),
         Some(&csrf),
         None,
@@ -2083,6 +2107,7 @@ async fn tag_rename_and_delete_check_version_and_references() {
         )),
     )
     .await;
+    let post_id = response_id(&body);
     assert_eq!(status, StatusCode::CREATED, "{body}");
 
     let (status, body) = api(
@@ -2102,7 +2127,7 @@ async fn tag_rename_and_delete_check_version_and_references() {
     let (status, body) = api(
         &stack.router,
         "PATCH",
-        "/api/admin/v1/posts/tagged",
+        &format!("/api/admin/v1/posts/{post_id}"),
         Some(&author_cookie),
         Some(&author_csrf),
         Some(r#"{"tag_ids":[]}"#),
@@ -2167,6 +2192,7 @@ async fn post_edit_saves_tags_with_content_and_validates_ids() {
         )),
     )
     .await;
+    let post_id = response_id(&body);
     assert_eq!(status, StatusCode::CREATED, "{body}");
     assert_eq!(
         body.matches(&format!("\"{}\"", tag_ids[0])).count(),
@@ -2188,7 +2214,7 @@ async fn post_edit_saves_tags_with_content_and_validates_ids() {
     let (status, body) = api(
         &stack.router,
         "PATCH",
-        "/api/admin/v1/posts/multi-tag",
+        &format!("/api/admin/v1/posts/{post_id}"),
         Some(&author_cookie),
         Some(&author_csrf),
         Some(&format!(r#"{{"tag_ids":["{ghost}"]}}"#)),
@@ -2201,7 +2227,7 @@ async fn post_edit_saves_tags_with_content_and_validates_ids() {
     let (status, body) = api(
         &stack.router,
         "PATCH",
-        "/api/admin/v1/posts/multi-tag",
+        &format!("/api/admin/v1/posts/{post_id}"),
         Some(&author_cookie),
         Some(&author_csrf),
         Some(&format!(
@@ -2225,7 +2251,7 @@ async fn post_edit_saves_tags_with_content_and_validates_ids() {
     let (status, body) = api(
         &stack.router,
         "PATCH",
-        "/api/admin/v1/posts/multi-tag",
+        &format!("/api/admin/v1/posts/{post_id}"),
         Some(&author2_cookie),
         Some(&author2_csrf),
         Some(r#"{"tag_ids":[]}"#),
@@ -2239,7 +2265,7 @@ async fn post_edit_saves_tags_with_content_and_validates_ids() {
     let (status, body) = api(
         &stack.router,
         "PATCH",
-        "/api/admin/v1/posts/multi-tag",
+        &format!("/api/admin/v1/posts/{post_id}"),
         Some(&editor_cookie),
         Some(&editor_csrf),
         Some(r#"{"tag_ids":[]}"#),
@@ -2345,6 +2371,7 @@ async fn category_management_and_post_association() {
         Some(r#"{"slug":"cat-post","title":"分类文章","content":"正文"}"#),
     )
     .await;
+    let post_id = response_id(&body);
     assert_eq!(status, StatusCode::CREATED, "{body}");
     let version: i64 = body
         .split("\"version\":")
@@ -2358,7 +2385,7 @@ async fn category_management_and_post_association() {
     let (status, body) = api(
         &stack.router,
         "PATCH",
-        "/api/admin/v1/posts/cat-post",
+        &format!("/api/admin/v1/posts/{post_id}"),
         Some(&author_cookie),
         Some(&author_csrf),
         Some(&format!(
@@ -2381,7 +2408,7 @@ async fn category_management_and_post_association() {
     let (status, body) = api(
         &stack.router,
         "PATCH",
-        "/api/admin/v1/posts/cat-post",
+        &format!("/api/admin/v1/posts/{post_id}"),
         Some(&author_cookie),
         Some(&author_csrf),
         Some(&format!(r#"{{"category_id":"{ghost}"}}"#)),
@@ -2406,7 +2433,7 @@ async fn category_management_and_post_association() {
     let (status, body) = api(
         &stack.router,
         "PATCH",
-        "/api/admin/v1/posts/cat-post",
+        &format!("/api/admin/v1/posts/{post_id}"),
         Some(&author_cookie),
         Some(&author_csrf),
         Some(r#"{"category_id":null}"#),
@@ -2526,7 +2553,7 @@ async fn series_management_reorder_and_post_association() {
             .parse()
             .unwrap();
         let (status, body) = api(
-            &stack.router, "PATCH", &format!("/api/admin/v1/posts/{slug}"),
+            &stack.router, "PATCH", &format!("/api/admin/v1/posts/{post_id}"),
             Some(&author_cookie), Some(&author_csrf),
             Some(&format!(r#"{{"series":{{"id":"{series_id}","order":{order}}},"expected_version":{version}}}"#)),
         ).await;
@@ -2584,11 +2611,11 @@ async fn series_management_reorder_and_post_association() {
     assert!(body.contains("成员不一致"), "{body}");
 
     // 退出系列（series: null）后删除保护解除。
-    for slug in ["ser-1", "ser-2"] {
+    for post_id in &posts {
         let (status, body) = api(
             &stack.router,
             "PATCH",
-            &format!("/api/admin/v1/posts/{slug}"),
+            &format!("/api/admin/v1/posts/{post_id}"),
             Some(&author_cookie),
             Some(&author_csrf),
             Some(r#"{"series":null}"#),
@@ -2631,7 +2658,7 @@ async fn series_management_reorder_and_post_association() {
     let (status, body) = api(
         &stack.router,
         "PATCH",
-        "/api/admin/v1/posts/ser-1",
+        &format!("/api/admin/v1/posts/{}", posts[0]),
         Some(&author_cookie),
         Some(&author_csrf),
         Some(&format!(r#"{{"series":{{"id":"{occ_id}","order":1}}}}"#)),
@@ -2697,6 +2724,7 @@ async fn series_members_endpoint_lists_other_authors_posts() {
         )
         .await;
         assert_eq!(status, StatusCode::CREATED, "{body}");
+        let post_id = response_id(&body);
         let version: i64 = body
             .split("\"version\":")
             .nth(1)
@@ -2709,7 +2737,7 @@ async fn series_members_endpoint_lists_other_authors_posts() {
         let (status, body) = api(
             &stack.router,
             "PATCH",
-            &format!("/api/admin/v1/posts/{slug}"),
+            &format!("/api/admin/v1/posts/{post_id}"),
             Some(cookie),
             Some(csrf),
             Some(&format!(
@@ -2824,6 +2852,7 @@ async fn series_members_requires_read_permission_for_every_member() {
         )
         .await;
         assert_eq!(status, StatusCode::CREATED, "{body}");
+        let post_id = response_id(&body);
         let version: i64 = body
             .split("\"version\":")
             .nth(1)
@@ -2836,7 +2865,7 @@ async fn series_members_requires_read_permission_for_every_member() {
         let (status, body) = api(
             &stack.router,
             "PATCH",
-            &format!("/api/admin/v1/posts/{slug}"),
+            &format!("/api/admin/v1/posts/{post_id}"),
             Some(cookie),
             Some(csrf),
             Some(&format!(
@@ -2888,6 +2917,7 @@ async fn series_members_requires_read_permission_for_every_member() {
         Some(r#"{"slug":"solo-1","title":"solo-1","content":"正文"}"#),
     )
     .await;
+    let post_id = response_id(&body);
     assert_eq!(status, StatusCode::CREATED, "{body}");
     let version: i64 = body
         .split("\"version\":")
@@ -2920,7 +2950,7 @@ async fn series_members_requires_read_permission_for_every_member() {
     let (status, body) = api(
         &stack.router,
         "PATCH",
-        "/api/admin/v1/posts/solo-1",
+        &format!("/api/admin/v1/posts/{post_id}"),
         Some(&author_cookie),
         Some(&author_csrf),
         Some(&format!(
@@ -2953,7 +2983,7 @@ async fn post_trash_http_scope_restore_and_owner_purge() {
     let (author_cookie, author_csrf) = login_as(&stack.router, &stack.idp, "author").await;
     let (other_cookie, other_csrf) = login_as(&stack.router, &stack.idp, "author2").await;
     let (owner_cookie, owner_csrf) = login_as(&stack.router, &stack.idp, "owner").await;
-    let (status, _) = api(
+    let (status, body) = api(
         &stack.router,
         "POST",
         "/api/admin/v1/posts",
@@ -2962,11 +2992,12 @@ async fn post_trash_http_scope_restore_and_owner_purge() {
         Some(r#"{"slug":"http-trash","title":"标题","content":"正文"}"#),
     )
     .await;
+    let post_id = response_id(&body);
     assert_eq!(status, StatusCode::CREATED);
     let (status, body) = api(
         &stack.router,
         "POST",
-        "/api/admin/v1/posts/http-trash/publish",
+        &format!("/api/admin/v1/posts/{post_id}/publish"),
         Some(&author_cookie),
         Some(&author_csrf),
         Some(r#"{"expected_version":1}"#),
@@ -2976,7 +3007,7 @@ async fn post_trash_http_scope_restore_and_owner_purge() {
     let (status, _) = api(
         &stack.router,
         "POST",
-        "/api/admin/v1/posts/http-trash/trash",
+        &format!("/api/admin/v1/posts/{post_id}/trash"),
         Some(&other_cookie),
         Some(&other_csrf),
         Some(r#"{"expected_version":2}"#),
@@ -2986,7 +3017,7 @@ async fn post_trash_http_scope_restore_and_owner_purge() {
     let (status, body) = api(
         &stack.router,
         "POST",
-        "/api/admin/v1/posts/http-trash/trash",
+        &format!("/api/admin/v1/posts/{post_id}/trash"),
         Some(&author_cookie),
         Some(&author_csrf),
         Some(r#"{"expected_version":2}"#),
@@ -3029,7 +3060,7 @@ async fn post_trash_http_scope_restore_and_owner_purge() {
     let (status, _) = api(
         &stack.router,
         "POST",
-        "/api/admin/v1/posts/http-trash/restore",
+        &format!("/api/admin/v1/posts/{post_id}/restore"),
         Some(&author_cookie),
         Some(&author_csrf),
         Some(r#"{"expected_version":2}"#),
@@ -3039,7 +3070,7 @@ async fn post_trash_http_scope_restore_and_owner_purge() {
     let (status, body) = api(
         &stack.router,
         "POST",
-        "/api/admin/v1/posts/http-trash/restore",
+        &format!("/api/admin/v1/posts/{post_id}/restore"),
         Some(&author_cookie),
         Some(&author_csrf),
         Some(r#"{"expected_version":3}"#),
@@ -3050,7 +3081,7 @@ async fn post_trash_http_scope_restore_and_owner_purge() {
     let (status, _) = api(
         &stack.router,
         "POST",
-        "/api/admin/v1/posts/http-trash/trash",
+        &format!("/api/admin/v1/posts/{post_id}/trash"),
         Some(&author_cookie),
         Some(&author_csrf),
         Some(r#"{"expected_version":4}"#),
@@ -3060,7 +3091,7 @@ async fn post_trash_http_scope_restore_and_owner_purge() {
     let (status, _) = api(
         &stack.router,
         "POST",
-        "/api/admin/v1/posts/http-trash/purge",
+        &format!("/api/admin/v1/posts/{post_id}/purge"),
         Some(&author_cookie),
         Some(&author_csrf),
         Some(r#"{"expected_version":5}"#),
@@ -3070,11 +3101,415 @@ async fn post_trash_http_scope_restore_and_owner_purge() {
     let (status, body) = api(
         &stack.router,
         "POST",
-        "/api/admin/v1/posts/http-trash/purge",
+        &format!("/api/admin/v1/posts/{post_id}/purge"),
         Some(&owner_cookie),
         Some(&owner_csrf),
         Some(r#"{"expected_version":5}"#),
     )
     .await;
     assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+}
+
+#[tokio::test]
+async fn post_by_id_survives_slug_reuse_and_preserves_write_guards() {
+    let _g = SERIAL.lock().await;
+    let stack = fresh_stack().await;
+    let (cookie, csrf) = login_as(&stack.router, &stack.idp, "author").await;
+    let (other_cookie, other_csrf) = login_as(&stack.router, &stack.idp, "author2").await;
+    let (editor_cookie, editor_csrf) = login_as(&stack.router, &stack.idp, "editor").await;
+    let (status, body) = api(
+        &stack.router,
+        "POST",
+        "/api/admin/v1/posts",
+        Some(&cookie),
+        Some(&csrf),
+        Some(r#"{"slug":"stable-post","title":"原文章","content":"原正文"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let created: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let id = created["id"].as_str().unwrap();
+    let uri = format!("/api/admin/v1/posts/{id}");
+
+    // ID 寻址沿用 own/any 授权，知道其他作者的 ID 不增加权限。
+    for (method, suffix, payload) in [
+        ("GET", "", None),
+        (
+            "PATCH",
+            "",
+            Some(r#"{"title":"越权","expected_version":1}"#),
+        ),
+        ("POST", "/publish", Some(r#"{"expected_version":1}"#)),
+        ("POST", "/trash", Some(r#"{"expected_version":1}"#)),
+    ] {
+        let (status, body) = api(
+            &stack.router,
+            method,
+            &format!("{uri}{suffix}"),
+            Some(&other_cookie),
+            Some(&other_csrf),
+            payload,
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{method} {suffix}: {body}");
+    }
+    let (status, body) = api(
+        &stack.router,
+        "PATCH",
+        &uri,
+        Some(&cookie),
+        None,
+        Some(r#"{"new_slug":"renamed-post","expected_version":1}"#),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "ID 写接口必须检查 CSRF：{body}"
+    );
+
+    let (status, body) = api(
+        &stack.router,
+        "PATCH",
+        &uri,
+        Some(&cookie),
+        Some(&csrf),
+        Some(r#"{"new_slug":"renamed-post","expected_version":1}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let renamed: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(renamed["id"], id);
+    assert_eq!(renamed["slug"], "renamed-post");
+    assert_eq!(renamed["version"], 2);
+
+    // 原 slug 被另一个作者占用；已打开的 ID 编辑会话仍绑定原实体。
+    let (status, body) = api(
+        &stack.router,
+        "POST",
+        "/api/admin/v1/posts",
+        Some(&other_cookie),
+        Some(&other_csrf),
+        Some(r#"{"slug":"stable-post","title":"新文章","content":"新正文"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let replacement: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_ne!(replacement["id"], id);
+    let (status, body) = api(&stack.router, "GET", &uri, Some(&editor_cookie), None, None).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "read_any 读取重命名后的同一 ID：{body}"
+    );
+    let detail: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(detail["id"], id);
+    assert_eq!(detail["slug"], "renamed-post");
+    assert_eq!(detail["content"], "原正文");
+
+    let (status, body) = api(
+        &stack.router,
+        "PATCH",
+        &uri,
+        Some(&editor_cookie),
+        Some(&editor_csrf),
+        Some(r#"{"title":"编辑修改原文章","expected_version":2}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "update_any 仍有效：{body}");
+    for (method, suffix, payload) in [
+        ("PATCH", "", r#"{"title":"过期修改","expected_version":2}"#),
+        ("POST", "/publish", r#"{"expected_version":2}"#),
+    ] {
+        let (status, body) = api(
+            &stack.router,
+            method,
+            &format!("{uri}{suffix}"),
+            Some(&cookie),
+            Some(&csrf),
+            Some(payload),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{method} {suffix}: {body}");
+        let error: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(error["code"], "version_conflict");
+    }
+
+    for (action, version, expected_status) in [
+        ("publish", 3, "published"),
+        ("unpublish", 4, "draft"),
+        ("trash", 5, "draft"),
+        ("restore", 6, "draft"),
+    ] {
+        let (status, body) = api(
+            &stack.router,
+            "POST",
+            &format!("{uri}/{action}"),
+            Some(&editor_cookie),
+            Some(&editor_csrf),
+            Some(&format!(r#"{{"expected_version":{version}}}"#)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{action}: {body}");
+        let result: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(result["id"], id);
+        assert_eq!(result["slug"], "renamed-post");
+        assert_eq!(result["status"], expected_status);
+        assert_eq!(result["version"], version + 1);
+    }
+    let (status, body) = api(
+        &stack.router,
+        "GET",
+        &format!(
+            "/api/admin/v1/posts/{}",
+            replacement["id"].as_str().unwrap()
+        ),
+        Some(&other_cookie),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "新文章通过自身 ID 读取：{body}");
+    let untouched: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(
+        untouched, replacement,
+        "旧 ID 的操作不能修改复用 slug 的新文章"
+    );
+}
+
+#[tokio::test]
+async fn page_by_id_never_targets_a_replacement_after_deletion() {
+    let _g = SERIAL.lock().await;
+    let stack = fresh_stack().await;
+    let (cookie, csrf) = login_as(&stack.router, &stack.idp, "editor").await;
+    let (author_cookie, author_csrf) = login_as(&stack.router, &stack.idp, "author").await;
+    let (status, body) = api(
+        &stack.router,
+        "POST",
+        "/api/admin/v1/pages",
+        Some(&cookie),
+        Some(&csrf),
+        Some(r#"{"slug":"stable-page","title":"原页面","content":"原正文"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let original: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let id = original["id"].as_str().unwrap();
+    let uri = format!("/api/admin/v1/pages/{id}");
+    let delete_version_1 = r#"{"expected_version":1}"#.to_string();
+
+    for (method, suffix, payload) in [
+        ("GET", "", None),
+        (
+            "PATCH",
+            "",
+            Some(r#"{"title":"越权","expected_version":1}"#),
+        ),
+        ("POST", "/publish", Some(r#"{"expected_version":1}"#)),
+        ("DELETE", "", Some(delete_version_1.as_str())),
+    ] {
+        let (status, body) = api(
+            &stack.router,
+            method,
+            &format!("{uri}{suffix}"),
+            Some(&author_cookie),
+            Some(&author_csrf),
+            payload,
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "页面仍需站点级权限：{body}");
+    }
+    let (status, body) = api(
+        &stack.router,
+        "PATCH",
+        &uri,
+        Some(&cookie),
+        Some(&csrf),
+        Some(r#"{"new_slug":"renamed-page","expected_version":1}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let renamed: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(renamed["id"], id);
+    assert_eq!(renamed["slug"], "renamed-page");
+    assert_eq!(renamed["version"], 2);
+    let (status, body) = api(&stack.router, "GET", &uri, Some(&cookie), None, None).await;
+    assert_eq!(status, StatusCode::OK, "重命名后仍通过原 ID 读取：{body}");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&body).unwrap(),
+        renamed
+    );
+
+    for (action, version, expected_status) in
+        [("publish", 2, "published"), ("unpublish", 3, "draft")]
+    {
+        let (status, body) = api(
+            &stack.router,
+            "POST",
+            &format!("{uri}/{action}"),
+            Some(&cookie),
+            Some(&csrf),
+            Some(&format!(r#"{{"expected_version":{version}}}"#)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{action}: {body}");
+        let result: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(result["id"], id);
+        assert_eq!(result["status"], expected_status);
+        assert_eq!(result["version"], version + 1);
+    }
+    let delete_version_4 = r#"{"expected_version":4}"#.to_string();
+    let (status, body) = api(
+        &stack.router,
+        "DELETE",
+        &uri,
+        Some(&cookie),
+        None,
+        Some(&delete_version_4),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "删除 ID 仍需 CSRF：{body}");
+    let (status, body) = api(
+        &stack.router,
+        "DELETE",
+        &uri,
+        Some(&cookie),
+        Some(&csrf),
+        Some(&delete_version_1),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "删除 ID 仍需匹配版本：{body}");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&body).unwrap()["code"],
+        "version_conflict"
+    );
+    let (status, body) = api(
+        &stack.router,
+        "DELETE",
+        &uri,
+        Some(&cookie),
+        Some(&csrf),
+        Some(&delete_version_4),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+
+    let (status, body) = api(
+        &stack.router,
+        "POST",
+        "/api/admin/v1/pages",
+        Some(&cookie),
+        Some(&csrf),
+        Some(r#"{"slug":"renamed-page","title":"新页面","content":"新正文"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let replacement: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_ne!(replacement["id"], id);
+
+    // 即使请求版本恰好与新页面相同，也不能把已删除 ID 重新解释为 slug。
+    for (method, suffix, payload) in [
+        ("GET", "", None),
+        (
+            "PATCH",
+            "",
+            Some(r#"{"title":"旧编辑会话","expected_version":1}"#),
+        ),
+        ("POST", "/publish", Some(r#"{"expected_version":1}"#)),
+        ("POST", "/unpublish", Some(r#"{"expected_version":1}"#)),
+        ("DELETE", "", Some(delete_version_1.as_str())),
+    ] {
+        let (status, body) = api(
+            &stack.router,
+            method,
+            &format!("{uri}{suffix}"),
+            Some(&cookie),
+            Some(&csrf),
+            payload,
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::NOT_FOUND,
+            "已删除 ID {method} {suffix}: {body}"
+        );
+    }
+    let (status, body) = api(
+        &stack.router,
+        "GET",
+        &format!(
+            "/api/admin/v1/pages/{}",
+            replacement["id"].as_str().unwrap()
+        ),
+        Some(&cookie),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let untouched: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(
+        untouched, replacement,
+        "新页面未被旧 ID 读取、改写、发布或删除"
+    );
+}
+
+#[tokio::test]
+async fn management_rejects_slug_addresses_without_changing_content() {
+    let _g = SERIAL.lock().await;
+    let stack = fresh_stack().await;
+    for (kind, username) in [("posts", "author"), ("pages", "editor")] {
+        let (cookie, csrf) = login_as(&stack.router, &stack.idp, username).await;
+        let (status, body) = api(
+            &stack.router,
+            "POST",
+            &format!("/api/admin/v1/{kind}"),
+            Some(&cookie),
+            Some(&csrf),
+            Some(r#"{"slug":"by-id","title":"合法公开路径","content":"正文"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{kind}: {body}");
+        let created: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let id = response_id(&body);
+        for (method, suffix, payload) in [
+            ("GET", "", None),
+            (
+                "PATCH",
+                "",
+                Some(r#"{"title":"不得写入","expected_version":1}"#),
+            ),
+            ("POST", "/publish", Some(r#"{"expected_version":1}"#)),
+            ("POST", "/unpublish", Some(r#"{"expected_version":1}"#)),
+        ] {
+            let (status, body) = api(
+                &stack.router,
+                method,
+                &format!("/api/admin/v1/{kind}/by-id{suffix}"),
+                Some(&cookie),
+                Some(&csrf),
+                payload,
+            )
+            .await;
+            assert_eq!(
+                status,
+                StatusCode::BAD_REQUEST,
+                "slug 管理地址应拒绝：{kind} {method} {body}"
+            );
+        }
+        let (status, body) = api(
+            &stack.router,
+            "GET",
+            &format!("/api/admin/v1/{kind}/{id}"),
+            Some(&cookie),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&body).unwrap(),
+            created
+        );
+    }
 }

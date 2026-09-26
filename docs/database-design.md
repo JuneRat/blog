@@ -1,213 +1,129 @@
-# 数据库设计：13 张核心内容表 + 媒体 2 表 + 会话 1 表
+# 数据库设计
 
-更新日期：2026-09-23。核心内容/身份模型采用用户提供并确认的方案：少表、关系清晰、以后再扩展；包含 Series、RBAC、OAuth，Post/Page 分表。替代此前 14 表与发布修订方案，取舍见 [ADR-0008](adr/0008-thirteen-table-blog-core.md)。媒体库交付时按该 ADR 的「按需扩展」原则新增 `media_assets` 与 `content_media_refs` 两张表（迁移 `0004_media.sql`），原 13 表未改动。会话持久化交付时按同一原则新增 `sessions` 一张表（迁移 `0005_sessions.sql`），见 [ADR-0010](adr/0010-persistent-postgres-sessions.md)。
+当前 PostgreSQL schema 有 **16 张业务表**，不含 sqlx 的迁移记录表。本文说明数据关系、主要字段、数据库约束和提交边界；内容状态见[内容生命周期](content-lifecycle.md)，认证授权见[身份与后台](identity-and-admin.md)。
 
-完整字段、类型、约束与索引见 [PostgreSQL DDL](sql/postgres-core.sql)（含媒体两表与会话表）；实际生效顺序由 `migrations/postgres/` 下的迁移决定（媒体是 `0004_media.sql`，会话是 `0005_sessions.sql`）。这是面向空 schema 的设计草案，不是已执行的数据库迁移。保留原方案的 13 张表和业务字段，只补充必要的约束、索引，以及可变记录的 `version` 并发控制字段；不增加路径、修订或审计表。
+## 1. 权威来源与迁移
 
-## 1. 表与关系
+生产 schema 由 [`migrations/postgres/`](../migrations/postgres/) 中按序执行的迁移定义。[汇总 DDL](sql/postgres-core.sql)用于阅读完整结构和空 schema 参考，不用于替代迁移或直接升级已有数据库。两者不一致时应修正文档或汇总 DDL，不能跳过已有迁移历史。
 
-| 范围 | 表 | 关系与用途 |
-|---|---|---|
-| 身份 | users | 本站用户，与登录方式分离 |
-| 身份 | oauth_accounts | 一个用户可绑定多个外部身份 |
-| 权限 | roles | 内置和自定义角色 |
-| 权限 | permissions | 以 resource.action 为 key 的权限目录 |
-| 权限 | user_roles | 用户与角色多对多 |
-| 权限 | role_permissions | 角色与权限多对多 |
-| 内容 | categories | 分类树，一篇文章至多一个分类 |
-| 内容 | series | 有序系列，一篇文章至多一个系列 |
-| 内容 | posts | 当前文章正文、归属、状态与系列顺序 |
-| 内容 | tags | 标签 |
-| 内容 | post_tags | 文章与标签多对多 |
-| 内容 | pages | 独立页面，不关联分类、标签、系列或作者 |
-| 媒体 | media_assets | 图片资产元数据与生命周期状态（随机存储路径、尺寸、校验值） |
-| 媒体 | content_media_refs | Post/Page 正文对媒体的真实引用关系；删除保护的唯一判据 |
-| 系统 | settings | 按 key 分组的 JSONB 配置 |
-
-```mermaid
-erDiagram
-    users ||--o{ oauth_accounts : identities
-    users ||--o{ user_roles : memberships
-    roles ||--o{ user_roles : assignments
-    roles ||--o{ role_permissions : grants
-    permissions ||--o{ role_permissions : selected
-    users ||--o{ posts : authors
-    categories |o--o{ categories : parent
-    categories |o--o{ posts : classifies
-    series |o--o{ posts : orders
-    posts ||--o{ post_tags : links
-    tags ||--o{ post_tags : labels
-    media_assets ||--o{ content_media_refs : referenced_by
-    pages {
-        uuid id PK
-        string slug UK
-    }
-    media_assets {
-        uuid id PK
-        string storage_key UK
-        string status
-    }
-    content_media_refs {
-        uuid media_id FK
-        string content_type
-        uuid content_id
-    }
-    settings {
-        string key PK
-        jsonb value
-    }
-```
-
-UUID 由应用生成；时间统一用 timestamptz。状态用字符串和 CHECK；updated_at 在更新时由应用写入，DEFAULT now() 仅处理插入。正文和 JSON 大小由接口及应用限制，不能因为 SQL 用 text/jsonb 就接受无限输入。
-
-users、roles、categories、series、posts、tags、pages、media_assets、settings 额外有 `version bigint`，初始 1。有变化的写入校验 expected_version 并递增；修改文章标签也递增 posts.version，修改角色授权也递增 roles.version。它只表示当前记录的提交版本，不代表存在修订历史。
-
-## 2. 用户与 OAuth
-
-| 表 | 字段 | 说明 |
-|---|---|---|
-| users | id、username、email、password_hash、display_name、avatar_media_id、created_at、updated_at、deleted_at | username 唯一；email 可空且唯一；password_hash 可空；`avatar_media_id` 外键指向 media_assets；deleted_at 非空即禁止认证及后台操作 |
-| oauth_accounts | id、user_id、provider、provider_user_id、email、created_at、updated_at | user_id 为 FK；唯一 (provider, provider_user_id)，不保存第三方 token |
-
-username 和用户主邮箱在写入前采用固定规范化策略，软删除后仍占用唯一值；OAuth email 只是资料快照，不唯一，也不用于自动合并账号。OAuth 返回同邮箱时不能直接绑定到已有用户，绑定必须由已登录且重新认证的用户明确发起。
-
-provider 表示稳定的提供商实例，而不只是任意的“oidc”字符串：OIDC 使用精确 issuer 作为身份命名空间，GitHub 使用固定平台实例标识；provider_user_id 分别使用 sub 或稳定数值用户 ID。配置别名、显示名或 GitHub login 不能替代身份键。
-
-`password_hash` 存 Argon2id 的 PHC 字符串（算法与参数自描述，可透明升级），OAuth-only 用户为空。本地密码登录、限流、重置与泄露处置契约见 [身份与后台 §7](identity-and-admin.md)；自助找回需要一次性令牌存储与邮件投递，本版未交付。只做登录时不长期保存 access_token/refresh_token；以后调用第三方 API 再单独设计加密凭据存储。
-
-users 的业务引用默认 RESTRICT；账号优先软删除/匿名化，不能级联删除其文章。头像已随媒体库第三段接入：`users.avatar_media_id` 是真外键（公开来源 = 账号未软删除）；站点 logo 的 id 按用户确认的取舍存在 `settings.site` 的 JSONB 值里，引用关系仍写入 `content_media_refs`（见 §8）。
-
-## 3. RBAC
-
-| 表 | 字段 | 主键/唯一约束 |
-|---|---|---|
-| roles | id、name、slug、description、created_at、updated_at | PK id；UQ slug |
-| permissions | id、name、key、description | PK id；UQ key |
-| user_roles | user_id、role_id | PK (user_id, role_id) |
-| role_permissions | role_id、permission_id | PK (role_id, permission_id) |
-
-用权限 key 检查业务动作，如 `post.create`、`post.update`、`post.publish`、`page.update`、`category.manage`、`settings.manage`；角色只是授权集合，不用角色名称替代动作检查。用户可持有多个角色，权限取并集。不增加用户直授权、角色继承、ACL 或规则脚本。
-
-permissions 由可信应用注册表同步，不允许普通后台创造任意“可执行权限”。自定义角色从已注册 key 选择；未知 key 默认拒绝。原方案的 action/scope 关系行改为 permission_id 外键，范围由 key 的可信描述符定义。
-
-为保留作者只能管理自己文章的要求，建议 `post.update/post.publish/post.delete` 表示 own；`post.update_any/post.publish_any/post.delete_any` 表示 any。同理补充 post.read、post.read_any、post.purge、post.transfer_author 等确有用例的动作。Author 获得 own，Editor 获得所需 any；后端仍读取 author_id 校验。Page 无 author_id，page.* 采用站点范围，不给 Author 默认页面管理权。
-
-Owner 保留为受保护的内置角色 slug；普通角色 API 不能创建、重命名为或修改该角色。首次 CLI 初始化显式绑定目标外部身份，禁止首个任意登录者自动成为 Owner。委派上限由可信策略限制，角色编辑前后、角色分配/移除都检查受影响权限；最后有效 Owner 不能被删除或降级。
-
-敏感业务写入与身份变更使用统一事务锁协议，授权后再检查记录版本；初期每次敏感操作读主库，不缓存有效权限。具体协议见 [身份与后台](identity-and-admin.md)，权限表的 FK 本身不能阻止业务提权。
-
-## 4. 分类、系列和标签
-
-| 表 | 字段 | 规则 |
-|---|---|---|
-| categories | id、name、slug、parent_id、description、created_at、updated_at | slug 唯一；parent_id 自引用，可空；不允许自身或祖先形成环 |
-| series | id、name、slug、description、cover_media_id、created_at、updated_at | slug 唯一；顺序在 posts 中维护；`cover_media_id` 外键指向 media_assets |
-| tags | id、name、slug、created_at | slug 唯一 |
-| post_tags | post_id、tag_id | 复合主键，避免重复标签 |
-
-分类表示主题归属，系列表示阅读顺序；二者可以同时存在。文章可无分类、无系列、无标签。一篇文章最多一个分类和一个系列，不建 post_categories 或 post_series。
-
-posts.series_id 与 series_order 必须同时为空或同时非空；序号为正整数，允许留空档。唯一 (series_id, series_order)，同系列不允许重复位置，草稿和回收站文章也占用自己的位置。无系列文章的两列为 NULL，默认唯一约束允许多条此类记录。[PostgreSQL 唯一约束](https://www.postgresql.org/docs/current/ddl-constraints.html)
-
-重排同系列时锁定 series 行，校验 series.version，在同一事务更新涉及文章的顺序与版本，并递增系列版本。跨系列移动按 ID 顺序锁两个系列。DDL 将位置唯一约束设为可延后检查，交换位置时执行 `SET CONSTRAINTS posts_series_position_unique DEFERRED`，提交时必须恢复唯一。[PostgreSQL SET CONSTRAINTS](https://www.postgresql.org/docs/current/sql-set-constraints.html)
-
-标签部分已随 M3 第一段交付：`tags`（name ≤100 字符、trim 后非空、slug 创建后不可修改、version 支持改名 CAS）与 `post_tags`（复合主键去重、post_id CASCADE、tag_id RESTRICT）经迁移建表并有仓储实现；文章与标签关系在保存文章的同一事务整体替换，仅标签变化也递增 posts.version；被引用标签（含草稿/私密/回收站引用）的删除在业务层与 FK RESTRICT 双重拒绝。
-
-分类 parent_id 的 CHECK 只防自身引用；所有创建、移动和删除分类的入口都取得统一树结构事务锁，再检查完整祖先链，防止并发形成多节点环。被文章或子分类引用的分类、被文章引用的系列/标签默认拒绝删除；先显式调整关系，不靠 CASCADE 静默改变文章。
-
-分类、标签、系列名称读取当前值，没有历史关联快照。公开列表、系列顺序与标签计数只统计当前公开文章，不泄漏草稿或私有文章。
-
-## 5. Post 与 Page
-
-| 表 | 业务字段 |
+| 迁移 | 变更 |
 |---|---|
-| posts | id、author_id、category_id、series_id、title、slug、excerpt、content、content_type、cover_media_id、series_order、status、visibility、published_at、created_at、updated_at、deleted_at |
-| pages | id、title、slug、content、content_type、status、visibility、published_at、created_at、updated_at |
+| `0001_identity_rbac.sql` | 用户、外部身份和 RBAC 六张表 |
+| `0002_content.sql` | 分类、系列、文章、标签、文章标签、页面六张表 |
+| `0003_settings.sql` | 分组设置 |
+| `0004_media.sql` | 媒体资产与内容引用 |
+| `0005_sessions.sql` | 持久会话 |
+| `0006_media_covers.sql` | Post/Series 文本封面替换为媒体外键 |
+| `0007_media_avatar_logo.sql` | 用户头像媒体外键，扩展头像与站点引用类型 |
+| `0008_content_html.sql` | Post/Page 持久化清洗 HTML 与生成规则版本 |
 
-content_type 首期仅允许 markdown；不接受未经处理的 HTML 作为另一种存储格式。status 为 draft/published/archived，visibility 为 public/private；后续确需定时、密码访问或 unlisted 时再扩展。published_at 表示第一次发布的时间，重新发布不重置。
+迁移不包含种子账号。权限目录和内置角色由可信注册表同步，不由任意配置或用户输入创造可执行权限。
 
-文章公开条件为 `status = 'published' AND visibility = 'public' AND deleted_at IS NULL`；页面为前两项。所有详情、列表、RSS、sitemap、模板函数和未来搜索都使用同一条件。私有内容只通过有授权的后台/预览入口访问，知道 slug 不等于有权读取。
+执行入口分两类：`migrate_schema` 只执行 SQL；完整 `migrate` 在 SQL 后重建正文派生物。身份、密码、角色、OAuth 和媒体维护只要求 schema 就绪，不能被无效旧正文或主题阻断；文章命令、serve 和显式迁移执行完整迁移。命令使用方法见[开发与运行](development.md)。
 
-**本版只保存一份正文。保存已发布内容及标签会直接更新线上；没有“未发布的编辑副本”或历史恢复。** 草稿可自动保存，已发布内容默认关闭服务端自动保存，使用明确的“保存并更新线上”操作；若需不公开地编辑，先撤回为 draft。浏览器本地暂存不等于数据库修订。
+## 2. 表与通用约定
 
-草稿标题和正文可暂空，但 slug 创建时就必须非空且表内唯一；由用户提供或应用生成临时唯一 slug。首次发布校验内容与路径，之后锁定 slug，即使撤回也不允许改名。无路径历史、自动重定向或删除墓碑。
-
-建议路由：文章 `/posts/{slug}`，页面 `/{slug}`，分类/标签/系列分别为 `/categories/{slug}`、`/tags/{slug}`、`/series/{slug}`；机器可读入口 `/feed.xml`、`/sitemap.xml`、`/robots.txt`。Page slug 仅为一个片段，应用拒绝 admin、api、auth、posts、categories、tags、series、assets、media 及 RSS/sitemap 等实际系统路由；路由优先匹配系统入口，最后才进入 Page。数据库的 pages.slug 唯一无法单独保护系统命名空间。
-
-posts 软删除保留 slug、系列位置及标签关系；恢复后为 draft，原 archived 仍保持 archived。默认不自动清空回收站，永久删除需专门授权，级联清除 post_tags 并释放 slug/系列位置。pages 按贴文无 deleted_at：删除为物理删除，需 page.delete 权限，无法从回收站恢复。永久删除后的旧地址可被新内容使用；如需永久占位必须另行扩展。
-
-## 6. Settings
-
-settings 保存 `key、value、updated_at`，附并发 version。key 为 site/theme/seo/oauth 等分组；value 为 JSON 对象，可在对象中包含 schema_version，由应用按分组验证结构和大小。
-
-```json
-{
-  "schema_version": 1,
-  "title": "Sun's Blog",
-  "description": "一个 Rust 博客",
-  "logo_media_id": null
-}
-```
-
-site 分组（标题/描述）已随 M3 第一段交付，语义冻结为：
-
-- **生效优先级**：数据库 site 行 > 环境变量（`BLOG_SITE_TITLE`/`BLOG_SITE_DESCRIPTION`）> 内置默认值。公开页面每次渲染解析（初期无缓存），保存即生效，重启后配置保留；保存动作本身就是「数据库接管」的意图，即使值与回退值相同也落库。
-- **行不完整时按字段回退**：标题缺失或 trim 后为空回退装配值；描述缺失回退、已保存的空串合法（清空描述是有效操作）。存储读取失败时公开页面整体回退，管理读取如实报错。
-- **并发**：version 行不存在视为 0，是首次保存的写入前提；条件写入（UPSERT + CAS）不覆盖并发修改，内容一致的保存幂等不递增版本。
-- **分组隔离**：site 的写路径只触碰 key='site'；oauth 等受保护分组各有专用端口、权限（oauth.manage）与入口，settings API 面上不存在可寻址的其他分组。
-
-主题 ID、版本和声明式配置可以放 theme；不再预建 theme_settings/plugin_settings。oauth 只保存提供商非敏感配置及 secret_ref，不保存 client secret 或访问令牌。公开模板只拿白名单 DTO，不能直接读取整张 settings。
-
-不同 key 使用不同写入权限：settings.manage 不自动赋予 OAuth 提供商修改权；oauth 需专用敏感权限及重新认证。配置中的 ID 引用没有自动 FK，首期导航/图片使用经校验路径或 URL，不承诺资源引用保护；出现管理型资源关系时再设计真实 FK。
-
-## 7. 运行时边界与后续扩展
-
-13 表（加媒体 2 表、会话 1 表共 16 张）是业务核心，不等于完整持久化认证/任务平台。会话已持久化到 PostgreSQL（§9）：服务重启后仍登录，多个进程共享同一份会话，按用户批量撤销跨进程生效；授权仍读主库，会话绑定 `users.version`，撤权后旧 Cookie 下一次请求即失效。OAuth state/nonce/PKCE 尝试仍放有容量和 TTL 限制的服务端内存存储，state 原子一次消费，进程重启即作废。多实例、持久邀请交付前，仍需补齐共享的登录限流与 OAuth 尝试存储，不能把凭据或临时状态塞进 settings。
-
-首版仅允许 CLI 预建并明确绑定的用户登录，不开放自助注册。管理员邀请仍是后续协作功能，需同时补齐一次性消费、授权复核与存储；不宣称当前 16 表已覆盖邀请工作流。当前只有脱敏运行/安全日志，不承诺事务内持久业务审计；数据库审计随该功能补充。
-
-暂不建 post_revisions、page_revisions、content_paths、oauth_tokens、invitations、audit_logs、series_posts、post_meta/page_meta、notifications/webhooks/analytics。媒体管理的两张表已随媒体库第一版交付（§8），`sessions` 已随会话持久化交付（§9）；其余能力按 [路线图](product-roadmap.md) 扩展，不能为了维持表数而把队列和引用关系隐藏在 JSON 中。
-
-DDL 不含种子账号、内置角色或权限数据；实施时由受控迁移/初始化命令同步注册权限和内置角色。创建、保存、关系更新与版本递增须在同一事务；不在数据库锁内调用身份提供商或其他网络接口。
-
-实施时须验证：16 表空库建立、重复 slug/外部身份拒绝、系列位置冲突与交换、分类树并发防环、标签关系/删除保护、版本冲突、草稿和私有内容隔离、Page 保留路由冲突、作者 own/any、角色编辑防提权、最后 Owner、OAuth 重放与账号绑定、媒体引用同事务写入与引用保护删除、封面/头像引用随内容保存与「替换封面 vs 删除图片」并发、头像软删除后公开来源失效而引用仍占用、站点 logo 的 settings CAS 与引用同事务、会话跨进程读取与撤销、并发创建/撤销与空闲/绝对过期。上述检查已在真实 PostgreSQL 上执行（`crates/infrastructure/tests/`、`crates/server/tests/`）。
-
-## 8. 媒体（第一段正文图片/封面、第三段头像/logo 均已交付）
-
-媒体库服务 Post/Page **正文图片**、Post/Series **封面**、**用户头像**与**站点 logo**，两张表：
-
-| 表 | 字段 | 规则 |
+| 范围 | 表 | 用途 |
 |---|---|---|
-| media_assets | id、owner_id、storage_key、original_name、mime、byte_size、width、height、checksum_sha256、status、version、created_at、updated_at | `storage_key` 由随机 id 与格式后缀组成且唯一；`mime` 只允许四类位图；`status` ∈ staged/ready/pending_deletion/deleted |
-| content_media_refs | media_id、content_type、content_id | 复合主键去重；`media_id` 对资产 RESTRICT；`content_type` ∈ post/page/series/user/site |
+| 身份 | `users`、`oauth_accounts` | 本站账号与外部登录身份分离 |
+| 权限 | `roles`、`permissions`、`user_roles`、`role_permissions` | 多角色权限并集 |
+| 内容 | `posts`、`pages` | 分别保存文章与独立页面的当前正文 |
+| 目录 | `categories`、`series`、`tags`、`post_tags` | 分类树、有序系列和多标签 |
+| 媒体 | `media_assets`、`content_media_refs` | 文件元数据、生命周期和真实引用 |
+| 系统 | `settings` | 按 key 分组的 JSONB 设置 |
+| 会话 | `sessions` | 本站会话摘要、期限和身份版本 |
 
-设计要点：
+实体 UUID 由应用生成；关系表采用复合主键，settings 以 key 为主键，sessions 以令牌摘要为主键。时间使用 `timestamptz`；状态使用字符串与 CHECK。`updated_at` 由写入逻辑维护，插入默认值不能代替更新逻辑。
 
-- **文件与行一一对应**：文件落在 `BLOG_MEDIA_DIR` 下的随机路径，行是唯一权威；`storage_key` 是相对路径（`objects/<uuid>.<ext>`，上传暂存在 `staging/`），从不使用用户提供的文件名。
-- **引用不是文本搜索**：保存内容时把正文走一遍渲染 + 清洗管线，再用 HTML5 分词器读出其中所有 `<img src>`（即「真正会渲染出来的图片」），与封面/头像 id 求并集，在事务内整体替换引用行。删除判据只看这张表。
-- **封面与头像是外键而非文本**：`posts.cover_media_id` / `series.cover_media_id` / `users.avatar_media_id` 引用 `media_assets(id)`（迁移 `0006_media_covers.sql` 与 `0007_media_avatar_logo.sql`），数据库拒绝悬空引用。**站点 logo 是明确的例外**：id 存在 `settings.site` 的 JSONB 值里，同一事务写引用行；JSON 里的 id 没有 FK 兜底，读取侧对失效 id 按「无 logo」处理。`set_avatar` 有意不递增 `users.version`（会话绑定版本）。
-- **多态引用无外键**：`content_id` 指向 posts/pages/series/users，无法建 FK，因此 `post.purge`、`page.delete` 与系列删除必须在同一事务清理引用行（实现见 `PostgresPostRepository::purge` / `PostgresPageRepository::delete` / `PostgresSeriesRepository::delete` / `PostgresUserRepository::set_avatar`）。站点是单例、`settings` 行没有 uuid，`content_type='site'` 用固定 nil UUID 占位。
-- **公开可见性由内容决定**：`has_public_reference` 用一条与公开文章/页面/系列/账号谓词逐字一致的 EXISTS 查询实时判定，因此撤回、改 private、移入回收站、账号软删除后匿名读取立刻停止；系列目录页对任何已存在系列公开可达、站点配置本身公开，因此系列封面与站点 logo 即公开来源。不缓存判定结果。
-- **回收与上传就绪互斥**：`claim_abandoned_staged` 是带「创建时间早于宽限期」谓词的**单语句条件更新**（`WHERE status = 'staged' … RETURNING`），与 `mark_ready` 只有一个能命中；认领后停在 `pending_deletion`，文件删除失败可重试。不用「先查后改」，否则两个进程会同时认为自己是赢家。
-- **使用位置过滤在应用层**：`usage_of` 返回 `author_id` 等原始字段，由应用层按 Post own/any、Page 站点权限、Series 目录权限、软删除头像的 `user.manage` 与站点 logo 的 `settings.manage` 过滤，引用计数保持全局。授权判断不写进 SQL 适配器。
-- **删除并发保护**：内容保存对涉及媒体行（正文图片 ∪ 封面/头像/logo）取 `FOR SHARE` 并校验 `status='ready'`；删除对同一行取 `FOR UPDATE` 并在锁内校验引用。锁序一致，不会交错出「引用已写入、文件已回收」的破图状态。
-- **备份单元**：媒体文件与数据库同属一份备份清单；`PendingDeletion` 对象若已不存在，只有在确认无引用且状态符合幂等删除规则时才可记为预期缺失（见 [备份与恢复](operations-and-recovery.md)）。
+可变的用户、角色、目录、内容、媒体和设置记录有正整数 `version bigint`，初值 1。它表示当前提交版本，不是修订历史。文章标签变化也属于文章提交；角色分配变化递增目标用户版本。系列整体重排递增系列及成员文章版本，不能把所有写入都解释成“同值不增版”。
 
-**关于「媒体不写进 settings JSON」**：一般规则仍然成立——引用关系需要真实外键与事务保护。站点 logo 是用户确认的例外：单例站点没有可承载 FK 的行，logo id 存进 `settings.site` 的值，但引用行仍在同一事务写入 `content_media_refs`，删除保护与公开来源以引用表为准；代价是 JSON 里的 id 缺失 FK 兜底，读取侧对失效 id 按无 logo 处理。
+文本长度、JSON 结构和请求大小由领域、应用及接口共同限制；SQL 的 text/jsonb 类型不代表接受无限输入。准确列类型、CHECK 和索引以迁移 SQL 为准。
 
-## 9. 会话（已交付）
+## 3. 身份与 RBAC
 
-会话持久化到 PostgreSQL，服务重启后仍登录，多个进程共享同一份状态（取舍见 [ADR-0010](adr/0010-persistent-postgres-sessions.md)）。一张表：
+| 表 | 主要字段和约束 |
+|---|---|
+| `users` | `id`、唯一 `username`、可空且唯一 `email`、可空 `password_hash`、`display_name`、`avatar_media_id`、`version`、时间和 `deleted_at` |
+| `oauth_accounts` | `id`、`user_id`、`provider`、`provider_user_id`、外部邮箱快照与时间；唯一 `(provider, provider_user_id)` |
+| `roles` | `id`、`name`、唯一 `slug`、描述、版本和时间 |
+| `permissions` | `id`、名称、唯一 `key`、描述 |
+| `user_roles` | 主键 `(user_id, role_id)`；两端均为 RESTRICT 外键 |
+| `role_permissions` | 主键 `(role_id, permission_id)`；角色端 CASCADE，权限端 RESTRICT |
 
-| 表 | 字段 | 规则 |
-|---|---|---|
-| sessions | token_hash、user_id、csrf_token、user_version、created_at、last_seen_at、expires_at | `token_hash` 是令牌的 SHA-256 小写 hex 主键；`user_id` 对 users CASCADE；`csrf_token` 为 32 字节 hex；`user_version` 记录签发时 `users.version`；`expires_at = created_at + 绝对 TTL` |
+用户名写入前 trim 并转 ASCII 小写，允许 ASCII 字母数字、`-`、`_`；邮箱 trim、空串视为空，但不转小写。软删除账号仍占用用户名和邮箱唯一值。
 
-设计要点：
+`password_hash` 存 Argon2id PHC 字符串，经独立凭据端口读写，不进入普通用户快照。外部邮箱只是资料快照，不唯一，也不用于自动合并账号。OIDC 的 provider 使用精确 issuer，GitHub 使用固定平台实例标识；外部 ID 使用 sub 或稳定用户 ID，不使用展示名或邮箱。数据库不保存第三方 access/refresh token。
 
-- **只存摘要**：明文令牌只在签发时返回一次。cookie 泄露不能从库中反查令牌，库泄露也不能直接当 cookie 使用；`token_hash` 的 CHECK 限定 64 位小写 hex，避免大小写/长度不一致导致查找静默落空。
-- **空闲与绝对过期**：有效条件是 `expires_at >= now` 且 `last_seen_at >= now - 空闲 TTL`；每次校验刷新 `last_seen_at`，活动可续期但不可逾越绝对上限。比较边界与内存实现（`InMemorySessionStore`）逐字对齐。
-- **撤销与清理索引**：`sessions_by_user` 供按用户批量撤销（改密、改角色、软删除）；`sessions_by_expires`/`sessions_by_last_seen` 供过期清理与容量淘汰。
-- **容量上限与批量撤销是同一把事务级锁上的不变量**：`create` 在 `pg_advisory_xact_lock` 内做「清理过期—按最久未活跃淘汰—插入」，并发创建也精确不超 `max_entries`；`revoke_all_for_user` 共用这把锁做整用户删除，因此撤销返回后不会再有此前已开始、尚未提交的创建落库（排在撤销之后的创建视为撤销后的新登录）。这与内存实现单锁下的语义一致。过期行在创建/校验路径顺带清理，适配器另提供显式清理方法供运维与恢复流程调用。
-- **版本绑定仍在**：`user_version` 与校验时重读的 `users.version` 比对，跨进程撤权不以「存储是否共享」为前提；持久化只是让撤销本身也能跨进程即时生效。
-- **备份影响**：`sessions` 属于恢复单元；从备份恢复会带回旧会话行，恢复流程必须显式撤销（见 [备份与恢复](operations-and-recovery.md) §3）。
+用户的文章、媒体、外部身份等业务引用不级联删除；会话属于运行态，可随物理删除账号清理。角色名称不承担授权语义；内置角色保护、委派上限和最后 Owner 校验由应用与事务逻辑执行，FK 不能代替这些规则。
+
+schema 能表达自定义角色，但当前后台仅提供角色目录和用户角色分配，不提供自定义角色创建、改名、权限编辑或删除工作流。
+
+## 4. 内容、目录与并发关系
+
+| 表 | 主要业务字段 |
+|---|---|
+| `posts` | `id`、作者、分类、系列、标题、slug、摘要、源文、清洗 HTML、生成规则版本、封面、系列位置、状态、可见性、首次发布时间、版本、时间、回收站时间 |
+| `pages` | `id`、标题、slug、源文、清洗 HTML、生成规则版本、状态、可见性、首次发布时间、版本和时间；无作者与回收站字段 |
+| `categories` | `id`、名称、slug、可空 `parent_id`、描述、版本和时间 |
+| `series` | `id`、名称、slug、描述、`cover_media_id`、版本和时间 |
+| `tags` | `id`、名称、slug、版本和创建时间 |
+| `post_tags` | 主键 `(post_id, tag_id)`；文章端 CASCADE，标签端 RESTRICT |
+
+Post/Page 的 `content_type` 只允许 markdown；status 只允许 draft/published/archived，visibility 只允许 public/private。published 必须有 `published_at`。slug 表内唯一且为 1–200 UTF-8 字节；合法字符、首次发布后锁定和 Page 系统保留路径由领域/应用验证。
+
+文章至多有一个分类和一个系列。分类 parent_id 自引用 CHECK 排除自身，但多节点环还需要统一树事务锁和祖先链检查。分类、系列、标签被内容引用时 RESTRICT；分类有子节点时同样不能删除。
+
+系列 ID 与 `series_order` 同空或同非空，序号必须为正整数。`posts_series_position_unique` 对 `(series_id, series_order)` 唯一，草稿、私有及回收站记录也占位置。约束为 `DEFERRABLE INITIALLY IMMEDIATE`，重排事务可延后检查以交换位置；系列行按 ID 排序加锁，再锁相关文章。重排复核系列版本和完整成员集合；跨系列移动与成员增减递增相关系列版本。
+
+内容提交将正文、关系、版本及媒体引用一起落库。公开查询有与公开谓词一致的部分索引；作者列表、分类、回收站、标签反查另有索引，系列顺序复用位置唯一索引。读写契约及公开边界见[内容生命周期](content-lifecycle.md)。
+
+### 持久化 HTML
+
+`content_html` 是清洗后的派生字段，`content_render_version integer` 标识生成规则，默认 0 表示尚未生成。客户端不能直接提交这两个字段。
+
+受限渲染任务在事务外生成 HTML 与正文媒体 ID；仓储把源文、HTML、规则版本、业务版本和全部媒体引用同事务提交。公开详情读取 HTML，不在请求内重新执行 Markdown 转换。
+
+规则重建按批读取旧规则记录，在事务外渲染，以 ID、原正文、原业务版本和待重建规则版本条件更新。HTML 与引用集合一起提交；并发编辑已改变源文或业务版本时不会被旧重建结果覆盖。重建不增加业务 `version`，不更改 `updated_at`，也不伪造新的编辑历史。
+
+## 5. 媒体与多态引用
+
+| 表/字段 | 存储约束 |
+|---|---|
+| `media_assets` | UUID 主键、上传者、唯一随机 `storage_key`、展示名、MIME、正数字节数和尺寸、SHA-256、状态、版本及时间 |
+| `content_media_refs` | 主键 `(media_id, content_type, content_id)`；`media_id` 为 RESTRICT 外键 |
+| `posts.cover_media_id`、`series.cover_media_id`、`users.avatar_media_id` | 可空媒体外键，RESTRICT |
+| `settings.site.logo_media_id` | JSONB 中的媒体 ID，无直接外键；保存时通过引用事务验证资产 |
+
+媒体 MIME 只允许 PNG/JPEG/GIF/WebP，状态只允许 staged/ready/pending_deletion/deleted。存储路径是相对媒体根目录的随机路径，原始文件名仅用于显示。ready 列表、上传者和待回收状态有对应索引。
+
+`content_type` 为 post/page/series/user/site。`content_id` 是多态引用，无法建到多张内容表的 FK；站点单例使用固定 nil UUID。文章永久删除、页面删除和系列删除须在同一事务清除对应引用。替换封面、头像或 logo 整体替换引用集合。
+
+引用表承担删除保护和公开来源判定。保存引用先按媒体 ID 顺序取得共享行锁并确认 ready；删除取得排他行锁，锁内检查全部引用，再转入 pending_deletion。文件删除在数据库事务之外执行，通过状态机补偿，而不是假设文件系统和数据库可共同提交。完整行为见[媒体生命周期](content-lifecycle.md)。
+
+站点 logo 的 JSONB ID 是明确例外：没有字段级 FK，但引用行仍有媒体外键和事务保护。读取时无效 logo 按无 logo 处理。头像更新有意不递增 `users.version`，避免普通资料变更使会话失效。
+
+## 6. 分组设置
+
+`settings` 保存 `key`、JSON 对象 `value`、`version`、`updated_at`。当前使用 site、theme、oauth 分组；分组各有专用端口，普通设置 API 不能按任意 key 写整张表。
+
+| 分组 | 内容与写入边界 |
+|---|---|
+| site | 标题、描述、可空 logo ID；`settings.manage`；logo 引用与配置 CAS 同事务 |
+| theme | 已安装主题选择；`settings.manage`；不存在的主题不能保存 |
+| oauth | 提供商非敏感元数据与 `secret_ref`；受控 OAuth 维护、`oauth.manage` |
+
+site/theme 行不存在时管理视图版本为 0，首次保存以此作为 CAS 前提；数据库行从版本 1 开始。即使值等于环境回退值，首次保存也建立数据库配置；之后同值保存可幂等返回，但显式版本仍须匹配。
+
+site 生效顺序为数据库、装配环境值、内置默认。缺失/空白标题回退，缺失描述回退，已保存的空描述合法；公开读取设置失败时回退，管理读取如实报错。环境变量说明统一见[配置](configuration.md)。模板只接收允许公开的站点 DTO，不读取任意 settings JSON。秘密本身不保存在此表。
+
+## 7. 持久会话
+
+`sessions` 的字段为 `token_hash`、`user_id`、`csrf_token`、`user_version`、`created_at`、`last_seen_at`、`expires_at`。
+
+- 主键为令牌 SHA-256 的 64 位小写 hex 摘要，数据库不存明文会话令牌。CSRF token 同样为 64 位 hex，但可由同源前端读取。
+- `user_id` 为 CASCADE 外键；`user_version` 必须为正整数。最后活跃时间不得早于创建时间，绝对过期时间必须晚于创建时间。
+- 主键支持校验/单会话撤销；用户索引支持批量撤销，过期时间和活跃时间索引支持清理与容量淘汰。
+- 创建会话在专用事务 advisory lock 内清理过期、按最久未活跃淘汰并插入，保证并发不超容量。按用户撤销使用同一把锁，防止撤销完成后又落入此前尚未提交的旧创建。
+- 校验刷新活跃时间但不延长绝对期限；应用另比对 `user_version` 与账号当前版本。期限、Cookie 和改密行为见[身份与后台](identity-and-admin.md)。
+
+会话随数据库备份恢复，旧会话可能随之重新出现；恢复流程必须显式撤销，见[运维与恢复](operations-and-recovery.md)。OAuth 尝试和登录限流目前在有界内存，不存入 settings。

@@ -261,17 +261,17 @@ export const api = {
   listTrash: (page = 1, author?: string): Promise<{ items: PostSummary[]; total: number; page: number; per_page: number }> =>
     request(`/api/admin/v1/post-trash?page=${page}${author ? `&author=${encodeURIComponent(author)}` : ""}`),
 
-  trashPost: (slug: string, expectedVersion: number): Promise<PostDetail> =>
-    request(`/api/admin/v1/posts/${encodeURIComponent(slug)}/trash`, { method: "POST", body: JSON.stringify({ expected_version: expectedVersion }) }),
+  trashPost: (id: string, expectedVersion: number): Promise<PostDetail> =>
+    request(`/api/admin/v1/posts/${encodeURIComponent(id)}/trash`, { method: "POST", body: JSON.stringify({ expected_version: expectedVersion }) }),
 
-  restorePost: (slug: string, expectedVersion: number): Promise<PostDetail> =>
-    request(`/api/admin/v1/posts/${encodeURIComponent(slug)}/restore`, { method: "POST", body: JSON.stringify({ expected_version: expectedVersion }) }),
+  restorePost: (id: string, expectedVersion: number): Promise<PostDetail> =>
+    request(`/api/admin/v1/posts/${encodeURIComponent(id)}/restore`, { method: "POST", body: JSON.stringify({ expected_version: expectedVersion }) }),
 
-  purgePost: (slug: string, expectedVersion: number): Promise<void> =>
-    request(`/api/admin/v1/posts/${encodeURIComponent(slug)}/purge`, { method: "POST", body: JSON.stringify({ expected_version: expectedVersion }) }),
+  purgePost: (id: string, expectedVersion: number): Promise<void> =>
+    request(`/api/admin/v1/posts/${encodeURIComponent(id)}/purge`, { method: "POST", body: JSON.stringify({ expected_version: expectedVersion }) }),
 
-  getPost: (slug: string): Promise<PostDetail> =>
-    request<PostDetail>(`/api/admin/v1/posts/${encodeURIComponent(slug)}`),
+  getPost: (id: string): Promise<PostDetail> =>
+    request<PostDetail>(`/api/admin/v1/posts/${encodeURIComponent(id)}`),
 
   createPost: (input: CreatePostInput): Promise<PostDetail> =>
     request<PostDetail>("/api/admin/v1/posts", {
@@ -279,28 +279,28 @@ export const api = {
       body: JSON.stringify(input),
     }),
 
-  updatePost: (slug: string, input: EditPostInput): Promise<PostDetail> =>
-    request<PostDetail>(`/api/admin/v1/posts/${encodeURIComponent(slug)}`, {
+  updatePost: (id: string, input: EditPostInput): Promise<PostDetail> =>
+    request<PostDetail>(`/api/admin/v1/posts/${encodeURIComponent(id)}`, {
       method: "PATCH",
       body: JSON.stringify(input),
     }),
 
-  publishPost: (slug: string, expectedVersion?: number): Promise<PostDetail> =>
-    request<PostDetail>(`/api/admin/v1/posts/${encodeURIComponent(slug)}/publish`, {
+  publishPost: (id: string, expectedVersion?: number): Promise<PostDetail> =>
+    request<PostDetail>(`/api/admin/v1/posts/${encodeURIComponent(id)}/publish`, {
       method: "POST",
       body: JSON.stringify({ expected_version: expectedVersion }),
     }),
 
-  unpublishPost: (slug: string, expectedVersion?: number): Promise<PostDetail> =>
-    request<PostDetail>(`/api/admin/v1/posts/${encodeURIComponent(slug)}/unpublish`, {
+  unpublishPost: (id: string, expectedVersion?: number): Promise<PostDetail> =>
+    request<PostDetail>(`/api/admin/v1/posts/${encodeURIComponent(id)}/unpublish`, {
       method: "POST",
       body: JSON.stringify({ expected_version: expectedVersion }),
     }),
 
   listPages: (): Promise<PageSummary[]> => request<PageSummary[]>("/api/admin/v1/pages"),
 
-  getPage: (slug: string): Promise<PageDetail> =>
-    request<PageDetail>(`/api/admin/v1/pages/${encodeURIComponent(slug)}`),
+  getPage: (id: string): Promise<PageDetail> =>
+    request<PageDetail>(`/api/admin/v1/pages/${encodeURIComponent(id)}`),
 
   createPage: (input: CreatePageInput): Promise<PageDetail> =>
     request<PageDetail>("/api/admin/v1/pages", {
@@ -308,29 +308,29 @@ export const api = {
       body: JSON.stringify(input),
     }),
 
-  updatePage: (slug: string, input: EditPageInput): Promise<PageDetail> =>
-    request<PageDetail>(`/api/admin/v1/pages/${encodeURIComponent(slug)}`, {
+  updatePage: (id: string, input: EditPageInput): Promise<PageDetail> =>
+    request<PageDetail>(`/api/admin/v1/pages/${encodeURIComponent(id)}`, {
       method: "PATCH",
       body: JSON.stringify(input),
     }),
 
-  publishPage: (slug: string, expectedVersion?: number): Promise<PageDetail> =>
-    request<PageDetail>(`/api/admin/v1/pages/${encodeURIComponent(slug)}/publish`, {
+  publishPage: (id: string, expectedVersion?: number): Promise<PageDetail> =>
+    request<PageDetail>(`/api/admin/v1/pages/${encodeURIComponent(id)}/publish`, {
       method: "POST",
       body: JSON.stringify({ expected_version: expectedVersion }),
     }),
 
-  unpublishPage: (slug: string, expectedVersion?: number): Promise<PageDetail> =>
-    request<PageDetail>(`/api/admin/v1/pages/${encodeURIComponent(slug)}/unpublish`, {
+  unpublishPage: (id: string, expectedVersion?: number): Promise<PageDetail> =>
+    request<PageDetail>(`/api/admin/v1/pages/${encodeURIComponent(id)}/unpublish`, {
       method: "POST",
       body: JSON.stringify({ expected_version: expectedVersion }),
     }),
 
-  /** Page 没有回收站；同时核对 id 与版本，避免 slug 被重新占用后误删新页面。 */
-  deletePage: (slug: string, expectedId: string, expectedVersion: number): Promise<void> =>
-    request<void>(`/api/admin/v1/pages/${encodeURIComponent(slug)}`, {
+  /** Page 没有回收站；稳定 ID 定位实体，版本前提保护并发删除。 */
+  deletePage: (id: string, expectedVersion: number): Promise<void> =>
+    request<void>(`/api/admin/v1/pages/${encodeURIComponent(id)}`, {
       method: "DELETE",
-      body: JSON.stringify({ expected_id: expectedId, expected_version: expectedVersion }),
+      body: JSON.stringify({ expected_version: expectedVersion }),
     }),
 
   /** 账号列表：需 `user.manage` 或 `role.manage`，否则 403 forbidden。 */

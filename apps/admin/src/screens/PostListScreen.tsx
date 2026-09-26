@@ -50,7 +50,7 @@ export function PostListScreen() {
       onOk: async () => {
         setError(null);
         try {
-          await api.trashPost(post.slug, post.version);
+          await api.trashPost(post.id, post.version);
           await load();
           await invalidateTrash();
         } catch (e) {
@@ -103,7 +103,7 @@ export function PostListScreen() {
           onClick={(event) => {
             // 行本身可点进编辑页；操作按钮不能冒泡成一次跳转。
             event.stopPropagation();
-            navigate(paths.editPost(post.slug));
+            navigate(paths.editPost(post.id));
           }}
         >
           编辑
@@ -150,7 +150,7 @@ export function PostListScreen() {
         pagination={false}
         // 保留迁移前的语义：整行点击进入该文章的编辑页。
         onRow={(post) => ({
-          onClick: () => navigate(paths.editPost(post.slug)),
+          onClick: () => navigate(paths.editPost(post.id)),
           style: { cursor: "pointer" },
         })}
         locale={{

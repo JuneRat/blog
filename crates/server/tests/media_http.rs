@@ -181,7 +181,10 @@ async fn fresh_stack() -> Stack {
     let series_repo: Arc<dyn application::ports::SeriesRepository> =
         Arc::new(PostgresSeriesRepository::new(pool.clone()));
     let posts = Arc::new(PostInteractor::new(
-        Arc::new(PostgresPostRepository::new(pool.clone())),
+        Arc::new(PostgresPostRepository::new(
+            pool.clone(),
+            Arc::new(infrastructure::RenderingRuntime::default()),
+        )),
         tag_repo,
         category_repo,
         series_repo,
@@ -189,7 +192,10 @@ async fn fresh_stack() -> Stack {
         common::media_guard(pool.clone()),
     ));
     let pages = Arc::new(application::page::PageInteractor::new(
-        Arc::new(PostgresPageRepository::new(pool.clone())),
+        Arc::new(PostgresPageRepository::new(
+            pool.clone(),
+            Arc::new(infrastructure::RenderingRuntime::default()),
+        )),
         clock.clone(),
     ));
 
@@ -411,7 +417,7 @@ async fn publish_post_referencing(
     csrf: &str,
     slug: &str,
     media_id: &str,
-) {
+) -> Uuid {
     let content = format!("正文\n\n![替代文字](/media/{media_id})\n");
     let (status, _, body) = send(
         &stack.router,
@@ -424,10 +430,11 @@ async fn publish_post_referencing(
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "创建文章失败：{body}");
+    let post_id: Uuid = body["id"].as_str().unwrap().parse().unwrap();
     let (status, _, body) = send(
         &stack.router,
         "POST",
-        &format!("/api/admin/v1/posts/{slug}/publish"),
+        &format!("/api/admin/v1/posts/{post_id}/publish"),
         Some(cookie),
         Some(csrf),
         Some(&serde_json::json!({})),
@@ -435,9 +442,10 @@ async fn publish_post_referencing(
     )
     .await;
     assert_eq!(status, StatusCode::OK, "发布失败：{body}");
+    post_id
 }
 
-/// 创建一篇**只以封面**引用图片的文章并发布，返回发布后的 version。
+/// 创建一篇**只以封面**引用图片的文章并发布，返回文章 ID 与发布后的 version。
 ///
 /// 封面引用与正文图片同源：保存时把 `{封面} ∪ 正文图片` 固化进引用表。
 async fn publish_post_with_cover(
@@ -446,7 +454,7 @@ async fn publish_post_with_cover(
     csrf: &str,
     slug: &str,
     cover_id: &str,
-) -> i64 {
+) -> (Uuid, i64) {
     let (status, _, body) = send(
         &stack.router,
         "POST",
@@ -463,10 +471,11 @@ async fn publish_post_with_cover(
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "创建带封面文章失败：{body}");
+    let post_id: Uuid = body["id"].as_str().unwrap().parse().unwrap();
     let (status, _, body) = send(
         &stack.router,
         "POST",
-        &format!("/api/admin/v1/posts/{slug}/publish"),
+        &format!("/api/admin/v1/posts/{post_id}/publish"),
         Some(cookie),
         Some(csrf),
         Some(&serde_json::json!({})),
@@ -474,7 +483,7 @@ async fn publish_post_with_cover(
     )
     .await;
     assert_eq!(status, StatusCode::OK, "发布失败：{body}");
-    body["version"].as_i64().unwrap()
+    (post_id, body["version"].as_i64().unwrap())
 }
 
 // ---------------------------------------------------------------------------
@@ -637,7 +646,7 @@ async fn anonymous_read_follows_publish_and_withdraw() {
     assert_eq!(headers.get(header::CACHE_CONTROL).unwrap(), "no-store");
 
     // 草稿引用仍然不公开。
-    publish_post_referencing(&stack, &author, &csrf, "with-image", &id).await;
+    let post_id = publish_post_referencing(&stack, &author, &csrf, "with-image", &id).await;
     let (status, headers, body) = send(
         &stack.router,
         "GET",
@@ -693,7 +702,7 @@ async fn anonymous_read_follows_publish_and_withdraw() {
     let (status, _, body) = send(
         &stack.router,
         "POST",
-        "/api/admin/v1/posts/with-image/unpublish",
+        &format!("/api/admin/v1/posts/{post_id}/unpublish"),
         Some(&author),
         Some(&csrf),
         Some(&serde_json::json!({})),
@@ -748,7 +757,7 @@ async fn delete_is_refused_while_referenced_then_succeeds_after_detaching() {
     let stack = fresh_stack().await;
     let (author, csrf) = login_as(&stack.router, &stack.idp, "author").await;
     let (id, version) = upload(&stack, &author, &csrf, 16).await;
-    publish_post_referencing(&stack, &author, &csrf, "referencing", &id).await;
+    let post_id = publish_post_referencing(&stack, &author, &csrf, "referencing", &id).await;
 
     let (status, _, body) = send(
         &stack.router,
@@ -787,7 +796,7 @@ async fn delete_is_refused_while_referenced_then_succeeds_after_detaching() {
     let post = send(
         &stack.router,
         "GET",
-        "/api/admin/v1/posts/referencing",
+        &format!("/api/admin/v1/posts/{post_id}"),
         Some(&author),
         None,
         None,
@@ -798,7 +807,7 @@ async fn delete_is_refused_while_referenced_then_succeeds_after_detaching() {
     let (status, _, body) = send(
         &stack.router,
         "PATCH",
-        "/api/admin/v1/posts/referencing",
+        &format!("/api/admin/v1/posts/{post_id}"),
         Some(&author),
         Some(&csrf),
         Some(&serde_json::json!({
@@ -910,17 +919,21 @@ async fn saving_content_with_an_unknown_media_reference_is_rejected() {
     assert_eq!(body["code"], "invalid_request");
 
     // 整篇草稿都没有落库。
-    let (status, _, _) = send(
+    let (status, _, listing) = send(
         &stack.router,
         "GET",
-        "/api/admin/v1/posts/ghost-image",
+        "/api/admin/v1/posts",
         Some(&author),
         None,
         None,
         None,
     )
     .await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        !listing.to_string().contains("ghost-image"),
+        "失败创建不得落库：{listing}"
+    );
 }
 
 /// `media.read` 只授予「浏览媒体库」，不得顺带泄露他人草稿/私密内容的标题与 slug。
@@ -951,6 +964,7 @@ async fn usage_locations_are_filtered_by_the_callers_content_permissions() {
         None,
     )
     .await;
+    let post_id: Uuid = body["id"].as_str().unwrap().parse().unwrap();
     assert_eq!(status, StatusCode::CREATED, "创建草稿失败：{body}");
 
     // author（只有 post.read own）：看不到 author2 的草稿，但计数是全局的。
@@ -997,7 +1011,7 @@ async fn usage_locations_are_filtered_by_the_callers_content_permissions() {
     let (status, _, body) = send(
         &stack.router,
         "POST",
-        "/api/admin/v1/posts/author2-draft/publish",
+        &format!("/api/admin/v1/posts/{post_id}/publish"),
         Some(&author2),
         Some(&author2_csrf),
         Some(&serde_json::json!({})),
@@ -1061,13 +1075,14 @@ async fn post_cover_is_saved_with_content_and_protects_the_image() {
     let (cover, cover_version) = upload(&stack, &author, &csrf, 32).await;
     let (cover2, cover2_version) = upload(&stack, &author, &csrf, 30).await;
 
-    let version = publish_post_with_cover(&stack, &author, &csrf, "cover-post", &cover).await;
+    let (post_id, version) =
+        publish_post_with_cover(&stack, &author, &csrf, "cover-post", &cover).await;
 
     // 后台读取封面：id 与站内地址都在，界面无需自己拼前缀。
     let (status, _, body) = send(
         &stack.router,
         "GET",
-        "/api/admin/v1/posts/cover-post",
+        &format!("/api/admin/v1/posts/{post_id}"),
         Some(&author),
         None,
         None,
@@ -1126,7 +1141,7 @@ async fn post_cover_is_saved_with_content_and_protects_the_image() {
     let (status, _, body) = send(
         &stack.router,
         "PATCH",
-        "/api/admin/v1/posts/cover-post",
+        &format!("/api/admin/v1/posts/{post_id}"),
         Some(&author),
         Some(&csrf),
         Some(&serde_json::json!({"cover_media_id": cover2, "expected_version": version})),
@@ -1162,7 +1177,7 @@ async fn post_cover_is_saved_with_content_and_protects_the_image() {
     let current = send(
         &stack.router,
         "GET",
-        "/api/admin/v1/posts/cover-post",
+        &format!("/api/admin/v1/posts/{post_id}"),
         Some(&author),
         None,
         None,
@@ -1173,7 +1188,7 @@ async fn post_cover_is_saved_with_content_and_protects_the_image() {
     let (status, _, body) = send(
         &stack.router,
         "PATCH",
-        "/api/admin/v1/posts/cover-post",
+        &format!("/api/admin/v1/posts/{post_id}"),
         Some(&author),
         Some(&csrf),
         Some(&serde_json::json!({
@@ -1224,6 +1239,7 @@ async fn cover_anonymous_access_follows_post_visibility() {
         None,
     )
     .await;
+    let post_id: Uuid = body["id"].as_str().unwrap().parse().unwrap();
     assert_eq!(status, StatusCode::CREATED, "{body}");
     let (status, _, _) = send(
         &stack.router,
@@ -1241,7 +1257,7 @@ async fn cover_anonymous_access_follows_post_visibility() {
     let (status, _, body) = send(
         &stack.router,
         "POST",
-        "/api/admin/v1/posts/cover-visibility/publish",
+        &format!("/api/admin/v1/posts/{post_id}/publish"),
         Some(&author),
         Some(&csrf),
         Some(&serde_json::json!({})),
@@ -1266,7 +1282,7 @@ async fn cover_anonymous_access_follows_post_visibility() {
     let (status, _, body) = send(
         &stack.router,
         "POST",
-        "/api/admin/v1/posts/cover-visibility/unpublish",
+        &format!("/api/admin/v1/posts/{post_id}/unpublish"),
         Some(&author),
         Some(&csrf),
         Some(&serde_json::json!({"expected_version": version})),
@@ -1302,7 +1318,7 @@ async fn cover_anonymous_access_follows_post_visibility() {
     let (status, _, body) = send(
         &stack.router,
         "POST",
-        "/api/admin/v1/posts/cover-visibility/publish",
+        &format!("/api/admin/v1/posts/{post_id}/publish"),
         Some(&author),
         Some(&csrf),
         Some(&serde_json::json!({"expected_version": version})),
@@ -1314,7 +1330,7 @@ async fn cover_anonymous_access_follows_post_visibility() {
     let (status, _, body) = send(
         &stack.router,
         "PATCH",
-        "/api/admin/v1/posts/cover-visibility",
+        &format!("/api/admin/v1/posts/{post_id}"),
         Some(&author),
         Some(&csrf),
         Some(&serde_json::json!({"visibility": "private", "expected_version": version})),
@@ -1339,7 +1355,7 @@ async fn cover_anonymous_access_follows_post_visibility() {
     let (status, _, body) = send(
         &stack.router,
         "PATCH",
-        "/api/admin/v1/posts/cover-visibility",
+        &format!("/api/admin/v1/posts/{post_id}"),
         Some(&author),
         Some(&csrf),
         Some(&serde_json::json!({"visibility": "public", "expected_version": version})),
@@ -1351,7 +1367,7 @@ async fn cover_anonymous_access_follows_post_visibility() {
     let (status, _, body) = send(
         &stack.router,
         "POST",
-        "/api/admin/v1/posts/cover-visibility/trash",
+        &format!("/api/admin/v1/posts/{post_id}/trash"),
         Some(&author),
         Some(&csrf),
         Some(&serde_json::json!({"expected_version": version})),
@@ -1380,12 +1396,13 @@ async fn stale_cover_save_is_a_version_conflict() {
     let (author, csrf) = login_as(&stack.router, &stack.idp, "author").await;
     let (a, _) = upload(&stack, &author, &csrf, 26).await;
     let (b, _) = upload(&stack, &author, &csrf, 25).await;
-    let version = publish_post_with_cover(&stack, &author, &csrf, "cover-conflict", &a).await;
+    let (post_id, version) =
+        publish_post_with_cover(&stack, &author, &csrf, "cover-conflict", &a).await;
 
     let (status, _, body) = send(
         &stack.router,
         "PATCH",
-        "/api/admin/v1/posts/cover-conflict",
+        &format!("/api/admin/v1/posts/{post_id}"),
         Some(&author),
         Some(&csrf),
         Some(&serde_json::json!({"cover_media_id": b, "expected_version": version})),
@@ -1398,7 +1415,7 @@ async fn stale_cover_save_is_a_version_conflict() {
     let (status, _, body) = send(
         &stack.router,
         "PATCH",
-        "/api/admin/v1/posts/cover-conflict",
+        &format!("/api/admin/v1/posts/{post_id}"),
         Some(&author),
         Some(&csrf),
         Some(&serde_json::json!({"cover_media_id": null, "expected_version": version})),
@@ -1411,7 +1428,7 @@ async fn stale_cover_save_is_a_version_conflict() {
     let post = send(
         &stack.router,
         "GET",
-        "/api/admin/v1/posts/cover-conflict",
+        &format!("/api/admin/v1/posts/{post_id}"),
         Some(&author),
         None,
         None,
@@ -1438,16 +1455,18 @@ async fn concurrent_cover_replacement_and_image_deletion_are_serialized() {
     let (author, csrf) = login_as(&stack.router, &stack.idp, "author").await;
     let (old_cover, _) = upload(&stack, &author, &csrf, 26).await;
     let (candidate, candidate_version) = upload(&stack, &author, &csrf, 25).await;
-    let version = publish_post_with_cover(&stack, &author, &csrf, "cover-race", &old_cover).await;
+    let (post_id, version) =
+        publish_post_with_cover(&stack, &author, &csrf, "cover-race", &old_cover).await;
 
     // 两个 JSON 体必须活到 join 之后：future 借用了它们。
     let patch_json = serde_json::json!({"cover_media_id": candidate, "expected_version": version});
     let delete_json = serde_json::json!({"expected_version": candidate_version});
+    let patch_uri = format!("/api/admin/v1/posts/{post_id}");
     let delete_uri = format!("/api/admin/v1/media/{candidate}");
     let patch = send(
         &stack.router,
         "PATCH",
-        "/api/admin/v1/posts/cover-race",
+        &patch_uri,
         Some(&author),
         Some(&csrf),
         Some(&patch_json),
@@ -1468,7 +1487,7 @@ async fn concurrent_cover_replacement_and_image_deletion_are_serialized() {
     let post = send(
         &stack.router,
         "GET",
-        "/api/admin/v1/posts/cover-race",
+        &format!("/api/admin/v1/posts/{post_id}"),
         Some(&author),
         None,
         None,
@@ -1661,6 +1680,7 @@ async fn cover_and_body_referencing_the_same_image_is_one_reference() {
         None,
     )
     .await;
+    let post_id: Uuid = body["id"].as_str().unwrap().parse().unwrap();
     assert_eq!(status, StatusCode::CREATED, "{body}");
 
     let (status, _, body) = send(
@@ -1683,7 +1703,7 @@ async fn cover_and_body_referencing_the_same_image_is_one_reference() {
     let post = send(
         &stack.router,
         "GET",
-        "/api/admin/v1/posts/shared-image",
+        &format!("/api/admin/v1/posts/{post_id}"),
         Some(&author),
         None,
         None,
@@ -1694,7 +1714,7 @@ async fn cover_and_body_referencing_the_same_image_is_one_reference() {
     let (status, _, body) = send(
         &stack.router,
         "PATCH",
-        "/api/admin/v1/posts/shared-image",
+        &format!("/api/admin/v1/posts/{post_id}"),
         Some(&author),
         Some(&csrf),
         Some(&serde_json::json!({

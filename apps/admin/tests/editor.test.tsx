@@ -72,7 +72,7 @@ function input(label: string): HTMLInputElement {
 
 beforeEach(() => {
   vi.resetAllMocks();
-  window.history.replaceState(null, "", paths.editPost(post.slug));
+  window.history.replaceState(null, "", paths.editPost(post.id));
   vi.mocked(api.getPost).mockResolvedValue(post);
   // 标签目录：空目录即可（编辑器只渲染选择区）。
   vi.mocked(api.listTags).mockResolvedValue([]);
@@ -99,7 +99,7 @@ describe("文章编辑器回归", () => {
     await waitFor(() => expect(api.createPost).toHaveBeenCalledTimes(1));
     fireEvent.change(input("正文（Markdown）"), { target: { value: "等待期间的新输入" } });
     await act(async () => { pending.resolve(post); });
-    expect(window.location.pathname).toBe(paths.editPost(post.slug));
+    expect(window.location.pathname).toBe(paths.editPost(post.id));
     expect(input("正文（Markdown）").value).toBe("等待期间的新输入");
 
     // 模拟浏览器回到保存前的新建历史项；App 必须复用真实编辑组件。
@@ -150,12 +150,12 @@ describe("文章编辑器回归", () => {
     expect(screen.getByText("v1")).toBeTruthy();
     fireEvent.change(input("标题"), { target: { value: "新的标题" } });
     fireEvent.click(screen.getByRole("button", { name: "保存并更新线上" }));
-    await waitFor(() => expect(api.updatePost).toHaveBeenCalledWith(post.slug, expect.objectContaining({
+    await waitFor(() => expect(api.updatePost).toHaveBeenCalledWith(post.id, expect.objectContaining({
       expected_version: 1, content: post.content,
     })));
   });
 
-  it("改名后用新 slug 发布，路由更新仍保留等待期间的新编辑", async () => {
+  it("改名后仍用原 ID 发布，地址不变且保留等待期间的新编辑", async () => {
     const pending = deferred<PostDetail>();
     vi.mocked(api.updatePost).mockReturnValue(pending.promise);
     vi.mocked(api.publishPost).mockResolvedValue({ ...post, slug: "renamed", status: "published", version: 3 });
@@ -167,10 +167,42 @@ describe("文章编辑器回归", () => {
     await waitFor(() => expect(api.updatePost).toHaveBeenCalledTimes(1));
     fireEvent.change(input("正文（Markdown）"), { target: { value: "继续编辑" } });
     await act(async () => { pending.resolve({ ...post, slug: "renamed", version: 2 }); });
-    expect(api.publishPost).toHaveBeenCalledWith("renamed", 2);
-    expect(window.location.pathname).toBe(paths.editPost("renamed"));
+    expect(api.publishPost).toHaveBeenCalledWith(post.id, 2);
+    expect(window.location.pathname).toBe(paths.editPost(post.id));
     expect(input("正文（Markdown）").value).toBe("继续编辑");
     expect(screen.getByText("已发布；等待期间的新改动尚未保存。")).toBeTruthy();
+  });
+
+  it("改名保存不改变编辑地址，旧 slug 被复用后重新打开仍编辑原 ID", async () => {
+    const renamed = { ...post, slug: "renamed", version: 2 };
+    const replacement = { ...post, id: "replacement-id", title: "占用旧地址的新文章" };
+    vi.mocked(api.updatePost).mockResolvedValueOnce(renamed);
+    render(<App />);
+    await screen.findByDisplayValue(post.title);
+    fireEvent.change(input("slug"), { target: { value: renamed.slug } });
+    fireEvent.click(screen.getByRole("button", { name: "保存并更新线上" }));
+    await screen.findByText(/已保存/);
+    expect(window.location.pathname).toBe(paths.editPost(post.id));
+
+    // 原地址已被另一篇占用，列表同时出现两个实体；书签继续指向原 ID。
+    vi.mocked(api.listPosts).mockResolvedValue([renamed, replacement]);
+    vi.mocked(api.getPost).mockImplementation(async (id) =>
+      id === post.id ? renamed : replacement,
+    );
+    act(() => { navigate(paths.list); });
+    await screen.findByText(replacement.title);
+    act(() => { navigate(paths.editPost(post.id)); });
+    await screen.findByDisplayValue(renamed.slug);
+    expect(input("标题").value).toBe(post.title);
+
+    vi.mocked(api.updatePost).mockResolvedValueOnce({ ...renamed, title: "继续修改原文章", version: 3 });
+    fireEvent.change(input("标题"), { target: { value: "继续修改原文章" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存并更新线上" }));
+    await screen.findByText("v3");
+    expect(api.updatePost).toHaveBeenLastCalledWith(post.id, expect.objectContaining({
+      expected_version: 2, new_slug: undefined, title: "继续修改原文章",
+    }));
+    expect(window.location.pathname).toBe(paths.editPost(post.id));
   });
 
   // 回归：A 已加载 → B 加载失败时，表单里仍是 A 的正文与版本号。
@@ -197,7 +229,7 @@ describe("文章编辑器回归", () => {
 
     // 加载成功后恢复编辑与提交能力。
     vi.mocked(api.getPost).mockResolvedValueOnce({
-      ...post, slug: "missing", title: "补回", version: 5,
+      ...post, id: "missing", slug: "missing", title: "补回", version: 5,
     });
     fireEvent.click(screen.getByRole("button", { name: "重新加载" }));
     await screen.findByDisplayValue("补回");
@@ -213,7 +245,7 @@ describe("文章编辑器回归", () => {
     render(<App />);
     await screen.findByText("原始标题"); // 让列表缓存先落地
 
-    act(() => { navigate(paths.editPost(post.slug)); });
+    act(() => { navigate(paths.editPost(post.id)); });
     await screen.findByDisplayValue("原始标题");
     fireEvent.change(input("标题"), { target: { value: "改过的标题" } });
     vi.mocked(api.updatePost).mockResolvedValue({ ...post, title: "改过的标题", version: 2 });
@@ -234,7 +266,7 @@ describe("文章编辑器回归", () => {
     render(<App />);
     await screen.findByText("原始标题"); // 列表缓存先落地
 
-    act(() => { navigate(paths.editPost(post.slug)); });
+    act(() => { navigate(paths.editPost(post.id)); });
     await screen.findByDisplayValue("原始标题");
     fireEvent.change(input("标题"), { target: { value: "改过的标题" } });
     vi.mocked(api.updatePost).mockResolvedValue({ ...post, title: "改过的标题", version: 2 });
@@ -246,7 +278,7 @@ describe("文章编辑器回归", () => {
     fireEvent.click(screen.getByRole("button", { name: "发布" }));
     // 先行保存发出并成功（版本 2），随后发布失败。
     await waitFor(() => expect(api.updatePost).toHaveBeenCalledTimes(1));
-    expect(api.publishPost).toHaveBeenCalledWith(post.slug, 2);
+    expect(api.publishPost).toHaveBeenCalledWith(post.id, 2);
     expect(await screen.findByText(/发布失败（错误编号 req-9）/)).toBeTruthy();
 
     // 保存已经生效：返回列表必须是新标题。
@@ -275,7 +307,7 @@ describe("文章编辑器封面", () => {
     fireEvent.click(screen.getByRole("button", { name: "保存并更新线上" }));
     await waitFor(() =>
       expect(api.updatePost).toHaveBeenCalledWith(
-        post.slug,
+        post.id,
         expect.objectContaining({ cover_media_id: "media-1", expected_version: 1 }),
       ),
     );
@@ -296,7 +328,7 @@ describe("文章编辑器封面", () => {
 
     await waitFor(() =>
       expect(api.updatePost).toHaveBeenCalledWith(
-        post.slug,
+        post.id,
         expect.objectContaining({ cover_media_id: null }),
       ),
     );
@@ -328,7 +360,7 @@ describe("文章编辑器封面", () => {
     fireEvent.click(screen.getByRole("button", { name: "保存并更新线上" }));
     await waitFor(() =>
       expect(api.updatePost).toHaveBeenCalledWith(
-        post.slug,
+        post.id,
         expect.objectContaining({ cover_media_id: "new-media" }),
       ),
     );

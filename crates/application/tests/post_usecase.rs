@@ -45,12 +45,104 @@ impl FakePostRepo {
             tags: Mutex::new(HashMap::new()),
         }
     }
+
+    fn commit_record(
+        &self,
+        post: &domain::content::post::Post,
+        expected: i64,
+        now: OffsetDateTime,
+        tag_ids: Option<&[Uuid]>,
+        lifecycle: bool,
+    ) -> Result<application::ports::PostCommitOutcome, UseCaseError> {
+        use application::ports::{PostCommitOutcome, PostRecord};
+        let mut snapshot = post.snapshot();
+        let mut posts = self.posts.lock().unwrap();
+        let mut tags = self.tags.lock().unwrap();
+        let Some(current) = posts.values().find(|s| s.id == snapshot.id).cloned() else {
+            return Ok(PostCommitOutcome::Gone);
+        };
+        if current.version != expected {
+            return Ok(PostCommitOutcome::StaleConflict);
+        }
+        if (!lifecycle && current.deleted_at.is_some())
+            || (lifecycle && current.deleted_at.is_some() == snapshot.deleted_at.is_some())
+        {
+            return Ok(PostCommitOutcome::Gone);
+        }
+        if posts
+            .get(&snapshot.slug)
+            .is_some_and(|s| s.id != snapshot.id)
+        {
+            return Err(UseCaseError::Conflict(ConflictKind::Slug));
+        }
+        snapshot.version = expected + 1;
+        snapshot.updated_at = now;
+        posts.remove(&current.slug);
+        posts.insert(snapshot.slug.clone(), snapshot.clone());
+        if let Some(ids) = tag_ids {
+            tags.insert(snapshot.id, ids.to_vec());
+        }
+        let tag_ids = tags.get(&snapshot.id).cloned().unwrap_or_default();
+        Ok(PostCommitOutcome::Saved(Box::new(PostRecord {
+            snapshot,
+            tag_ids,
+        })))
+    }
 }
 
 #[async_trait::async_trait]
 impl PostRepository for FakePostRepo {
-    async fn find_by_slug(&self, slug: &str) -> Result<Option<PostSnapshot>, UseCaseError> {
-        Ok(self.posts.lock().unwrap().get(slug).cloned())
+    async fn find_record_by_id(
+        &self,
+        id: Uuid,
+    ) -> Result<Option<application::ports::PostRecord>, UseCaseError> {
+        let posts = self.posts.lock().unwrap();
+        let tags = self.tags.lock().unwrap();
+        Ok(posts
+            .values()
+            .find(|s| s.id == id)
+            .map(|snapshot| application::ports::PostRecord {
+                snapshot: snapshot.clone(),
+                tag_ids: tags.get(&id).cloned().unwrap_or_default(),
+            }))
+    }
+
+    async fn insert_post(
+        &self,
+        post: &domain::content::post::Post,
+        tag_ids: &[Uuid],
+    ) -> Result<application::ports::PostRecord, UseCaseError> {
+        let snapshot = post.snapshot();
+        let mut posts = self.posts.lock().unwrap();
+        let mut tags = self.tags.lock().unwrap();
+        if posts.contains_key(&snapshot.slug) {
+            return Err(UseCaseError::Conflict(ConflictKind::Slug));
+        }
+        posts.insert(snapshot.slug.clone(), snapshot.clone());
+        tags.insert(snapshot.id, tag_ids.to_vec());
+        Ok(application::ports::PostRecord {
+            snapshot,
+            tag_ids: tag_ids.to_vec(),
+        })
+    }
+
+    async fn commit_post(
+        &self,
+        post: &domain::content::post::Post,
+        expected: i64,
+        now: OffsetDateTime,
+        tag_ids: Option<&[Uuid]>,
+    ) -> Result<application::ports::PostCommitOutcome, UseCaseError> {
+        self.commit_record(post, expected, now, tag_ids, false)
+    }
+
+    async fn commit_lifecycle(
+        &self,
+        post: &domain::content::post::Post,
+        expected: i64,
+        now: OffsetDateTime,
+    ) -> Result<application::ports::PostCommitOutcome, UseCaseError> {
+        self.commit_record(post, expected, now, None, true)
     }
 
     async fn find_by_id(&self, id: uuid::Uuid) -> Result<Option<PostSnapshot>, UseCaseError> {
@@ -102,57 +194,6 @@ impl PostRepository for FakePostRepo {
         ))
     }
 
-    async fn trash(
-        &self,
-        id: Uuid,
-        expected_version: i64,
-        now: OffsetDateTime,
-    ) -> Result<SaveOutcome, UseCaseError> {
-        let mut posts = self.posts.lock().unwrap();
-        let Some(post) = posts
-            .values_mut()
-            .find(|p| p.id == id && p.deleted_at.is_none())
-        else {
-            return Ok(SaveOutcome::Gone);
-        };
-        if post.version != expected_version {
-            return Ok(SaveOutcome::StaleConflict);
-        }
-        post.deleted_at = Some(now);
-        post.updated_at = now;
-        post.version += 1;
-        Ok(SaveOutcome::Saved {
-            new_version: post.version,
-        })
-    }
-
-    async fn restore(
-        &self,
-        id: Uuid,
-        expected_version: i64,
-        now: OffsetDateTime,
-    ) -> Result<SaveOutcome, UseCaseError> {
-        let mut posts = self.posts.lock().unwrap();
-        let Some(post) = posts
-            .values_mut()
-            .find(|p| p.id == id && p.deleted_at.is_some())
-        else {
-            return Ok(SaveOutcome::Gone);
-        };
-        if post.version != expected_version {
-            return Ok(SaveOutcome::StaleConflict);
-        }
-        post.deleted_at = None;
-        post.updated_at = now;
-        post.version += 1;
-        if post.status != domain::content::post::PostStatus::Archived {
-            post.status = domain::content::post::PostStatus::Draft;
-        }
-        Ok(SaveOutcome::Saved {
-            new_version: post.version,
-        })
-    }
-
     async fn purge(&self, id: Uuid, expected_version: i64) -> Result<SaveOutcome, UseCaseError> {
         let mut posts = self.posts.lock().unwrap();
         let Some(post) = posts
@@ -170,68 +211,6 @@ impl PostRepository for FakePostRepo {
         Ok(SaveOutcome::Saved {
             new_version: expected_version + 1,
         })
-    }
-
-    async fn insert(&self, snapshot: &PostSnapshot, tag_ids: &[Uuid]) -> Result<(), UseCaseError> {
-        let mut posts = self.posts.lock().unwrap();
-        if posts.contains_key(&snapshot.slug) {
-            return Err(UseCaseError::Conflict(ConflictKind::Slug));
-        }
-        posts.insert(snapshot.slug.clone(), snapshot.clone());
-        drop(posts);
-        if !tag_ids.is_empty() {
-            self.tags
-                .lock()
-                .unwrap()
-                .insert(snapshot.id, tag_ids.to_vec());
-        }
-        Ok(())
-    }
-
-    async fn save(
-        &self,
-        snapshot: &PostSnapshot,
-        expected_version: i64,
-        now: OffsetDateTime,
-        tag_ids: Option<&[Uuid]>,
-    ) -> Result<SaveOutcome, UseCaseError> {
-        let mut posts = self.posts.lock().unwrap();
-        let current = match posts.get_mut(&snapshot.slug) {
-            Some(p) if p.id == snapshot.id => p,
-            _ => return Ok(SaveOutcome::Gone),
-        };
-        if current.deleted_at.is_some() {
-            return Ok(SaveOutcome::Gone);
-        }
-        if current.version != expected_version {
-            return Ok(SaveOutcome::StaleConflict);
-        }
-        current.title = snapshot.title.clone();
-        current.excerpt = snapshot.excerpt.clone();
-        current.content = snapshot.content.clone();
-        current.status = snapshot.status;
-        current.visibility = snapshot.visibility;
-        current.published_at = snapshot.published_at;
-        current.updated_at = now;
-        current.version += 1;
-        let new_version = current.version;
-        let post_id = current.id;
-        drop(posts);
-        // 标签替换与“正文保存”在同一逻辑事务：先判定再统一写入。
-        if let Some(tag_ids) = tag_ids {
-            self.tags.lock().unwrap().insert(post_id, tag_ids.to_vec());
-        }
-        Ok(SaveOutcome::Saved { new_version })
-    }
-
-    async fn tags_of(&self, post_id: uuid::Uuid) -> Result<Vec<Uuid>, UseCaseError> {
-        Ok(self
-            .tags
-            .lock()
-            .unwrap()
-            .get(&post_id)
-            .cloned()
-            .unwrap_or_default())
     }
 }
 
@@ -812,7 +791,7 @@ async fn create_edit_publish_withdraw_flow() {
         .edit(
             &f.author,
             EditPostCmd {
-                target_slug: "first-post".into(),
+                id: created.id,
                 title: Some("第一篇（改）".into()),
                 ..Default::default()
             },
@@ -821,28 +800,16 @@ async fn create_edit_publish_withdraw_flow() {
         .unwrap();
     assert_eq!(edited.version, 2, "有实际变化才递增 version");
 
-    let published = f
-        .posts
-        .publish(&f.author, "first-post", None)
-        .await
-        .unwrap();
+    let published = f.posts.publish(&f.author, created.id, None).await.unwrap();
     assert_eq!(published.status, "published");
     assert!(published.published_at.is_some());
     assert_eq!(published.version, 3);
 
     // 重复发布幂等：无变化不递增版本。
-    let again = f
-        .posts
-        .publish(&f.author, "first-post", None)
-        .await
-        .unwrap();
+    let again = f.posts.publish(&f.author, created.id, None).await.unwrap();
     assert_eq!(again.version, 3);
 
-    let withdrawn = f
-        .posts
-        .withdraw(&f.author, "first-post", None)
-        .await
-        .unwrap();
+    let withdrawn = f.posts.withdraw(&f.author, created.id, None).await.unwrap();
     assert_eq!(withdrawn.status, "draft");
     assert_eq!(withdrawn.version, 4);
     assert!(withdrawn.published_at.is_some(), "保留首次发布时间");
@@ -858,7 +825,7 @@ async fn no_op_writes_reject_stale_versions_without_exposing_a_new_baseline() {
         .edit(
             &f.author,
             EditPostCmd {
-                target_slug: slug.into(),
+                id: original.id,
                 content: Some("另一位编辑的新正文".into()),
                 expected_version: Some(original.version),
                 ..Default::default()
@@ -868,20 +835,20 @@ async fn no_op_writes_reject_stale_versions_without_exposing_a_new_baseline() {
         .unwrap();
     let published = f
         .posts
-        .publish(&f.author, slug, Some(edited.version))
+        .publish(&f.author, original.id, Some(edited.version))
         .await
         .unwrap();
 
     // 另一位编辑已发布：旧页面再点发布必须冲突，不能取得新版本后覆盖旧正文。
     assert!(matches!(
         f.posts
-            .publish(&f.author, slug, Some(original.version))
+            .publish(&f.author, original.id, Some(original.version))
             .await,
         Err(UseCaseError::VersionConflict)
     ));
     let again = f
         .posts
-        .publish(&f.author, slug, Some(published.version))
+        .publish(&f.author, original.id, Some(published.version))
         .await
         .unwrap();
     assert_eq!(again.version, published.version);
@@ -889,18 +856,18 @@ async fn no_op_writes_reject_stale_versions_without_exposing_a_new_baseline() {
 
     let withdrawn = f
         .posts
-        .withdraw(&f.author, slug, Some(published.version))
+        .withdraw(&f.author, original.id, Some(published.version))
         .await
         .unwrap();
     assert!(matches!(
         f.posts
-            .withdraw(&f.author, slug, Some(published.version))
+            .withdraw(&f.author, original.id, Some(published.version))
             .await,
         Err(UseCaseError::VersionConflict)
     ));
     assert_eq!(
         f.posts
-            .withdraw(&f.author, slug, Some(withdrawn.version))
+            .withdraw(&f.author, original.id, Some(withdrawn.version))
             .await
             .unwrap()
             .version,
@@ -913,7 +880,7 @@ async fn no_op_writes_reject_stale_versions_without_exposing_a_new_baseline() {
             .edit(
                 &f.author,
                 EditPostCmd {
-                    target_slug: slug.into(),
+                    id: original.id,
                     expected_version: Some(original.version),
                     ..Default::default()
                 }
@@ -926,7 +893,7 @@ async fn no_op_writes_reject_stale_versions_without_exposing_a_new_baseline() {
         .edit(
             &f.author,
             EditPostCmd {
-                target_slug: slug.into(),
+                id: original.id,
                 expected_version: Some(withdrawn.version),
                 ..Default::default()
             },
@@ -940,7 +907,7 @@ async fn no_op_writes_reject_stale_versions_without_exposing_a_new_baseline() {
 #[tokio::test]
 async fn concurrent_edit_detects_version_conflict() {
     let f = fixture().await;
-    f.posts.create(&f.author, draft_cmd("race")).await.unwrap();
+    let created = f.posts.create(&f.author, draft_cmd("race")).await.unwrap();
 
     // 两个调用方都基于 version=1 提交编辑。
     let a = f
@@ -948,7 +915,7 @@ async fn concurrent_edit_detects_version_conflict() {
         .edit(
             &f.author,
             EditPostCmd {
-                target_slug: "race".into(),
+                id: created.id,
                 content: Some("A 的修改".into()),
                 expected_version: Some(1),
                 ..Default::default()
@@ -961,7 +928,7 @@ async fn concurrent_edit_detects_version_conflict() {
         .edit(
             &f.author,
             EditPostCmd {
-                target_slug: "race".into(),
+                id: created.id,
                 content: Some("B 的修改".into()),
                 expected_version: Some(1),
                 ..Default::default()
@@ -979,7 +946,8 @@ async fn concurrent_edit_detects_version_conflict() {
 #[tokio::test]
 async fn truly_parallel_edits_exactly_one_wins() {
     let f = fixture().await;
-    f.posts
+    let created = f
+        .posts
         .create(&f.author, draft_cmd("parallel"))
         .await
         .unwrap();
@@ -989,7 +957,7 @@ async fn truly_parallel_edits_exactly_one_wins() {
         f.posts.edit(
             &f.author,
             EditPostCmd {
-                target_slug: "parallel".into(),
+                id: created.id,
                 content: Some(content.into()),
                 expected_version: Some(1),
                 ..Default::default()
@@ -1004,7 +972,7 @@ async fn truly_parallel_edits_exactly_one_wins() {
         + usize::from(matches!(b, Err(UseCaseError::VersionConflict)));
     assert_eq!(conflict_count, 1);
 
-    let shown = f.posts.find(&f.author, "parallel").await.unwrap();
+    let shown = f.posts.find(&f.author, created.id).await.unwrap();
     assert_eq!(shown.version, 2, "恰好一次版本递增");
     // 胜者只改了 content，标题/摘要保持原样。
     assert_eq!(shown.title, "第一篇");
@@ -1013,14 +981,15 @@ async fn truly_parallel_edits_exactly_one_wins() {
 #[tokio::test]
 async fn ownership_check_rejects_non_author() {
     let f = fixture().await;
-    f.posts
+    let created = f
+        .posts
         .create(&f.author, draft_cmd("own-post"))
         .await
         .unwrap();
 
     let err = f
         .posts
-        .publish(&f.other, "own-post", None)
+        .publish(&f.other, created.id, None)
         .await
         .unwrap_err();
     assert!(matches!(err, UseCaseError::Forbidden));
@@ -1029,7 +998,8 @@ async fn ownership_check_rejects_non_author() {
 #[tokio::test]
 async fn publish_requires_content() {
     let f = fixture().await;
-    f.posts
+    let created = f
+        .posts
         .create(
             &f.author,
             CreatePostCmd {
@@ -1047,7 +1017,11 @@ async fn publish_requires_content() {
         .await
         .unwrap();
 
-    let err = f.posts.publish(&f.author, "empty", None).await.unwrap_err();
+    let err = f
+        .posts
+        .publish(&f.author, created.id, None)
+        .await
+        .unwrap_err();
     match err {
         UseCaseError::Invalid(msg) => assert!(msg.contains("标题")),
         other => panic!("期望 Invalid，得到 {other:?}"),
@@ -1098,7 +1072,7 @@ async fn generated_slug_occupied_at_creation() {
 async fn find_returns_current_state_for_cli() {
     let f = fixture().await;
     let created = f.posts.create(&f.author, draft_cmd("shown")).await.unwrap();
-    let shown = f.posts.find(&f.author, "shown").await.unwrap();
+    let shown = f.posts.find(&f.author, created.id).await.unwrap();
     assert_eq!(shown.id, created.id);
     // deleted_at 过滤行为由 infrastructure 集成测试覆盖（M1 未开放删除用例）。
 }
@@ -1117,7 +1091,8 @@ async fn actor_resolution_rejects_unknown_user() {
 #[tokio::test]
 async fn editor_with_any_permission_can_edit_others_posts() {
     let f = fixture().await;
-    f.posts
+    let created = f
+        .posts
         .create(&f.author, draft_cmd("editors-view"))
         .await
         .unwrap();
@@ -1128,7 +1103,7 @@ async fn editor_with_any_permission_can_edit_others_posts() {
         .edit(
             &f.editor,
             EditPostCmd {
-                target_slug: "editors-view".into(),
+                id: created.id,
                 title: Some("编辑改写".into()),
                 ..Default::default()
             },
@@ -1136,7 +1111,7 @@ async fn editor_with_any_permission_can_edit_others_posts() {
         .await;
     assert!(edited.is_ok(), "update_any 应允许编辑他人文章：{edited:?}");
 
-    let shown = f.posts.find(&f.editor, "editors-view").await.unwrap();
+    let shown = f.posts.find(&f.editor, created.id).await.unwrap();
     assert_eq!(shown.title, "编辑改写");
 }
 
@@ -1157,20 +1132,21 @@ async fn user_without_permission_cannot_create_posts() {
 #[tokio::test]
 async fn reader_scope_blocks_others_drafts() {
     let f = fixture().await;
-    f.posts
+    let created = f
+        .posts
         .create(&f.author, draft_cmd("secret-draft"))
         .await
         .unwrap();
 
     // other 无 read/read_any：既不能读也不能改。
-    let err = f.posts.find(&f.other, "secret-draft").await.unwrap_err();
+    let err = f.posts.find(&f.other, created.id).await.unwrap_err();
     assert!(matches!(err, UseCaseError::Forbidden));
     let err = f
         .posts
         .edit(
             &f.other,
             EditPostCmd {
-                target_slug: "secret-draft".into(),
+                id: created.id,
                 title: Some("越权修改".into()),
                 ..Default::default()
             },
@@ -1181,7 +1157,7 @@ async fn reader_scope_blocks_others_drafts() {
 
     // author2 有 own 权限（post.read/post.update）但不是作者：
     // 这里测的是「不是本人」，而不是「没有权限」。
-    let err = f.posts.find(&f.author2, "secret-draft").await.unwrap_err();
+    let err = f.posts.find(&f.author2, created.id).await.unwrap_err();
     assert!(
         matches!(err, UseCaseError::Forbidden),
         "own 权限不得跨作者读取：{err:?}"
@@ -1191,7 +1167,7 @@ async fn reader_scope_blocks_others_drafts() {
         .edit(
             &f.author2,
             EditPostCmd {
-                target_slug: "secret-draft".into(),
+                id: created.id,
                 title: Some("越权修改".into()),
                 ..Default::default()
             },
@@ -1203,15 +1179,16 @@ async fn reader_scope_blocks_others_drafts() {
         "own 权限不得跨作者编辑：{err:?}"
     );
     // author 本人可读自己的草稿（own）。
-    assert!(f.posts.find(&f.author, "secret-draft").await.is_ok());
+    assert!(f.posts.find(&f.author, created.id).await.is_ok());
     // editor 有 read_any，可读他人草稿。
-    assert!(f.posts.find(&f.editor, "secret-draft").await.is_ok());
+    assert!(f.posts.find(&f.editor, created.id).await.is_ok());
 }
 
 #[tokio::test]
 async fn list_by_author_requires_read_permission_for_own_posts_too() {
     let f = fixture().await;
-    f.posts
+    let created = f
+        .posts
         .create(&f.author, draft_cmd("listed-draft"))
         .await
         .unwrap();
@@ -1227,7 +1204,7 @@ async fn list_by_author_requires_read_permission_for_own_posts_too() {
         "无 post.read 不得列出本人文章：{err:?}"
     );
     assert!(matches!(
-        f.posts.find(&f.other, "listed-draft").await.unwrap_err(),
+        f.posts.find(&f.other, created.id).await.unwrap_err(),
         UseCaseError::Forbidden
     ));
 
@@ -1261,7 +1238,8 @@ async fn list_by_author_requires_read_permission_for_own_posts_too() {
 async fn author_cannot_publish_others_posts_without_any() {
     let f = fixture().await;
     let author2 = f.users.actor_for_username("author2").await.unwrap();
-    f.posts
+    let created = f
+        .posts
         .create(&author2, draft_cmd("author2-owns"))
         .await
         .unwrap();
@@ -1269,18 +1247,13 @@ async fn author_cannot_publish_others_posts_without_any() {
     // author 有 post.publish(own)，但文章属于 author2 → Forbidden。
     let err = f
         .posts
-        .publish(&f.author, "author2-owns", None)
+        .publish(&f.author, created.id, None)
         .await
         .unwrap_err();
     assert!(matches!(err, UseCaseError::Forbidden));
 
     // editor 有 publish_any，可发布同一篇。
-    assert!(
-        f.posts
-            .publish(&f.editor, "author2-owns", None)
-            .await
-            .is_ok()
-    );
+    assert!(f.posts.publish(&f.editor, created.id, None).await.is_ok());
 }
 
 #[tokio::test]
@@ -1518,7 +1491,7 @@ async fn editing_tags_only_still_bumps_version() {
         .edit(
             &f.author,
             EditPostCmd {
-                target_slug: "tags-only".into(),
+                id: created.id,
                 tag_ids: Some(vec![rust_id]),
                 ..Default::default()
             },
@@ -1534,7 +1507,7 @@ async fn editing_tags_only_still_bumps_version() {
         .edit(
             &f.author,
             EditPostCmd {
-                target_slug: "tags-only".into(),
+                id: created.id,
                 tag_ids: Some(vec![rust_id]),
                 ..Default::default()
             },
@@ -1549,7 +1522,7 @@ async fn editing_tags_only_still_bumps_version() {
         .edit(
             &f.author,
             EditPostCmd {
-                target_slug: "tags-only".into(),
+                id: created.id,
                 tag_ids: Some(vec![]),
                 ..Default::default()
             },
@@ -1603,7 +1576,8 @@ async fn unknown_tag_id_is_a_validation_error() {
 #[tokio::test]
 async fn tag_association_follows_post_authorization() {
     let f = tag_fixture().await;
-    f.posts
+    let created = f
+        .posts
         .create(&f.author, draft_cmd("auth-tags"))
         .await
         .unwrap();
@@ -1615,7 +1589,7 @@ async fn tag_association_follows_post_authorization() {
         .edit(
             &f.other,
             EditPostCmd {
-                target_slug: "auth-tags".into(),
+                id: created.id,
                 tag_ids: Some(vec![rust_id]),
                 ..Default::default()
             },
@@ -1630,7 +1604,7 @@ async fn tag_association_follows_post_authorization() {
         .edit(
             &f.editor,
             EditPostCmd {
-                target_slug: "auth-tags".into(),
+                id: created.id,
                 tag_ids: Some(vec![rust_id]),
                 ..Default::default()
             },
@@ -1657,7 +1631,7 @@ async fn tag_change_requires_fresh_version() {
         .edit(
             &f.author,
             EditPostCmd {
-                target_slug: "stale-tags".into(),
+                id: created.id,
                 tag_ids: Some(vec![rust_id]),
                 expected_version: Some(created.version - 1),
                 ..Default::default()
@@ -1678,18 +1652,18 @@ async fn trash_scope_versions_restore_and_purge_permissions() {
         .unwrap();
     let published = f
         .posts
-        .publish(&f.author, "trash-cycle", Some(created.version))
+        .publish(&f.author, created.id, Some(created.version))
         .await
         .unwrap();
     assert!(matches!(
         f.posts
-            .trash(&f.author2, "trash-cycle", Some(published.version))
+            .trash(&f.author2, created.id, Some(published.version))
             .await,
         Err(UseCaseError::Forbidden)
     ));
     let deleted = f
         .posts
-        .trash(&f.author, "trash-cycle", Some(published.version))
+        .trash(&f.author, created.id, Some(published.version))
         .await
         .unwrap();
     assert!(deleted.deleted);
@@ -1715,25 +1689,25 @@ async fn trash_scope_versions_restore_and_purge_permissions() {
     ));
     assert!(matches!(
         f.posts
-            .restore(&f.author2, "trash-cycle", Some(deleted.version))
+            .restore(&f.author2, created.id, Some(deleted.version))
             .await,
         Err(UseCaseError::Forbidden)
     ));
     assert!(matches!(
         f.posts
-            .restore(&f.author, "trash-cycle", Some(published.version))
+            .restore(&f.author, created.id, Some(published.version))
             .await,
         Err(UseCaseError::VersionConflict)
     ));
     assert!(matches!(
         f.posts
-            .purge(&f.author, "trash-cycle", Some(deleted.version))
+            .purge(&f.author, created.id, Some(deleted.version))
             .await,
         Err(UseCaseError::Forbidden)
     ));
     let restored = f
         .posts
-        .restore(&f.author, "trash-cycle", Some(deleted.version))
+        .restore(&f.author, created.id, Some(deleted.version))
         .await
         .unwrap();
     assert_eq!(restored.status, "draft");
@@ -1741,7 +1715,7 @@ async fn trash_scope_versions_restore_and_purge_permissions() {
     assert!(restored.published_at.is_some());
     assert!(matches!(
         f.posts
-            .purge(&f.author, "trash-cycle", Some(restored.version))
+            .purge(&f.author, created.id, Some(restored.version))
             .await,
         Err(UseCaseError::Forbidden)
     ));
@@ -1851,7 +1825,7 @@ async fn post_cover_of_another_users_private_image_is_rejected() {
         .edit(
             &writer,
             EditPostCmd {
-                target_slug: "cover-edit".into(),
+                id: created.id,
                 expected_version: Some(created.version),
                 cover_media_id: Some(Some(foreign)),
                 ..Default::default()
@@ -1879,7 +1853,7 @@ async fn resubmitting_the_current_post_cover_skips_reauthorization() {
         .edit(
             &f.author,
             EditPostCmd {
-                target_slug: "cover-keep".into(),
+                id: created.id,
                 expected_version: Some(created.version),
                 cover_media_id: Some(Some(own)),
                 content: Some("# 改动正文".into()),

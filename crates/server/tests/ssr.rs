@@ -22,7 +22,7 @@ use infrastructure::{
     MiniJinjaThemeRenderer, PostgresCategoryRepository, PostgresPageRepository,
     PostgresPostRepository, PostgresPublishedCategoryQuery, PostgresPublishedPageQuery,
     PostgresPublishedPostQuery, PostgresPublishedTagQuery, PostgresRbacStore,
-    PostgresTagRepository, PostgresUserRepository, SanitizingMarkdownRenderer, SystemClock,
+    PostgresTagRepository, PostgresUserRepository, RenderingRuntime, SystemClock,
 };
 use interfaces::http::public_router_minimal;
 use sqlx::PgPool;
@@ -61,9 +61,12 @@ async fn stack_with_theme(theme_dir: &str) -> Stack {
     let pool = common::fresh_database("blog_server_test").await;
 
     let clock = Arc::new(SystemClock);
+    let rendering = Arc::new(RenderingRuntime::default());
     let user_repo: Arc<dyn UserRepository> = Arc::new(PostgresUserRepository::new(pool.clone()));
-    let post_repo: Arc<dyn PostRepository> = Arc::new(PostgresPostRepository::new(pool.clone()));
-    let page_repo: Arc<dyn PageRepository> = Arc::new(PostgresPageRepository::new(pool.clone()));
+    let post_repo: Arc<dyn PostRepository> =
+        Arc::new(PostgresPostRepository::new(pool.clone(), rendering.clone()));
+    let page_repo: Arc<dyn PageRepository> =
+        Arc::new(PostgresPageRepository::new(pool.clone(), rendering.clone()));
     let rbac = Arc::new(PostgresRbacStore::new(pool.clone()));
     let roles = Arc::new(RoleInteractor::new(rbac.clone(), user_repo.clone()));
     roles.sync_registry().await.expect("同步权限目录失败");
@@ -71,8 +74,6 @@ async fn stack_with_theme(theme_dir: &str) -> Stack {
         Arc::new(PostgresPublishedPostQuery::new(pool.clone()));
     let public_page_query: Arc<dyn PublishedPageQuery> =
         Arc::new(PostgresPublishedPageQuery::new(pool.clone()));
-
-    let markdown = Arc::new(SanitizingMarkdownRenderer::new());
 
     let users = Arc::new(UserInteractor::new(
         user_repo,
@@ -87,7 +88,7 @@ async fn stack_with_theme(theme_dir: &str) -> Stack {
         Arc::new(PostgresCategoryRepository::new(pool.clone()));
     let public_category_query: Arc<dyn PublishedCategoryQuery> =
         Arc::new(PostgresPublishedCategoryQuery::new(pool.clone()));
-    let theme = Arc::new(
+    let theme = rendering.theme_renderer(
         MiniJinjaThemeRenderer::load(std::path::Path::new(theme_dir))
             .expect("模板加载失败")
             .with_data(Arc::new(application::theme_data::ThemeData::new(
@@ -121,7 +122,6 @@ async fn stack_with_theme(theme_dir: &str) -> Stack {
         public_tag_query,
         public_category_query,
         public_series_query,
-        markdown,
         theme,
         // 公开渲染的站点信息经 settings 解析：site 行未配置时回退装配值。
         Arc::new(infrastructure::PostgresSettingsStore::new(pool.clone())),
@@ -225,10 +225,7 @@ async fn published_post_is_readable_and_withdrawn_becomes_404() {
     assert_eq!(status, StatusCode::NOT_FOUND, "草稿不可匿名读取");
 
     // 发布后可访问，内容来自 Markdown 渲染。
-    s.posts
-        .publish(&s.author, "acceptance-post", None)
-        .await
-        .unwrap();
+    s.posts.publish(&s.author, created.id, None).await.unwrap();
     let (status, body) = get(&s.router, "/posts/acceptance-post").await;
     assert_eq!(status, StatusCode::OK);
     assert!(body.contains("验收文章"));
@@ -239,10 +236,7 @@ async fn published_post_is_readable_and_withdrawn_becomes_404() {
     assert!(body.contains("作者甲"), "公开署名来自用户展示名");
 
     // 撤回后立即不可访问（无页面缓存）。
-    s.posts
-        .withdraw(&s.author, "acceptance-post", None)
-        .await
-        .unwrap();
+    s.posts.withdraw(&s.author, created.id, None).await.unwrap();
     let (status, _) = get(&s.router, "/posts/acceptance-post").await;
     assert_eq!(status, StatusCode::NOT_FOUND, "撤回后不可访问");
 }
@@ -252,33 +246,30 @@ async fn index_lists_only_public_posts() {
     let _g = SERIAL.lock().await;
     let s = stack().await;
 
-    s.posts
+    let _created = s
+        .posts
         .create(&s.author, cmd("visible", "公开文章"))
         .await
         .unwrap();
-    s.posts.publish(&s.author, "visible", None).await.unwrap();
+    s.posts.publish(&s.author, _created.id, None).await.unwrap();
 
-    s.posts
+    let _created = s
+        .posts
         .create(&s.author, cmd("hidden-draft", "草稿文章"))
         .await
         .unwrap();
 
     let mut private = cmd("hidden-private", "私有文章");
     private.visibility = domain_visibility_private();
-    s.posts.create(&s.author, private).await.unwrap();
-    s.posts
-        .publish(&s.author, "hidden-private", None)
-        .await
-        .unwrap();
+    let _created = s.posts.create(&s.author, private).await.unwrap();
+    s.posts.publish(&s.author, _created.id, None).await.unwrap();
 
-    s.posts
+    let _created = s
+        .posts
         .create(&s.author, cmd("hidden-deleted", "回收站文章"))
         .await
         .unwrap();
-    s.posts
-        .publish(&s.author, "hidden-deleted", None)
-        .await
-        .unwrap();
+    s.posts.publish(&s.author, _created.id, None).await.unwrap();
     sqlx::raw_sql("UPDATE posts SET deleted_at = now() WHERE slug = 'hidden-deleted'")
         .execute(&s.pool)
         .await
@@ -315,8 +306,8 @@ async fn title_and_excerpt_html_is_escaped_in_templates() {
     // 标题与摘要依赖模板自动转义，这里把该保证钉进测试。
     let mut cmd = cmd("xss-title", "<script>alert('title')</script>");
     cmd.excerpt = Some("<img src=x onerror=alert('excerpt')>".into());
-    s.posts.create(&s.author, cmd).await.unwrap();
-    s.posts.publish(&s.author, "xss-title", None).await.unwrap();
+    let _created = s.posts.create(&s.author, cmd).await.unwrap();
+    s.posts.publish(&s.author, _created.id, None).await.unwrap();
 
     let (status, body) = get(&s.router, "/posts/xss-title").await;
     assert_eq!(status, StatusCode::OK);
@@ -351,7 +342,8 @@ async fn page_is_public_only_while_published_and_public() {
     let _g = SERIAL.lock().await;
     let s = stack().await;
 
-    s.pages
+    let _created = s
+        .pages
         .create(&s.editor, page_cmd("about", "关于"))
         .await
         .unwrap();
@@ -362,24 +354,27 @@ async fn page_is_public_only_while_published_and_public() {
     assert!(!body.contains("关于"));
 
     // 发布后可访问，Markdown 已渲染。
-    s.pages.publish(&s.editor, "about", None).await.unwrap();
+    s.pages.publish(&s.editor, _created.id, None).await.unwrap();
     let (status, body) = get(&s.router, "/about").await;
     assert_eq!(status, StatusCode::OK);
     assert!(body.contains("关于"));
     assert!(body.contains("<strong>加粗</strong>"), "{body}");
 
     // 撤回后立即不可访问（无页面缓存）。
-    s.pages.withdraw(&s.editor, "about", None).await.unwrap();
+    s.pages
+        .withdraw(&s.editor, _created.id, None)
+        .await
+        .unwrap();
     let (status, _) = get(&s.router, "/about").await;
     assert_eq!(status, StatusCode::NOT_FOUND, "撤回后不可访问");
 
     // 重新发布再改 private：退出匿名读取，但后台仍可见。
-    s.pages.publish(&s.editor, "about", None).await.unwrap();
+    s.pages.publish(&s.editor, _created.id, None).await.unwrap();
     s.pages
         .edit(
             &s.editor,
             application::page::EditPageCmd {
-                target_slug: "about".into(),
+                id: _created.id,
                 visibility: Some(PageVisibility::Private),
                 ..Default::default()
             },
@@ -447,7 +442,7 @@ async fn tag_page_lists_public_posts_and_hides_drafts_and_private() {
     let rust = seed_tag(&stack, "Rust", "rust").await;
 
     // 公开发布、草稿、发布但 private 各一篇挂同一标签。
-    stack
+    let _created = stack
         .posts
         .create(
             &stack.author,
@@ -467,11 +462,11 @@ async fn tag_page_lists_public_posts_and_hides_drafts_and_private() {
         .unwrap();
     stack
         .posts
-        .publish(&stack.author, "tag-visible", None)
+        .publish(&stack.author, _created.id, None)
         .await
         .unwrap();
 
-    stack
+    let _created = stack
         .posts
         .create(
             &stack.author,
@@ -490,7 +485,7 @@ async fn tag_page_lists_public_posts_and_hides_drafts_and_private() {
         .await
         .unwrap();
 
-    stack
+    let _created = stack
         .posts
         .create(
             &stack.author,
@@ -510,7 +505,7 @@ async fn tag_page_lists_public_posts_and_hides_drafts_and_private() {
         .unwrap();
     stack
         .posts
-        .publish(&stack.author, "tag-private", None)
+        .publish(&stack.author, _created.id, None)
         .await
         .unwrap();
 
@@ -543,7 +538,7 @@ async fn tag_page_paginates_public_posts() {
     // 21 篇公开文章：每页 20 → 第 1 页 20 条，第 2 页 1 条。
     for i in 1..=21 {
         let slug = format!("page-{i:02}");
-        stack
+        let _created = stack
             .posts
             .create(
                 &stack.author,
@@ -563,7 +558,7 @@ async fn tag_page_paginates_public_posts() {
             .unwrap();
         stack
             .posts
-            .publish(&stack.author, &slug, None)
+            .publish(&stack.author, _created.id, None)
             .await
             .unwrap();
     }
@@ -615,7 +610,7 @@ async fn category_page_lists_public_posts_and_hides_drafts() {
         ("cat-visible", "公开的分类文章", true),
         ("cat-draft", "草稿不外泄", false),
     ] {
-        stack
+        let _created = stack
             .posts
             .create(
                 &stack.author,
@@ -636,7 +631,7 @@ async fn category_page_lists_public_posts_and_hides_drafts() {
         if publish {
             stack
                 .posts
-                .publish(&stack.author, slug, None)
+                .publish(&stack.author, _created.id, None)
                 .await
                 .unwrap();
         }
@@ -676,7 +671,7 @@ async fn series_page_lists_public_posts_in_reading_order() {
         ("guide-first", 2, true),
         ("guide-second", 3, true),
     ] {
-        stack
+        let _created = stack
             .posts
             .create(
                 &stack.author,
@@ -697,7 +692,7 @@ async fn series_page_lists_public_posts_in_reading_order() {
         if publish {
             stack
                 .posts
-                .publish(&stack.author, slug, None)
+                .publish(&stack.author, _created.id, None)
                 .await
                 .unwrap();
         }
@@ -745,7 +740,8 @@ async fn paper_theme_functions_use_only_public_data() {
         ("paper-related", "同类可见文章", true),
         ("paper-draft", "纸张主题不可见草稿", false),
     ] {
-        s.posts
+        let _created = s
+            .posts
             .create(
                 &s.author,
                 CreatePostCmd {
@@ -763,7 +759,7 @@ async fn paper_theme_functions_use_only_public_data() {
             .await
             .unwrap();
         if publish {
-            s.posts.publish(&s.author, slug, None).await.unwrap();
+            s.posts.publish(&s.author, _created.id, None).await.unwrap();
         }
     }
     let (status, index) = get(&s.router, "/").await;
@@ -785,14 +781,12 @@ async fn paper_theme_functions_use_only_public_data() {
         assert!(listing.contains("纸张主题可见文章"));
         assert!(!listing.contains("纸张主题不可见草稿"));
     }
-    s.pages
+    let _created = s
+        .pages
         .create(&s.editor, page_cmd("paper-page", "纸张主题页面"))
         .await
         .unwrap();
-    s.pages
-        .publish(&s.editor, "paper-page", None)
-        .await
-        .unwrap();
+    s.pages.publish(&s.editor, _created.id, None).await.unwrap();
     let (status, page) = get(&s.router, "/paper-page").await;
     assert_eq!(status, StatusCode::OK, "{page}");
     assert!(page.contains("纸张主题页面"));
@@ -826,11 +820,8 @@ async fn post_cover_is_rendered_on_the_public_detail_page() {
 
     let mut command = cmd("with-cover", "带封面的文章");
     command.cover_media_id = Some(cover);
-    s.posts.create(&s.author, command).await.unwrap();
-    s.posts
-        .publish(&s.author, "with-cover", None)
-        .await
-        .unwrap();
+    let _created = s.posts.create(&s.author, command).await.unwrap();
+    s.posts.publish(&s.author, _created.id, None).await.unwrap();
 
     let (status, body) = get(&s.router, "/posts/with-cover").await;
     assert_eq!(status, StatusCode::OK, "{body}");
@@ -840,7 +831,7 @@ async fn post_cover_is_rendered_on_the_public_detail_page() {
     );
 
     s.posts
-        .withdraw(&s.author, "with-cover", None)
+        .withdraw(&s.author, _created.id, None)
         .await
         .unwrap();
     let (status, body) = get(&s.router, "/posts/with-cover").await;
@@ -916,14 +907,12 @@ async fn site_logo_and_author_avatar_are_rendered_on_public_pages() {
         .await
         .unwrap();
 
-    s.posts
+    let _created = s
+        .posts
         .create(&s.author, cmd("avatar-post", "带头像的文章"))
         .await
         .unwrap();
-    s.posts
-        .publish(&s.author, "avatar-post", None)
-        .await
-        .unwrap();
+    s.posts.publish(&s.author, _created.id, None).await.unwrap();
 
     let (status, body) = get(&s.router, "/posts/avatar-post").await;
     assert_eq!(status, StatusCode::OK, "{body}");

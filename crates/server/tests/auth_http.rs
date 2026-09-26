@@ -144,7 +144,10 @@ async fn fresh_stack_with(secure_cookies: bool) -> Stack {
     let tag_repo: Arc<dyn application::ports::TagRepository> =
         Arc::new(infrastructure::PostgresTagRepository::new(pool.clone()));
     let posts = Arc::new(application::content::PostInteractor::new(
-        Arc::new(infrastructure::PostgresPostRepository::new(pool.clone())),
+        Arc::new(infrastructure::PostgresPostRepository::new(
+            pool.clone(),
+            Arc::new(infrastructure::RenderingRuntime::default()),
+        )),
         tag_repo.clone(),
         std::sync::Arc::new(infrastructure::PostgresCategoryRepository::new(
             pool.clone(),
@@ -154,7 +157,10 @@ async fn fresh_stack_with(secure_cookies: bool) -> Stack {
         common::media_guard(pool.clone()),
     ));
     let pages = Arc::new(application::page::PageInteractor::new(
-        Arc::new(infrastructure::PostgresPageRepository::new(pool.clone())),
+        Arc::new(infrastructure::PostgresPageRepository::new(
+            pool.clone(),
+            Arc::new(infrastructure::RenderingRuntime::default()),
+        )),
         std::sync::Arc::new(infrastructure::SystemClock),
     ));
 

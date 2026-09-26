@@ -29,7 +29,7 @@ use infrastructure::{
     PostgresPageRepository, PostgresPostRepository, PostgresPublishedCategoryQuery,
     PostgresPublishedPageQuery, PostgresPublishedPostQuery, PostgresPublishedSeriesQuery,
     PostgresPublishedTagQuery, PostgresRbacStore, PostgresSeriesRepository, PostgresSettingsStore,
-    PostgresTagRepository, PostgresUserRepository, SanitizingMarkdownRenderer, SystemClock,
+    PostgresTagRepository, PostgresUserRepository, RenderingRuntime, SystemClock,
 };
 use interfaces::http::{PublicSiteState, mount_theme_assets, public_router};
 use interfaces::http_admin::{pages_router, settings_router};
@@ -111,6 +111,7 @@ struct Stack {
 
 async fn build(pool: PgPool) -> Stack {
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
+    let rendering = Arc::new(RenderingRuntime::default());
     let user_repo = Arc::new(PostgresUserRepository::new(pool.clone()));
     let rbac = Arc::new(PostgresRbacStore::new(pool.clone()));
     let roles = Arc::new(RoleInteractor::new(rbac.clone(), user_repo.clone()));
@@ -200,7 +201,7 @@ async fn build(pool: PgPool) -> Stack {
     let category_repo = Arc::new(PostgresCategoryRepository::new(pool.clone()));
     let series_repo = Arc::new(PostgresSeriesRepository::new(pool.clone()));
     let posts = Arc::new(PostInteractor::new(
-        Arc::new(PostgresPostRepository::new(pool.clone())),
+        Arc::new(PostgresPostRepository::new(pool.clone(), rendering.clone())),
         tag_repo.clone(),
         category_repo.clone(),
         series_repo.clone(),
@@ -208,7 +209,7 @@ async fn build(pool: PgPool) -> Stack {
         common::media_guard(pool.clone()),
     ));
     let pages = Arc::new(PageInteractor::new(
-        Arc::new(PostgresPageRepository::new(pool.clone())),
+        Arc::new(PostgresPageRepository::new(pool.clone(), rendering.clone())),
         clock.clone(),
     ));
     let tags = Arc::new(application::tag::TagInteractor::new(
@@ -241,10 +242,18 @@ async fn build(pool: PgPool) -> Stack {
         .with_data(theme_data);
     let mut registry = ThemeRegistry::new("default".into());
     registry
-        .add("default".into(), "Default".into(), Arc::new(default_theme))
+        .add(
+            "default".into(),
+            "Default".into(),
+            rendering.theme_renderer(default_theme),
+        )
         .unwrap();
     registry
-        .add("paper".into(), "Paper".into(), Arc::new(paper_theme))
+        .add(
+            "paper".into(),
+            "Paper".into(),
+            rendering.theme_renderer(paper_theme),
+        )
         .unwrap();
     let registry = Arc::new(registry);
     let settings = Arc::new(
@@ -266,7 +275,6 @@ async fn build(pool: PgPool) -> Stack {
             Arc::new(PostgresPublishedTagQuery::new(pool.clone())),
             Arc::new(PostgresPublishedCategoryQuery::new(pool.clone())),
             Arc::new(PostgresPublishedSeriesQuery::new(pool.clone())),
-            Arc::new(SanitizingMarkdownRenderer::new()),
             theme,
             settings_store,
             site_fallback(),
@@ -323,7 +331,7 @@ async fn fresh_stack() -> Stack {
 /// 只重建公开路由（新 interactor + 新 settings 存储，同一数据库）：
 /// 模拟「重启后」的进程——进程内状态全丢，配置只剩数据库。
 async fn revived_public_router(pool: &PgPool) -> axum::Router {
-    let theme = Arc::new(
+    let theme = RenderingRuntime::default().theme_renderer(
         MiniJinjaThemeRenderer::load(std::path::Path::new("../../themes/default"))
             .expect("模板加载失败"),
     );
@@ -333,7 +341,6 @@ async fn revived_public_router(pool: &PgPool) -> axum::Router {
         Arc::new(PostgresPublishedTagQuery::new(pool.clone())),
         Arc::new(PostgresPublishedCategoryQuery::new(pool.clone())),
         Arc::new(PostgresPublishedSeriesQuery::new(pool.clone())),
-        Arc::new(SanitizingMarkdownRenderer::new()),
         theme,
         Arc::new(PostgresSettingsStore::new(pool.clone())),
         site_fallback(),
@@ -683,7 +690,6 @@ async fn page_physical_delete_removes_public_entries_and_releases_slug() {
     let stack = fresh_stack().await;
     let (editor_cookie, editor_csrf) = login_as(&stack, "editor").await;
     let (author_cookie, author_csrf) = login_as(&stack, "author").await;
-    let path = "/api/admin/v1/pages/about";
     let (status, created) = page_write(
         &stack.router,
         "POST",
@@ -695,10 +701,11 @@ async fn page_physical_delete_removes_public_entries_and_releases_slug() {
     .await;
     assert_eq!(status, StatusCode::CREATED, "{created}");
     let id = created["id"].as_str().unwrap();
+    let path = &format!("/api/admin/v1/pages/{id}");
     let (status, published) = page_write(
         &stack.router,
         "POST",
-        "/api/admin/v1/pages/about/publish",
+        &format!("{path}/publish"),
         &editor_cookie,
         &editor_csrf,
         serde_json::json!({"expected_version":1}),
@@ -714,7 +721,7 @@ async fn page_physical_delete_removes_public_entries_and_releases_slug() {
             .contains("https://blog.test/about")
     );
 
-    let body = serde_json::json!({"expected_id":id,"expected_version":2});
+    let body = serde_json::json!({"expected_version":2});
     let (status, _) = page_write(
         &stack.router,
         "DELETE",
@@ -735,10 +742,7 @@ async fn page_physical_delete_removes_public_entries_and_releases_slug() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    for stale in [
-        serde_json::json!({"expected_id":id,"expected_version":1}),
-        serde_json::json!({"expected_id":uuid::Uuid::now_v7(),"expected_version":2}),
-    ] {
+    for stale in [serde_json::json!({"expected_version":1})] {
         let (status, error) = page_write(
             &stack.router,
             "DELETE",
@@ -803,12 +807,21 @@ async fn page_physical_delete_removes_public_entries_and_releases_slug() {
         path,
         &editor_cookie,
         &editor_csrf,
-        serde_json::json!({"expected_id":id,"expected_version":1}),
+        serde_json::json!({"expected_version":1}),
     )
     .await;
-    assert_eq!(status, StatusCode::CONFLICT, "{stale}");
+    assert_eq!(status, StatusCode::NOT_FOUND, "{stale}");
     assert_eq!(
-        get(&stack.router, path, Some(&editor_cookie)).await.0,
+        get(
+            &stack.router,
+            &format!(
+                "/api/admin/v1/pages/{}",
+                replacement["id"].as_str().unwrap()
+            ),
+            Some(&editor_cookie)
+        )
+        .await
+        .0,
         StatusCode::OK
     );
 }

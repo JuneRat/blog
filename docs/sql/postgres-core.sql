@@ -1,8 +1,8 @@
--- PostgreSQL：13 张博客核心表 + 媒体库 2 表 + 会话表。
--- 面向空 schema 的设计草案；UUID 由应用生成，不含种子数据或生产升级迁移。
--- 保留贴文中的业务字段；version 为并发编辑补充，不创建路径/修订等辅助表。
--- 媒体两表随媒体库第一版交付（migrations/postgres/0004_media.sql），
--- 会话表随持久会话交付（migrations/postgres/0005_sessions.sql），此处同步维护。
+-- PostgreSQL 当前结构参考：16 张业务表，不含 sqlx 迁移记录表。
+-- 汇总 migrations/postgres/0001 至 0008，供整体阅读与空 schema 参考。
+-- 实际建库和升级使用 migrations/postgres/ 中的迁移，不直接执行本文件替代迁移。
+-- UUID 由应用生成，不含种子账号；version 用于并发控制，不表示修订历史。
+-- 数据关系与约束说明见 docs/database-design.md。
 BEGIN;
 
 -- 1. 本站身份；password_hash 可空，存 Argon2id 的 PHC 字符串（见 ADR-0009）。
@@ -108,6 +108,8 @@ CREATE TABLE posts (
         CHECK (octet_length(slug) BETWEEN 1 AND 200),
     excerpt text CHECK (char_length(excerpt) <= 1000),
     content text NOT NULL DEFAULT '',
+    content_html text NOT NULL DEFAULT '',
+    content_render_version integer NOT NULL DEFAULT 0 CHECK (content_render_version >= 0),
     content_type varchar(16) NOT NULL DEFAULT 'markdown' CHECK (content_type = 'markdown'),
     -- cover_media_id 由 0006_media_covers.sql 在 media_assets 建表后追加（见文末）。
     series_order integer,
@@ -157,6 +159,8 @@ CREATE TABLE pages (
     slug varchar(200) COLLATE "C" NOT NULL UNIQUE
         CHECK (octet_length(slug) BETWEEN 1 AND 200),
     content text NOT NULL DEFAULT '',
+    content_html text NOT NULL DEFAULT '',
+    content_render_version integer NOT NULL DEFAULT 0 CHECK (content_render_version >= 0),
     content_type varchar(16) NOT NULL DEFAULT 'markdown' CHECK (content_type = 'markdown'),
     status varchar(16) NOT NULL DEFAULT 'draft'
         CHECK (status IN ('draft', 'published', 'archived')),

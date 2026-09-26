@@ -7,12 +7,14 @@ use std::sync::Arc;
 
 use application::error::UseCaseError;
 use application::public_site::{
-    CategoryView, PageView, PostCard, PostView, SeriesView, SiteInfo, TagView, ThemeRenderer,
+    CategoryView, PageView, PostCard, PostView, SeriesView, SiteInfo, TagView,
 };
 use application::seo::SeoMeta;
 use application::theme_data::ThemeData;
 use minijinja::{Environment, UndefinedBehavior, Value};
 use pulldown_cmark::{Options, Parser, html::push_html};
+
+pub use crate::render_executor::{RenderingLimits, RenderingRuntime};
 
 const THEME_API_VERSION: u32 = 1;
 const THEME_FUNCTIONS: &[&str] = &[
@@ -78,8 +80,8 @@ impl Default for SanitizingMarkdownRenderer {
     }
 }
 
-impl application::ports::ContentRenderer for SanitizingMarkdownRenderer {
-    fn render_markdown(&self, source: &str) -> String {
+impl SanitizingMarkdownRenderer {
+    pub fn render_markdown(&self, source: &str) -> String {
         let mut options = Options::empty();
         options.insert(Options::ENABLE_TABLES);
         options.insert(Options::ENABLE_STRIKETHROUGH);
@@ -283,8 +285,8 @@ fn load_asset_urls(dir: &Path, slug: &str) -> Result<HashMap<String, String>, Us
     Ok(urls)
 }
 
-impl ThemeRenderer for MiniJinjaThemeRenderer {
-    fn render_index(
+impl MiniJinjaThemeRenderer {
+    pub(crate) fn render_index(
         &self,
         site: &SiteInfo,
         seo: &SeoMeta,
@@ -294,7 +296,7 @@ impl ThemeRenderer for MiniJinjaThemeRenderer {
         self.render("index.html", ctx)
     }
 
-    fn render_post(
+    pub(crate) fn render_post(
         &self,
         site: &SiteInfo,
         seo: &SeoMeta,
@@ -304,7 +306,7 @@ impl ThemeRenderer for MiniJinjaThemeRenderer {
         self.render("post.html", ctx)
     }
 
-    fn render_page(
+    pub(crate) fn render_page(
         &self,
         site: &SiteInfo,
         seo: &SeoMeta,
@@ -314,7 +316,7 @@ impl ThemeRenderer for MiniJinjaThemeRenderer {
         self.render("page.html", ctx)
     }
 
-    fn render_tag(
+    pub(crate) fn render_tag(
         &self,
         site: &SiteInfo,
         seo: &SeoMeta,
@@ -324,7 +326,7 @@ impl ThemeRenderer for MiniJinjaThemeRenderer {
         self.render("tag.html", ctx)
     }
 
-    fn render_category(
+    pub(crate) fn render_category(
         &self,
         site: &SiteInfo,
         seo: &SeoMeta,
@@ -338,7 +340,7 @@ impl ThemeRenderer for MiniJinjaThemeRenderer {
         self.render("category.html", ctx)
     }
 
-    fn render_series(
+    pub(crate) fn render_series(
         &self,
         site: &SiteInfo,
         seo: &SeoMeta,

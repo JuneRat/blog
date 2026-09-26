@@ -263,7 +263,7 @@ export function SeriesListScreen() {
             {post.deleted ? (
               <Typography.Text>{post.title || post.slug}</Typography.Text>
             ) : (
-              <Typography.Link href={`/admin/posts/${encodeURIComponent(post.slug)}/edit`}>
+              <Typography.Link href={`/admin/posts/${encodeURIComponent(post.id)}/edit`}>
                 {post.title || post.slug}
               </Typography.Link>
             )}

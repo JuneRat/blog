@@ -13,10 +13,10 @@ use application::error::UseCaseError;
 use application::media::{MediaInteractor, RECLAIM_BATCH, STAGED_GRACE_SECS, UploadMediaCmd};
 use application::ports::{
     MediaDeleteOutcome, MediaRefGuard, MediaRepository, MediaStorage, PageRepository,
-    PostRepository, SaveOutcome, UserRepository,
+    PostCommitOutcome, PostRepository, SaveOutcome, UserRepository,
 };
 use domain::content::page::Page;
-use domain::content::post::{Post, Slug, Visibility};
+use domain::content::post::{Post, PostPatch, Slug, Visibility};
 use domain::identity::{User, UserId};
 use domain::media::{Media, MediaSnapshot};
 use infrastructure::{
@@ -179,10 +179,13 @@ async fn seeded_post(pool: &PgPool, author: Uuid, slug: &str, content: String) -
     )
     .unwrap();
     let snapshot = post.snapshot();
-    PostgresPostRepository::new(pool.clone())
-        .insert(&snapshot, &[])
-        .await
-        .expect("写入文章失败");
+    PostgresPostRepository::new(
+        pool.clone(),
+        Arc::new(infrastructure::RenderingRuntime::default()),
+    )
+    .insert_post(&post, &[])
+    .await
+    .expect("写入文章失败");
     PostSnapshotRow {
         id: snapshot.id,
         version: snapshot.version,
@@ -199,17 +202,27 @@ async fn save_post_content(
     pool: &PgPool,
     row: &PostSnapshotRow,
     content: String,
-) -> Result<SaveOutcome, UseCaseError> {
-    let current = PostgresPostRepository::new(pool.clone())
-        .find_by_id(row.id)
-        .await?
-        .expect("文章应存在");
-    let mut next = current;
-    next.content = content;
-    let expected = next.version;
-    PostgresPostRepository::new(pool.clone())
-        .save(&next, expected, OffsetDateTime::now_utc(), None)
-        .await
+) -> Result<PostCommitOutcome, UseCaseError> {
+    let current = PostgresPostRepository::new(
+        pool.clone(),
+        Arc::new(infrastructure::RenderingRuntime::default()),
+    )
+    .find_by_id(row.id)
+    .await?
+    .expect("文章应存在");
+    let expected = current.version;
+    let mut next = Post::reconstitute(current);
+    next.edit(PostPatch {
+        content: Some(content),
+        ..Default::default()
+    })
+    .map_err(|error| UseCaseError::Invalid(error.to_string()))?;
+    PostgresPostRepository::new(
+        pool.clone(),
+        Arc::new(infrastructure::RenderingRuntime::default()),
+    )
+    .commit_post(&next, expected, OffsetDateTime::now_utc(), None)
+    .await
 }
 
 async fn refs_of(pool: &PgPool, media_id: Uuid) -> i64 {
@@ -555,8 +568,11 @@ async fn page_references_follow_page_visibility() {
     )
     .unwrap();
     let snapshot = page.snapshot();
-    let pages = PostgresPageRepository::new(pool.clone());
-    pages.insert(&snapshot).await.unwrap();
+    let pages = PostgresPageRepository::new(
+        pool.clone(),
+        Arc::new(infrastructure::RenderingRuntime::default()),
+    );
+    pages.insert_page(&page).await.unwrap();
     assert!(
         !store.has_public_reference(media.id).await.unwrap(),
         "草稿页面引用不公开"
@@ -683,18 +699,25 @@ async fn purge_clears_post_references_before_the_media_can_be_deleted() {
     let pool = fresh_pool().await;
     let author = seed_user(&pool, "author").await;
     let media = ready_media(&pool, author, 16, 16).await;
-    let posts = PostgresPostRepository::new(pool.clone());
+    let posts = PostgresPostRepository::new(
+        pool.clone(),
+        Arc::new(infrastructure::RenderingRuntime::default()),
+    );
     let store = repo(&pool);
 
     let row = seeded_post(&pool, author, "purgeme", markdown_with(&[media.id])).await;
     // 永久删除只对回收站文章生效。
+    let now = OffsetDateTime::now_utc();
+    let mut post = Post::reconstitute(posts.find_by_id(row.id).await.unwrap().unwrap());
+    assert!(post.trash(now));
     let trashed = posts
-        .trash(row.id, row.version, OffsetDateTime::now_utc())
+        .commit_lifecycle(&post, row.version, now)
         .await
         .unwrap();
-    let SaveOutcome::Saved { new_version } = trashed else {
+    let PostCommitOutcome::Saved(record) = trashed else {
         panic!("移入回收站应成功，实际：{trashed:?}");
     };
+    let new_version = record.snapshot.version;
     // 回收站中的引用仍然是保留引用（内容可恢复）。
     assert_eq!(
         store

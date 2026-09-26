@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use application::error::{ConflictKind, UseCaseError};
 use application::identity::{Actor, ActorChannel};
 use application::page::{CreatePageCmd, DeletePageCmd, EditPageCmd, PageInteractor};
-use application::ports::{Clock, PageDeleteOutcome, PageRepository, SaveOutcome};
+use application::ports::{Clock, PageCommitOutcome, PageDeleteOutcome, PageRepository};
 use domain::content::page::{PageSnapshot, PageStatus, Visibility};
 use domain::identity::{PermissionSet, UserId};
 use time::OffsetDateTime;
@@ -28,10 +28,6 @@ struct FakePageRepo {
 
 #[async_trait::async_trait]
 impl PageRepository for FakePageRepo {
-    async fn find_by_slug(&self, slug: &str) -> Result<Option<PageSnapshot>, UseCaseError> {
-        Ok(self.pages.lock().unwrap().get(slug).cloned())
-    }
-
     async fn find_by_id(&self, id: Uuid) -> Result<Option<PageSnapshot>, UseCaseError> {
         Ok(self
             .pages
@@ -48,36 +44,39 @@ impl PageRepository for FakePageRepo {
         Ok(all)
     }
 
-    async fn insert(&self, snapshot: &PageSnapshot) -> Result<(), UseCaseError> {
+    async fn insert_page(
+        &self,
+        page: &domain::content::page::Page,
+    ) -> Result<PageSnapshot, UseCaseError> {
+        let snapshot = page.snapshot();
         let mut pages = self.pages.lock().unwrap();
         if pages.contains_key(&snapshot.slug) {
             return Err(UseCaseError::Conflict(ConflictKind::Slug));
         }
         pages.insert(snapshot.slug.clone(), snapshot.clone());
-        Ok(())
+        Ok(snapshot)
     }
 
-    async fn save(
+    async fn commit_page(
         &self,
-        snapshot: &PageSnapshot,
+        page: &domain::content::page::Page,
         expected_version: i64,
         now: OffsetDateTime,
-    ) -> Result<SaveOutcome, UseCaseError> {
+    ) -> Result<PageCommitOutcome, UseCaseError> {
+        let snapshot = page.snapshot();
         let mut pages = self.pages.lock().unwrap();
         let Some(existing) = pages.values().find(|p| p.id == snapshot.id).cloned() else {
-            return Ok(SaveOutcome::Gone);
+            return Ok(PageCommitOutcome::Gone);
         };
         if existing.version != expected_version {
-            return Ok(SaveOutcome::StaleConflict);
+            return Ok(PageCommitOutcome::StaleConflict);
         }
         pages.remove(&existing.slug);
         let mut next = snapshot.clone();
         next.version = existing.version + 1;
         next.updated_at = now;
         pages.insert(next.slug.clone(), next.clone());
-        Ok(SaveOutcome::Saved {
-            new_version: next.version,
-        })
+        Ok(PageCommitOutcome::Saved(next))
     }
 
     async fn delete(
@@ -161,7 +160,7 @@ async fn reserved_root_slug_is_rejected_on_create_and_rename() {
         );
     }
 
-    pages
+    let created = pages
         .create(&editor, cmd(Some("about"), "关于"))
         .await
         .unwrap();
@@ -169,7 +168,7 @@ async fn reserved_root_slug_is_rejected_on_create_and_rename() {
         .edit(
             &editor,
             EditPageCmd {
-                target_slug: "about".into(),
+                id: created.id,
                 new_slug: Some("healthz".into()),
                 ..Default::default()
             },
@@ -178,7 +177,7 @@ async fn reserved_root_slug_is_rejected_on_create_and_rename() {
         .unwrap_err();
     assert!(matches!(err, UseCaseError::Invalid(_)), "{err:?}");
     // 失败不得部分写入。
-    let shown = pages.find(&editor, "about").await.unwrap();
+    let shown = pages.find(&editor, created.id).await.unwrap();
     assert_eq!(shown.slug, "about");
 }
 
@@ -189,7 +188,7 @@ async fn read_and_list_require_page_read() {
     let reader = actor_with(&["page.read"]);
     let outsider = actor_with(&["post.read"]);
 
-    pages
+    let created = pages
         .create(&editor, cmd(Some("about"), "关于"))
         .await
         .unwrap();
@@ -198,9 +197,9 @@ async fn read_and_list_require_page_read() {
         .await
         .unwrap();
 
-    assert!(pages.find(&reader, "about").await.is_ok());
+    assert!(pages.find(&reader, created.id).await.is_ok());
     assert!(matches!(
-        pages.find(&outsider, "about").await.unwrap_err(),
+        pages.find(&outsider, created.id).await.unwrap_err(),
         UseCaseError::Forbidden
     ));
 
@@ -223,8 +222,7 @@ async fn physical_delete_requires_permission_and_exact_identity_and_version() {
         .await
         .unwrap();
     let command = || DeletePageCmd {
-        slug: "about".into(),
-        expected_id: created.id,
+        id: created.id,
         expected_version: created.version,
     };
     assert!(matches!(
@@ -236,12 +234,12 @@ async fn physical_delete_requires_permission_and_exact_identity_and_version() {
             .delete(
                 &deleter,
                 DeletePageCmd {
-                    expected_id: Uuid::now_v7(),
+                    id: Uuid::now_v7(),
                     ..command()
                 }
             )
             .await,
-        Err(UseCaseError::VersionConflict)
+        Err(UseCaseError::NotFound(_))
     ));
     assert!(matches!(
         pages
@@ -255,7 +253,7 @@ async fn physical_delete_requires_permission_and_exact_identity_and_version() {
             .await,
         Err(UseCaseError::VersionConflict)
     ));
-    assert!(pages.find(&editor, "about").await.is_ok());
+    assert!(pages.find(&editor, created.id).await.is_ok());
     pages.delete(&deleter, command()).await.unwrap();
     assert!(matches!(
         pages.delete(&deleter, command()).await,
@@ -268,10 +266,10 @@ async fn physical_delete_requires_permission_and_exact_identity_and_version() {
     assert_ne!(replacement.id, created.id);
     assert!(matches!(
         pages.delete(&deleter, command()).await,
-        Err(UseCaseError::VersionConflict)
+        Err(UseCaseError::NotFound(_))
     ));
     assert_eq!(
-        pages.find(&editor, "about").await.unwrap().id,
+        pages.find(&editor, replacement.id).await.unwrap().id,
         replacement.id
     );
 }
@@ -280,7 +278,7 @@ async fn physical_delete_requires_permission_and_exact_identity_and_version() {
 async fn stale_version_is_a_version_conflict_and_slug_locks_after_publish() {
     let pages = interactor();
     let editor = actor_with(EDITOR);
-    pages
+    let created = pages
         .create(&editor, cmd(Some("about"), "关于"))
         .await
         .unwrap();
@@ -290,7 +288,7 @@ async fn stale_version_is_a_version_conflict_and_slug_locks_after_publish() {
         .edit(
             &editor,
             EditPageCmd {
-                target_slug: "about".into(),
+                id: created.id,
                 title: Some("关于我们".into()),
                 expected_version: Some(1),
                 ..Default::default()
@@ -305,7 +303,7 @@ async fn stale_version_is_a_version_conflict_and_slug_locks_after_publish() {
         .edit(
             &editor,
             EditPageCmd {
-                target_slug: "about".into(),
+                id: created.id,
                 title: Some("基于旧版本".into()),
                 expected_version: Some(1),
                 ..Default::default()
@@ -316,12 +314,12 @@ async fn stale_version_is_a_version_conflict_and_slug_locks_after_publish() {
     assert!(matches!(err, UseCaseError::VersionConflict), "{err:?}");
 
     // 发布后 slug 锁定，撤回也不解锁。
-    pages.publish(&editor, "about", None).await.unwrap();
+    pages.publish(&editor, created.id, None).await.unwrap();
     let err = pages
         .edit(
             &editor,
             EditPageCmd {
-                target_slug: "about".into(),
+                id: created.id,
                 new_slug: Some("contact".into()),
                 ..Default::default()
             },
@@ -329,12 +327,12 @@ async fn stale_version_is_a_version_conflict_and_slug_locks_after_publish() {
         .await
         .unwrap_err();
     assert!(matches!(err, UseCaseError::Invalid(_)), "{err:?}");
-    pages.withdraw(&editor, "about", None).await.unwrap();
+    pages.withdraw(&editor, created.id, None).await.unwrap();
     let err = pages
         .edit(
             &editor,
             EditPageCmd {
-                target_slug: "about".into(),
+                id: created.id,
                 new_slug: Some("contact".into()),
                 ..Default::default()
             },
@@ -350,7 +348,7 @@ async fn publish_requires_permission_and_content_then_withdraws_to_draft() {
     let editor = actor_with(EDITOR);
     let updater = actor_with(&["page.read", "page.create", "page.update"]);
 
-    pages
+    let created = pages
         .create(
             &editor,
             CreatePageCmd {
@@ -363,32 +361,32 @@ async fn publish_requires_permission_and_content_then_withdraws_to_draft() {
         .await
         .unwrap();
     // 正文为空：发布被拒（domain 规则映射为 Invalid）。
-    let err = pages.publish(&editor, "blank", None).await.unwrap_err();
+    let err = pages.publish(&editor, created.id, None).await.unwrap_err();
     assert!(matches!(err, UseCaseError::Invalid(_)), "{err:?}");
 
     // 有 update 但没有 publish：仍然被拒。
-    let err = pages.publish(&updater, "blank", None).await.unwrap_err();
+    let err = pages.publish(&updater, created.id, None).await.unwrap_err();
     assert!(matches!(err, UseCaseError::Forbidden), "{err:?}");
 
     pages
         .edit(
             &editor,
             EditPageCmd {
-                target_slug: "blank".into(),
+                id: created.id,
                 content: Some("正文".into()),
                 ..Default::default()
             },
         )
         .await
         .unwrap();
-    let published = pages.publish(&editor, "blank", None).await.unwrap();
+    let published = pages.publish(&editor, created.id, None).await.unwrap();
     assert_eq!(published.status, "published");
     assert!(published.published_at.is_some());
     // 幂等：重复发布不递增版本。
-    let again = pages.publish(&editor, "blank", None).await.unwrap();
+    let again = pages.publish(&editor, created.id, None).await.unwrap();
     assert_eq!(again.version, published.version);
 
-    let withdrawn = pages.withdraw(&editor, "blank", None).await.unwrap();
+    let withdrawn = pages.withdraw(&editor, created.id, None).await.unwrap();
     assert_eq!(withdrawn.status, "draft");
     assert!(withdrawn.published_at.is_some(), "保留首次发布时间");
 }
@@ -403,11 +401,11 @@ async fn page_status_and_visibility_round_trip_through_repository() {
         .unwrap();
 
     // 通过 find 重建聚合后仍能识别为草稿且不可公开。
-    let found = pages.find(&editor, &created.slug).await.unwrap();
+    let found = pages.find(&editor, created.id).await.unwrap();
     assert_eq!(found.status, PageStatus::Draft.as_str());
 
-    pages.publish(&editor, "about", None).await.unwrap();
-    let public = pages.find(&editor, "about").await.unwrap();
+    pages.publish(&editor, created.id, None).await.unwrap();
+    let public = pages.find(&editor, created.id).await.unwrap();
     assert_eq!(public.status, "published");
     assert_eq!(public.visibility, "public");
 }
@@ -420,27 +418,33 @@ async fn page_status_and_visibility_round_trip_through_repository() {
 async fn idempotent_publish_and_withdraw_still_enforce_expected_version() {
     let pages = interactor();
     let editor = actor_with(EDITOR);
-    pages
+    let created = pages
         .create(&editor, cmd(Some("about"), "关于"))
         .await
         .unwrap();
 
     // 首次发布 v1 → v2，页面已发布。
-    let published = pages.publish(&editor, "about", Some(1)).await.unwrap();
+    let published = pages.publish(&editor, created.id, Some(1)).await.unwrap();
     assert_eq!(published.version, 2);
 
     // 再次发布本是幂等 no-op，但带过期版本必须报冲突，而不是假装成功。
-    let err = pages.publish(&editor, "about", Some(1)).await.unwrap_err();
+    let err = pages
+        .publish(&editor, created.id, Some(1))
+        .await
+        .unwrap_err();
     assert!(matches!(err, UseCaseError::VersionConflict), "{err:?}");
 
     // 用当前版本重试：幂等成功且不递增版本。
-    let again = pages.publish(&editor, "about", Some(2)).await.unwrap();
+    let again = pages.publish(&editor, created.id, Some(2)).await.unwrap();
     assert_eq!(again.version, 2, "幂等发布不产生新版本");
 
     // 撤回 v2 → v3；再次撤回带过期版本同样报冲突。
-    let withdrawn = pages.withdraw(&editor, "about", Some(2)).await.unwrap();
+    let withdrawn = pages.withdraw(&editor, created.id, Some(2)).await.unwrap();
     assert_eq!(withdrawn.version, 3);
-    let err = pages.withdraw(&editor, "about", Some(2)).await.unwrap_err();
+    let err = pages
+        .withdraw(&editor, created.id, Some(2))
+        .await
+        .unwrap_err();
     assert!(matches!(err, UseCaseError::VersionConflict), "{err:?}");
 }
 
@@ -449,7 +453,7 @@ async fn idempotent_publish_and_withdraw_still_enforce_expected_version() {
 async fn noop_edit_still_enforces_expected_version() {
     let pages = interactor();
     let editor = actor_with(EDITOR);
-    pages
+    let created = pages
         .create(&editor, cmd(Some("about"), "关于"))
         .await
         .unwrap();
@@ -458,7 +462,7 @@ async fn noop_edit_still_enforces_expected_version() {
         .edit(
             &editor,
             EditPageCmd {
-                target_slug: "about".into(),
+                id: created.id,
                 title: Some("关于我们".into()),
                 expected_version: Some(1),
                 ..Default::default()
@@ -469,7 +473,7 @@ async fn noop_edit_still_enforces_expected_version() {
 
     // 提交与当前完全一致的内容（no-op）但带过期版本：必须冲突。
     let noop = || EditPageCmd {
-        target_slug: "about".into(),
+        id: created.id,
         title: Some("关于我们".into()),
         expected_version: Some(1),
         ..Default::default()

@@ -1,152 +1,144 @@
-# 主题、MiniJinja 与模板数据函数
+# 主题与渲染
 
-状态：M0 原型已验证同步-异步桥接；生产渲染现已接入公开只读模板函数与第二主题 `themes/paper`。当前函数子集及预算见 §2/§4；未实现的候选函数仍列在后续范围。模板引擎使用 MiniJinja。
+公开站点使用 MiniJinja SSR，已提供 [default](../themes/default/) 和 [paper](../themes/paper/) 两个主题。应用层定义引擎无关的异步渲染端口与公开数据 DTO；基础设施负责模板、Markdown 清洗、媒体引用提取、执行预算与缓存。后台 SPA 不使用这些主题。
 
-## 1. 选型与边界
+## 主题包与加载
 
-MiniJinja 支持通过 `Environment::add_function` 注册函数、关键字参数以及通过 `State` 访问渲染状态，适合构建面向主题作者的查询 API。Tera 同样支持注册函数；选择 MiniJinja 是扩展接口和运行时模型的取舍，不意味着 Tera 无法获取数据，也不预先宣称性能更高。
+主题是管理员部署的可信文件，不是可上传执行任意代码的插件。当前目录结构：
 
-MiniJinja 类型只出现在 infrastructure；application 定义引擎无关的公开查询门面、展示 DTO 与渲染端口，infrastructure 为每次渲染创建独立作用域。主题只能调用注册的只读函数，不能获取仓储、数据库连接、SQL、任意 HTTP 客户端或管理 API。
+```text
+themes/default/
+├── theme.json
+├── templates/
+│   ├── base.html
+│   ├── index.html
+│   ├── post.html
+│   ├── page.html
+│   ├── tag.html
+│   ├── category.html
+│   └── series.html
+└── assets/
+    └── style.css
+```
 
-模板函数由核心服务提供并版本化，主题负责调用，不允许主题上传新的 Rust 可执行函数。该机制属于已经确认的受限扩展范围。
+七个模板都是必需文件。清单只接受以下字段；两个版本字段当前都必须为 `1`：
 
-每个主题包含 `theme.json`（`schema_version: 1`、`theme_api_version: 1`、名称及 `required_functions`）。启动时检查版本和必需函数，未知函数或不兼容版本直接拒绝加载。当前支持的函数集合固定为下表六项；清单只描述兼容性，不赋予主题新权限。
+```json
+{
+  "schema_version": 1,
+  "slug": "default",
+  "name": "Default",
+  "theme_api_version": 1,
+  "required_functions": []
+}
+```
 
-## 2. 主题 API 示例
+`slug` 只允许小写 ASCII 字母、数字、`-`，主题目录名必须与它一致，名称不能为空。`required_functions` 只能包含已注册函数；它声明所需能力，不授予额外权限。清单与模板校验在 [rendering.rs](../crates/infrastructure/src/rendering.rs)，加载和资源挂载在 [website.rs](../crates/server/src/website.rs)。
 
-以下函数由应用提供，不是 MiniJinja 内置函数。当前可用：
+`BLOG_THEME_DIR` 指定启动默认主题。启动时加载它及同级目录下有效的主题，解析模板并扫描静态资源；默认主题失败会阻止 `serve`，其他无效主题被跳过。请求复用已加载的模板，不扫描磁盘。新增或修改主题文件后需重启，使模板、资源清单和指纹一同生效；没有热安装、后台上传或样例预览发布流程。
+
+后台站点设置可以选择已加载主题，选择以版本条件保存到 `settings.theme`。公开请求每次读取活动选择，切换已安装主题无需重启；未配置或对应主题不在启动注册表中时，使用启动默认主题。设置查询或模板执行失败会返回错误，不触发这项回退。资源按 `/assets/{theme_slug}/{path}?v={hash}` 分开，hash 为文件 SHA-256 的前 12 个十六进制字符；资源扫描拒绝符号链接。URL 指纹不等于应用已经为主题资源配置长期缓存，响应与代理策略还需按部署环境核验。
+
+配置项见[配置参考](configuration.md)，设置权限与版本契约见[管理 API](admin-api.md)。
+
+## 固定上下文
+
+[公开用例](../crates/application/src/public_site.rs) 先读取页面主体，再交给活动主题。每个页面都有 `site` 和 `seo`：
+
+| 变量 | 当前内容 | 模板 |
+|---|---|---|
+| `site` | `title`、`description`、可空 `logo_url` | 全部 |
+| `seo` | `title`、`description`、`canonical_url`、`feed_url`、`og_type` | 全部 |
+| `posts` | 文章卡片列表：标题、slug、摘要、发布时间、作者展示名及可空头像 URL | index |
+| `post` | 文章详情、清洗后 `content_html`、标签、可空分类/系列/封面 | post |
+| `page` | 页面详情与清洗后 `content_html` | page |
+| `tag` / `category` | 目录名称、slug、页码、总页数和文章卡片 | tag / category |
+| `series` | 系列名称、slug、可空封面、分页和带连续阅读序号的文章卡片 | series |
+
+可空图片 URL 为 `/media/{id}`。文章卡片和详情有 `author_avatar_url`，详情有 `cover_url`；图片是否匿名可读由媒体用例根据当前引用状态判断，主题拿到地址并不授予读取权。
+
+站点信息每次按数据库设置、装配回退值解析；SEO 规则集中在 [seo.rs](../crates/application/src/seo.rs)，主题只输出结果。canonical、RSS 和 sitemap 使用经过验证的 `BLOG_PUBLIC_BASE_URL`，不取请求 Host；当前要求部署在域名根路径，不支持 URL 路径前缀。描述折叠为空白单行并限制为 160 字符，目录分页从第 2 页起使用自指 canonical。
+
+### RSS、sitemap 与 robots
+
+机器可读输出由应用层[协议渲染函数](../crates/application/src/syndication.rs)和公开用例生成，不经过主题，主题切换不改变其协议契约。
+
+| 路径 | 当前契约 |
+|---|---|
+| `/feed.xml` | RSS 2.0；按发布时间及 ID 倒序取最新 20 篇公开文章；输出摘要而非正文，文章绝对 URL 同时作为 link 和稳定 guid |
+| `/sitemap.xml` | 收录首页、公开文章、公开 Page，以及至少有一篇公开文章的标签/分类/系列目录；目录只收录第 1 页；内容条目 lastmod 使用更新时间 |
+| `/robots.txt` | 允许抓取公开内容，排除 `/admin`、`/api`、`/auth`，并声明绝对 sitemap 地址 |
+
+sitemap 的 50,000 条限制是整个文件的预算：首页、文章、Page、目录共用，按此顺序分配；超出部分截断，当前没有 sitemap index。XML 文本统一转义并排除非法控制字符；Unicode slug 的路径编码与 canonical 保持一致。三个响应均设置 `Cache-Control: no-cache`，当前不生成 ETag。
+
+## 模板数据函数
+
+当前注册六个只读函数。参数采用关键字形式，未知参数、非法 slug 和超限输入都报模板错误。
+
+| 函数 | 输入 | 输出与边界 |
+|---|---|---|
+| `get_posts` | `limit=10`，范围 1–50；可选 `tag` 或 `category`，二者互斥 | `{items}` 公开文章摘要，按发布时间及 ID 倒序；只取首批 |
+| `get_post` | `slug` | 公开文章摘要加 `updated_at`，不可见或不存在返回 none；不返回正文 |
+| `get_categories` | `limit=20`，范围 1–50 | `{items}` 分类名称、slug 和 URL |
+| `get_tags` | `limit=20`，范围 1–50 | `{items}` 标签名称、slug 和 URL |
+| `asset_url` | `path` | 当前主题已扫描资源的带指纹 URL；不存在或越界报错 |
+| `post_url` | `slug` | 校验并按 UTF-8 百分号编码后的根相对文章 URL |
+
+文章摘要字段为 `title`、`slug`、`url`、`excerpt`、`published_at`、`author_display`。目录可以没有公开文章，不透出非公开引用量。函数没有 cursor、排序选择、任意字段查询或 SQL 参数。
 
 ```jinja
 {% set recent = get_posts(limit=5, tag="rust") %}
-{% for post in recent.items %}
-  <a href="{{ post.url }}">{{ post.title }}</a>
+{% for item in recent.items %}
+  <a href="{{ item.url | url }}">{{ item.title }}</a>
 {% endfor %}
-
-{% set categories = get_categories(limit=20) %}
-{% for category in categories.items %}
-  <a href="{{ category.url }}">{{ category.name }}</a>
-{% endfor %}
-
-<link rel="stylesheet" href="{{ asset_url(path='main.css') }}">
+<link rel="stylesheet" href="{{ asset_url(path='style.css') | url }}">
 ```
 
-| 函数 | 输入与输出 | 约束 |
+[ThemeData](../crates/application/src/theme_data.rs) 只依赖公开查询端口，不接受 Actor，也不会因为访问者已登录而返回草稿或私密内容。每次渲染创建独立的 [RenderScope](../crates/infrastructure/src/theme_functions.rs)，持有函数预算、截止时间和请求内查询缓存；共享模板环境不保存用户或请求状态。当前没有服务端主题预览权限范围。
+
+## 正文渲染与持久化
+
+[`ContentRenderer::render_content`](../crates/application/src/ports/rendering.rs) 返回 `RenderedContent { content_html, media_ids }`。生产实现把以下工作放入同一个受控阻塞任务：
+
+1. 用 pulldown-cmark 转换 Markdown，启用表格与删除线。
+2. 用 ammonia 清洗 HTML。
+3. 从这份清洗结果提取 `<img src="/media/{uuid}">`，按 UUID 排序、去重。
+
+注释、被清洗掉的标签、普通链接和纯文本不形成图片引用。独立封面由保存侧并入引用集合；它不属于正文渲染结果。媒体引用提取不会在异步数据库线程上再次解析 HTML。
+
+[内容仓储](../crates/infrastructure/src/persistence/content.rs) 在事务外等待渲染，然后把源文、`content_html`、`content_render_version` 和媒体关系同事务提交。公开 Post/Page 详情直接读取保存的 HTML，不在每次访问时转换 Markdown。
+
+清洗规则改变时需要递增 `CONTENT_RENDER_VERSION`。完整迁移入口分批重建不匹配的记录，以业务版本和源文作条件，避免覆盖并发编辑；HTML 与引用一起更新，不增加编辑版本或改变业务更新时间。结构迁移与完整迁移的命令分工见[架构](architecture.md)。
+
+## 执行策略与实际预算
+
+[`RenderingRuntime`](../crates/infrastructure/src/render_executor.rs) 为正文渲染和全部主题共享一组许可。应用只调用异步端口，不持有 Tokio 信号量，也不自行使用 `spawn_blocking` 或超时。
+
+主题主体先异步预取；同步 MiniJinja 渲染在阻塞池内运行。模板函数缺少请求缓存时，才从该阻塞线程通过 Tokio Handle 驱动带剩余截止时间的公开查询。桥接不会新建 runtime，也不在异步工作线程中 `block_on`；每次查询等待会占用当前渲染许可。
+
+| 限制 | 当前默认值 | 作用范围 |
 |---|---|---|
-| `get_posts` | `limit`（默认 10，1–50）、可选 `tag` 或 `category`（互斥）→ `{items}` 文章摘要 | 仅公开已发布未删除文章；`url` 为根相对路径，按发布时间及 ID 稳定排序 |
-| `get_post` | `slug` → 公开文章摘要与 `updated_at` 或 none | 草稿、私密、回收站与不存在同为 none；不提供正文源文 |
-| `get_categories` / `get_tags` | `limit`（默认 20，1–50）→ `{items}` 目录 | 返回公开目录名称、slug、URL；目录可为空，不暴露非公开引用量 |
-| `asset_url` | `path` → 带内容摘要查询串的主题资源 URL | 仅主题 assets 中已扫描的普通文件；不存在或越界路径报错 |
-| `post_url` | `slug` → 根相对文章 URL | 校验 slug，按 UTF-8 百分号编码 |
+| 渲染并发 | 16 | 同一运行时的正文转换、引用提取及主题渲染 |
+| 等待许可 | 250ms | 超时返回渲染错误；没有另设排队人数上限 |
+| 等待执行结果 | 2s | 从提交阻塞任务开始计时，包含阻塞池调度等待 |
+| MiniJinja fuel | 200,000 | 每次模板渲染 |
+| 模板递归深度 | 100 | MiniJinja 环境 |
+| 主题输出 | 1 MiB | 渲染完成后的长度检查，不是硬内存上限 |
+| 宿主函数调用 | 64 | 每次渲染，查询缓存命中也计数 |
+| 独立数据查询 | 10 | 每次渲染，重复查询命中缓存不再计数 |
+| 函数截止时间 | 500ms | 从 RenderScope 创建起；查询按剩余时间等待 |
+| Markdown LRU | 64 条、8 MiB | 源文、HTML 和媒体 UUID 合计，两个上限同时生效 |
 
-未知参数和超限请求返回受控模板错误，不接受原始 SQL、任意字段选择或任意条件表达式。当前只提供首批摘要，不接受 cursor/sort；`get_navigation`、`get_public_authors` 与 cursor 分页是候选扩展，尚未注册。`themes/paper` 的侧栏使用目录函数，文章页用 `get_posts` 查同类公开文章、`get_post` 查公开更新时间，资源与文章链接通过宿主函数生成。
+当前服务使用默认值；`RenderingLimits` 可在 Rust 装配时设置，不是已开放的环境变量配置。过载、模板错误和超时返回受控渲染错误，不伪装成空数据。
 
-基础上下文仍提供 `site`、`seo` 与当前页面主体。路由预加载文章正文，模板函数补充侧栏、分类和相关文章，不强迫全部内容通过函数获取。
+已启动的阻塞任务不能被强制终止。2s 超时或调用者取消会结束等待，但许可留在实际工作中直到退出；尚未启动的任务在执行超时时尝试取消。fuel、递归限制和函数查询 deadline 提供额外约束，但不构成恶意模板安全沙箱或硬 CPU/内存隔离。
 
-### 2.1 当前已交付的固定上下文与 SEO 元数据
+缓存只保存由完整源文决定的 HTML 与正文引用，不缓存主题页面、数据库查询结果或媒体权限。单条结果超出容量时正常返回但不入缓存；命中不占渲染许可。tracing 记录命中、输入大小、排队和执行耗时、成功状态及媒体数量，不记录正文内容。请求内函数缓存随渲染结束释放。
 
-模板仍拿到预取主体上下文，并可额外调用上述公开函数；两个主题都含 7 个模板：base、index、post、page、tag、category、series。`BLOG_THEME_DIR` 指定启动默认主题；服务启动时加载其同级目录下清单有效、目录名与 slug 一致的主题。具有 `settings.manage` 权限的管理员可在后台「站点设置」选择主题，选择保存到独立的 `settings.theme` 行（版本 CAS）；公开 HTML 每次请求读取该行，切换后无需重启。若已保存的主题后来不可用，公开页面暂用启动默认主题，后台显示原选择并允许重新保存。主题资源使用 `/assets/{theme_slug}/{path}?v={hash}`，旧页面的样式资源仍可读取。部署新主题文件需要重启服务以加载模板和挂载资源；多实例部署需在所有实例安装同一主题集。
+## 转义与公开性
 
-| 变量 | 内容 | 可用模板 |
-|---|---|---|
-| `site` | `title`、`description`（数据库 site 行 > 环境变量 > 内置默认值，每次渲染解析） | 全部 |
-| `seo` | `title`、`description`、`canonical_url`、`feed_url`、`og_type` | 全部（`base.html` 依赖） |
-| `posts` | 首页文章卡片列表 | index |
-| `post` / `page` / `tag` / `category` / `series` | 各自页面主体 | 对应模板 |
+`.html` 模板采用 MiniJinja 的 HTML 自动转义和严格未定义模式。清洗后的 `post.content_html` / `page.content_html` 可使用 `|safe`；普通标题、描述和用户资料保持自动转义。`url` 过滤器保留 `/` 并转义 HTML 属性特殊字符，供宿主生成的地址使用；它不替代 JavaScript、CSS 或任意 URL 的专门校验。
 
-文章详情上下文（`post`）与系列页上下文（`series`）带 `cover_url`，文章卡片/详情带 `author_avatar_url`，`site` 带 `logo_url`：值都是应用层生成的 `/media/{id}` 站内地址（无对应图片时为 none），模板用 `| url` 过滤器输出到属性并自行决定渲染。这些只是地址，**匿名可读性由媒体库按内容公开状态（文章/页面/系列/账号）实时判定**，模板不参与也不得缓存该判定。
+公开查询只允许已发布、公开、未删除的文章及已发布、公开的 Page。缺失内容可以返回 none 或 404，数据库失败、参数错误、预算耗尽和模板错误则保留为错误。当前没有公开页面缓存、跨请求函数缓存、全站 generation 或主题失败页面缓存；主题资源版本与内容公开性分别管理。
 
-- **标题、描述、canonical 只有一处规则**（application 的 `seo` 模块）：详情页标题是「页面标题 - 站点标题」，首页只有站点标题；描述折叠为单行并截断到 160 字符，文章优先取摘要、缺失时回退站点描述；canonical 是绝对 URL，列表页第 2 页起自指 `?page=N`。模板不再各自拼 `<title>`，`base.html` 已无 `{% block title %}`。
-- **站点公开地址**取可信配置 `BLOG_PUBLIC_BASE_URL`（装配期用 `url` crate 解析并校验绝对 http/https、无凭据、无查询与片段、**无路径前缀**），不从请求 Host 头推导。子路径部署当前不支持：模板中的 `/assets/...`、`/posts/...`、`/feed.xml` 等都是域名根相对路径，接受前缀只会产出半套带前缀的链接，因此配置阶段直接拒绝。建议使用独立域名，并在对外域名根路径部署；仅由反向代理改写入站路径无法解决根相对链接问题。Unicode slug 在 URL 中按百分号编码，因此 canonical/feed/sitemap 对同一内容给出一致的地址。
-- URL 值用 `url` 过滤器输出：`{{ seo.canonical_url | url }}`。MiniJinja 的 HTML 自动转义会把 `/` 写成 `&#x2f;`（合法但让地址不可读、外部工具比对失配），该过滤器保留 `/` 并兜底转义 `&`、`<`、`>`、`"`、`'` 后标记为安全字符串。标题、描述等普通文本继续走自动转义。
-- **机器可读输出不经过模板**：`/feed.xml`、`/sitemap.xml`、`/robots.txt` 由 application 层纯函数渲染。RSS/sitemap 是协议契约，不应随主题变化，也不该让主题作者有机会产出不合规范的 XML；XML 转义与控制字符处理在该层单独测试。
-
-## 3. 调用链与层次
-
-```text
-公开页面用例（application）
-  → ThemeRenderer 端口
-    → MiniJinjaRenderer（infrastructure）
-      → 已注册模板函数（infrastructure 参数转换）
-        → ThemeDataProvider 查询门面（application）
-          → PublishedContentQuery 等端口
-            → PostgreSQL / 读缓存适配器（infrastructure）
-```
-
-该运行时回调不新增反向编译依赖：infrastructure 实现 application 的端口，也可以调用 application 定义的查询门面；application 不依赖 MiniJinja。server 装配各实现。查询门面禁止再次调用渲染器，避免递归渲染或等待自己占用的工作队列。
-
-当前 `ThemeData` 只封装公开查询端口，不接受 Actor；`RenderScope` 在 infrastructure 内持有截止时间、查询/调用预算与请求级缓存。预览、语言、主题版本和可配置预算尚未接入，不借公开函数提供这些能力。引擎 `Value` 不进入 application 契约。
-
-模板 Environment 按活动主题版本复用，不能把当前用户、预览权限或请求缓存捕获到共享全局闭包中。请求级函数闭包或只读 Object 可绑定独立 RenderScope，必须避免跨请求共享可变身份。模板参数和模板变量不能修改可信权限范围；不能依赖模板可覆盖的变量充当授权依据。
-
-## 4. 同步渲染与异步数据库
-
-MiniJinja 的常规渲染与注册函数接口是同步接口，SQLx future 不会自动被模板 await。当前实现采用“页面主体异步预取 + 函数按需受控查询”：
-
-1. 用例异步读取页面主体与已知公共数据，准备请求级结果缓存。
-2. 在异步侧获取有界渲染许可，将同步渲染送入阻塞工作池；不能每次请求无上限创建线程。
-3. 模板函数先查请求缓存和符合权限范围的读缓存。
-4. 缺失时，仅从该阻塞工作线程，通过基础设施桥接调用异步查询门面；可采用多线程 Tokio runtime 的 Handle 驱动有超时的查询 future，具体机制通过原型验证。
-5. 查询完成后返回 DTO，转换为 MiniJinja Value 并继续渲染。
-
-禁止在 Axum 异步执行线程内直接 `block_on`，不为每次查询新建 runtime，不在同步锁或未提交写事务内等待查询。同步函数调用会占用渲染线程并可能串行访问数据库，因此这是功能支持机制，不是吞吐量优化；热点页面应依靠预取、缓存与批量查询减少 miss。
-
-已启动的 Tokio `spawn_blocking` 任务不能通过 abort 强制停止。当前实现以每次宿主查询剩余 deadline 的 `tokio::time::timeout` 取消等待中的 future；MiniJinja fuel=200,000、递归深度=100，渲染结果超过 1 MiB 则拒绝返回（这是渲染后检查，不是分配时的硬内存上限）。渲染许可由实际工作持有到退出，客户端提前离开不会释放仍占用线程的许可。数据库侧 `statement_timeout` 与对纯模板执行时间的独立硬截止仍可在部署层补强。
-
-当前预算：单列表默认 10（目录 20）、最大 50；每次渲染最多 10 次独立数据查询与 64 次函数调用，函数查询总截止 500ms；渲染许可 16 个、最多等待 250ms。重复查询命中请求缓存仍计入函数调用预算，但不重复计入数据库查询次数。饱和时返回受控服务错误，不无限排队。
-
-### 对照方案与验证顺序
-
-可选对照是主题清单声明数据需求，由 application 异步预取，函数只读准备好的结果。它能移除渲染中的数据库等待，但动态参数、依赖前序结果的查询需要声明语言或功能限制；CPU、递归、输出预算与列表失效依然存在。
-
-保留函数取数需求，先用 M0 原型比较两种实现，不把“参数空间大”当作无法预取的证明，也不把静态声明当作缓存失效已经解决。原型不通过时记录 ADR 调整桥接/API；正式主题编写不应建立在尚未验证的并发机制上。M0 可与采用纯预取的 M1 内容闭环独立推进，仅作为 M3 模板函数契约的门槛；原型位置及退出条件见 [路线图](product-roadmap.md)。
-
-## 5. 权限、转义与错误
-
-公开模板始终采用公开读取范围，即使请求者已登录管理员，也不自动暴露草稿。预览用例独立鉴权，仅允许读取被授权的目标内容；预览结果 no-store，默认关联列表仍为公开数据。请求缓存不得跨公开/预览共享。
-
-只返回公开 DTO，不返回 User 聚合、会话、凭据或后台统计。模板不能通过 `status="draft"` 或伪造 actor_id 提权。列表、数量、关系数据与详情均采用一致可见性规则。
-
-HTML 模板显式配置自动转义；启用严格未定义行为，并为可选字段提供明确默认值。正文先清洗，再由受控宿主标记为可安全插入 HTML；普通字符串不自动标安全。HTML 转义不能代替 JavaScript、CSS、URL 上下文的专门处理。主题仍仅由可信管理员安装，不宣称引擎提供完整恶意模板隔离。
-
-`asset_url` 仅处理主题包内静态资源。封面、头像与站点 logo 均已接入媒体库：模板通过 `post.cover_url` / `series.cover_url` / `post.author_avatar_url` / `site.logo_url` 拿到 `/media/{id}` 地址。正文图片由 Markdown 渲染成 `<img src="/media/{id}">`，它与上述图片的匿名可读性由媒体库按 [内容生命周期 §5](content-lifecycle.md) 实时判定（文章撤回、账号软删除等都会立即失效），主题模板不参与也不得缓存该判定。分类/标签/系列 DTO 使用当前名称，关系及计数只来自当前 public、published、未软删除文章。
-
-查询未找到返回 none/空集合；数据库失败、预算耗尽和参数错误不伪装成没有内容。关键渲染失败返回受控 5xx，服务端记录函数名、模板位置和脱敏错误。仅对明确声明可降级的可选区块使用回退，不缓存部分失败页面为正常页面。
-
-## 6. 缓存依赖与版本
-
-函数查询采用规范化查询键，包含查询种类、过滤/排序/分页参数、语言与读取范围。同一渲染去重，不允许以线程全局缓存保存私人上下文。
-
-动态数据函数使页面依赖不再仅限主文章 ID。建议在 M3 引入页面缓存时使用站点公开内容 generation 作为粗粒度版本（M1 无页面缓存）：公开文章/页面保存、发布、撤回、归档、可见性、公开作者资料、分类/标签/系列变更均在事务中更新 generation。保存草稿不递增公开版本；当前没有“编辑已发布内容但不更新线上”的工作副本。页面键另包含主题、settings.version 和模板 API 版本；渲染前后核验版本，变化时不缓存混合结果。generation 的持久化协调在启用页面缓存时单独设计，不能将一个普通设置行的 version 自动视为全站版本。
-
-空列表和未命中详情也具有查询依赖；新增文章必须使相应结果失效。异步通知与 TTL 用作补充，不能替代撤回后的可见性保证。缓存命中路径仍遵守架构文档中的即时撤回约束。
-
-generation 的职责：application 定义 PublicContentVersion 读取与事务更新契约，发布用例在同一工作单元内协调递增，页面用例负责渲染前后核验；infrastructure 使用数据库原子更新和缓存适配器实现。它不属于 domain，也不由模板函数随意修改。并发更新同一记录会产生写争用，应测量并在事务冲突时受限重试，不能在应用进程读旧值再覆盖。
-
-同一版本校验必须覆盖页面缓存和函数读缓存，不能使用新 generation 包装旧 DTO。建议初期从主库读取权威版本，禁止用滞后的本地版本缓存或读副本宣称立即撤回。公开可见性建议定义为：撤回事务完成后才开始的读取不能获得旧公开内容；已在执行中的读取可以按其一致性检查时点完成，已发送给客户端的字节无法追回。更严格的并发屏障是独立需求。版本变化时丢弃缓存写入；需要返回新视图时受限重读，超过重试预算返回受控错误。
-
-该策略只约束经过应用的读取，不自动清除浏览器/CDN副本。要求撤回后新请求立即失效的正文与路径响应，必须强制重新验证或禁用共享缓存；若未来启用 CDN TTL，需明确有限陈旧窗口，不能继续承诺相同语义。
-
-站点版本变化会使全站旧页面键不可命中，必须有容量和过期回收，避免旧键堆积。公开变更期间单独测命中率、整体 p95/p99、重建并发和数据库负载；热缓存命中延迟只是一个条件指标。细化依赖时，新内容进入列表和空查询转为非空也必须触发失效，不能只跟踪现有返回 ID。
-
-以上方案的取舍见 [ADR-0004](adr/0004-public-cache-generation.md)。
-
-模板 API 独立于主题版本和 MiniJinja 版本。清单声明兼容范围、所需函数与可选能力，激活时检查并使用样例数据渲染主要模板。任意分支无法靠一次样例渲染证明可用，运行时仍需受控报错与主题回退策略。升级引擎或函数契约运行主题兼容测试。
-
-## 7. 验收
-
-- 模板函数能按参数读取真实查询 DTO，并保持正确的分页与排序。
-- 不同用户、并行预览和公开页面之间无请求状态串用。
-- 重复调用不重复查询；循环内唯一查询超预算可控失败；批量 API 避免 N+1。
-- 数据库慢查询、渲染超时与客户端取消不会无限占用工作线程或突破并发上限。
-- 侧栏数据改变、空列表新增、文章撤回与主题切换使相关缓存失效。
-- 转义、路径越界、缺失字段、非法参数、权限绕过均有针对性测试。
-- 与静态上下文渲染比较冷/热缓存延迟及饱和吞吐量，校准预算后再承诺性能指标。
-
-## 8. 参考
-
-- [MiniJinja 函数](https://docs.rs/minijinja/latest/minijinja/functions/index.html)
-- [Environment](https://docs.rs/minijinja/latest/minijinja/struct.Environment.html)
-- [State](https://docs.rs/minijinja/latest/minijinja/struct.State.html)
-- [Tera 函数能力](https://keats.github.io/tera/)
-- [Tokio 同步桥接](https://tokio.rs/tokio/topics/bridging)
-- [spawn_blocking 的取消限制](https://docs.rs/tokio/latest/tokio/task/fn.spawn_blocking.html)
+关于页面缓存、模板 API 扩展及外部集成的后续取舍，见[产品路线图](product-roadmap.md)与[扩展设计](extensions-and-data.md)。历史桥接、缓存方案及执行边界决策保留在 [ADR-0002](adr/0002-template-data-functions.md)、[ADR-0004](adr/0004-public-cache-generation.md)、[ADR-0015](adr/0015-rendered-content-runtime-and-module-boundaries.md)；其中规划方案不等于当前实现。

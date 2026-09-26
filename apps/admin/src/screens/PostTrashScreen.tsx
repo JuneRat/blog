@@ -61,8 +61,8 @@ export function PostTrashScreen() {
     setActionError(null);
     setNotice(null);
     try {
-      if (purge) await api.purgePost(post.slug, post.version);
-      else await api.restorePost(post.slug, post.version);
+      if (purge) await api.purgePost(post.id, post.version);
+      else await api.restorePost(post.id, post.version);
       // 先给出成功反馈，再重取：即使重取失败，用户也知道操作已经生效。
       setNotice(purge ? `已永久删除「${post.title || post.slug}」。` : `已恢复「${post.title || post.slug}」。`);
       /**

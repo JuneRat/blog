@@ -10,7 +10,7 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::error::UseCaseError;
-use crate::ports::{Clock, PageDeleteOutcome, PageRepository, SaveOutcome};
+use crate::ports::{Clock, PageCommitOutcome, PageDeleteOutcome, PageRepository};
 use crate::version::checked_version;
 use domain::content::page::{Page, PageError, PagePatch, PageSnapshot, Slug, Visibility};
 
@@ -28,7 +28,7 @@ pub struct CreatePageCmd {
 
 #[derive(Debug, Clone, Default)]
 pub struct EditPageCmd {
-    pub target_slug: String,
+    pub id: Uuid,
     pub new_slug: Option<String>,
     pub title: Option<String>,
     pub content: Option<String>,
@@ -38,8 +38,7 @@ pub struct EditPageCmd {
 }
 
 pub struct DeletePageCmd {
-    pub slug: String,
-    pub expected_id: Uuid,
+    pub id: Uuid,
     pub expected_version: i64,
 }
 
@@ -106,8 +105,7 @@ impl PageInteractor {
             self.clock.now(),
         )
         .map_err(map_domain)?;
-        let snapshot = page.snapshot();
-        self.pages.insert(&snapshot).await?;
+        let snapshot = self.pages.insert_page(&page).await?;
         Ok(PageDto::from_snapshot(&snapshot))
     }
 
@@ -115,9 +113,9 @@ impl PageInteractor {
     pub async fn find(
         &self,
         actor: &crate::identity::Actor,
-        slug: &str,
+        id: Uuid,
     ) -> Result<PageDto, UseCaseError> {
-        let page = self.load_authorized(actor, slug, "page.read").await?;
+        let page = self.load_authorized(actor, id, "page.read").await?;
         Ok(PageDto::from_snapshot(&page.snapshot()))
     }
 
@@ -137,9 +135,7 @@ impl PageInteractor {
         cmd: EditPageCmd,
     ) -> Result<PageDto, UseCaseError> {
         actor.ensure_write_channel()?;
-        let (mut page, loaded) = self
-            .load_versioned(actor, &cmd.target_slug, "page.update")
-            .await?;
+        let (mut page, loaded) = self.load_versioned(actor, cmd.id, "page.update").await?;
         let expected = checked_version(loaded, cmd.expected_version)?;
 
         let changed = page
@@ -161,11 +157,11 @@ impl PageInteractor {
     pub async fn publish(
         &self,
         actor: &crate::identity::Actor,
-        slug: &str,
+        id: Uuid,
         expected_version: Option<i64>,
     ) -> Result<PageDto, UseCaseError> {
         actor.ensure_write_channel()?;
-        let (mut page, loaded) = self.load_versioned(actor, slug, "page.publish").await?;
+        let (mut page, loaded) = self.load_versioned(actor, id, "page.publish").await?;
         let expected = checked_version(loaded, expected_version)?;
 
         if page.publish(self.clock.now()).map_err(map_domain)? {
@@ -178,11 +174,11 @@ impl PageInteractor {
     pub async fn withdraw(
         &self,
         actor: &crate::identity::Actor,
-        slug: &str,
+        id: Uuid,
         expected_version: Option<i64>,
     ) -> Result<PageDto, UseCaseError> {
         actor.ensure_write_channel()?;
-        let (mut page, loaded) = self.load_versioned(actor, slug, "page.unpublish").await?;
+        let (mut page, loaded) = self.load_versioned(actor, id, "page.unpublish").await?;
         let expected = checked_version(loaded, expected_version)?;
 
         if page.withdraw() {
@@ -198,42 +194,32 @@ impl PageInteractor {
         cmd: DeletePageCmd,
     ) -> Result<(), UseCaseError> {
         actor.ensure_write_channel()?;
-        let (page, loaded_version) = self.load_versioned(actor, &cmd.slug, "page.delete").await?;
-        if page.snapshot().id != cmd.expected_id {
-            return Err(UseCaseError::VersionConflict);
-        }
+        let (_, loaded_version) = self.load_versioned(actor, cmd.id, "page.delete").await?;
         checked_version(loaded_version, Some(cmd.expected_version))?;
-        match self
-            .pages
-            .delete(cmd.expected_id, cmd.expected_version)
-            .await?
-        {
+        match self.pages.delete(cmd.id, cmd.expected_version).await? {
             PageDeleteOutcome::Deleted => Ok(()),
             PageDeleteOutcome::StaleVersion => Err(UseCaseError::VersionConflict),
-            PageDeleteOutcome::Gone => Err(UseCaseError::NotFound(format!("页面 {}", cmd.slug))),
+            PageDeleteOutcome::Gone => Err(UseCaseError::NotFound(format!("页面 {}", cmd.id))),
         }
     }
 
     /// 提交聚合变更：三态结果映射为用例错误；成功时采用数据库返回的新版本。
     async fn commit(&self, page: Page, expected: i64) -> Result<PageDto, UseCaseError> {
-        let now = self.clock.now();
-        let mut snapshot = page.snapshot();
-        match self.pages.save(&snapshot, expected, now).await? {
-            SaveOutcome::Saved { new_version } => {
-                snapshot.version = new_version;
-                snapshot.updated_at = now;
-                Ok(PageDto::from_snapshot(&snapshot))
-            }
-            SaveOutcome::StaleConflict => Err(UseCaseError::VersionConflict),
-            SaveOutcome::Gone => Err(UseCaseError::NotFound("页面（已被删除）".into())),
+        match self
+            .pages
+            .commit_page(&page, expected, self.clock.now())
+            .await?
+        {
+            PageCommitOutcome::Saved(snapshot) => Ok(PageDto::from_snapshot(&snapshot)),
+            PageCommitOutcome::StaleConflict => Err(UseCaseError::VersionConflict),
+            PageCommitOutcome::Gone => Err(UseCaseError::NotFound("页面（已被删除）".into())),
         }
     }
 
-    /// 读取 + 站点级授权（不含版本；用于 find）。
     async fn load_authorized(
         &self,
         actor: &crate::identity::Actor,
-        slug: &str,
+        id: Uuid,
         key: &str,
     ) -> Result<Page, UseCaseError> {
         if !actor.has_permission(key) {
@@ -241,20 +227,19 @@ impl PageInteractor {
         }
         let snapshot = self
             .pages
-            .find_by_slug(slug)
+            .find_by_id(id)
             .await?
-            .ok_or_else(|| UseCaseError::NotFound(format!("页面 {slug}")))?;
+            .ok_or_else(|| UseCaseError::NotFound(format!("页面 {id}")))?;
         Ok(Page::reconstitute(snapshot))
     }
 
-    /// 读取 + 授权 + 返回当前版本（写用例用）。
     async fn load_versioned(
         &self,
         actor: &crate::identity::Actor,
-        slug: &str,
+        id: Uuid,
         key: &str,
     ) -> Result<(Page, i64), UseCaseError> {
-        let page = self.load_authorized(actor, slug, key).await?;
+        let page = self.load_authorized(actor, id, key).await?;
         let version = page.version();
         Ok((page, version))
     }

@@ -87,7 +87,7 @@ impl SettingsStore for PostgresSettingsStore {
             &mut tx,
             MediaContentKind::Site,
             SITE_MEDIA_CONTENT_ID,
-            &media_ids_for("", value.logo_media_id),
+            &media_ids_for(&[], value.logo_media_id),
         )
         .await?;
         tx.commit().await.map_err(map_repo_error)?;

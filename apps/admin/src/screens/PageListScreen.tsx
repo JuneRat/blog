@@ -64,7 +64,7 @@ export function PageListScreen() {
         onClick={(event) => {
           // 行本身可点进编辑页；操作按钮不能冒泡成一次跳转。
           event.stopPropagation();
-          navigate(paths.editPage(page.slug));
+          navigate(paths.editPage(page.id));
         }}
       >
         编辑
@@ -101,7 +101,7 @@ export function PageListScreen() {
         pagination={false}
         // 保留迁移前的语义：整行点击进入该页面的编辑页。
         onRow={(page) => ({
-          onClick: () => navigate(paths.editPage(page.slug)),
+          onClick: () => navigate(paths.editPage(page.id)),
           style: { cursor: "pointer" },
         })}
         locale={{

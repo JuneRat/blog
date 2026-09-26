@@ -7,17 +7,15 @@ use std::io::Read;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use application::auth::AuthInteractor;
+use application::auth::OAuthManagementInteractor;
 use application::content::PostVisibility;
 use application::content::{CreatePostCmd, EditPostCmd, PostInteractor};
 use application::error::UseCaseError;
 use application::identity::{Actor, CreateUserCmd, RoleInteractor, UserInteractor};
 use application::password::PasswordInteractor;
-use application::ports::{ProviderConfig, ProviderKind, UserRepository};
-use application::public_site::{PublicSiteInteractor, format_datetime};
+use application::ports::{ProviderConfig, ProviderKind};
+use application::public_site::format_datetime;
 use clap::{Parser, Subcommand};
-
-use crate::http::{PublicSiteState, public_router};
 
 #[derive(Debug, Parser)]
 #[command(name = "blog", version, about = "博客受控 CLI 与公开 SSR 服务入口")]
@@ -223,7 +221,7 @@ pub enum PostAction {
     /// 编辑文章（保存已发布内容直接更新线上）
     Edit {
         #[arg(long)]
-        slug: String,
+        id: uuid::Uuid,
         /// 发布前可改；首次发布后锁定
         #[arg(long)]
         new_slug: Option<String>,
@@ -248,7 +246,7 @@ pub enum PostAction {
     /// 发布文章（draft → published）
     Publish {
         #[arg(long)]
-        slug: String,
+        id: uuid::Uuid,
         #[arg(long)]
         if_version: Option<i64>,
         #[arg(long = "as")]
@@ -258,7 +256,7 @@ pub enum PostAction {
     /// 撤回文章（published → draft，slug 保持锁定）
     Withdraw {
         #[arg(long)]
-        slug: String,
+        id: uuid::Uuid,
         #[arg(long)]
         if_version: Option<i64>,
         #[arg(long = "as")]
@@ -268,7 +266,7 @@ pub enum PostAction {
     /// 查看文章当前状态（CLI/后台视图，含草稿）
     Show {
         #[arg(long)]
-        slug: String,
+        id: uuid::Uuid,
         /// 查看身份（own 限本人文章，read_any 可看全部）
         #[arg(long = "as")]
         actor: Option<String>,
@@ -284,122 +282,19 @@ pub enum PostAction {
     },
 }
 
-/// 装配层注入的用例集合。
-pub struct CliDeps {
+/// 用户命令仅依赖账号和密码用例。
+pub struct UserCliDeps {
+    pub users: Arc<UserInteractor>,
+    pub passwords: Arc<PasswordInteractor>,
+}
+
+/// 文章命令只需要文章用例和操作身份解析。
+pub struct PostCliDeps {
     pub users: Arc<UserInteractor>,
     pub posts: Arc<PostInteractor>,
-    pub pages: Arc<application::page::PageInteractor>,
-    /// 标签目录用例（管理动作 tag.manage）。
-    pub tags: Arc<application::tag::TagInteractor>,
-    /// 分类目录用例（管理动作 category.manage）。
-    pub categories: Arc<application::category::CategoryInteractor>,
-    /// 系列用例（管理动作 series.manage；重排逐篇核验文章授权）。
-    pub series: Arc<application::series::SeriesInteractor>,
-    /// 站点设置用例（settings.manage；覆盖 site/theme 分组）。
-    pub settings: Arc<application::settings::SettingsInteractor>,
-    pub roles: Arc<RoleInteractor>,
-    pub auth: Arc<AuthInteractor>,
-    /// 本地密码用例（受控设置/重置、清除与限流）。
-    pub passwords: Arc<PasswordInteractor>,
-    /// 媒体库用例（上传/浏览/删除与可重试回收）。
-    pub media: Arc<application::media::MediaInteractor>,
-    pub secure_cookies: bool,
-    pub public_site: Arc<PublicSiteInteractor>,
-    pub user_repo: Arc<dyn UserRepository>,
-    /// 主题静态资源目录（/assets/）。
-    pub assets_dir: Option<PathBuf>,
-    pub theme_assets: Vec<(String, PathBuf)>,
-    /// 后台 SPA 构建产物目录（/admin/）；不存在时不注册该路由。
-    pub admin_dist: Option<PathBuf>,
-    /// readiness 探针（healthz）。
-    pub health: Option<Arc<dyn application::ports::HealthCheck>>,
 }
 
-pub async fn run(deps: CliDeps, command: Command) -> Result<(), String> {
-    match command {
-        Command::Migrate => Err("migrate 由 server 装配层处理".into()),
-
-        Command::User { action } => run_user(deps, action).await,
-
-        Command::Post { action } => run_post(deps, action).await,
-
-        Command::Role { action } => run_role(deps, action).await,
-
-        Command::Oauth { action } => run_oauth(deps, action).await,
-
-        Command::Media { action } => run_media(deps, action).await,
-
-        Command::Serve { addr } => {
-            let bind = addr
-                .or_else(|| std::env::var("BLOG_BIND").ok())
-                .unwrap_or_else(|| "127.0.0.1:8080".into());
-            let public_state = PublicSiteState {
-                site: deps.public_site,
-                health: deps.health,
-            };
-            let auth_state = crate::http_auth::AuthState {
-                auth: deps.auth,
-                passwords: deps.passwords.clone(),
-                secure_cookies: deps.secure_cookies,
-            };
-            let admin_state = crate::http_auth::AdminState {
-                auth: auth_state.auth.clone(),
-                users: deps.users,
-                passwords: deps.passwords,
-                posts: deps.posts,
-                pages: deps.pages,
-                tags: deps.tags,
-                categories: deps.categories,
-                series: deps.series,
-                settings: deps.settings,
-                roles: deps.roles,
-                media: deps.media.clone(),
-                secure_cookies: deps.secure_cookies,
-            };
-            let media_read_state = crate::http_media::MediaReadState {
-                media: deps.media,
-                auth: admin_state.auth.clone(),
-            };
-            let app = crate::http::mount_theme_assets(
-                public_router(public_state, deps.assets_dir),
-                deps.theme_assets,
-            )
-            .merge(crate::http_auth::auth_router(auth_state))
-            .merge(crate::http_auth::admin_router(admin_state.clone()))
-            .merge(crate::http_admin::posts_router(admin_state.clone()))
-            .merge(crate::http_admin::pages_router(admin_state.clone()))
-            .merge(crate::http_admin::tags_router(admin_state.clone()))
-            .merge(crate::http_admin::categories_router(admin_state.clone()))
-            .merge(crate::http_admin::series_router(admin_state.clone()))
-            .merge(crate::http_admin::settings_router(admin_state.clone()))
-            .merge(crate::http_media::media_admin_router(admin_state.clone()))
-            .merge(crate::http_identity::identity_router(admin_state))
-            // 公开媒体读取必须挂在与 /{slug} 同一张表上：静态前缀优先。
-            .merge(crate::http_media::media_read_router(media_read_state));
-            // 后台 SPA 挂在 /admin 子树；dist 不存在时保持未注册。
-            let app = crate::http::mount_admin_spa(app, deps.admin_dist);
-            // 全站最外层：分配请求编号、记录完成日志、回写 x-request-id（含被提前拒绝的 401/403）。
-            let app = app.layer(axum::middleware::from_fn(
-                crate::http_support::request_context,
-            ));
-            let listener = tokio::net::TcpListener::bind(&bind)
-                .await
-                .map_err(|e| format!("绑定 {bind} 失败：{e}"))?;
-            println!("公开站点已启动：http://{bind}");
-            // 连接信息供密码登录按来源地址限流（只信任 socket 对端，不读转发头）。
-            axum::serve(
-                listener,
-                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
-            )
-            .with_graceful_shutdown(shutdown_signal())
-            .await
-            .map_err(|e| format!("服务退出：{e}"))?;
-            Ok(())
-        }
-    }
-}
-
-async fn run_user(deps: CliDeps, action: UserAction) -> Result<(), String> {
+pub async fn run_user(deps: UserCliDeps, action: UserAction) -> Result<(), String> {
     match action {
         UserAction::Create {
             username,
@@ -521,7 +416,10 @@ fn strip_one_line_ending(input: &str) -> &str {
     trimmed.strip_suffix('\r').unwrap_or(trimmed)
 }
 
-async fn run_oauth(deps: CliDeps, action: OauthAction) -> Result<(), String> {
+pub async fn run_oauth(
+    oauth: &OAuthManagementInteractor,
+    action: OauthAction,
+) -> Result<(), String> {
     match action {
         OauthAction::AddOidc {
             id,
@@ -531,7 +429,7 @@ async fn run_oauth(deps: CliDeps, action: OauthAction) -> Result<(), String> {
             secret_ref,
             scopes,
         } => {
-            let mut providers = deps.auth.list_providers().await.map_err(fmt_error)?;
+            let mut providers = oauth.list_providers().await.map_err(fmt_error)?;
             upsert_provider(
                 &mut providers,
                 ProviderConfig {
@@ -544,7 +442,7 @@ async fn run_oauth(deps: CliDeps, action: OauthAction) -> Result<(), String> {
                     scopes: split_scopes(scopes),
                 },
             );
-            deps.auth
+            oauth
                 .save_providers(&Actor::bootstrap_cli(), &providers)
                 .await
                 .map_err(fmt_error)?;
@@ -558,7 +456,7 @@ async fn run_oauth(deps: CliDeps, action: OauthAction) -> Result<(), String> {
             secret_ref,
             scopes,
         } => {
-            let mut providers = deps.auth.list_providers().await.map_err(fmt_error)?;
+            let mut providers = oauth.list_providers().await.map_err(fmt_error)?;
             upsert_provider(
                 &mut providers,
                 ProviderConfig {
@@ -571,7 +469,7 @@ async fn run_oauth(deps: CliDeps, action: OauthAction) -> Result<(), String> {
                     scopes: split_scopes(scopes),
                 },
             );
-            deps.auth
+            oauth
                 .save_providers(&Actor::bootstrap_cli(), &providers)
                 .await
                 .map_err(fmt_error)?;
@@ -579,7 +477,7 @@ async fn run_oauth(deps: CliDeps, action: OauthAction) -> Result<(), String> {
             Ok(())
         }
         OauthAction::List => {
-            let providers = deps.auth.list_providers().await.map_err(fmt_error)?;
+            let providers = oauth.list_providers().await.map_err(fmt_error)?;
             if providers.is_empty() {
                 println!("（未配置提供商；用 oauth add-oidc / add-github 添加）");
             }
@@ -605,7 +503,7 @@ async fn run_oauth(deps: CliDeps, action: OauthAction) -> Result<(), String> {
             external_id,
             email,
         } => {
-            deps.auth
+            oauth
                 .bind_external_id(
                     &Actor::bootstrap_cli(),
                     &user,
@@ -623,7 +521,7 @@ async fn run_oauth(deps: CliDeps, action: OauthAction) -> Result<(), String> {
             provider,
             external_id,
         } => {
-            deps.auth
+            oauth
                 .unbind_external_id(&Actor::bootstrap_cli(), &user, &provider, &external_id)
                 .await
                 .map_err(fmt_error)?;
@@ -631,7 +529,7 @@ async fn run_oauth(deps: CliDeps, action: OauthAction) -> Result<(), String> {
             Ok(())
         }
         OauthAction::Bindings { user } => {
-            let bindings = deps.auth.bindings_of(&user).await.map_err(fmt_error)?;
+            let bindings = oauth.bindings_of(&user).await.map_err(fmt_error)?;
             if bindings.is_empty() {
                 println!("用户 {user} 没有外部身份绑定。");
             }
@@ -665,11 +563,13 @@ fn normalize_optional(value: Option<String>) -> Option<String> {
 ///
 /// 上传中断（staged）与文件删除失败（pending_deletion）都会停在中间状态，
 /// 这里幂等地重试；失败项保留原状态并打印原因，可再次执行。
-async fn run_media(deps: CliDeps, action: MediaAction) -> Result<(), String> {
+pub async fn run_media(
+    media: &application::media::MediaInteractor,
+    action: MediaAction,
+) -> Result<(), String> {
     match action {
         MediaAction::Reclaim => {
-            let report = deps
-                .media
+            let report = media
                 .reclaim(&Actor::bootstrap_cli())
                 .await
                 .map_err(fmt_error)?;
@@ -698,16 +598,15 @@ async fn run_media(deps: CliDeps, action: MediaAction) -> Result<(), String> {
     }
 }
 
-async fn run_role(deps: CliDeps, action: RoleAction) -> Result<(), String> {
+pub async fn run_role(roles: &RoleInteractor, action: RoleAction) -> Result<(), String> {
     match action {
         RoleAction::Sync => {
-            deps.roles.sync_registry().await.map_err(fmt_error)?;
+            roles.sync_registry().await.map_err(fmt_error)?;
             println!("权限目录与内置角色已同步。");
             Ok(())
         }
         RoleAction::List => {
-            let roles = deps
-                .roles
+            let roles = roles
                 .list(&Actor::bootstrap_cli())
                 .await
                 .map_err(fmt_error)?;
@@ -724,7 +623,7 @@ async fn run_role(deps: CliDeps, action: RoleAction) -> Result<(), String> {
             Ok(())
         }
         RoleAction::Assign { user, role } => {
-            deps.roles
+            roles
                 .assign_to_username(&Actor::bootstrap_cli(), &user, &role)
                 .await
                 .map_err(fmt_error)?;
@@ -732,7 +631,7 @@ async fn run_role(deps: CliDeps, action: RoleAction) -> Result<(), String> {
             Ok(())
         }
         RoleAction::Remove { user, role } => {
-            deps.roles
+            roles
                 .remove_from_username(&Actor::bootstrap_cli(), &user, &role)
                 .await
                 .map_err(fmt_error)?;
@@ -742,7 +641,7 @@ async fn run_role(deps: CliDeps, action: RoleAction) -> Result<(), String> {
     }
 }
 
-async fn run_post(deps: CliDeps, action: PostAction) -> Result<(), String> {
+pub async fn run_post(deps: PostCliDeps, action: PostAction) -> Result<(), String> {
     match action {
         PostAction::Create {
             author,
@@ -777,14 +676,14 @@ async fn run_post(deps: CliDeps, action: PostAction) -> Result<(), String> {
                 .await
                 .map_err(fmt_error)?;
             println!(
-                "已创建草稿 slug={} version={} status={}",
-                dto.slug, dto.version, dto.status
+                "已创建草稿 id={} slug={} version={} status={}",
+                dto.id, dto.slug, dto.version, dto.status
             );
             Ok(())
         }
 
         PostAction::Edit {
-            slug,
+            id,
             new_slug,
             title,
             excerpt,
@@ -793,7 +692,7 @@ async fn run_post(deps: CliDeps, action: PostAction) -> Result<(), String> {
             if_version,
             actor,
         } => {
-            let actor = resolve_actor(&deps, actor.as_deref(), &slug).await?;
+            let actor = resolve_actor(&deps, actor.as_deref(), id).await?;
             let content = match content_file {
                 Some(path) => Some(read_content(Some(&path))?),
                 None => None,
@@ -807,7 +706,7 @@ async fn run_post(deps: CliDeps, action: PostAction) -> Result<(), String> {
                 .edit(
                     &actor,
                     EditPostCmd {
-                        target_slug: slug,
+                        id,
                         new_slug,
                         title,
                         excerpt,
@@ -830,14 +729,14 @@ async fn run_post(deps: CliDeps, action: PostAction) -> Result<(), String> {
         }
 
         PostAction::Publish {
-            slug,
+            id,
             if_version,
             actor,
         } => {
-            let actor = resolve_actor(&deps, actor.as_deref(), &slug).await?;
+            let actor = resolve_actor(&deps, actor.as_deref(), id).await?;
             let dto = deps
                 .posts
-                .publish(&actor, &slug, if_version)
+                .publish(&actor, id, if_version)
                 .await
                 .map_err(fmt_error)?;
             println!(
@@ -851,23 +750,23 @@ async fn run_post(deps: CliDeps, action: PostAction) -> Result<(), String> {
         }
 
         PostAction::Withdraw {
-            slug,
+            id,
             if_version,
             actor,
         } => {
-            let actor = resolve_actor(&deps, actor.as_deref(), &slug).await?;
+            let actor = resolve_actor(&deps, actor.as_deref(), id).await?;
             let dto = deps
                 .posts
-                .withdraw(&actor, &slug, if_version)
+                .withdraw(&actor, id, if_version)
                 .await
                 .map_err(fmt_error)?;
             println!("已撤回 slug={} status={}", dto.slug, dto.status);
             Ok(())
         }
 
-        PostAction::Show { slug, actor } => {
-            let actor = resolve_actor(&deps, actor.as_deref(), &slug).await?;
-            let dto = deps.posts.find(&actor, &slug).await.map_err(fmt_error)?;
+        PostAction::Show { id, actor } => {
+            let actor = resolve_actor(&deps, actor.as_deref(), id).await?;
+            let dto = deps.posts.find(&actor, id).await.map_err(fmt_error)?;
             print_post(&dto);
             Ok(())
         }
@@ -891,13 +790,13 @@ async fn run_post(deps: CliDeps, action: PostAction) -> Result<(), String> {
                 .await
                 .map_err(fmt_error)?;
             println!(
-                "{:<6} {:<10} {:<8} {:<14} 标题",
-                "版本", "状态", "可见", "slug"
+                "{:<36} {:<6} {:<10} {:<8} {:<14} 标题",
+                "ID", "版本", "状态", "可见", "slug"
             );
             for dto in list {
                 println!(
-                    "v{:<5} {:<10} {:<8} {:<14} {}",
-                    dto.version, dto.status, dto.visibility, dto.slug, dto.title
+                    "{} v{:<5} {:<10} {:<8} {:<14} {}",
+                    dto.id, dto.version, dto.status, dto.visibility, dto.slug, dto.title
                 );
             }
             Ok(())
@@ -906,9 +805,9 @@ async fn run_post(deps: CliDeps, action: PostAction) -> Result<(), String> {
 }
 
 async fn resolve_actor(
-    deps: &CliDeps,
+    deps: &PostCliDeps,
     actor_username: Option<&str>,
-    post_slug: &str,
+    post_id: uuid::Uuid,
 ) -> Result<Actor, String> {
     match actor_username {
         Some(username) => deps
@@ -918,7 +817,7 @@ async fn resolve_actor(
             .map_err(fmt_error),
         None => {
             // 缺省使用文章作者（写动作随后仍按 own/any 授权）。
-            let author = deps.posts.author_of(post_slug).await.map_err(fmt_error)?;
+            let author = deps.posts.author_of(post_id).await.map_err(fmt_error)?;
             deps.users
                 .actor_for_user_id(author.0)
                 .await
@@ -953,6 +852,7 @@ fn read_content(path: Option<&std::path::Path>) -> Result<String, String> {
 }
 
 fn print_post(dto: &application::content::PostDto) {
+    println!("id:          {}", dto.id);
     println!("slug:        {}", dto.slug);
     println!("title:       {}", dto.title);
     println!("status:      {}", dto.status);
@@ -974,24 +874,43 @@ fn fmt_error(e: UseCaseError) -> String {
     e.to_string()
 }
 
-async fn shutdown_signal() {
-    let ctrl_c = async {
-        let _ = tokio::signal::ctrl_c().await;
-    };
-    #[cfg(unix)]
-    let terminate = async {
-        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
-            Ok(mut sig) => {
-                sig.recv().await;
-            }
-            Err(_) => std::future::pending::<()>().await,
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn existing_post_commands_require_uuid_identity() {
+        let id = uuid::Uuid::now_v7();
+        for name in ["edit", "publish", "withdraw", "show"] {
+            let cli = Cli::try_parse_from(["blog", "post", name, "--id", &id.to_string()])
+                .expect("UUID command should parse");
+            let Command::Post { action } = cli.command else {
+                panic!("expected post command");
+            };
+            let parsed_id = match action {
+                PostAction::Edit { id, .. }
+                | PostAction::Publish { id, .. }
+                | PostAction::Withdraw { id, .. }
+                | PostAction::Show { id, .. } => id,
+                _ => panic!("expected existing post command"),
+            };
+            assert_eq!(parsed_id, id);
+            assert!(Cli::try_parse_from(["blog", "post", name, "--id", "a-slug"]).is_err());
+            assert!(Cli::try_parse_from(["blog", "post", name, "--slug", "a-slug"]).is_err());
         }
-    };
-    #[cfg(not(unix))]
-    let terminate = std::future::pending::<()>();
-    tokio::select! {
-        _ = ctrl_c => {},
-        _ = terminate => {},
     }
-    println!("收到退出信号，正在关闭…");
+
+    #[test]
+    fn create_can_set_the_public_slug() {
+        let cli = Cli::try_parse_from([
+            "blog", "post", "create", "--author", "sun", "--slug", "hello",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Post {
+                action: PostAction::Create { slug: Some(slug), .. },
+            } if slug == "hello"
+        ));
+    }
 }

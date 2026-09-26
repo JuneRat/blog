@@ -154,7 +154,7 @@ describe("文章编辑器标签选择", () => {
   };
 
   beforeEach(() => {
-    window.history.replaceState(null, "", paths.editPost(post.slug));
+    window.history.replaceState(null, "", paths.editPost(post.id));
     vi.mocked(api.listTags).mockResolvedValue([essay, rust]);
     vi.mocked(api.categoryApi.list).mockResolvedValue([]);
   vi.mocked(seriesApi.list).mockResolvedValue([]);
@@ -178,7 +178,7 @@ describe("文章编辑器标签选择", () => {
 
     await waitFor(() => {
       expect(apiAny.updatePost).toHaveBeenCalledWith(
-        "first",
+        post.id,
         expect.objectContaining({
           tag_ids: expect.arrayContaining(["tag-rust", "tag-essay"]),
           expected_version: 3,

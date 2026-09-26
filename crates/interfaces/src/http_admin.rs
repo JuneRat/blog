@@ -251,12 +251,12 @@ pub fn posts_router(state: AdminState) -> Router {
     Router::new()
         .route("/api/admin/v1/posts", get(list_posts).post(create_post))
         .route("/api/admin/v1/post-trash", get(list_trash))
-        .route("/api/admin/v1/posts/{slug}", get(get_post).patch(edit_post))
-        .route("/api/admin/v1/posts/{slug}/trash", post(trash_post))
-        .route("/api/admin/v1/posts/{slug}/restore", post(restore_post))
-        .route("/api/admin/v1/posts/{slug}/purge", post(purge_post))
-        .route("/api/admin/v1/posts/{slug}/publish", post(publish_post))
-        .route("/api/admin/v1/posts/{slug}/unpublish", post(unpublish_post))
+        .route("/api/admin/v1/posts/{id}", get(get_post).patch(edit_post))
+        .route("/api/admin/v1/posts/{id}/trash", post(trash_post))
+        .route("/api/admin/v1/posts/{id}/restore", post(restore_post))
+        .route("/api/admin/v1/posts/{id}/purge", post(purge_post))
+        .route("/api/admin/v1/posts/{id}/publish", post(publish_post))
+        .route("/api/admin/v1/posts/{id}/unpublish", post(unpublish_post))
         .layer(axum::extract::DefaultBodyLimit::max(ADMIN_BODY_LIMIT))
         .layer(middleware::from_fn(no_store))
         .with_state(state)
@@ -303,9 +303,9 @@ async fn get_post(
     AdminAuth { actor }: AdminAuth,
     request_id: RequestId,
     State(state): State<AdminState>,
-    Path(slug): Path<String>,
+    Path(id): Path<Uuid>,
 ) -> Response {
-    match state.posts.find(&actor, &slug).await {
+    match state.posts.find(&actor, id).await {
         Ok(dto) => (StatusCode::OK, Json(PostDetailJson::from(dto))).into_response(),
         Err(e) => admin_error(e, &request_id),
     }
@@ -379,12 +379,12 @@ async fn trash_post(
     AdminAuth { actor }: AdminAuth,
     request_id: RequestId,
     State(state): State<AdminState>,
-    Path(slug): Path<String>,
+    Path(id): Path<Uuid>,
     body: Option<Json<VersionBody>>,
 ) -> Response {
     match state
         .posts
-        .trash(&actor, &slug, body.and_then(|Json(b)| b.expected_version))
+        .trash(&actor, id, body.and_then(|Json(b)| b.expected_version))
         .await
     {
         Ok(dto) => (StatusCode::OK, Json(PostDetailJson::from(dto))).into_response(),
@@ -396,12 +396,12 @@ async fn restore_post(
     AdminAuth { actor }: AdminAuth,
     request_id: RequestId,
     State(state): State<AdminState>,
-    Path(slug): Path<String>,
+    Path(id): Path<Uuid>,
     body: Option<Json<VersionBody>>,
 ) -> Response {
     match state
         .posts
-        .restore(&actor, &slug, body.and_then(|Json(b)| b.expected_version))
+        .restore(&actor, id, body.and_then(|Json(b)| b.expected_version))
         .await
     {
         Ok(dto) => (StatusCode::OK, Json(PostDetailJson::from(dto))).into_response(),
@@ -413,12 +413,12 @@ async fn purge_post(
     AdminAuth { actor }: AdminAuth,
     request_id: RequestId,
     State(state): State<AdminState>,
-    Path(slug): Path<String>,
+    Path(id): Path<Uuid>,
     body: Option<Json<VersionBody>>,
 ) -> Response {
     match state
         .posts
-        .purge(&actor, &slug, body.and_then(|Json(b)| b.expected_version))
+        .purge(&actor, id, body.and_then(|Json(b)| b.expected_version))
         .await
     {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
@@ -430,7 +430,7 @@ async fn edit_post(
     AdminAuth { actor }: AdminAuth,
     request_id: RequestId,
     State(state): State<AdminState>,
-    Path(slug): Path<String>,
+    Path(id): Path<Uuid>,
     Json(body): Json<EditPostBody>,
 ) -> Response {
     let visibility = match body.visibility.as_deref() {
@@ -440,26 +440,21 @@ async fn edit_post(
         },
         None => None,
     };
-    match state
-        .posts
-        .edit(
-            &actor,
-            EditPostCmd {
-                target_slug: slug,
-                new_slug: body.new_slug,
-                title: body.title,
-                excerpt: body.excerpt,
-                content: body.content,
-                visibility,
-                tag_ids: body.tag_ids,
-                category_id: body.category_id,
-                series: body.series.map(|opt| opt.map(|s| (s.id, s.order))),
-                cover_media_id: body.cover_media_id,
-                expected_version: body.expected_version,
-            },
-        )
-        .await
-    {
+    let cmd = EditPostCmd {
+        id,
+        new_slug: body.new_slug,
+        title: body.title,
+        excerpt: body.excerpt,
+        content: body.content,
+        visibility,
+        tag_ids: body.tag_ids,
+        category_id: body.category_id,
+        series: body.series.map(|opt| opt.map(|s| (s.id, s.order))),
+        cover_media_id: body.cover_media_id,
+        expected_version: body.expected_version,
+    };
+    let result = state.posts.edit(&actor, cmd).await;
+    match result {
         Ok(dto) => (StatusCode::OK, Json(PostDetailJson::from(dto))).into_response(),
         Err(e) => admin_error(e, &request_id),
     }
@@ -469,11 +464,11 @@ async fn publish_post(
     AdminAuth { actor }: AdminAuth,
     request_id: RequestId,
     State(state): State<AdminState>,
-    Path(slug): Path<String>,
+    Path(id): Path<Uuid>,
     body: Option<Json<VersionBody>>,
 ) -> Response {
     let expected = body.and_then(|Json(b)| b.expected_version);
-    match state.posts.publish(&actor, &slug, expected).await {
+    match state.posts.publish(&actor, id, expected).await {
         Ok(dto) => (StatusCode::OK, Json(PostDetailJson::from(dto))).into_response(),
         Err(e) => admin_error(e, &request_id),
     }
@@ -483,11 +478,11 @@ async fn unpublish_post(
     AdminAuth { actor }: AdminAuth,
     request_id: RequestId,
     State(state): State<AdminState>,
-    Path(slug): Path<String>,
+    Path(id): Path<Uuid>,
     body: Option<Json<VersionBody>>,
 ) -> Response {
     let expected = body.and_then(|Json(b)| b.expected_version);
-    match state.posts.withdraw(&actor, &slug, expected).await {
+    match state.posts.withdraw(&actor, id, expected).await {
         Ok(dto) => (StatusCode::OK, Json(PostDetailJson::from(dto))).into_response(),
         Err(e) => admin_error(e, &request_id),
     }
@@ -579,7 +574,6 @@ pub struct EditPageBody {
 
 #[derive(Deserialize)]
 pub struct DeletePageBody {
-    pub expected_id: Uuid,
     pub expected_version: i64,
 }
 
@@ -587,11 +581,11 @@ pub fn pages_router(state: AdminState) -> Router {
     Router::new()
         .route("/api/admin/v1/pages", get(list_pages).post(create_page))
         .route(
-            "/api/admin/v1/pages/{slug}",
+            "/api/admin/v1/pages/{id}",
             get(get_page).patch(edit_page).delete(delete_page),
         )
-        .route("/api/admin/v1/pages/{slug}/publish", post(publish_page))
-        .route("/api/admin/v1/pages/{slug}/unpublish", post(unpublish_page))
+        .route("/api/admin/v1/pages/{id}/publish", post(publish_page))
+        .route("/api/admin/v1/pages/{id}/unpublish", post(unpublish_page))
         .layer(axum::extract::DefaultBodyLimit::max(ADMIN_BODY_LIMIT))
         .layer(middleware::from_fn(no_store))
         .with_state(state)
@@ -601,21 +595,20 @@ async fn delete_page(
     AdminAuth { actor }: AdminAuth,
     request_id: RequestId,
     State(state): State<AdminState>,
-    Path(slug): Path<String>,
+    Path(id): Path<Uuid>,
     Json(body): Json<DeletePageBody>,
 ) -> Response {
-    match state
+    let result = state
         .pages
         .delete(
             &actor,
             DeletePageCmd {
-                slug,
-                expected_id: body.expected_id,
+                id,
                 expected_version: body.expected_version,
             },
         )
-        .await
-    {
+        .await;
+    match result {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => admin_error(e, &request_id),
     }
@@ -653,9 +646,9 @@ async fn get_page(
     AdminAuth { actor }: AdminAuth,
     request_id: RequestId,
     State(state): State<AdminState>,
-    Path(slug): Path<String>,
+    Path(id): Path<Uuid>,
 ) -> Response {
-    match state.pages.find(&actor, &slug).await {
+    match state.pages.find(&actor, id).await {
         Ok(dto) => (StatusCode::OK, Json(PageDetailJson::from(dto))).into_response(),
         Err(e) => admin_error(e, &request_id),
     }
@@ -680,7 +673,7 @@ async fn edit_page(
     AdminAuth { actor }: AdminAuth,
     request_id: RequestId,
     State(state): State<AdminState>,
-    Path(slug): Path<String>,
+    Path(id): Path<Uuid>,
     Json(body): Json<EditPageBody>,
 ) -> Response {
     let visibility = match body.visibility.as_deref() {
@@ -690,21 +683,16 @@ async fn edit_page(
         },
         None => None,
     };
-    match state
-        .pages
-        .edit(
-            &actor,
-            EditPageCmd {
-                target_slug: slug,
-                new_slug: body.new_slug,
-                title: body.title,
-                content: body.content,
-                visibility,
-                expected_version: body.expected_version,
-            },
-        )
-        .await
-    {
+    let cmd = EditPageCmd {
+        id,
+        new_slug: body.new_slug,
+        title: body.title,
+        content: body.content,
+        visibility,
+        expected_version: body.expected_version,
+    };
+    let result = state.pages.edit(&actor, cmd).await;
+    match result {
         Ok(dto) => (StatusCode::OK, Json(PageDetailJson::from(dto))).into_response(),
         Err(e) => admin_error(e, &request_id),
     }
@@ -714,11 +702,11 @@ async fn publish_page(
     AdminAuth { actor }: AdminAuth,
     request_id: RequestId,
     State(state): State<AdminState>,
-    Path(slug): Path<String>,
+    Path(id): Path<Uuid>,
     body: Option<Json<VersionBody>>,
 ) -> Response {
     let expected = body.and_then(|Json(b)| b.expected_version);
-    match state.pages.publish(&actor, &slug, expected).await {
+    match state.pages.publish(&actor, id, expected).await {
         Ok(dto) => (StatusCode::OK, Json(PageDetailJson::from(dto))).into_response(),
         Err(e) => admin_error(e, &request_id),
     }
@@ -728,11 +716,11 @@ async fn unpublish_page(
     AdminAuth { actor }: AdminAuth,
     request_id: RequestId,
     State(state): State<AdminState>,
-    Path(slug): Path<String>,
+    Path(id): Path<Uuid>,
     body: Option<Json<VersionBody>>,
 ) -> Response {
     let expected = body.and_then(|Json(b)| b.expected_version);
-    match state.pages.withdraw(&actor, &slug, expected).await {
+    match state.pages.withdraw(&actor, id, expected).await {
         Ok(dto) => (StatusCode::OK, Json(PageDetailJson::from(dto))).into_response(),
         Err(e) => admin_error(e, &request_id),
     }

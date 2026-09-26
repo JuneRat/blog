@@ -88,17 +88,17 @@ function isVersionConflict(error: unknown): boolean {
 type TextAreaHandle = { resizableTextArea?: { textArea: HTMLTextAreaElement } };
 
 /**
- * 页面编辑屏。`slug === null` 表示新建。
+ * 页面编辑屏。`id === null` 表示新建。
  *
  * 与文章编辑器共享同一套交互（脏检测、按字段合并服务器响应、发布前先保存、
- * 改名后 replaceState），但 Page 没有作者、摘要与分类，页面权限是站点级。
+ * 稳定 ID 定位），但 Page 没有作者、摘要与分类，页面权限是站点级。
  *
  * 值的唯一来源是 antd Form 的 store；`view` 只是给渲染与脏判断用的镜像，
  * 由 `onValuesChange`（同步回调）与写入函数共同维护，不另立第二份数据。
  * 这样 `pickServer`/`mergeServer` 仍能读到「响应回来那一刻」的真实输入，
  * 保留「请求飞行期间的新输入不被服务器响应覆盖」的既有语义。
  */
-export function PageEditScreen({ slug }: { slug: string | null }) {
+export function PageEditScreen({ id }: { id: string | null }) {
   const { me } = useAuth();
   const { modal } = AntdApp.useApp();
   const [formApi] = Form.useForm<FormState>();
@@ -110,16 +110,14 @@ export function PageEditScreen({ slug }: { slug: string | null }) {
   const [mediaOpen, setMediaOpen] = useState(false);
   /** 正文输入框：插入位置取自它的真实选区。 */
   const contentRef = useRef<HTMLTextAreaElement | null>(null);
-  /** 当前表单内容所属的 slug（`applyServer` 写入）。用于识别「表单与地址不一致」。 */
-  const [formSlug, setFormSlug] = useState<string | null>(null);
-  const [loading, setLoading] = useState(slug !== null);
+  const [loading, setLoading] = useState(id !== null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [conflict, setConflict] = useState(false);
   const [deleteConflict, setDeleteConflict] = useState(false);
   const baselineRef = useRef<FormState>(EMPTY_FORM);
-  const loadedSlugRef = useRef<string | null>(null);
+  const loadedIdRef = useRef<string | null>(null);
 
   const attachContentRef = useCallback((node: TextAreaHandle | null): void => {
     contentRef.current = node?.resizableTextArea?.textArea ?? null;
@@ -146,9 +144,8 @@ export function PageEditScreen({ slug }: { slug: string | null }) {
       const server = toForm(page);
       const merged = sent === undefined ? server : mergeServer(readForm(), sent, server);
       baselineRef.current = server;
-      loadedSlugRef.current = server.slug;
+      loadedIdRef.current = page.id;
       writeForm(merged);
-      setFormSlug(server.slug);
       setVersion(page.version);
       setPageId(page.id);
       setPageStatus(page.status);
@@ -173,10 +170,10 @@ export function PageEditScreen({ slug }: { slug: string | null }) {
   /**
    * 表单内容与当前地址不一致：编辑页后退/切换到另一页时组件会被复用，
    * 若目标页加载失败（或仍在加载），表单里留着的仍是**上一篇**的内容。
-   * 此时绝不能提交——`expected_version` 会用上一篇的版本号打到新 slug 上。
-   * 用「表单所属 slug」而非「version 是否为空」判断，才能覆盖 A(已加载) → B(加载失败)。
+   * 此时绝不能提交——`expected_version` 会用上一篇的版本号打到另一个 ID 上。
+   * 用「表单所属 ID」而非「version 是否为空」判断，才能覆盖 A(已加载) → B(加载失败)。
    */
-  const formMismatch = slug !== null && formSlug !== slug;
+  const formMismatch = id !== null && pageId !== id;
   /** 未加载成功（非加载中但表单仍不属于当前地址）：显示告警与重试入口。 */
   const unloaded = formMismatch && !loading;
   /** 渲染镜像与最近一次服务器同步值的差异；用于离开确认（见 src/unsaved.tsx）。 */
@@ -189,14 +186,13 @@ export function PageEditScreen({ slug }: { slug: string | null }) {
   }, [queryClient]);
 
   useEffect(() => {
-    if (slug === null) {
-      // 编辑页后退到新建页时组件会复用（App 不按 slug 加 key）；清空全部编辑状态，
+    if (id === null) {
+      // 编辑页后退到新建页时组件会复用（App 不按 ID 加 key）；清空全部编辑状态，
       // 否则会带着上一篇的 slug/标题/正文/version 与「已发布」徽标去建新页。
-      // 创建成功的 null → slug 跳转仍由 loadedSlugRef 保留已合并的新输入。
+      // 创建成功的 null → ID 跳转仍由 loadedIdRef 保留已合并的新输入。
       baselineRef.current = EMPTY_FORM;
-      loadedSlugRef.current = null;
+      loadedIdRef.current = null;
       writeForm(EMPTY_FORM);
-      setFormSlug(null);
       setVersion(null);
       setPageId(null);
       setPageStatus("draft");
@@ -208,8 +204,8 @@ export function PageEditScreen({ slug }: { slug: string | null }) {
       setLoading(false);
       return;
     }
-    // 刚在本地同步过这个页面（例如改名后更新地址栏）：表单已经是最新的，不要重载覆盖。
-    if (slug === loadedSlugRef.current) {
+    // 刚创建并同步过这个页面：切到新 ID 时不要重载覆盖请求期间的新输入。
+    if (id === loadedIdRef.current) {
       setLoading(false);
       return;
     }
@@ -217,7 +213,7 @@ export function PageEditScreen({ slug }: { slug: string | null }) {
     void (async () => {
       setLoading(true);
       try {
-        const page = await api.getPage(slug);
+        const page = await api.getPage(id);
         if (!cancelled) applyServer(page);
       } catch (e) {
         if (!cancelled) setError(permissionMessageOf(e));
@@ -228,7 +224,7 @@ export function PageEditScreen({ slug }: { slug: string | null }) {
     return () => {
       cancelled = true;
     };
-  }, [slug, applyServer, writeForm]);
+  }, [id, applyServer, writeForm]);
 
   function commitContent(next: string): void {
     writeForm({ ...readForm(), content: next });
@@ -239,7 +235,7 @@ export function PageEditScreen({ slug }: { slug: string | null }) {
     const current = readForm();
     const trimmed = current.slug.trim();
     return {
-      new_slug: slug !== null && trimmed.length > 0 && trimmed !== slug ? trimmed : undefined,
+      new_slug: id !== null && trimmed.length > 0 && trimmed !== baselineRef.current.slug ? trimmed : undefined,
       title: current.title,
       content: current.content,
       visibility: current.visibility,
@@ -249,14 +245,14 @@ export function PageEditScreen({ slug }: { slug: string | null }) {
   async function save(): Promise<void> {
     setError(null);
     setNotice(null);
-    // 用 formMismatch 而非 unloaded：加载途中也不能把上一篇的内容提交到新 slug。
+    // 用 formMismatch 而非 unloaded：加载途中也不能把上一篇的内容提交到另一个 ID。
     if (formMismatch) {
       setError("页面尚未成功加载，请先重新加载再保存，避免覆盖服务器内容。");
       return;
     }
     setBusy(true);
     try {
-      if (slug === null) {
+      if (id === null) {
         const sent = readForm();
         const created = await api.createPage({
           slug: sent.slug.trim().length > 0 ? sent.slug.trim() : undefined,
@@ -266,20 +262,17 @@ export function PageEditScreen({ slug }: { slug: string | null }) {
         });
         applyServer(created, sent);
         invalidateList();
-        navigate(paths.editPage(created.slug));
+        navigate(paths.editPage(created.id));
         return;
       }
       const sent = readForm();
-      const saved = await api.updatePage(slug, {
+      const saved = await api.updatePage(id, {
         ...editPayload(),
         expected_version: version ?? undefined,
       });
       const stillDirty = applyServer(saved, sent);
       invalidateList();
-      if (saved.slug !== slug) {
-        navigate(paths.editPage(saved.slug), { replace: true });
-        return;
-      }
+
       setNotice(
         stillDirty ? "已保存；等待期间的新改动尚未保存。" : "已保存（已发布页面直接更新线上）。",
       );
@@ -296,11 +289,11 @@ export function PageEditScreen({ slug }: { slug: string | null }) {
 
   /** 冲突动作一：丢弃本地改动，重新加载服务器最新内容。 */
   async function reloadFromServer(): Promise<void> {
-    if (slug === null) return;
+    if (id === null) return;
     setError(null);
     setBusy(true);
     try {
-      applyServer(await api.getPage(slug));
+      applyServer(await api.getPage(id));
       setNotice("已重新加载服务器最新内容。");
     } catch (e) {
       setError(permissionMessageOf(e));
@@ -311,7 +304,7 @@ export function PageEditScreen({ slug }: { slug: string | null }) {
 
   /** 冲突动作二：二次确认后用服务器最新 version 覆盖本地内容。 */
   function overwriteWithLatest(): void {
-    if (slug === null) return;
+    if (id === null) return;
     modal.confirm({
       title: "用当前编辑内容覆盖服务器上的最新版本？",
       content: "将用你当前的编辑内容覆盖服务器上的最新版本，确定继续？",
@@ -320,18 +313,15 @@ export function PageEditScreen({ slug }: { slug: string | null }) {
         setError(null);
         setBusy(true);
         try {
-          const latest = await api.getPage(slug);
+          const latest = await api.getPage(id);
           const sent = readForm();
-          const saved = await api.updatePage(slug, {
+          const saved = await api.updatePage(id, {
             ...editPayload(),
             expected_version: latest.version,
           });
           const stillDirty = applyServer(saved, sent);
           invalidateList();
-          if (saved.slug !== slug) {
-            navigate(paths.editPage(saved.slug), { replace: true });
-            return;
-          }
+
           setNotice(
             stillDirty ? "已覆盖保存；等待期间的新改动尚未保存。" : "已用服务器最新版本覆盖保存。",
           );
@@ -351,21 +341,19 @@ export function PageEditScreen({ slug }: { slug: string | null }) {
   /** 发布/撤回：有未保存改动时先保存，再用保存得到的版本改状态。 */
   async function setPublished(publish: boolean): Promise<void> {
     // 表单不属于当前地址时不得改状态：没有可依据的版本号，等于盲写。
-    if (slug === null || formMismatch) return;
+    if (id === null || formMismatch) return;
     setError(null);
     setNotice(null);
     setBusy(true);
     const hadUnsavedEdits = hasUnsaved();
-    let activeSlug = slug;
     try {
       let expected = version ?? undefined;
       if (hadUnsavedEdits) {
         const sent = readForm();
-        const saved = await api.updatePage(activeSlug, {
+        const saved = await api.updatePage(id, {
           ...editPayload(),
           expected_version: expected,
         });
-        activeSlug = saved.slug;
         expected = saved.version;
         applyServer(saved, sent);
         /**
@@ -376,8 +364,8 @@ export function PageEditScreen({ slug }: { slug: string | null }) {
         invalidateList();
       }
       const result = publish
-        ? await api.publishPage(activeSlug, expected)
-        : await api.unpublishPage(activeSlug, expected);
+        ? await api.publishPage(id, expected)
+        : await api.unpublishPage(id, expected);
       applyStatus(result);
       invalidateList();
       const stillDirty = hasUnsaved();
@@ -395,19 +383,16 @@ export function PageEditScreen({ slug }: { slug: string | null }) {
         setError(permissionMessageOf(e));
       }
     } finally {
-      if (activeSlug !== slug) {
-        navigate(paths.editPage(activeSlug), { replace: true });
-      }
       setBusy(false);
     }
   }
 
   function deletePage(): void {
-    if (slug === null || formMismatch || pageId === null || version === null) return;
+    if (id === null || formMismatch || pageId === null || version === null) return;
     const current = readForm();
     modal.confirm({
-      title: `永久删除页面「${current.title || slug}」？`,
-      content: `地址 /${slug} 会立即失效。此操作没有回收站，无法恢复；未保存的修改也会丢失。`,
+      title: `永久删除页面「${current.title || current.slug}」？`,
+      content: `地址 /${baselineRef.current.slug} 会立即失效。此操作没有回收站，无法恢复；未保存的修改也会丢失。`,
       okButtonProps: { danger: true },
       onOk: async () => {
         setBusy(true);
@@ -415,7 +400,7 @@ export function PageEditScreen({ slug }: { slug: string | null }) {
         setNotice(null);
         setDeleteConflict(false);
         try {
-          await api.deletePage(slug, pageId, version);
+          await api.deletePage(id, version);
           invalidateList();
           navigate(paths.pages, { replace: true });
         } catch (cause) {
@@ -455,13 +440,13 @@ export function PageEditScreen({ slug }: { slug: string | null }) {
       <Flex justify="space-between" align="center" wrap gap={12} style={{ marginBottom: 16 }}>
         <Flex align="center" gap={8}>
           <Typography.Title level={3} style={{ margin: 0 }}>
-            {slug === null ? "新建页面" : view.slug}
+            {id === null ? "新建页面" : view.slug}
           </Typography.Title>
           <Tag color={published ? "green" : undefined}>{published ? "已发布" : "草稿"}</Tag>
           {version !== null && <Typography.Text type="secondary">v{version}</Typography.Text>}
         </Flex>
-        {published && slug !== null && (
-          <Typography.Link href={`/${encodeURIComponent(slug)}`} target="_blank" rel="noreferrer">
+        {published && id !== null && (
+          <Typography.Link href={`/${encodeURIComponent(baselineRef.current.slug)}`} target="_blank" rel="noreferrer">
             查看公开页面
           </Typography.Link>
         )}
@@ -594,12 +579,12 @@ export function PageEditScreen({ slug }: { slug: string | null }) {
           <Button type="primary" htmlType="submit" disabled={busy}>
             {busy ? "处理中…" : "保存并更新线上"}
           </Button>
-          {canToggle && slug !== null && (
+          {canToggle && id !== null && (
             <Button disabled={busy} onClick={() => void setPublished(pageStatus !== "published")}>
               {published ? "撤回为草稿" : "发布"}
             </Button>
           )}
-          {canDelete && slug !== null && !formMismatch && pageId !== null && (
+          {canDelete && id !== null && !formMismatch && pageId !== null && (
             <Button danger disabled={busy} onClick={deletePage}>
               永久删除页面
             </Button>

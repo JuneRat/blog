@@ -1,51 +1,48 @@
-# 架构文档
+# 文档导航
 
-本目录记录 Rust 博客的设计基线，当前采用用户确认的 **13 张核心表**，并随功能交付追加媒体 2 表与会话 1 表（共 16 张）：少表、关系清晰、按功能扩展。M1 内容闭环、M2 身份/后台与本地密码认证已实现，其余能力按 [功能路线](product-roadmap.md) 推进。
+这里区分当前实现、操作指南、后续规划和决策记录。当前行为以代码及测试为准，数据库结构以迁移为执行依据；规划和历史 ADR 不代表功能已经可用。
 
-- [数据库设计](database-design.md)：用户、OAuth、RBAC、分类、Series、文章、标签、独立页面、settings、媒体与会话的字段及关系。
-- [PostgreSQL DDL](sql/postgres-core.sql)：16 表建表草案、主外键、唯一约束、并发 version 和查询索引。
-- [架构设计](architecture.md)：五个 crate、依赖方向、端口、主题与运行边界。
-- [内容生命周期](content-lifecycle.md)：单份正文的编辑/发布、分类树、系列顺序、可见性、删除与 URL。
-- [Domain 设计](domain.md)：业务模块、聚合、可见性与演进条件。
-- [身份、RBAC 与后台](identity-and-admin.md)：权限 key、作者归属、角色委派、OAuth、本地密码（Argon2id/限流/重置）和 PostgreSQL 持久会话。
-- [主题与渲染](themes-and-rendering.md)：MiniJinja、受控数据函数、异步桥接与后续缓存。
-- [扩展与数据](extensions-and-data.md)：后续受限插件、外部搜索/统计、可靠事件与多数据库适配。
-- [备份与恢复](operations-and-recovery.md)：核心数据库及资源清单、维护备份、隔离恢复与扩展任务核对。
-- [功能路线](product-roadmap.md)：唯一的阶段清单与当前/后续功能边界。
-- [ADR 索引](adr/README.md)：关键选择、来源、替代关系与代价。
+## 按任务阅读
 
-当前核心表：
+| 你要做什么 | 从这里开始 |
+|---|---|
+| 首次运行项目 | [项目首页](../README.md) → [开发指南](development.md) |
+| 配置环境、域名、数据库或媒体目录 | [配置参考](configuration.md) |
+| 修改后端或判断代码应放在哪一层 | [架构](architecture.md) → [领域模型](domain.md) |
+| 修改编辑、发布、删除或媒体引用行为 | [内容生命周期](content-lifecycle.md) → [数据库设计](database-design.md) |
+| 开发后台或接入管理接口 | [管理 API](admin-api.md) → [身份、权限与后台](identity-and-admin.md) |
+| 开发公开页面、主题或 SEO | [主题与渲染](themes-and-rendering.md) |
+| 备份、恢复或处置账号问题 | [运维与恢复](operations-and-recovery.md) |
+| 确认交付范围或选择下一步工作 | [产品路线图](product-roadmap.md) |
+| 理解决策原因及替代方案 | [ADR 索引](adr/README.md) |
 
-```text
-users             oauth_accounts
-roles             permissions       user_roles       role_permissions
-categories        series            posts
-tags              post_tags         pages
-settings
-```
+## 文档职责
 
-随功能交付追加的表：
+每类信息在一个主文档中维护，其他文档用链接引用。
 
-```text
-media_assets      content_media_refs          # 媒体库第一版（0004）
-sessions                                      # 持久会话（0005）
-```
+| 文档 | 负责的内容 |
+|---|---|
+| [开发指南](development.md) | 本地环境、CLI、前端联调、检查命令与测试库 |
+| [配置参考](configuration.md) | 环境变量、配置优先级、路径与命令作用域 |
+| [架构](architecture.md) | 模块职责、依赖方向、装配、事务与执行边界 |
+| [领域模型](domain.md) | 对象关系、业务不变量与公开可见性 |
+| [内容生命周期](content-lifecycle.md) | 编辑、发布、回收站、并发与媒体生命周期 |
+| [数据库设计](database-design.md) | 表结构、约束、索引、迁移与 SQL 参考的关系 |
+| [身份、权限与后台](identity-and-admin.md) | 认证、授权、会话、Owner 保护与后台交互约束 |
+| [管理 API](admin-api.md) | 当前路由、请求形态、版本与错误约定 |
+| [主题与渲染](themes-and-rendering.md) | 模板契约、HTML 派生、执行预算、主题与 SEO |
+| [运维与恢复](operations-and-recovery.md) | 当前工具的操作步骤、验证范围与限制 |
+| [产品路线图](product-roadmap.md) | 交付状态、后续里程碑和验收标准 |
+| [扩展与数据能力](extensions-and-data.md) | 尚未交付的扩展接口、格式和设计约束 |
+| [ADR](adr/README.md) | 决策背景、理由、后果与替代关系 |
 
-Post/Page 分表，文章单分类、单系列、多标签，分类可分层。Page 无作者及分类/标签/系列，使用根路径并保留系统路由。配置按 settings.key 分组存 JSONB。
-
-当前不建修订、路径或审计表：已发布内容保存直接更新线上；无历史恢复或旧 URL 跳转。会话持久化到 PostgreSQL 的 `sessions` 表（服务重启后仍登录、跨进程共享撤销，见 [ADR-0010](adr/0010-persistent-postgres-sessions.md)），OAuth 尝试与本地密码失败限流仍是单实例有界内存、重启失效；用户先由 CLI 显式创建绑定。媒体库第一版（Post/Page 正文图片）已交付 `media_assets` 与 `content_media_refs` 两张表；邀请、事务审计和可靠任务需要时再补存储。
-
-技术方向保持 Rust、PostgreSQL、MiniJinja SSR、React + TypeScript + Vite、通用 OIDC + GitHub。用户可以持有多个角色，作者可直接发布自己的文章，后端校验权限与真实资源归属。
-
-当前仓库已实现五个 crate 的依赖装配、16 表迁移（13 张核心 + 媒体 2 张 + 会话 1 张）与真实 PostgreSQL 集成测试；DDL 在本地/CI 的 PostgreSQL 18 上执行。文档描述的是采用的设计基线，未实现的能力（邀请、审计、媒体扩展、多实例等）以 [功能路线](product-roadmap.md) 为准，不因文档存在而视为可用。
+数据库迁移位于 [migrations/postgres](../migrations/postgres/)，[postgres-core.sql](sql/postgres-core.sql) 是便于整体阅读的结构参考。原型验证位于 [spikes/template-bridge](../spikes/template-bridge/README.md)，不属于主程序的功能入口。
 
 ## 维护约定
 
-当前方案以数据库设计、专项文档及最新 ADR 为准。[ADR-0008](adr/0008-thirteen-table-blog-core.md) 替代此前 14 表及共享内容方案；旧 ADR 保留历史，不作为当前开发要求。
-
-- 已确认：用户明确选择的功能、技术或 schema，不重复请求确认。
-- 工程建议：本次为落地补充的长度、状态、事务、权限和运行时约定。
-- 待验证：需真实数据库、原型或集成检查支持的方案。
-- 已实现：标记以代码与验收为准。当前已实现 M1 内容闭环、M2 身份/后台（含 OAuth 与会话）以及本地密码认证（[ADR-0009](adr/0009-local-password-authentication.md)）；其余仍按“已确认/工程建议/待验证”区分。
-
-后续修改涉及数据模型、生命周期或功能范围时，同步相关文档和路线图；重大取舍增加 ADR，不仅修改 SQL 留下相互冲突的规格。
+- 功能变更时更新对应的当前参考；状态变化只在路线图维护，不往每份文档追加交付日志。
+- 上手命令放开发指南，配置表放配置参考，路由与错误码放 API 参考，避免复制后逐渐失配。
+- 未实现的设计明确标为规划；有表或权限 key，不等于已有可用的用例、API 或界面。
+- 重要架构取舍新增 ADR。旧决策被替代时在索引标明关系，保留当时的背景，不把历史全文改写成现状。
+- SQL 变更先写迁移，再同步数据库说明和结构参考；文档中的 SQL 不替代迁移执行。
+- 使用相对链接引用仓库文件与章节；移动文件或改标题后检查链接。测试数量和一次性执行日志留在变更记录中，不作为长期文档内容。

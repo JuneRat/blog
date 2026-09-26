@@ -167,7 +167,7 @@ describe("我的文章列表", () => {
     render(<App />);
 
     fireEvent.click(await screen.findByText("Rust 指南"));
-    await waitFor(() => expect(window.location.pathname).toBe(paths.editPost("rust-guide")));
+    await waitFor(() => expect(window.location.pathname).toBe(paths.editPost(rustPost.id)));
   });
 
   it("移入回收站：确认后以该行 slug 与当前版本调用 api，并刷新列表", async () => {
@@ -183,7 +183,7 @@ describe("我的文章列表", () => {
     expect(await screen.findByRole("dialog", { name: "将「Rust 指南」移入回收站？" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "确定" }));
 
-    await waitFor(() => expect(api.trashPost).toHaveBeenCalledWith("rust-guide", 3));
+    await waitFor(() => expect(api.trashPost).toHaveBeenCalledWith(rustPost.id, 3));
     // 被移走的行从界面消失，另一行还在。
     await waitFor(() => expect(screen.queryByText("Rust 指南")).toBeNull());
     expect(screen.getByText("draft-note")).toBeTruthy();
@@ -278,7 +278,7 @@ describe("独立页面列表", () => {
     render(<App />);
 
     fireEvent.click(await screen.findByText("关于"));
-    await waitFor(() => expect(window.location.pathname).toBe(paths.editPage("about")));
+    await waitFor(() => expect(window.location.pathname).toBe(paths.editPage(aboutPage.id)));
   });
 
   it("无 page.create 权限时不渲染「新建页面」入口", async () => {
@@ -333,7 +333,7 @@ describe("文章回收站", () => {
     ).toBe(true);
   });
 
-  it("恢复：以 slug 与当前版本调用 api.restorePost，并刷新列表", async () => {
+  it("恢复：以 ID 与当前版本调用 api.restorePost，并刷新列表", async () => {
     render(<App />);
     await screen.findByText("已删除的稿子");
 
@@ -342,12 +342,12 @@ describe("文章回收站", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "恢复" }));
 
-    await waitFor(() => expect(api.restorePost).toHaveBeenCalledWith("gone", 4));
+    await waitFor(() => expect(api.restorePost).toHaveBeenCalledWith(trashed.id, 4));
     expect(await screen.findByText("共 0 篇")).toBeTruthy();
     expect(screen.queryByText("gone")).toBeNull();
   });
 
-  it("永久删除：确认后以 slug 与当前版本调用 api.purgePost", async () => {
+  it("永久删除：确认后以 ID 与当前版本调用 api.purgePost", async () => {
     render(<App />);
     await screen.findByText("已删除的稿子");
 
@@ -355,7 +355,7 @@ describe("文章回收站", () => {
     expect(await screen.findByRole("dialog", { name: "永久删除「已删除的稿子」？" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "确定" }));
 
-    await waitFor(() => expect(api.purgePost).toHaveBeenCalledWith("gone", 4));
+    await waitFor(() => expect(api.purgePost).toHaveBeenCalledWith(trashed.id, 4));
   });
 
   it("永久删除：取消时不调用 api.purgePost", async () => {
@@ -525,7 +525,7 @@ describe("跨屏缓存一致性", () => {
     render(<App />);
     await screen.findByText("关于"); // 列表缓存先落地
 
-    act(() => { navigate(paths.editPage("about")); });
+    act(() => { navigate(paths.editPage(aboutPage.id)); });
     await screen.findByDisplayValue("关于");
     fireEvent.change(screen.getByLabelText("标题"), { target: { value: "关于我们" } });
     vi.mocked(api.updatePage).mockResolvedValue({ ...aboutDetail, title: "关于我们", version: 3 });
@@ -546,7 +546,7 @@ describe("跨屏缓存一致性", () => {
     render(<App />);
     await screen.findByText("关于"); // 列表缓存先落地
 
-    act(() => { navigate(paths.editPage("about")); });
+    act(() => { navigate(paths.editPage(aboutPage.id)); });
     await screen.findByDisplayValue("关于");
     fireEvent.change(screen.getByLabelText("标题"), { target: { value: "关于我们" } });
     vi.mocked(api.updatePage).mockResolvedValue({ ...aboutDetail, title: "关于我们", version: 3 });
@@ -557,7 +557,7 @@ describe("跨屏缓存一致性", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "撤回为草稿" }));
     await waitFor(() => expect(api.updatePage).toHaveBeenCalledTimes(1));
-    expect(api.unpublishPage).toHaveBeenCalledWith("about", 3);
+    expect(api.unpublishPage).toHaveBeenCalledWith(aboutPage.id, 3);
     expect(await screen.findByText(/撤回失败（错误编号 req-8）/)).toBeTruthy();
 
     fireEvent.click(screen.getByRole("menuitem", { name: "独立页面" }));

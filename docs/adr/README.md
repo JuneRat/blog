@@ -1,27 +1,37 @@
 # 架构决策记录
 
-记录始于 2026-09-20，索引更新日期：2026-09-23。这里只记录重要取舍；详细规则由专项设计文档维护。
+索引更新：2026-09-26。ADR 记录取舍及当时背景；当前功能交付状态统一见[路线图](../product-roadmap.md)，当前规则见专项文档。
 
-状态含义：
+“已采纳”是决策状态，不自动代表已实现或生产验收。下表同时给出必要的实施说明。历史正文保持原样；正文开头仍写“待实施/待验证”时，以本索引记录的后续结论和关联文档理解，不把旧时间点描述当作当前状态。
 
-- 已采纳：会话中已确定的选择，或明确标注为工程设计基线的方案；不代表已实现。
-- 提议：仍需产品确认或技术原型验证，不视为用户同意。
-- 被替代：保留原决策与替代记录，后续不静默覆盖历史。
+## 当前决策
 
-| ADR | 状态 | 来源 |
-|---|---|---|
-| [0001 Workspace 与边界](0001-workspace-boundaries.md) | 已采纳 | 用户要求 workspace 与四层，另设装配入口 |
-| [0002 MiniJinja 与数据函数](0002-template-data-functions.md) | 引擎/能力已采纳；桥接待验证 | 用户提出 MiniJinja 与模板函数获取数据 |
-| [0003 产品与接入基线](0003-product-baseline.md) | 已采纳 | 用户逐项回答数据库、插件、账号、登录、SPA、发布流程问题 |
-| [0004 公开缓存版本](0004-public-cache-generation.md) | 提议 | 工程设计建议，需原型与一致性验证 |
-| [0005 一致备份与隔离恢复](0005-consistent-backup-and-recovery.md) | 提议 | 文档审查后的工程建议，需部署规格及恢复演练验证 |
-| [0006 共享内容存储与引用](0006-relational-content-storage.md) | 被替代 | 由 ADR-0007 替代，保留原建议作为历史记录 |
-| [0007 精简核心表与 Post/Page 分表](0007-simple-separated-content-schema.md) | 被替代 | 由 ADR-0008 替代，保留原 14 表设计作为历史 |
-| [0008 用户确认的 13 表核心](0008-thirteen-table-blog-core.md) | 已采纳，待实施 | 用户提供 Series、RBAC、OAuth 的具体表设计并要求采用 |
-| [0009 启用本地密码认证](0009-local-password-authentication.md) | 已采纳并实现 | 用户要求优先启用 `users.password_hash`，并明确要 Argon2id、限流、重置与泄露处置 |
-| [0010 会话持久化到 PostgreSQL](0010-persistent-postgres-sessions.md) | 已采纳并实现 | 用户要求保留认证流程、自研 PostgreSQL `SessionStore`，实现重启后仍登录 |
-| [0011 后台 UI 迁移到 Ant Design v6](0011-admin-ui-library.md) | 已采纳并实现 | 用户明确不保留既有手写 CSS，要求迁到成熟组件库 |
-| [0012 前端取数层：抽公共 hook，暂不引入 TanStack Query](0012-admin-data-layer.md) | 被替代 | 由 ADR-0013 替代；保留原「先用公共 hook」的推理作为历史 |
-| [0013 引入 TanStack Query](0013-tanstack-query.md) | 已采纳并实现 | 用户明确 Query 可用，并要求同时去掉不必要、过度防御的测试 |
+| ADR | 当前解释与后续变化 |
+|---|---|
+| [0001 Workspace 与边界](0001-workspace-boundaries.md) | 已采纳；五个 crate 已实现，依赖检查由 0015 落实。正文“未实现依赖连线”是历史状态 |
+| [0002 MiniJinja 与数据函数](0002-template-data-functions.md) | 已采纳；桥接原型已验证可行，受控函数已进入生产代码。正文首段“待原型验证”由文末结论及[原型报告](../../spikes/template-bridge/README.md)更新；执行边界进一步见 0015 |
+| [0003 产品与接入基线](0003-product-baseline.md) | 产品方向仍有效；存储与交付分期由 0008 及后续 ADR 细化，邀请/外部集成等不能据此推定已实现 |
+| [0008 用户确认的 13 表核心](0008-thirteen-table-blog-core.md) | 已采纳并实现，替代 0007。正文“待实施”已过时；按需扩展原则下增加媒体 2 表与会话 1 表，密码与会话分别由 0009/0010 更新 |
+| [0009 本地密码认证](0009-local-password-authentication.md) | 已采纳并实现；启用 Argon2id、限流及受控重置 |
+| [0010 PostgreSQL 持久会话](0010-persistent-postgres-sessions.md) | 已采纳并实现；替代初期会话重启失效的边界，不代表完整多实例支持 |
+| [0011 Ant Design v6 后台](0011-admin-ui-library.md) | 已采纳并实现 |
+| [0013 TanStack Query](0013-tanstack-query.md) | 已采纳并实现；替代 0012 中暂不引入 Query 的决策 |
+| [0014 内容提交与后台稳定身份](0014-content-commits-and-stable-admin-identity.md) | 已采纳并实现；领域写入口、完整记录及后台 UUID 身份 |
+| [0015 持久化 HTML、渲染与模块边界](0015-rendered-content-runtime-and-module-boundaries.md) | 已采纳并实现；派生 HTML、集中执行、按命令装配及依赖检查 |
 
-内容修订、URL、Owner 引导、授权变更、媒体/分类规则和会话存储的建议状态集中记录于 [决策登记表](../product-roadmap.md)；重大取舍可先以“提议”记录，确认后更新状态，避免把草案回填为历史事实。
+## 提议与尚未关闭的验证范围
+
+| ADR | 当前边界 |
+|---|---|
+| [0004 公开缓存 generation](0004-public-cache-generation.md) | 仍为提议。桥接验证没有替代跨请求缓存的命中率、新鲜度与撤回验证；当前没有整页缓存 |
+| [0005 一致备份与隔离恢复](0005-consistent-backup-and-recovery.md) | 原决策保留提议状态；维护工具与核心数据本机演练已落实部分方案，正文“待实施”不代表全无实现。完整媒体恢复、生产编排与 RPO/RTO 未验收，见[实际工具边界](../operations-and-recovery.md) |
+
+## 历史与替代关系
+
+| ADR | 替代关系 |
+|---|---|
+| [0006 共享内容存储与引用](0006-relational-content-storage.md) | 被 0007 替代；共享正文/修订/路径方案不再是当前模型 |
+| [0007 精简核心表与 Post/Page 分表](0007-simple-separated-content-schema.md) | 被 0008 替代；保留原 14 表建议，不据此补建历史辅助表 |
+| [0012 公共 hook 与暂缓 Query](0012-admin-data-layer.md) | “暂不引入 Query”被 0013 替代；公共错误处理的理由仍保留 |
+
+新增重大选择先记录为提议，确认后再改变决策状态；实现进度在路线图更新。已被替代的正文不删除、不重新包装成当前方案。

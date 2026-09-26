@@ -172,7 +172,10 @@ async fn fresh_stack_with(throttle_config: ThrottleConfig) -> Stack {
     let tag_repo: Arc<dyn application::ports::TagRepository> =
         Arc::new(PostgresTagRepository::new(pool.clone()));
     let posts = Arc::new(application::content::PostInteractor::new(
-        Arc::new(PostgresPostRepository::new(pool.clone())),
+        Arc::new(PostgresPostRepository::new(
+            pool.clone(),
+            Arc::new(infrastructure::RenderingRuntime::default()),
+        )),
         tag_repo.clone(),
         Arc::new(PostgresCategoryRepository::new(pool.clone())),
         Arc::new(infrastructure::PostgresSeriesRepository::new(pool.clone())),
@@ -180,7 +183,10 @@ async fn fresh_stack_with(throttle_config: ThrottleConfig) -> Stack {
         common::media_guard(pool.clone()),
     ));
     let pages = Arc::new(PageInteractor::new(
-        Arc::new(PostgresPageRepository::new(pool.clone())),
+        Arc::new(PostgresPageRepository::new(
+            pool.clone(),
+            Arc::new(infrastructure::RenderingRuntime::default()),
+        )),
         Arc::new(SystemClock),
     ));
 

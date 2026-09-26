@@ -2,7 +2,7 @@
 
 记录日期：2026-09-23。
 
-状态：**已被 [ADR-0013](0013-tanstack-query.md) 替代**（其「暂不引入 TanStack Query」的第 4 条决策不再有效；公共错误文案与失败口径集中的部分继续有效）。原来源：后台迁到 Ant Design v6 之后，用户要求评估并落地「抽公共 hook 收掉重复样板」，并明确是否引入 TanStack Query。相关记录见 [ADR-0011](0011-admin-ui-library.md) 与 [架构总览 §7](../architecture.md)。
+状态：**已被 [ADR-0013](0013-tanstack-query.md) 替代**（其「暂不引入 TanStack Query」的第 4 条决策不再有效；公共错误文案与失败口径集中的部分继续有效）。原来源：后台迁到 Ant Design v6 之后，用户要求评估并落地「抽公共 hook 收掉重复样板」，并明确是否引入 TanStack Query。相关记录见 [ADR-0011](0011-admin-ui-library.md) 与 [当前架构](../architecture.md)。
 
 ## 背景
 

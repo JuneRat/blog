@@ -87,7 +87,7 @@ impl AuthInteractor {
         provider_id: &str,
         next: &str,
     ) -> Result<LoginStart, UseCaseError> {
-        let config = self.find_config(provider_id).await?;
+        let config = find_provider_config(self.deps.configs.as_ref(), provider_id).await?;
         let next = sanitize_next(next)?;
 
         let state = self.deps.random.token_hex()?;
@@ -167,7 +167,7 @@ impl AuthInteractor {
             return Err(UseCaseError::Invalid("登录尝试已过期，请重新发起".into()));
         }
 
-        let config = self.find_config(provider_id).await?;
+        let config = find_provider_config(self.deps.configs.as_ref(), provider_id).await?;
 
         // 网络交换在锁外执行（docs §4 第 3 步）。
         let identity = self
@@ -183,7 +183,7 @@ impl AuthInteractor {
             .await?;
 
         // 返回后重新检查配置（可能在交换期间被禁用/修改）。
-        let config_after = self.find_config(provider_id).await?;
+        let config_after = find_provider_config(self.deps.configs.as_ref(), provider_id).await?;
         if config_after.client_id != config.client_id {
             return Err(UseCaseError::External(
                 "提供商配置在登录过程中发生变化".into(),
@@ -274,11 +274,6 @@ impl AuthInteractor {
         self.deps.sessions.revoke_all_for_user(user_id).await
     }
 
-    /// OAuth 配置管理（`oauth.manage`；受保护配置不受普通 settings 权限覆盖）。
-    pub async fn list_providers(&self) -> Result<Vec<ProviderConfig>, UseCaseError> {
-        self.deps.configs.list().await
-    }
-
     /// 公开登录页用的提供商摘要（只读、匿名可访问）。
     pub async fn list_provider_summaries(&self) -> Result<Vec<ProviderSummary>, UseCaseError> {
         Ok(self
@@ -294,6 +289,35 @@ impl AuthInteractor {
             })
             .collect())
     }
+}
+
+/// 受控 OAuth 维护用例：仅依赖配置、绑定、用户和会话，不需要登录网络客户端或站点地址。
+pub struct OAuthManagementInteractor {
+    configs: Arc<dyn OAuthConfigStore>,
+    accounts: Arc<dyn OAuthAccountStore>,
+    sessions: Arc<dyn SessionStore>,
+    users: Arc<UserInteractor>,
+}
+
+impl OAuthManagementInteractor {
+    pub fn new(
+        configs: Arc<dyn OAuthConfigStore>,
+        accounts: Arc<dyn OAuthAccountStore>,
+        sessions: Arc<dyn SessionStore>,
+        users: Arc<UserInteractor>,
+    ) -> Self {
+        Self {
+            configs,
+            accounts,
+            sessions,
+            users,
+        }
+    }
+
+    /// OAuth 配置管理（`oauth.manage`；受保护配置不受普通 settings 权限覆盖）。
+    pub async fn list_providers(&self) -> Result<Vec<ProviderConfig>, UseCaseError> {
+        self.configs.list().await
+    }
 
     pub async fn save_providers(
         &self,
@@ -307,7 +331,7 @@ impl AuthInteractor {
         for config in providers {
             validate_provider_config(config)?;
         }
-        self.deps.configs.save(providers).await
+        self.configs.save(providers).await
     }
 
     /// 显式绑定外部身份（需 `oauth.manage`；操作者需核对稳定外部 ID）。
@@ -323,16 +347,15 @@ impl AuthInteractor {
         if !actor.has_permission("oauth.manage") {
             return Err(UseCaseError::Forbidden);
         }
-        let config = self.find_config(provider_id).await?;
+        let config = find_provider_config(self.configs.as_ref(), provider_id).await?;
         let provider_key = provider_identity_key(&config);
         let target = self.users.actor_for_username(username).await?;
-        self.deps
-            .accounts
+        self.accounts
             .bind(target.user_id.0, &provider_key, external_id, email)
             .await
     }
 
-    /// 解绑外部身份：需 `oauth.manage`；解绑后清除该用户的内存会话（docs §5）。
+    /// 解绑外部身份：需 `oauth.manage`；解绑后撤销该用户的全部会话（docs §5）。
     pub async fn unbind_external_id(
         &self,
         actor: &Actor,
@@ -344,35 +367,36 @@ impl AuthInteractor {
         if !actor.has_permission("oauth.manage") {
             return Err(UseCaseError::Forbidden);
         }
-        let config = self.find_config(provider_id).await?;
+        let config = find_provider_config(self.configs.as_ref(), provider_id).await?;
         let provider_key = provider_identity_key(&config);
         let target = self.users.actor_for_username(username).await?;
-        self.deps
-            .accounts
+        self.accounts
             .unbind(target.user_id.0, &provider_key, external_id)
             .await?;
         // 登录方式发生变化：旧 Cookie 立即失效。
-        self.revoke_sessions_of_user(target.user_id.0).await
+        self.sessions.revoke_all_for_user(target.user_id.0).await
     }
 
     pub async fn bindings_of(&self, username: &str) -> Result<Vec<String>, UseCaseError> {
         let actor = self.users.actor_for_username(username).await?;
-        let bindings = self.deps.accounts.list_for_user(actor.user_id.0).await?;
+        let bindings = self.accounts.list_for_user(actor.user_id.0).await?;
         Ok(bindings
             .into_iter()
             .map(|b| format!("{}#{}", b.provider_key, b.provider_user_id))
             .collect())
     }
+}
 
-    async fn find_config(&self, provider_id: &str) -> Result<ProviderConfig, UseCaseError> {
-        self.deps
-            .configs
-            .list()
-            .await?
-            .into_iter()
-            .find(|c| c.id == provider_id)
-            .ok_or_else(|| UseCaseError::NotFound(format!("OAuth 提供商 {provider_id}")))
-    }
+async fn find_provider_config(
+    configs: &dyn OAuthConfigStore,
+    provider_id: &str,
+) -> Result<ProviderConfig, UseCaseError> {
+    configs
+        .list()
+        .await?
+        .into_iter()
+        .find(|config| config.id == provider_id)
+        .ok_or_else(|| UseCaseError::NotFound(format!("OAuth 提供商 {provider_id}")))
 }
 
 /// 身份命名空间键：OIDC 用精确 issuer，GitHub 用固定平台实例标识。

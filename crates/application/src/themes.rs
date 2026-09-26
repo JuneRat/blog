@@ -5,7 +5,7 @@ use std::sync::Arc;
 use serde::Serialize;
 
 use crate::error::UseCaseError;
-use crate::public_site::ThemeRenderer;
+use crate::ports::ThemeRenderer;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ThemeOption {

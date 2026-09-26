@@ -25,6 +25,40 @@ pub struct PublicSiteState {
     pub health: Option<Arc<dyn HealthCheck>>,
 }
 
+/// 完整 HTTP 入站状态。命令行维护不需要也不应构建这些依赖。
+pub struct AppState {
+    pub public: PublicSiteState,
+    pub auth: crate::http_auth::AuthState,
+    pub admin: crate::http_auth::AdminState,
+}
+
+pub struct HttpAssets {
+    pub themes: Vec<(String, PathBuf)>,
+    pub admin_dist: PathBuf,
+}
+
+/// 组合完整站点路由；监听地址、进程信号和关闭策略由 server 装配层负责。
+pub fn app_router(state: AppState, assets: HttpAssets) -> Router {
+    let media_read = crate::http_media::MediaReadState {
+        media: state.admin.media.clone(),
+        auth: state.admin.auth.clone(),
+    };
+    let app = mount_theme_assets(public_router(state.public, None), assets.themes)
+        .merge(crate::http_auth::auth_router(state.auth))
+        .merge(crate::http_auth::admin_router(state.admin.clone()))
+        .merge(crate::http_admin::posts_router(state.admin.clone()))
+        .merge(crate::http_admin::pages_router(state.admin.clone()))
+        .merge(crate::http_admin::tags_router(state.admin.clone()))
+        .merge(crate::http_admin::categories_router(state.admin.clone()))
+        .merge(crate::http_admin::series_router(state.admin.clone()))
+        .merge(crate::http_admin::settings_router(state.admin.clone()))
+        .merge(crate::http_media::media_admin_router(state.admin.clone()))
+        .merge(crate::http_identity::identity_router(state.admin))
+        .merge(crate::http_media::media_read_router(media_read));
+    mount_admin_spa(app, Some(assets.admin_dist))
+        .layer(middleware::from_fn(crate::http_support::request_context))
+}
+
 /// 构建公开路由；assets_dir 提供时挂载 /assets/ 静态资源（主题 assets 目录）。
 ///
 /// 根路径 `/{slug}` 是 Page 的公开地址（如 /about）。固定路由优先、Page 最后匹配：

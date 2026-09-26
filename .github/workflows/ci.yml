@@ -40,6 +40,11 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      - name: Dependency boundaries
+        run: |
+          python3 -B scripts/check_dependencies.py
+          PYTHONPATH=scripts python3 -B -m unittest scripts/test_check_dependencies.py
+
       - name: Format
         run: cargo fmt --all --check
 

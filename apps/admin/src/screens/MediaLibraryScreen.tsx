@@ -29,18 +29,18 @@ const { Dragger } = Upload;
  * 引用来源 → 展示名与站内跳转目标。
  *
  * 系列封面是**整个系列**引用图片（系列本身没有单独编辑页），因此统一回到系列目录，
- * 不能沿用页面编辑地址——那会把用户带到 `pages/{slug}/edit` 这个不存在的页面。
+ * 不能沿用页面编辑地址——那会把用户带到 `pages/{id}/edit` 这个不存在的页面。
  * 头像与站点 logo 同理：回到用户列表与站点设置。
  */
 function referenceTarget(
   kind: MediaReference["kind"],
-  slug: string,
+  contentId: string,
 ): { label: string; to: string } {
   switch (kind) {
     case "post":
-      return { label: "文章", to: paths.editPost(slug) };
+      return { label: "文章", to: paths.editPost(contentId) };
     case "page":
-      return { label: "页面", to: paths.editPage(slug) };
+      return { label: "页面", to: paths.editPage(contentId) };
     case "series":
       return { label: "系列", to: paths.series };
     case "user":
@@ -262,7 +262,7 @@ export function MediaLibraryScreen() {
             <>
               <ul style={{ margin: "0 0 8px", paddingInlineStart: 20 }}>
                 {usage.data.references.map((reference) => {
-                  const target = referenceTarget(reference.kind, reference.slug);
+                  const target = referenceTarget(reference.kind, reference.content_id);
                   return (
                     <li key={`${reference.kind}-${reference.content_id}`}>
                       <Button

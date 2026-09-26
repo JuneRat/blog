@@ -112,19 +112,18 @@ function AdminRoutes() {
             }
           />
         ) : route.name === "postEdit" ? (
-          // 编辑器不按 slug 加 key：改名时 slug 变化只更新地址，组件内已合并好的表单
-          // 不应被重载覆盖；真正切换到另一篇内容时，编辑屏自己会按 slug 变化重新加载。
-          <PostEditScreen slug={route.slug} />
+          // 创建后由编辑器保留已经合并的输入；切换实体按稳定 ID 重新加载。
+          <PostEditScreen id={route.id} />
         ) : route.name === "postNew" ? (
-          <PostEditScreen slug={null} />
+          <PostEditScreen id={null} />
         ) : route.name === "postTrash" ? (
           <PostTrashScreen />
         ) : route.name === "pageList" ? (
           <PageListScreen />
         ) : route.name === "pageEdit" ? (
-          <PageEditScreen slug={route.slug} />
+          <PageEditScreen id={route.id} />
         ) : route.name === "pageNew" ? (
-          <PageEditScreen slug={null} />
+          <PageEditScreen id={null} />
         ) : route.name === "tagList" ? (
           <TagListScreen />
         ) : route.name === "mediaLibrary" ? (

@@ -2,13 +2,13 @@
 
 记录日期：2026-09-23。
 
-状态：已采纳并实现。来源：用户要求保留现有认证流程，自行实现 PostgreSQL `SessionStore` 适配器，让服务重启后仍保持登录，同时保留既有授权语义。细化契约见 [身份、RBAC 与后台 §5](../identity-and-admin.md)，恢复影响见 [备份与恢复](../operations-and-recovery.md)。
+状态：已采纳并实现。来源：用户要求保留现有认证流程，自行实现 PostgreSQL `SessionStore` 适配器，让服务重启后仍保持登录，同时保留既有授权语义。细化契约见 [会话与失败限流](../identity-and-admin.md#6-会话与失败限流)，恢复影响见 [备份与恢复](../operations-and-recovery.md)。
 
 ## 背景
 
 [ADR-0008](0008-thirteen-table-blog-core.md) 的 13 表基线把本站会话与 OAuth 尝试放在单实例有界内存存储，明确「重启全部失效、不承诺不登出」。这在首版是可接受的取舍，但对长期运行站点意味着每次部署/重启都强制全体重新登录。
 
-用户要求在不重写登录系统的前提下实现「重启后仍登录」：应用层已有 `SessionStore` 端口（`create`/`validate`/`revoke`/`revoke_all_for_user`，见 [ports.rs](../../crates/application/src/ports.rs)），只需替换装配处的内存实现。
+用户要求在不重写登录系统的前提下实现「重启后仍登录」：应用层已有 `SessionStore` 端口（`create`/`validate`/`revoke`/`revoke_all_for_user`，见 [identity 端口](../../crates/application/src/ports/identity.rs)），只需替换装配处的内存实现。
 
 `tower-sessions` 等成熟 Axum/Tower 会话中间件也提供 PostgreSQL 存储，但采用它意味着改用其 Session 提取器与键值模型，再把本项目已有的按用户批量撤销、`users.version` 即时失效、CSRF 与既有 Cookie 行为接回去；收益主要是通用会话中间件，而这些部分本项目已经具备。因此选择自研最小适配器。
 

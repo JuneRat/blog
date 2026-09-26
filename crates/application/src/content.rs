@@ -13,9 +13,11 @@ use uuid::Uuid;
 
 use crate::error::UseCaseError;
 use crate::identity::{Actor, authorize_own_or_any};
-use crate::ports::{Clock, PostRepository, SaveOutcome, TagRepository};
+use crate::ports::{
+    Clock, PostCommitOutcome, PostRecord, PostRepository, SaveOutcome, TagRepository,
+};
 use crate::version::checked_version;
-use domain::content::post::{Post, PostPatch, PostSnapshot, PostStatus, Slug, Visibility};
+use domain::content::post::{Post, PostDraftMetadata, PostPatch, PostSnapshot, Slug, Visibility};
 use domain::identity::UserId;
 
 /// 向接口层转出的值对象（interfaces 不直接依赖 domain crate）。
@@ -41,7 +43,7 @@ pub struct CreatePostCmd {
 
 #[derive(Debug, Clone, Default)]
 pub struct EditPostCmd {
-    pub target_slug: String,
+    pub id: Uuid,
     pub new_slug: Option<String>,
     pub title: Option<String>,
     pub excerpt: Option<String>,
@@ -96,6 +98,10 @@ pub struct TrashPage {
 }
 
 impl PostDto {
+    fn from_record(record: PostRecord) -> Self {
+        Self::from_snapshot(&record.snapshot, record.tag_ids)
+    }
+
     fn from_snapshot(s: &PostSnapshot, tag_ids: Vec<Uuid>) -> Self {
         Self {
             id: s.id,
@@ -172,34 +178,33 @@ impl PostInteractor {
         if let Some(cover_media_id) = cmd.cover_media_id {
             crate::media::ensure_attachable(&*self.media_guard, actor, cover_media_id).await?;
         }
-        let post = Post::create_draft(
+        let post = Post::create_draft_with_metadata(
             actor.user_id,
             slug,
             cmd.title,
             cmd.excerpt,
             cmd.content,
             cmd.visibility,
+            PostDraftMetadata {
+                category_id: cmd.category_id,
+                series: cmd.series,
+                cover_media_id: cmd.cover_media_id,
+            },
             self.clock.now(),
         )
         .map_err(|e| UseCaseError::Invalid(e.to_string()))?;
-        let mut snapshot = post.snapshot();
-        snapshot.category_id = cmd.category_id;
-        snapshot.series_id = cmd.series.map(|(id, _)| id);
-        snapshot.series_order = cmd.series.map(|(_, order)| order);
-        snapshot.cover_media_id = cmd.cover_media_id;
-        // 正文与初始标签/分类/系列/封面关系同一事务写入。
-        self.posts.insert(&snapshot, &tag_ids).await?;
-        Ok(PostDto::from_snapshot(&snapshot, tag_ids))
+        let record = self.posts.insert_post(&post, &tag_ids).await?;
+        Ok(PostDto::from_record(record))
     }
 
     /// 编辑当前正文；保存已发布内容直接更新线上。
     /// tag_ids = Some(set) 时与正文在同一事务整体替换标签关系。
     pub async fn edit(&self, actor: &Actor, cmd: EditPostCmd) -> Result<PostDto, UseCaseError> {
         actor.ensure_write_channel()?;
-        let (mut post, expected) = self
-            .load_authorized(&cmd.target_slug, actor, "post.update", "post.update_any")
+        let (mut post, record) = self
+            .load_authorized(cmd.id, actor, "post.update", "post.update_any")
             .await?;
-        let expected = checked_version(expected, cmd.expected_version)?;
+        let expected = checked_version(record.snapshot.version, cmd.expected_version)?;
 
         if let Some(Some(category_id)) = cmd.category_id {
             self.validate_category(category_id).await?;
@@ -220,10 +225,7 @@ impl PostInteractor {
         };
         // 标签是否有实际变化：与当前集合（同样去重排序后）比较。
         let tags_changed = match new_tags.as_deref() {
-            Some(new_set) => {
-                let current = self.posts.tags_of(post.snapshot().id).await?;
-                current != new_set
-            }
+            Some(new_set) => record.tag_ids != new_set,
             None => false,
         };
 
@@ -245,78 +247,67 @@ impl PostInteractor {
         if changed || tags_changed {
             return self.commit(post, expected, new_tags).await;
         }
-        let tag_ids = self.posts.tags_of(post.snapshot().id).await?;
-        Ok(PostDto::from_snapshot(&post.snapshot(), tag_ids))
+        Ok(PostDto::from_record(record))
     }
 
     /// 发布：draft → published，首次发布写入 published_at；已发布幂等。
     pub async fn publish(
         &self,
         actor: &Actor,
-        slug: &str,
+        id: Uuid,
         expected_version: Option<i64>,
     ) -> Result<PostDto, UseCaseError> {
         actor.ensure_write_channel()?;
-        let (mut post, expected) = self
-            .load_authorized(slug, actor, "post.publish", "post.publish_any")
+        let (mut post, record) = self
+            .load_authorized(id, actor, "post.publish", "post.publish_any")
             .await?;
-        let expected = checked_version(expected, expected_version)?;
+        let expected = checked_version(record.snapshot.version, expected_version)?;
 
         if post.publish(self.clock.now()).map_err(map_domain)? {
             return self.commit(post, expected, None).await;
         }
-        let tag_ids = self.posts.tags_of(post.snapshot().id).await?;
-        Ok(PostDto::from_snapshot(&post.snapshot(), tag_ids))
+        Ok(PostDto::from_record(record))
     }
 
     /// 撤回：published → draft，slug 保持锁定；非发布状态幂等。
     pub async fn withdraw(
         &self,
         actor: &Actor,
-        slug: &str,
+        id: Uuid,
         expected_version: Option<i64>,
     ) -> Result<PostDto, UseCaseError> {
         actor.ensure_write_channel()?;
-        let (mut post, expected) = self
-            .load_authorized(slug, actor, "post.unpublish", "post.unpublish_any")
+        let (mut post, record) = self
+            .load_authorized(id, actor, "post.unpublish", "post.unpublish_any")
             .await?;
-        let expected = checked_version(expected, expected_version)?;
+        let expected = checked_version(record.snapshot.version, expected_version)?;
 
         if post.withdraw() {
             return self.commit(post, expected, None).await;
         }
-        let tag_ids = self.posts.tags_of(post.snapshot().id).await?;
-        Ok(PostDto::from_snapshot(&post.snapshot(), tag_ids))
+        Ok(PostDto::from_record(record))
     }
 
     /// 文章作者元数据（不含内容）；供 CLI 解析缺省操作身份。
     /// 泄漏面只有作者 id，不构成内容读取。
-    pub async fn author_of(&self, slug: &str) -> Result<UserId, UseCaseError> {
+    pub async fn author_of(&self, id: Uuid) -> Result<UserId, UseCaseError> {
         let snapshot = self
             .posts
-            .find_by_slug(slug)
+            .find_by_id(id)
             .await?
-            .ok_or_else(|| UseCaseError::NotFound(format!("文章 {slug}")))?;
+            .ok_or_else(|| UseCaseError::NotFound(format!("文章 {id}")))?;
         if snapshot.deleted_at.is_some() {
-            return Err(UseCaseError::NotFound(format!("文章 {slug}")));
+            return Err(UseCaseError::NotFound(format!("文章 {id}")));
         }
         Ok(UserId(snapshot.author_id))
     }
 
     /// CLI/后台读取（任意状态）：own 需归属，any 放行；匿名 HTTP 不走此路径。
-    pub async fn find(&self, actor: &Actor, slug: &str) -> Result<PostDto, UseCaseError> {
-        let snapshot = self
-            .posts
-            .find_by_slug(slug)
-            .await?
-            .ok_or_else(|| UseCaseError::NotFound(format!("文章 {slug}")))?;
-        if snapshot.deleted_at.is_some() {
-            return Err(UseCaseError::NotFound(format!("文章 {slug}")));
-        }
-        let post = Post::reconstitute(snapshot);
-        authorize_own_or_any(actor, "post.read", "post.read_any", post.author_id())?;
-        let tag_ids = self.posts.tags_of(post.snapshot().id).await?;
-        Ok(PostDto::from_snapshot(&post.snapshot(), tag_ids))
+    pub async fn find(&self, actor: &Actor, id: Uuid) -> Result<PostDto, UseCaseError> {
+        let (_, record) = self
+            .load_authorized(id, actor, "post.read", "post.read_any")
+            .await?;
+        Ok(PostDto::from_record(record))
     }
 
     /// 列出作者的文章：本人列表需 `post.read`，他人列表需 `post.read_any`。
@@ -366,141 +357,87 @@ impl PostInteractor {
     pub async fn trash(
         &self,
         actor: &Actor,
-        slug: &str,
+        id: Uuid,
         version: Option<i64>,
     ) -> Result<PostDto, UseCaseError> {
         actor.ensure_write_channel()?;
-        let (post, current) = self
-            .load_authorized(slug, actor, "post.delete", "post.delete_any")
+        let (mut post, record) = self
+            .load_authorized(id, actor, "post.delete", "post.delete_any")
             .await?;
-        let expected = checked_version(current, version)?;
+        let expected = checked_version(record.snapshot.version, version)?;
         let now = self.clock.now();
-        self.map_lifecycle_result(
-            self.posts.trash(post.snapshot().id, expected, now).await?,
-            post.snapshot(),
-            now,
-            true,
-        )
-        .await
+        post.trash(now);
+        Self::committed(self.posts.commit_lifecycle(&post, expected, now).await?)
     }
 
     pub async fn restore(
         &self,
         actor: &Actor,
-        slug: &str,
+        id: Uuid,
         version: Option<i64>,
     ) -> Result<PostDto, UseCaseError> {
         actor.ensure_write_channel()?;
-        let snapshot = self
-            .load_trash_authorized(slug, actor, "post.delete", "post.delete_any")
-            .await?;
-        let expected = checked_version(snapshot.version, version)?;
-        let now = self.clock.now();
-        self.map_lifecycle_result(
-            self.posts.restore(snapshot.id, expected, now).await?,
-            snapshot,
-            now,
-            false,
+        let record = self.load_record(id).await?;
+        authorize_own_or_any(
+            actor,
+            "post.delete",
+            "post.delete_any",
+            UserId(record.snapshot.author_id),
+        )?;
+        if record.snapshot.deleted_at.is_none() {
+            return Err(UseCaseError::NotFound(format!("回收站文章 {id}")));
+        }
+        let expected = checked_version(record.snapshot.version, version)?;
+        let mut post = Post::reconstitute(record.snapshot);
+        post.restore();
+        Self::committed(
+            self.posts
+                .commit_lifecycle(&post, expected, self.clock.now())
+                .await?,
         )
-        .await
     }
 
     pub async fn purge(
         &self,
         actor: &Actor,
-        slug: &str,
+        id: Uuid,
         version: Option<i64>,
     ) -> Result<(), UseCaseError> {
         actor.ensure_write_channel()?;
         if !actor.has_permission("post.purge") {
             return Err(UseCaseError::Forbidden);
         }
-        let snapshot = self
-            .posts
-            .find_by_slug(slug)
-            .await?
-            .ok_or_else(|| UseCaseError::NotFound(format!("文章 {slug}")))?;
-        if snapshot.deleted_at.is_none() {
+        let record = self.load_record(id).await?;
+        if record.snapshot.deleted_at.is_none() {
             return Err(UseCaseError::Invalid("只能永久删除回收站文章".into()));
         }
-        let expected = checked_version(snapshot.version, version)?;
-        match self.posts.purge(snapshot.id, expected).await? {
+        let expected = checked_version(record.snapshot.version, version)?;
+        match self.posts.purge(record.snapshot.id, expected).await? {
             SaveOutcome::Saved { .. } => Ok(()),
             SaveOutcome::StaleConflict => Err(UseCaseError::VersionConflict),
-            SaveOutcome::Gone => Err(UseCaseError::NotFound(format!("文章 {slug}"))),
+            SaveOutcome::Gone => Err(UseCaseError::NotFound(format!("文章 {id}"))),
         }
     }
 
-    async fn load_trash_authorized(
-        &self,
-        slug: &str,
-        actor: &Actor,
-        own: &str,
-        any: &str,
-    ) -> Result<PostSnapshot, UseCaseError> {
-        let snapshot = self
-            .posts
-            .find_by_slug(slug)
-            .await?
-            .ok_or_else(|| UseCaseError::NotFound(format!("文章 {slug}")))?;
-        authorize_own_or_any(actor, own, any, UserId(snapshot.author_id))?;
-        if snapshot.deleted_at.is_none() {
-            return Err(UseCaseError::NotFound(format!("回收站文章 {slug}")));
-        }
-        Ok(snapshot)
-    }
-
-    async fn map_lifecycle_result(
-        &self,
-        result: SaveOutcome,
-        mut snapshot: PostSnapshot,
-        now: time::OffsetDateTime,
-        deleted: bool,
-    ) -> Result<PostDto, UseCaseError> {
-        match result {
-            SaveOutcome::Saved { new_version } => {
-                snapshot.version = new_version;
-                snapshot.updated_at = now;
-                snapshot.deleted_at = deleted.then_some(now);
-                if !deleted && snapshot.status != PostStatus::Archived {
-                    snapshot.status = PostStatus::Draft;
-                }
-                let tags = self.posts.tags_of(snapshot.id).await?;
-                Ok(PostDto::from_snapshot(&snapshot, tags))
-            }
-            SaveOutcome::StaleConflict => Err(UseCaseError::VersionConflict),
-            SaveOutcome::Gone => Err(UseCaseError::NotFound("文章".into())),
-        }
-    }
-
-    /// 提交聚合变更：三态结果映射为用例错误；
-    /// 成功时直接采用数据库返回的新版本，不做二次回读。
-    /// `new_tags = Some(set)` 时标签关系与正文在同一事务整体替换。
+    /// All relations and the returned editor record belong to the same conditional commit.
     async fn commit(
         &self,
         post: Post,
         expected: i64,
         new_tags: Option<Vec<Uuid>>,
     ) -> Result<PostDto, UseCaseError> {
-        let now = self.clock.now();
-        let mut snapshot = post.snapshot();
-        match self
-            .posts
-            .save(&snapshot, expected, now, new_tags.as_deref())
-            .await?
-        {
-            SaveOutcome::Saved { new_version } => {
-                snapshot.version = new_version;
-                snapshot.updated_at = now;
-                // 未经替换（发布/撤回）时回读当前集合，保证响应与存储一致。
-                let tag_ids = match new_tags {
-                    Some(set) => set,
-                    None => self.posts.tags_of(snapshot.id).await?,
-                };
-                Ok(PostDto::from_snapshot(&snapshot, tag_ids))
-            }
-            SaveOutcome::StaleConflict => Err(UseCaseError::VersionConflict),
-            SaveOutcome::Gone => Err(UseCaseError::NotFound("文章（已被删除）".into())),
+        Self::committed(
+            self.posts
+                .commit_post(&post, expected, self.clock.now(), new_tags.as_deref())
+                .await?,
+        )
+    }
+
+    fn committed(result: PostCommitOutcome) -> Result<PostDto, UseCaseError> {
+        match result {
+            PostCommitOutcome::Saved(record) => Ok(PostDto::from_record(*record)),
+            PostCommitOutcome::StaleConflict => Err(UseCaseError::VersionConflict),
+            PostCommitOutcome::Gone => Err(UseCaseError::NotFound("文章（已被删除）".into())),
         }
     }
 
@@ -548,26 +485,27 @@ impl PostInteractor {
         Ok(unique)
     }
 
-    /// 加载聚合并执行 own/any 授权。
+    async fn load_record(&self, id: Uuid) -> Result<PostRecord, UseCaseError> {
+        self.posts
+            .find_record_by_id(id)
+            .await?
+            .ok_or_else(|| UseCaseError::NotFound(format!("文章 {id}")))
+    }
+
+    /// Authorize the same complete snapshot used by the editor and write preconditions.
     async fn load_authorized(
         &self,
-        slug: &str,
+        id: Uuid,
         actor: &Actor,
         own_key: &str,
         any_key: &str,
-    ) -> Result<(Post, i64), UseCaseError> {
-        let snapshot = self
-            .posts
-            .find_by_slug(slug)
-            .await?
-            .ok_or_else(|| UseCaseError::NotFound(format!("文章 {slug}")))?;
-        if snapshot.deleted_at.is_some() {
-            return Err(UseCaseError::NotFound(format!("文章 {slug}")));
+    ) -> Result<(Post, PostRecord), UseCaseError> {
+        let record = self.load_record(id).await?;
+        if record.snapshot.deleted_at.is_some() {
+            return Err(UseCaseError::NotFound(format!("文章 {id}")));
         }
-        let post = Post::reconstitute(snapshot);
-        authorize_own_or_any(actor, own_key, any_key, post.author_id())?;
-        let version = post.version();
-        Ok((post, version))
+        authorize_own_or_any(actor, own_key, any_key, UserId(record.snapshot.author_id))?;
+        Ok((Post::reconstitute(record.snapshot.clone()), record))
     }
 }
 

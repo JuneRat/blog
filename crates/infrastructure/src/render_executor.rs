@@ -1,0 +1,500 @@
+//! 渲染执行策略：共享并发预算、有限等待与阻塞任务隔离。
+//!
+//! 超时或调用者取消不会终止已经开始的阻塞任务；许可随任务持有到真正完成，
+//! 防止客户端反复取消请求后绕过并发上限。只缓存纯 Markdown 结果，不缓存主题数据。
+
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use application::error::UseCaseError;
+use application::ports::{ContentRenderer, RenderedContent, ThemeRenderer};
+use application::public_site::{
+    CategoryView, PageView, PostCard, PostView, SeriesView, SiteInfo, TagView,
+};
+use application::seo::SeoMeta;
+use async_trait::async_trait;
+use tokio::sync::Semaphore;
+
+use crate::media_refs::extract_media_ids_from_html;
+use crate::rendering::{MiniJinjaThemeRenderer, SanitizingMarkdownRenderer};
+
+#[derive(Debug, Clone)]
+pub struct RenderingLimits {
+    pub concurrency: usize,
+    pub queue_timeout: Duration,
+    pub execution_timeout: Duration,
+    pub markdown_cache_entries: usize,
+    /// 包含源文本、结果 HTML 和媒体 UUID 的总字节上限；大于上限的单次结果不进入缓存。
+    pub markdown_cache_bytes: usize,
+}
+
+impl Default for RenderingLimits {
+    fn default() -> Self {
+        Self {
+            concurrency: 16,
+            queue_timeout: Duration::from_millis(250),
+            execution_timeout: Duration::from_secs(2),
+            markdown_cache_entries: 64,
+            markdown_cache_bytes: 8 * 1024 * 1024,
+        }
+    }
+}
+
+#[derive(Default)]
+struct MarkdownCache {
+    entries: VecDeque<(String, RenderedContent)>,
+    bytes: usize,
+}
+
+impl MarkdownCache {
+    fn entry_bytes(source: &str, rendered: &RenderedContent) -> usize {
+        source
+            .len()
+            .saturating_add(rendered.content_html.len())
+            .saturating_add(
+                rendered
+                    .media_ids
+                    .len()
+                    .saturating_mul(std::mem::size_of::<uuid::Uuid>()),
+            )
+    }
+
+    fn get(&mut self, source: &str) -> Option<RenderedContent> {
+        let index = self.entries.iter().position(|(key, _)| key == source)?;
+        let entry = self.entries.remove(index)?;
+        let rendered = entry.1.clone();
+        self.entries.push_back(entry);
+        Some(rendered)
+    }
+
+    fn insert(&mut self, source: String, rendered: RenderedContent, limits: &RenderingLimits) {
+        let bytes = Self::entry_bytes(&source, &rendered);
+        if limits.markdown_cache_entries == 0 || bytes > limits.markdown_cache_bytes {
+            return;
+        }
+        if let Some(index) = self.entries.iter().position(|(key, _)| key == &source) {
+            let (key, value) = self.entries.remove(index).expect("existing cache entry");
+            self.bytes -= Self::entry_bytes(&key, &value);
+        }
+        while self.entries.len() >= limits.markdown_cache_entries
+            || self.bytes.saturating_add(bytes) > limits.markdown_cache_bytes
+        {
+            let Some((key, value)) = self.entries.pop_front() else {
+                break;
+            };
+            self.bytes -= Self::entry_bytes(&key, &value);
+        }
+        self.bytes += bytes;
+        self.entries.push_back((source, rendered));
+    }
+}
+
+struct RuntimeState {
+    limits: RenderingLimits,
+    slots: Arc<Semaphore>,
+    markdown: Mutex<MarkdownCache>,
+}
+
+/// 进程内共享实例：注入内容仓储，并为所有主题创建使用同一预算的执行器。
+#[derive(Clone)]
+pub struct RenderingRuntime {
+    state: Arc<RuntimeState>,
+}
+
+impl Default for RenderingRuntime {
+    fn default() -> Self {
+        Self::with_limits(RenderingLimits::default()).expect("valid default rendering limits")
+    }
+}
+
+impl RenderingRuntime {
+    pub fn with_limits(limits: RenderingLimits) -> Result<Self, UseCaseError> {
+        if limits.concurrency == 0
+            || limits.concurrency > Semaphore::MAX_PERMITS
+            || limits.queue_timeout.is_zero()
+            || limits.execution_timeout.is_zero()
+        {
+            return Err(UseCaseError::Render(
+                "渲染并发数和超时必须为有效正值".into(),
+            ));
+        }
+        Ok(Self {
+            state: Arc::new(RuntimeState {
+                slots: Arc::new(Semaphore::new(limits.concurrency)),
+                limits,
+                markdown: Mutex::new(MarkdownCache::default()),
+            }),
+        })
+    }
+
+    pub fn theme_renderer(&self, renderer: MiniJinjaThemeRenderer) -> Arc<dyn ThemeRenderer> {
+        Arc::new(ThemeExecutor {
+            runtime: self.clone(),
+            renderer: Arc::new(renderer),
+        })
+    }
+
+    async fn execute<T, F>(&self, kind: &'static str, task: F) -> Result<T, UseCaseError>
+    where
+        T: Send + 'static,
+        F: FnOnce() -> Result<T, UseCaseError> + Send + 'static,
+    {
+        let queued = Instant::now();
+        let permit = tokio::time::timeout(
+            self.state.limits.queue_timeout,
+            self.state.slots.clone().acquire_owned(),
+        )
+        .await
+        .map_err(|_| {
+            tracing::warn!(
+                kind,
+                queue_ms = queued.elapsed().as_millis() as u64,
+                "渲染排队超时"
+            );
+            UseCaseError::Render("渲染排队超时".into())
+        })?
+        .map_err(|_| UseCaseError::Render("渲染执行器已关闭".into()))?;
+        let queue_ms = queued.elapsed().as_millis() as u64;
+        let span = tracing::Span::current();
+        let mut worker = tokio::task::spawn_blocking(move || {
+            // 此许可必须在阻塞闭包内，不能由等待它的 async future 持有。
+            let _permit = permit;
+            span.in_scope(|| {
+                let started = Instant::now();
+                let result = task();
+                tracing::debug!(
+                    kind,
+                    queue_ms,
+                    execution_ms = started.elapsed().as_millis() as u64,
+                    success = result.is_ok(),
+                    "渲染任务完成"
+                );
+                result
+            })
+        });
+        match tokio::time::timeout(self.state.limits.execution_timeout, &mut worker).await {
+            Ok(result) => {
+                result.map_err(|error| UseCaseError::Render(format!("渲染任务失败：{error}")))?
+            }
+            Err(_) => {
+                // 尚未开始的 blocking job 可取消；已开始的继续持有其许可直到完成。
+                worker.abort();
+                tracing::warn!(kind, queue_ms, "渲染执行超时");
+                Err(UseCaseError::Render("渲染执行超时".into()))
+            }
+        }
+    }
+}
+
+#[async_trait]
+impl ContentRenderer for RenderingRuntime {
+    async fn render_content(&self, source: &str) -> Result<RenderedContent, UseCaseError> {
+        let started = Instant::now();
+        let cached = self
+            .state
+            .markdown
+            .lock()
+            .map_err(|_| UseCaseError::Render("Markdown 缓存锁失效".into()))?
+            .get(source);
+        tracing::debug!(
+            kind = "markdown",
+            cache_hit = cached.is_some(),
+            lookup_us = started.elapsed().as_micros() as u64,
+            input_bytes = source.len(),
+            "Markdown 缓存查询"
+        );
+        if let Some(rendered) = cached {
+            return Ok(rendered);
+        }
+        let source = source.to_owned();
+        let state = self.state.clone();
+        self.execute("markdown", move || {
+            let content_html = SanitizingMarkdownRenderer::new().render_markdown(&source);
+            let media_ids = extract_media_ids_from_html(&content_html);
+            let rendered = RenderedContent {
+                content_html,
+                media_ids,
+            };
+            tracing::debug!(
+                output_bytes = rendered.content_html.len(),
+                media_count = rendered.media_ids.len(),
+                "正文 HTML 与媒体引用生成完成"
+            );
+            state
+                .markdown
+                .lock()
+                .map_err(|_| UseCaseError::Render("Markdown 缓存锁失效".into()))?
+                .insert(source, rendered.clone(), &state.limits);
+            Ok(rendered)
+        })
+        .await
+    }
+}
+
+struct ThemeExecutor {
+    runtime: RenderingRuntime,
+    renderer: Arc<MiniJinjaThemeRenderer>,
+}
+
+#[async_trait]
+impl ThemeRenderer for ThemeExecutor {
+    async fn render_index(
+        &self,
+        site: &SiteInfo,
+        seo: &SeoMeta,
+        posts: &[PostCard],
+    ) -> Result<String, UseCaseError> {
+        let renderer = self.renderer.clone();
+        let (site, seo, posts) = (site.clone(), seo.clone(), posts.to_vec());
+        self.runtime
+            .execute("theme.index", move || {
+                renderer.render_index(&site, &seo, &posts)
+            })
+            .await
+    }
+
+    async fn render_post(
+        &self,
+        site: &SiteInfo,
+        seo: &SeoMeta,
+        view: &PostView,
+    ) -> Result<String, UseCaseError> {
+        let renderer = self.renderer.clone();
+        let (site, seo, view) = (site.clone(), seo.clone(), view.clone());
+        self.runtime
+            .execute("theme.post", move || {
+                renderer.render_post(&site, &seo, &view)
+            })
+            .await
+    }
+    async fn render_page(
+        &self,
+        site: &SiteInfo,
+        seo: &SeoMeta,
+        view: &PageView,
+    ) -> Result<String, UseCaseError> {
+        let renderer = self.renderer.clone();
+        let (site, seo, view) = (site.clone(), seo.clone(), view.clone());
+        self.runtime
+            .execute("theme.page", move || {
+                renderer.render_page(&site, &seo, &view)
+            })
+            .await
+    }
+    async fn render_tag(
+        &self,
+        site: &SiteInfo,
+        seo: &SeoMeta,
+        view: &TagView,
+    ) -> Result<String, UseCaseError> {
+        let renderer = self.renderer.clone();
+        let (site, seo, view) = (site.clone(), seo.clone(), view.clone());
+        self.runtime
+            .execute("theme.tag", move || renderer.render_tag(&site, &seo, &view))
+            .await
+    }
+    async fn render_category(
+        &self,
+        site: &SiteInfo,
+        seo: &SeoMeta,
+        view: &CategoryView,
+    ) -> Result<String, UseCaseError> {
+        let renderer = self.renderer.clone();
+        let (site, seo, view) = (site.clone(), seo.clone(), view.clone());
+        self.runtime
+            .execute("theme.category", move || {
+                renderer.render_category(&site, &seo, &view)
+            })
+            .await
+    }
+    async fn render_series(
+        &self,
+        site: &SiteInfo,
+        seo: &SeoMeta,
+        view: &SeriesView,
+    ) -> Result<String, UseCaseError> {
+        let renderer = self.renderer.clone();
+        let (site, seo, view) = (site.clone(), seo.clone(), view.clone());
+        self.runtime
+            .execute("theme.series", move || {
+                renderer.render_series(&site, &seo, &view)
+            })
+            .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn limited() -> RenderingRuntime {
+        RenderingRuntime::with_limits(RenderingLimits {
+            concurrency: 1,
+            queue_timeout: Duration::from_millis(25),
+            execution_timeout: Duration::from_millis(100),
+            markdown_cache_entries: 2,
+            markdown_cache_bytes: 40,
+        })
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn cancelled_caller_keeps_running_worker_permit_and_rejects_overload() {
+        let runtime = limited();
+        let (started, ready) = tokio::sync::oneshot::channel();
+        let (release, blocked) = std::sync::mpsc::channel();
+        let worker_runtime = runtime.clone();
+        let caller = tokio::spawn(async move {
+            worker_runtime
+                .execute("test", move || {
+                    let _ = started.send(());
+                    let _ = blocked.recv();
+                    Ok("complete".to_string())
+                })
+                .await
+        });
+        ready.await.unwrap();
+        caller.abort();
+        assert!(caller.await.unwrap_err().is_cancelled());
+        assert_eq!(runtime.state.slots.available_permits(), 0);
+        let error = runtime
+            .execute("overload", || Ok("must not run".to_string()))
+            .await;
+        assert!(matches!(error, Err(UseCaseError::Render(message)) if message == "渲染排队超时"));
+        release.send(()).unwrap();
+        assert_eq!(
+            runtime
+                .execute("after", || Ok("available".to_string()))
+                .await
+                .unwrap(),
+            "available"
+        );
+    }
+
+    #[tokio::test]
+    async fn execution_timeout_does_not_release_a_running_worker_permit() {
+        let runtime = limited();
+        let (release, blocked) = std::sync::mpsc::channel();
+        let result = runtime
+            .execute("slow", move || {
+                let _ = blocked.recv();
+                Ok("late".to_string())
+            })
+            .await;
+        assert!(matches!(result, Err(UseCaseError::Render(message)) if message == "渲染执行超时"));
+        assert_eq!(runtime.state.slots.available_permits(), 0);
+        let queued = runtime
+            .execute("queued", || Ok("must not run".to_string()))
+            .await;
+        assert!(matches!(queued, Err(UseCaseError::Render(message)) if message == "渲染排队超时"));
+        release.send(()).unwrap();
+        assert!(runtime.execute("after", || Ok(String::new())).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn markdown_cache_hits_without_a_worker_and_is_bounded_by_entries_and_bytes() {
+        let runtime = limited();
+        assert_eq!(
+            runtime.render_content("a").await.unwrap().content_html,
+            "<p>a</p>\n"
+        );
+        let permit = runtime.state.slots.clone().acquire_owned().await.unwrap();
+        // 唯一执行槽正被占用：命中仍立即返回，未命中会排队超时。
+        assert_eq!(
+            runtime.render_content("a").await.unwrap().content_html,
+            "<p>a</p>\n"
+        );
+        assert!(runtime.render_content("missing").await.is_err());
+        drop(permit);
+        runtime.render_content("b").await.unwrap();
+        runtime.render_content("c").await.unwrap();
+        {
+            let mut cache = runtime.state.markdown.lock().unwrap();
+            assert_eq!(cache.entries.len(), 2);
+            assert!(cache.get("a").is_none());
+            assert!(cache.bytes <= 40);
+        }
+        // 单个超大结果仍可渲染，但不挤入缓存、也不清空已有热点。
+        runtime.render_content(&"x".repeat(100)).await.unwrap();
+        {
+            let cache = runtime.state.markdown.lock().unwrap();
+            assert_eq!(cache.entries.len(), 2);
+            assert!(cache.bytes <= 40);
+        }
+        runtime.render_content("12345678901234").await.unwrap();
+        let cache = runtime.state.markdown.lock().unwrap();
+        assert_eq!(cache.entries.len(), 1, "字节上限应先于条目数上限淘汰");
+        assert!(cache.bytes <= 40);
+    }
+
+    #[tokio::test]
+    async fn async_markdown_renderer_sanitizes_the_cached_result() {
+        let runtime = RenderingRuntime::default();
+        let source = "# 标题\n\n<script>alert('x')</script>\n\n[链接](javascript:alert(1))";
+        let first = runtime.render_content(source).await.unwrap();
+        assert!(first.content_html.contains("<h1>标题</h1>"));
+        assert!(!first.content_html.contains("<script"));
+        assert!(!first.content_html.contains("javascript:"));
+        assert_eq!(runtime.render_content(source).await.unwrap(), first);
+    }
+
+    #[tokio::test]
+    async fn cached_content_includes_sorted_unique_media_and_counts_their_bytes() {
+        let first = uuid::Uuid::from_u128(1);
+        let second = uuid::Uuid::from_u128(2);
+        let ignored = uuid::Uuid::from_u128(3);
+        let source = format!(
+            "![二](/media/{second})\n![一](/media/{first})\n![重复](/media/{second})\n\n<!-- <img src='/media/{ignored}'> -->"
+        );
+        let runtime = RenderingRuntime::default();
+        let rendered = runtime.render_content(&source).await.unwrap();
+        assert_eq!(rendered.media_ids, vec![first, second]);
+        let permits = runtime
+            .state
+            .slots
+            .clone()
+            .acquire_many_owned(16)
+            .await
+            .unwrap();
+        assert_eq!(runtime.render_content(&source).await.unwrap(), rendered);
+        drop(permits);
+
+        // 文本本身能放下、计入 UUID 后超限的结果不能进入缓存。
+        let runtime = RenderingRuntime::with_limits(RenderingLimits {
+            markdown_cache_bytes: source.len() + rendered.content_html.len(),
+            ..RenderingLimits::default()
+        })
+        .unwrap();
+        assert_eq!(runtime.render_content(&source).await.unwrap(), rendered);
+        assert!(runtime.state.markdown.lock().unwrap().entries.is_empty());
+    }
+
+    #[tokio::test]
+    async fn theme_executor_uses_the_shared_budget_and_preserves_stored_html() {
+        let runtime = limited();
+        let theme = runtime.theme_renderer(
+            MiniJinjaThemeRenderer::load(std::path::Path::new("../../themes/default")).unwrap(),
+        );
+        let site = SiteInfo {
+            title: "测试站点".into(),
+            description: "渲染执行器测试".into(),
+            logo_url: None,
+        };
+        let base = application::seo::PublicBaseUrl::parse("https://blog.test").unwrap();
+        let seo = SeoMeta::page(&site, &base, "页面", "page");
+        let page = PageView {
+            title: "页面".into(),
+            slug: "page".into(),
+            published_at: None,
+            updated_at: "2026-01-01".into(),
+            content_html: "<p><strong>持久化 HTML</strong></p>".into(),
+        };
+        let permit = runtime.state.slots.clone().acquire_owned().await.unwrap();
+        let error = theme.render_page(&site, &seo, &page).await;
+        assert!(matches!(error, Err(UseCaseError::Render(message)) if message == "渲染排队超时"));
+        drop(permit);
+        let html = theme.render_page(&site, &seo, &page).await.unwrap();
+        assert!(html.contains(&page.content_html));
+    }
+}

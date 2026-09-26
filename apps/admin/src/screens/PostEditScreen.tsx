@@ -171,7 +171,7 @@ function isVersionConflict(error: unknown): boolean {
 type TextAreaHandle = { resizableTextArea?: { textArea: HTMLTextAreaElement } };
 
 /**
- * 编辑屏。`slug === null` 表示新建。
+ * 编辑屏。`id === null` 表示新建。
  *
  * 冲突策略（docs/content-lifecycle.md §1）：写入携带 expected_version；
  * 409 时**保留客户端编辑并提示处理**，不自动覆盖：
@@ -183,14 +183,14 @@ type TextAreaHandle = { resizableTextArea?: { textArea: HTMLTextAreaElement } };
  * 这样 `pickServer`/`mergeServer` 仍能读到「响应回来那一刻」的真实输入，
  * 保留「请求飞行期间的新输入不被服务器响应覆盖」的既有语义。
  */
-export function PostEditScreen({ slug }: { slug: string | null }) {
+export function PostEditScreen({ id }: { id: string | null }) {
   const { me } = useAuth();
   const { modal } = AntdApp.useApp();
   const [formApi] = Form.useForm<FormState>();
   const [view, setView] = useState<FormState>(EMPTY_FORM);
   const [version, setVersion] = useState<number | null>(null);
   const [postStatus, setPostStatus] = useState<string>("draft");
-  const [loading, setLoading] = useState(slug !== null);
+  const [loading, setLoading] = useState(id !== null);
   const [busy, setBusy] = useState(false);
   /**
    * 三个目录（标签/分类/系列）走 React Query：与标签、分类、系列三个管理屏
@@ -222,22 +222,19 @@ export function PostEditScreen({ slug }: { slug: string | null }) {
   const contentRef = useRef<HTMLTextAreaElement | null>(null);
   /** 最近一次与服务器同步的表单内容，用于判断是否有未保存编辑。 */
   const baselineRef = useRef<FormState>(EMPTY_FORM);
+  /** 创建成功后切到新 ID 时保留已合并的输入，避免重复加载覆盖。 */
+  const loadedIdRef = useRef<string | null>(null);
   /**
-   * 当前表单对应的服务器 slug。改名成功后会先本地同步再更新地址栏；
-   * 效果钩子据此跳过"同一篇文章"的重载，避免把刚合并好的编辑覆盖掉。
-   */
-  const loadedSlugRef = useRef<string | null>(null);
-  /**
-   * 当前表单内容所属的 slug（`applyServer` 写入）。
+   * 当前表单内容所属的 ID（`applyServer` 写入）。
    *
-   * 编辑屏后退或切换到另一篇文章时组件会被复用（App 不按 slug 加 key）：
+   * 编辑屏后退或切换到另一篇文章时组件会被复用（App 不按 ID 加 key）：
    * 若目标文章加载失败，表单里留着的仍是**上一篇**的正文与版本号。
-   * 用「表单所属 slug」而不是「version 是否为空」判断，才能覆盖
+   * 用「表单所属 ID」而不是「version 是否为空」判断，才能覆盖
    * A(已加载) → B(加载失败) 这条路径，避免把 A 的内容连 A 的 expected_version
-   * 写到 B 的地址上（版本恰好相同就是静默覆盖）。
-   * 与 `PageEditScreen` 的 `formSlug`/`formMismatch`/`unloaded` 同源。
+   * 写到 B 的 ID 上（版本恰好相同就是静默覆盖）。
+   * 与 `PageEditScreen` 的 `pageId`/`formMismatch`/`unloaded` 同源。
    */
-  const [formSlug, setFormSlug] = useState<string | null>(null);
+  const [formId, setFormId] = useState<string | null>(null);
 
   const attachContentRef = useCallback((node: TextAreaHandle | null): void => {
     contentRef.current = node?.resizableTextArea?.textArea ?? null;
@@ -269,9 +266,9 @@ export function PostEditScreen({ slug }: { slug: string | null }) {
       const server = toForm(post);
       const merged = sent === undefined ? server : mergeServer(readForm(), sent, server);
       baselineRef.current = server;
-      loadedSlugRef.current = server.slug;
+      loadedIdRef.current = post.id;
       writeForm(merged);
-      setFormSlug(server.slug);
+      setFormId(post.id);
       setVersion(post.version);
       setPostStatus(post.status);
       setConflict(false);
@@ -295,8 +292,8 @@ export function PostEditScreen({ slug }: { slug: string | null }) {
     return !formEquals(readForm(), baselineRef.current);
   }
 
-  /** 表单内容与当前地址不一致：见 `formSlug` 的说明。 */
-  const formMismatch = slug !== null && formSlug !== slug;
+  /** 表单内容与当前地址不一致：见 `formId` 的说明。 */
+  const formMismatch = id !== null && formId !== id;
   /** 未加载成功（非加载中但表单仍不属于当前地址）：显示告警与重试入口。 */
   const unloaded = formMismatch && !loading;
   /** 渲染镜像与最近一次服务器同步值的差异；用于离开确认（见 src/unsaved.tsx）。 */
@@ -318,13 +315,13 @@ export function PostEditScreen({ slug }: { slug: string | null }) {
 
 
   useEffect(() => {
-    if (slug === null) {
+    if (id === null) {
       // 编辑页后退到新建页时组件会复用；清空全部编辑状态。
-      // 创建成功的 null → slug 跳转仍由 loadedSlugRef 保留已合并的新输入。
+      // 创建成功的 null → ID 跳转仍由 loadedIdRef 保留已合并的新输入。
       baselineRef.current = EMPTY_FORM;
-      loadedSlugRef.current = null;
+      loadedIdRef.current = null;
       writeForm(EMPTY_FORM);
-      setFormSlug(null);
+      setFormId(null);
       setVersion(null);
       setPostStatus("draft");
       setBusy(false);
@@ -334,8 +331,8 @@ export function PostEditScreen({ slug }: { slug: string | null }) {
       setLoading(false);
       return;
     }
-    // 刚在本地同步过这篇文章（例如改名后更新地址栏）：表单已经是最新的，不要重载覆盖。
-    if (slug === loadedSlugRef.current) {
+    // 刚创建并同步过这篇文章：切到新 ID 时不要重载覆盖请求期间的新输入。
+    if (id === loadedIdRef.current) {
       setLoading(false);
       return;
     }
@@ -343,7 +340,7 @@ export function PostEditScreen({ slug }: { slug: string | null }) {
     void (async () => {
       setLoading(true);
       try {
-        const post = await api.getPost(slug);
+        const post = await api.getPost(id);
         if (!cancelled) applyServer(post);
       } catch (e) {
         if (!cancelled) setError(permissionMessageOf(e));
@@ -354,7 +351,7 @@ export function PostEditScreen({ slug }: { slug: string | null }) {
     return () => {
       cancelled = true;
     };
-  }, [slug, applyServer, writeForm]);
+  }, [id, applyServer, writeForm]);
 
   function commitContent(next: string): void {
     writeForm({ ...readForm(), content: next });
@@ -366,7 +363,7 @@ export function PostEditScreen({ slug }: { slug: string | null }) {
     const current = readForm();
     const trimmed = current.slug.trim();
     return {
-      new_slug: slug !== null && trimmed.length > 0 && trimmed !== slug ? trimmed : undefined,
+      new_slug: id !== null && trimmed.length > 0 && trimmed !== baselineRef.current.slug ? trimmed : undefined,
       title: current.title,
       excerpt: current.excerpt,
       content: current.content,
@@ -395,7 +392,7 @@ export function PostEditScreen({ slug }: { slug: string | null }) {
 
   async function save(): Promise<void> {
     // 表单不属于当前地址时绝不能写入：`expected_version` 会用上一篇的版本号
-    // 打到新 slug 上，版本相同即静默覆盖。（加载途中同样适用，故用 formMismatch 而非 unloaded。）
+    // 打到另一个 ID 上，版本相同即静默覆盖。（加载途中同样适用，故用 formMismatch 而非 unloaded。）
     if (formMismatch) {
       setError("文章尚未成功加载，请先重新加载再保存，避免覆盖服务器内容。");
       return;
@@ -409,7 +406,7 @@ export function PostEditScreen({ slug }: { slug: string | null }) {
     setNotice(null);
     setBusy(true);
     try {
-      if (slug === null) {
+      if (id === null) {
         const sent = readForm();
         const created = await api.createPost({
           slug: sent.slug.trim().length > 0 ? sent.slug.trim() : undefined,
@@ -426,23 +423,18 @@ export function PostEditScreen({ slug }: { slug: string | null }) {
         // 先本地同步（含创建期间的新输入），再更新地址；效果钩子会跳过重载。
         applyServer(created, sent);
         invalidateList();
-        navigate(paths.editPost(created.slug));
+        navigate(paths.editPost(created.id));
         return;
       }
       const sent = readForm();
-      const saved = await api.updatePost(slug, {
+      const saved = await api.updatePost(id, {
         ...editPayload(),
         expected_version: version ?? undefined,
       });
       // 合并而不是整体覆盖：请求飞行期间的新输入必须保留。
       const stillDirty = applyServer(saved, sent);
       invalidateList();
-      if (saved.slug !== slug) {
-        // 改名成功：先本地同步再替换地址栏，否则编辑器、发布按钮与公开链接
-        // 会继续指向已不存在的旧地址，直到手动刷新。
-        navigate(paths.editPost(saved.slug), { replace: true });
-        return;
-      }
+
       setNotice(
         stillDirty ? "已保存；等待期间的新改动尚未保存。" : "已保存（已发布内容直接更新线上）。",
       );
@@ -459,11 +451,11 @@ export function PostEditScreen({ slug }: { slug: string | null }) {
 
   /** 冲突动作一：丢弃本地改动，重新加载服务器最新内容。 */
   async function reloadFromServer(): Promise<void> {
-    if (slug === null) return;
+    if (id === null) return;
     setError(null);
     setBusy(true);
     try {
-      applyServer(await api.getPost(slug));
+      applyServer(await api.getPost(id));
       setNotice("已重新加载服务器最新内容。");
     } catch (e) {
       setError(permissionMessageOf(e));
@@ -474,7 +466,7 @@ export function PostEditScreen({ slug }: { slug: string | null }) {
 
   /** 冲突动作二：二次确认后用服务器最新 version 覆盖本地内容。 */
   function overwriteWithLatest(): void {
-    if (slug === null) return;
+    if (id === null) return;
     modal.confirm({
       title: "用当前编辑内容覆盖服务器上的最新版本？",
       content: "将用你当前的编辑内容覆盖服务器上的最新版本，确定继续？",
@@ -483,19 +475,16 @@ export function PostEditScreen({ slug }: { slug: string | null }) {
         setError(null);
         setBusy(true);
         try {
-          const latest = await api.getPost(slug);
+          const latest = await api.getPost(id);
           // 等待 getPost 期间的新输入也要一起提交，不能在覆盖时丢掉。
           const sent = readForm();
-          const saved = await api.updatePost(slug, {
+          const saved = await api.updatePost(id, {
             ...editPayload(),
             expected_version: latest.version,
           });
           const stillDirty = applyServer(saved, sent);
           invalidateList();
-          if (saved.slug !== slug) {
-            navigate(paths.editPost(saved.slug), { replace: true });
-            return;
-          }
+
           setNotice(
             stillDirty ? "已覆盖保存；等待期间的新改动尚未保存。" : "已用服务器最新版本覆盖保存。",
           );
@@ -519,7 +508,7 @@ export function PostEditScreen({ slug }: { slug: string | null }) {
    */
   async function setPublished(publish: boolean): Promise<void> {
     // 表单不属于当前地址时不得改状态：没有可依据的版本号，等于盲写。
-    if (slug === null || formMismatch) return;
+    if (id === null || formMismatch) return;
     // 保存未存编辑走同一前提校验。
     if (readForm().seriesId !== null && !validSeriesOrder(readForm().seriesOrder)) {
       setError("选择了系列时，系列内序号必须是正整数（如 1、2、3）。");
@@ -529,17 +518,14 @@ export function PostEditScreen({ slug }: { slug: string | null }) {
     setNotice(null);
     setBusy(true);
     const hadUnsavedEdits = hasUnsaved();
-    /** 保存若发生改名，后续发布必须打到新地址。 */
-    let activeSlug = slug;
     try {
       let expected = version ?? undefined;
       if (hadUnsavedEdits) {
         const sent = readForm();
-        const saved = await api.updatePost(activeSlug, {
+        const saved = await api.updatePost(id, {
           ...editPayload(),
           expected_version: expected,
         });
-        activeSlug = saved.slug;
         expected = saved.version;
         applyServer(saved, sent);
         /**
@@ -551,8 +537,8 @@ export function PostEditScreen({ slug }: { slug: string | null }) {
       }
       // 发布/撤回不改正文：只同步状态，保留（可能还在变化的）表单。
       const result = publish
-        ? await api.publishPost(activeSlug, expected)
-        : await api.unpublishPost(activeSlug, expected);
+        ? await api.publishPost(id, expected)
+        : await api.unpublishPost(id, expected);
       applyStatus(result);
       invalidateList();
       const stillDirty = hasUnsaved();
@@ -570,11 +556,6 @@ export function PostEditScreen({ slug }: { slug: string | null }) {
         setError(permissionMessageOf(e));
       }
     } finally {
-      // 改名已落库：无论发布成功还是失败，地址都必须先指向新 slug，
-      // 否则重试与「重新加载」都会打到已不存在的旧地址。
-      if (activeSlug !== slug) {
-        navigate(paths.editPost(activeSlug), { replace: true });
-      }
       setBusy(false);
     }
   }
@@ -601,16 +582,16 @@ export function PostEditScreen({ slug }: { slug: string | null }) {
       <Flex justify="space-between" align="center" wrap gap={12} style={{ marginBottom: 16 }}>
         <Flex align="center" gap={8}>
           <Typography.Title level={3} style={{ margin: 0 }}>
-            {slug === null ? "新建草稿" : view.slug}
+            {id === null ? "新建草稿" : view.slug}
           </Typography.Title>
           <Tag color={postStatus === "published" ? "green" : undefined}>
             {postStatus === "published" ? "已发布" : "草稿"}
           </Tag>
           {version !== null && <Typography.Text type="secondary">v{version}</Typography.Text>}
         </Flex>
-        {postStatus === "published" && slug !== null && (
+        {postStatus === "published" && id !== null && (
           <Typography.Link
-            href={`/posts/${encodeURIComponent(slug)}`}
+            href={`/posts/${encodeURIComponent(baselineRef.current.slug)}`}
             target="_blank"
             rel="noreferrer"
           >
@@ -814,7 +795,7 @@ export function PostEditScreen({ slug }: { slug: string | null }) {
           <Button type="primary" htmlType="submit" disabled={busy}>
             {busy ? "处理中…" : "保存并更新线上"}
           </Button>
-          {canPublish && slug !== null && (
+          {canPublish && id !== null && (
             <Button disabled={busy} onClick={() => void setPublished(postStatus !== "published")}>
               {postStatus === "published" ? "撤回为草稿" : "发布"}
             </Button>

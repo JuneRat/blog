@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
-# 本地提交前检查：格式 + clippy(-D warnings) + 全量测试 + 后台 SPA 类型/测试 + 备份恢复演练。
+# 本地提交前检查：依赖边界 + 格式 + clippy + 测试 + 后台 SPA + 备份恢复。
 # 与 CI（.github/workflows/ci.yml 的 check 与 web 两个 job）保持一致。
 set -euo pipefail
 cd "$(dirname "$0")/.."
+
+echo "==> Cargo dependency boundaries"
+python3 -B scripts/check_dependencies.py
+PYTHONPATH=scripts python3 -B -m unittest scripts/test_check_dependencies.py
 
 echo "==> cargo fmt --check"
 cargo fmt --all --check

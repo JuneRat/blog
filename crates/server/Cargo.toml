@@ -12,15 +12,15 @@ application = { path = "../application" }
 infrastructure = { path = "../infrastructure" }
 interfaces = { path = "../interfaces" }
 tokio.workspace = true
+axum.workspace = true
+sqlx.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
-axum.workspace = true
 time.workspace = true
-sqlx.workspace = true
 async-trait.workspace = true
 uuid.workspace = true
 serde_json.workspace = true

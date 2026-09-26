@@ -68,7 +68,7 @@ async function openDirtyEditor(): Promise<void> {
 
 beforeEach(() => {
   vi.resetAllMocks();
-  window.history.replaceState(null, "", paths.editPost(post.slug));
+  window.history.replaceState(null, "", paths.editPost(post.id));
   vi.mocked(api.getPost).mockResolvedValue(post);
   vi.mocked(api.listTags).mockResolvedValue([]);
   vi.mocked(api.categoryApi.list).mockResolvedValue([]);
@@ -87,7 +87,7 @@ describe("未保存离开保护", () => {
     fireEvent.click(screen.getByRole("button", { name: "留在此页" }));
     await act(async () => {});
 
-    expect(window.location.pathname).toBe(paths.editPost(post.slug));
+    expect(window.location.pathname).toBe(paths.editPost(post.id));
     expect(titleInput().value).toBe("改过的标题");
   });
 
@@ -159,7 +159,7 @@ describe("未保存离开保护", () => {
     fireEvent.click(screen.getByRole("button", { name: "留在此页" }));
     await act(async () => {});
 
-    expect(window.location.pathname).toBe(paths.editPost(post.slug));
+    expect(window.location.pathname).toBe(paths.editPost(post.id));
     expect(titleInput().value).toBe("改过的标题");
   });
 
