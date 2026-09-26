@@ -63,7 +63,8 @@ fn user_from_row(row: &sqlx::postgres::PgRow) -> Result<UserSnapshot, UseCaseErr
 
 #[async_trait]
 impl UserRepository for PostgresUserRepository {
-    async fn insert(&self, snapshot: &UserSnapshot) -> Result<(), UseCaseError> {
+    async fn insert(&self, aggregate: &domain::identity::User) -> Result<(), UseCaseError> {
+        let snapshot = aggregate.snapshot();
         sqlx::query(
             r#"
             INSERT INTO users (id, username, email, display_name, version, created_at, updated_at)

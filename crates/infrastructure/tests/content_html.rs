@@ -7,8 +7,8 @@ use application::ports::{
     PublishedPageQuery, PublishedPostQuery, RenderedContent,
 };
 use async_trait::async_trait;
-use domain::content::page::{Page, PagePatch};
-use domain::content::post::{Post, PostPatch, Slug, Visibility};
+use domain::content::{Page, PagePatch};
+use domain::content::{Post, PostPatch, Slug, Visibility};
 use domain::identity::UserId;
 use infrastructure::persistence::{CONTENT_RENDER_VERSION, rebuild_content_html};
 use infrastructure::{

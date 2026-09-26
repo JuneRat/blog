@@ -4,15 +4,19 @@
 
 ## 当前模块
 
-领域层按业务概念组织，简单模型保留在单文件；[crate 入口](../crates/domain/src/lib.rs) 公开 `content`、`identity`、`media`、`settings` 四个模块。
+领域层按业务概念组织，简单模型保留在单文件；[crate 入口](../crates/domain/src/lib.rs) 公开 `content`、`identity`、`media`、`comment`、`settings` 五个模块。
 
 | 模块 | 已实现类型 | 保护的规则 |
 |---|---|---|
-| [content/post.rs](../crates/domain/src/content/post.rs) | `Post`、`Slug`、`SeriesPlacement`、创建元数据与编辑补丁 | 当前正文、发布状态、路径锁定、系列位置格式 |
+| [content/post.rs](../crates/domain/src/content/post.rs) | `Post`、`SeriesPlacement`、创建元数据与编辑补丁 | 当前正文、发布状态、路径锁定、系列位置格式 |
+| [content/slug.rs](../crates/domain/src/content/slug.rs)、[visibility.rs](../crates/domain/src/content/visibility.rs) | `Slug`、`SlugError`、`Visibility` | 共享路径格式与可见性；外部统一从 `domain::content` 导入 |
 | [content/page.rs](../crates/domain/src/content/page.rs) | `Page`、页面状态与编辑补丁 | 独立页面正文、发布状态、根路径保留名 |
 | [content/category.rs](../crates/domain/src/content/category.rs)、[tag.rs](../crates/domain/src/content/tag.rs)、[series.rs](../crates/domain/src/content/series.rs) | `Category`、`Tag`、`Series` | 名称/描述规范化、长度、不可变 slug |
-| [identity.rs](../crates/domain/src/identity.rs) | `User`、`UserId`、`PermissionSet`、密码策略 | 用户名与资料格式、权限集合语义、新密码规则 |
+| [identity/user.rs](../crates/domain/src/identity/user.rs) | `User`、`UserId`、`UserSnapshot`、`Username`、`Email` | 用户名与资料格式、身份修订号语义 |
+| [identity/password.rs](../crates/domain/src/identity/password.rs) | `PasswordError`、密码策略与常量 | 新密码长度、用户名包含与常见口令规则 |
+| [identity/permissions.rs](../crates/domain/src/identity/permissions.rs) | `PermissionSet` | 权限并集、成员判断与子集关系 |
 | [media.rs](../crates/domain/src/media.rs) | `Media`、媒体状态、图片格式与校验结果 | 资产状态转换、上传大小与声明尺寸、文件名规范化 |
+| [comment.rs](../crates/domain/src/comment.rs) | `CommentBody`、`CommentNickname`、`CommentStatus`、`ModerationAction` | 评论正文与昵称校验、审核动作与状态 |
 | [settings.rs](../crates/domain/src/settings.rs) | `SiteSettings` | 站点标题、描述与 logo 的完整写入值 |
 
 没有 `appearance`、邀请、主题激活或通用扩展聚合；角色授权、OAuth 绑定和设置持久化由应用用例与对应端口组织。数据库关系表不自动对应一个领域聚合。
@@ -63,6 +67,8 @@ Post 只引用 `identity::UserId`，不引用 User 聚合或权限实现。公�
 
 `User` 创建入口规范化用户名（trim、ASCII 小写），验证用户名、可选邮箱和展示名。`PermissionSet` 只表达权限并集、成员判断和子集关系；具体权限 key、内置角色与授权策略由应用层定义。密码策略也是纯规则，密码哈希、登录限流、会话和提供商协议在外层。详细身份流程见[身份与后台](identity-and-admin.md)。
 
+`UserSnapshot::version` 是身份修订号，用于会话有效性判定；凭据、角色和停用变更递增，头像修改不递增。它不能作为普通资料编辑的通用乐观锁版本。identity 按 user/password/permissions 拆分，通过 [mod.rs](../crates/domain/src/identity/mod.rs) 显式重导出；调用方继续从 `domain::identity` 导入。
+
 `Media` 区分 `staged`、`ready`、`pending_deletion`、`deleted`，只允许明确的状态转换；未完成上传可从 staged 进入待删除状态。删除决定与文件删除完成分开，以支持重试。只有 ready 资产可被引用，但 ready 本身不代表匿名可读：公开性实时取决于引用它的内容。
 
 图片校验接受 PNG、JPEG、GIF、WebP，按文件头识别格式与尺寸；上限为 10 MiB、单边 12,000 像素、总像素 60,000,000。它不完整解码图片，不能据此宣称已检查所有损坏文件。存储路径由资产 ID 决定，原始文件名只供展示。
@@ -73,11 +79,13 @@ Post 只引用 `identity::UserId`，不引用 User 聚合或权限实现。公�
 
 聚合内部字段私有，对外提供业务方法、必要访问器及 `snapshot()` 副本。[content/mod.rs](../crates/domain/src/content/mod.rs) 显式重导出常用类型，同时保留公开子模块；现有调用方可以使用 `domain::content::Post` 或 `domain::content::post::Post`。
 
-快照结构的字段公开，`reconstitute(snapshot)` 用于从可信仓储结果恢复聚合。现有重建函数信任快照，不重新执行创建校验；它不是处理 HTTP 输入的验证入口，也不是按调用者限制访问的安全机制。应用写流程应调用聚合行为，不能修改快照后用重建绕过规则。Post/Page 写端口接收聚合，具体收口见 [ADR-0014](adr/0014-content-commits-and-stable-admin-identity.md)。
+快照结构的字段公开，`reconstitute(snapshot)` 用于从仓储结果恢复聚合，并校验结构不变量（例如路径、版本、发布状态及字段格式），无效快照会返回错误。重建与新建规则并非完全相同：Post/Page 允许加载历史超长正文以便缩短，但编辑和发布仍校验源文预算。重建不是 HTTP 输入入口，也不是按调用者限制访问的安全机制；应用写流程应调用聚合行为，不能修改快照后用重建绕过业务动作。Post/Page 写端口以及用户、标签、分类、系列和媒体创建端口均接收聚合；Snapshot 用于读取、重建和返回结果。媒体状态迁移、密码更新、目录树移动等仍使用专用原子操作。内容提交细节见 [ADR-0014](adr/0014-content-commits-and-stable-admin-identity.md)。
 
 私有字段保护日常状态修改，Cargo 与模块可见性限制可达范围，但统一 `domain` 中的公开模型对所有合法依赖者可见。若将来需要某业务上下文在编译期完全无法使用另一聚合，应拆分 crate 并收紧依赖；仅移动文件不能提供这种隔离。
 
 ## 模型之外
+
+源文长度上限保留在领域 [content/budget.rs](../crates/domain/src/content/budget.rs)。正文 HTML 上限、主题额外输出空间和整页 HTML 上限集中在应用 [rendering_budget.rs](../crates/application/src/rendering_budget.rs)，由基础设施执行；修改渲染策略无需改动领域层。
 
 领域不保存清洗 HTML、渲染规则版本、模板状态、SQL 事务、HTTP 请求或会话。`content_html` 是基础设施维护的派生物；仓储、查询、时钟、渲染端口及 DTO 位于应用层。领域错误描述规则失败，不携带 HTTP 状态或数据库错误。
 

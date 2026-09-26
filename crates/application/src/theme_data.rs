@@ -6,7 +6,7 @@ use serde::Serialize;
 use crate::error::UseCaseError;
 use crate::ports::{PublishedCategoryQuery, PublishedPostQuery, PublishedTagQuery};
 use crate::public_site::format_datetime;
-use domain::content::post::Slug;
+use domain::content::Slug;
 
 /// All public article lists share one display contract.
 pub type ThemePostSummary = crate::public_site::PostCard;

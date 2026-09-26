@@ -50,7 +50,7 @@ pub struct Series {
 impl Series {
     pub fn new(
         name: String,
-        slug: super::post::Slug,
+        slug: super::Slug,
         description: Option<String>,
         now: OffsetDateTime,
     ) -> Result<Self, SeriesError> {
@@ -69,7 +69,7 @@ impl Series {
     }
 
     pub fn reconstitute(snapshot: SeriesSnapshot) -> Result<Self, SeriesError> {
-        super::post::Slug::new(&snapshot.slug).map_err(|_| SeriesError::InvalidSnapshot)?;
+        super::Slug::new(&snapshot.slug).map_err(|_| SeriesError::InvalidSnapshot)?;
         if normalize_name(snapshot.name.clone())? != snapshot.name || snapshot.version < 1 {
             return Err(SeriesError::InvalidSnapshot);
         }
@@ -150,7 +150,7 @@ fn normalize_description(raw: Option<String>) -> Result<Option<String>, SeriesEr
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::content::post::Slug;
+    use crate::content::Slug;
 
     fn series() -> Series {
         Series::new(

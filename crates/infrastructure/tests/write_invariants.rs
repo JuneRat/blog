@@ -195,7 +195,7 @@ async fn media_transition_matrix_matches_aggregate_and_conditional_writes() {
                 now,
             )
             .unwrap();
-            repo.insert_staged(&media.snapshot()).await.unwrap();
+            repo.insert_staged(&media).await.unwrap();
             sqlx::query("UPDATE media_assets SET status=$2 WHERE id=$1")
                 .bind(id)
                 .bind(status.as_str())

@@ -14,7 +14,7 @@ pub struct PasswordCredential {
     pub user_id: Uuid,
     /// PHC 格式的 Argon2id 字符串（算法与参数自描述）。
     pub password_hash: String,
-    /// 读取时的 `users.version`：会话签发时绑定它，避免并发改密后用旧口令建会话。
+    /// 读取时的 `users.version`（身份修订号）：会话签发时绑定它，避免并发改密后用旧口令建会话。
     pub version: i64,
 }
 
@@ -45,13 +45,14 @@ impl AdminUserRow {
 
 #[async_trait]
 pub trait UserRepository: Send + Sync {
-    async fn insert(&self, snapshot: &UserSnapshot) -> Result<(), UseCaseError>;
+    /// 创建接收已校验的聚合；快照仅用于读取、重建与返回结果。
+    async fn insert(&self, aggregate: &domain::identity::User) -> Result<(), UseCaseError>;
     async fn find_by_id(&self, id: Uuid) -> Result<Option<UserSnapshot>, UseCaseError>;
     async fn find_by_username(&self, username: &str) -> Result<Option<UserSnapshot>, UseCaseError>;
 
     /// 设置/清除头像（自助；仅本人）。
     ///
-    /// **不递增 `users.version`**：该版本是会话绑定版本，递增会让该用户的所有
+    /// **不递增 `users.version`**：该版本是会话绑定的身份修订号，递增会让该用户的所有
     /// 会话立即失效——换个头像不该把人踢下线。头像因此是后写覆盖，没有 CAS。
     /// 头像的媒体引用在同一事务内整体替换；`Some(id)` 时资产必须存在且 `ready`。
     async fn set_avatar(
@@ -218,7 +219,7 @@ pub struct SessionRecord {
 #[async_trait]
 pub trait SessionStore: Send + Sync {
     /// 创建会话，返回不透明令牌（明文只出现一次；服务端保存验证摘要）。
-    /// `user_version` 为签发时账号的 `users.version`，校验时用于比对。
+    /// `user_version` 为签发时账号的身份修订号（`users.version`），校验时用于比对。
     async fn create(&self, user_id: Uuid, user_version: i64) -> Result<String, UseCaseError>;
     /// 校验令牌并刷新 last_seen；过期/未知/已撤销返回 None。
     async fn validate(&self, token: &str) -> Result<Option<SessionRecord>, UseCaseError>;

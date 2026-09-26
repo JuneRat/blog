@@ -15,8 +15,8 @@ use application::ports::{
     MediaDeleteOutcome, MediaRefGuard, MediaRepository, MediaStorage, PageRepository,
     PostCommitOutcome, PostRepository, SaveOutcome, UserRepository,
 };
-use domain::content::page::Page;
-use domain::content::post::{Post, PostPatch, Slug, Visibility};
+use domain::content::Page;
+use domain::content::{Post, PostPatch, Slug, Visibility};
 use domain::identity::{User, UserId};
 use domain::media::{Media, MediaSnapshot};
 use infrastructure::{
@@ -92,7 +92,7 @@ async fn seed_user(pool: &PgPool, username: &str) -> Uuid {
     )
     .expect("构造用户失败");
     PostgresUserRepository::new(pool.clone())
-        .insert(&user.snapshot())
+        .insert(&user)
         .await
         .expect("写入用户失败");
     user.id().0
@@ -149,7 +149,10 @@ async fn ready_media(pool: &PgPool, owner: Uuid, width: u32, height: u32) -> Med
     .unwrap()
     .snapshot();
     let store = repo(pool);
-    store.insert_staged(&media).await.unwrap();
+    store
+        .insert_staged(&domain::media::Media::reconstitute(media.clone()).unwrap())
+        .await
+        .unwrap();
     assert!(
         store
             .mark_ready(media.id, OffsetDateTime::now_utc())
@@ -792,7 +795,10 @@ async fn reclaim_discards_interrupted_uploads_and_retries_file_deletion() {
     )
     .unwrap()
     .snapshot();
-    repo(&pool).insert_staged(&broken).await.unwrap();
+    repo(&pool)
+        .insert_staged(&domain::media::Media::reconstitute(broken.clone()).unwrap())
+        .await
+        .unwrap();
     assert_eq!(media_status(&pool, broken.id).await, "staged");
 
     // 正常上传后直接进入回收：文件真实存在，等待删除确认。
@@ -983,7 +989,10 @@ async fn staged_assets_are_not_listed_and_ready_assets_are_paginated() {
     )
     .unwrap()
     .snapshot();
-    store.insert_staged(&staged).await.unwrap();
+    store
+        .insert_staged(&domain::media::Media::reconstitute(staged.clone()).unwrap())
+        .await
+        .unwrap();
 
     let (items, total) = store.list(2, 0).await.unwrap();
     assert_eq!(total, 3, "总数只统计可用资产");
@@ -1070,7 +1079,10 @@ async fn reclaim_never_touches_an_asset_whose_upload_won_the_race() {
     )
     .unwrap()
     .snapshot();
-    store.insert_staged(&staged).await.unwrap();
+    store
+        .insert_staged(&domain::media::Media::reconstitute(staged.clone()).unwrap())
+        .await
+        .unwrap();
 
     // 上传在回收扫描之前完成：文件移入正式位置，行标记 ready。
     storage.promote(&key).await.unwrap();
@@ -1139,7 +1151,10 @@ async fn upload_cannot_become_ready_after_reclaim_claimed_it() {
     )
     .unwrap()
     .snapshot();
-    store.insert_staged(&staged).await.unwrap();
+    store
+        .insert_staged(&domain::media::Media::reconstitute(staged.clone()).unwrap())
+        .await
+        .unwrap();
 
     let report = interactor.reclaim(&actor).await.unwrap();
     assert_eq!(report.abandoned_staged, 1);
@@ -1186,7 +1201,10 @@ async fn concurrent_ready_and_reclaim_claim_are_mutually_exclusive() {
         )
         .unwrap()
         .snapshot();
-        store.insert_staged(&staged).await.unwrap();
+        store
+            .insert_staged(&domain::media::Media::reconstitute(staged.clone()).unwrap())
+            .await
+            .unwrap();
         // 上传在并发前把文件移入正式位置（真实流程中 promote 先于 mark_ready）。
         storage.promote(&key).await.unwrap();
 
@@ -1258,7 +1276,10 @@ async fn reclaim_leaves_fresh_staged_uploads_alone() {
     )
     .unwrap()
     .snapshot();
-    store.insert_staged(&fresh).await.unwrap();
+    store
+        .insert_staged(&domain::media::Media::reconstitute(fresh.clone()).unwrap())
+        .await
+        .unwrap();
 
     let report = interactor.reclaim(&actor).await.unwrap();
     assert_eq!(report.abandoned_staged, 0, "宽限期内的上传不能被认领");

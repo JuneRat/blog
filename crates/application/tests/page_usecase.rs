@@ -8,7 +8,7 @@ use application::error::{ConflictKind, UseCaseError};
 use application::identity::{Actor, ActorChannel};
 use application::page::{CreatePageCmd, DeletePageCmd, EditPageCmd, PageInteractor};
 use application::ports::{Clock, PageCommitOutcome, PageDeleteOutcome, PageRepository};
-use domain::content::page::{PageSnapshot, PageStatus, Visibility};
+use domain::content::{PageSnapshot, PageStatus, Visibility};
 use domain::identity::{PermissionSet, UserId};
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -46,7 +46,7 @@ impl PageRepository for FakePageRepo {
 
     async fn insert_page(
         &self,
-        page: &domain::content::page::Page,
+        page: &domain::content::Page,
     ) -> Result<PageSnapshot, UseCaseError> {
         let snapshot = page.snapshot();
         let mut pages = self.pages.lock().unwrap();
@@ -59,7 +59,7 @@ impl PageRepository for FakePageRepo {
 
     async fn commit_page(
         &self,
-        page: &domain::content::page::Page,
+        page: &domain::content::Page,
         expected_version: i64,
         now: OffsetDateTime,
     ) -> Result<PageCommitOutcome, UseCaseError> {

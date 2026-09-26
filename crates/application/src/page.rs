@@ -12,10 +12,10 @@ use uuid::Uuid;
 use crate::error::UseCaseError;
 use crate::ports::{Clock, PageCommitOutcome, PageDeleteOutcome, PageRepository};
 use crate::version::checked_version;
-use domain::content::page::{Page, PageError, PagePatch, PageSnapshot, Slug, Visibility};
+use domain::content::{Page, PageError, PagePatch, PageSnapshot, Slug, Visibility};
 
 /// 向接口层转出的可见性值对象（interfaces 不直接依赖 domain crate）。
-pub use domain::content::page::Visibility as PageVisibility;
+pub use domain::content::Visibility as PageVisibility;
 
 #[derive(Debug, Clone)]
 pub struct CreatePageCmd {

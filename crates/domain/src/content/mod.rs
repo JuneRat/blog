@@ -5,7 +5,9 @@ pub mod category;
 pub mod page;
 pub mod post;
 pub mod series;
+pub mod slug;
 pub mod tag;
+pub mod visibility;
 
 pub use category::{CATEGORY_NAME_MAX_CHARS, Category, CategoryError, CategorySnapshot};
 pub use page::{
@@ -14,7 +16,10 @@ pub use page::{
 };
 pub use post::{
     Post, PostDraftMetadata, PostError, PostId, PostPatch, PostSnapshot, PostStatus,
-    SeriesPlacement, Slug, Visibility,
+    SeriesPlacement,
 };
 pub use series::{SERIES_NAME_MAX_CHARS, Series, SeriesError, SeriesSnapshot};
 pub use tag::{TAG_NAME_MAX_CHARS, Tag, TagError, TagSnapshot};
+
+pub use slug::{SLUG_MAX_BYTES, Slug, SlugError};
+pub use visibility::Visibility;

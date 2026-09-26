@@ -32,7 +32,8 @@ pub enum TagDeleteOutcome {
 
 #[async_trait]
 pub trait TagRepository: Send + Sync {
-    async fn insert(&self, snapshot: &domain::content::TagSnapshot) -> Result<(), UseCaseError>;
+    /// 创建接收已校验的聚合；快照仅用于读取、重建与返回结果。
+    async fn insert(&self, aggregate: &domain::content::Tag) -> Result<(), UseCaseError>;
     async fn find_by_slug(
         &self,
         slug: &str,
@@ -92,10 +93,8 @@ pub enum CategoryDeleteOutcome {
 /// 在 [`CategoryRepository::update`] 的分类树事务锁内完成（docs/content-lifecycle.md §3）。
 #[async_trait]
 pub trait CategoryRepository: Send + Sync {
-    async fn insert(
-        &self,
-        snapshot: &domain::content::CategorySnapshot,
-    ) -> Result<(), UseCaseError>;
+    /// 创建接收已校验的聚合；快照仅用于读取、重建与返回结果。
+    async fn insert(&self, aggregate: &domain::content::Category) -> Result<(), UseCaseError>;
     async fn find_by_slug(
         &self,
         slug: &str,
@@ -181,7 +180,8 @@ pub struct SeriesMember {
 
 #[async_trait]
 pub trait SeriesRepository: Send + Sync {
-    async fn insert(&self, snapshot: &domain::content::SeriesSnapshot) -> Result<(), UseCaseError>;
+    /// 创建接收已校验的聚合；快照仅用于读取、重建与返回结果。
+    async fn insert(&self, aggregate: &domain::content::Series) -> Result<(), UseCaseError>;
     async fn find_by_slug(
         &self,
         slug: &str,

@@ -128,11 +128,8 @@ pub trait MediaRefGuard: Send + Sync {
 /// 「是否仍被使用」以该表为唯一判据，不靠搜索 Markdown 文本。
 #[async_trait]
 pub trait MediaRepository: Send + Sync {
-    /// 登记一次上传（状态 `staged`）。
-    async fn insert_staged(
-        &self,
-        snapshot: &domain::media::MediaSnapshot,
-    ) -> Result<(), UseCaseError>;
+    /// 登记已校验的上传聚合；实现必须拒绝非 `staged` 状态。
+    async fn insert_staged(&self, aggregate: &domain::media::Media) -> Result<(), UseCaseError>;
 
     /// `staged → ready`。未命中（记录消失或已被回收）返回 false。
     async fn mark_ready(&self, id: Uuid, now: OffsetDateTime) -> Result<bool, UseCaseError>;

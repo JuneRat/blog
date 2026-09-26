@@ -47,7 +47,8 @@ impl FakeTagRepo {
 
 #[async_trait::async_trait]
 impl TagRepository for FakeTagRepo {
-    async fn insert(&self, snapshot: &TagSnapshot) -> Result<(), UseCaseError> {
+    async fn insert(&self, aggregate: &domain::content::Tag) -> Result<(), UseCaseError> {
+        let snapshot = aggregate.snapshot();
         let mut tags = self.tags.lock().unwrap();
         if tags.contains_key(&snapshot.slug) {
             return Err(UseCaseError::Conflict(
@@ -271,7 +272,8 @@ impl UserRepository for FakeUserRepo {
         unimplemented!("该用例不使用头像")
     }
 
-    async fn insert(&self, snapshot: &UserSnapshot) -> Result<(), UseCaseError> {
+    async fn insert(&self, aggregate: &domain::identity::User) -> Result<(), UseCaseError> {
+        let snapshot = aggregate.snapshot();
         self.users
             .lock()
             .unwrap()

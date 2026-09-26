@@ -48,7 +48,8 @@ const TAG_PUBLIC_COUNT: &str = "(SELECT count(*) FROM post_tags pt JOIN posts p 
 
 #[async_trait]
 impl TagRepository for PostgresTagRepository {
-    async fn insert(&self, snapshot: &domain::content::TagSnapshot) -> Result<(), UseCaseError> {
+    async fn insert(&self, aggregate: &domain::content::Tag) -> Result<(), UseCaseError> {
+        let snapshot = aggregate.snapshot();
         sqlx::query(
             "INSERT INTO tags (id, name, slug, version, created_at) \
              VALUES ($1, $2, $3, $4, $5)",
@@ -383,10 +384,8 @@ async fn parent_chain_contains(
 
 #[async_trait]
 impl CategoryRepository for PostgresCategoryRepository {
-    async fn insert(
-        &self,
-        snapshot: &domain::content::CategorySnapshot,
-    ) -> Result<(), UseCaseError> {
+    async fn insert(&self, aggregate: &domain::content::Category) -> Result<(), UseCaseError> {
+        let snapshot = aggregate.snapshot();
         // 新节点不可能是自己的祖先，创建本身无环；树锁仍统一取得，
         // 与并发删除父分类互斥（否则插入成功后父已消失，靠 FK 报裸错误）。
         let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
@@ -760,7 +759,8 @@ fn series_from_row(
 
 #[async_trait]
 impl SeriesRepository for PostgresSeriesRepository {
-    async fn insert(&self, snapshot: &domain::content::SeriesSnapshot) -> Result<(), UseCaseError> {
+    async fn insert(&self, aggregate: &domain::content::Series) -> Result<(), UseCaseError> {
+        let snapshot = aggregate.snapshot();
         sqlx::query(
             "INSERT INTO series (id, name, slug, description, cover_media_id, version, created_at, \
              updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",

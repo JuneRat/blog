@@ -6,8 +6,8 @@ use uuid::Uuid;
 
 use super::runtime::SaveOutcome;
 use crate::error::UseCaseError;
-use domain::content::page::{Page, PageSnapshot};
-use domain::content::post::{Post, PostSnapshot};
+use domain::content::{Page, PageSnapshot};
+use domain::content::{Post, PostSnapshot};
 
 /// 同一数据库快照中的文章及其标签；仅作为读取/提交结果，不作为写入命令。
 #[derive(Debug, Clone, PartialEq)]

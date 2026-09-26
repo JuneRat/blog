@@ -51,7 +51,7 @@ impl Category {
     /// parent 由用例校验存在（新节点不可能是自己的祖先，创建本身无环风险）。
     pub fn new(
         name: String,
-        slug: super::post::Slug,
+        slug: super::Slug,
         parent_id: Option<Uuid>,
         description: Option<String>,
         now: OffsetDateTime,
@@ -72,7 +72,7 @@ impl Category {
 
     /// 受控重建入口：仅供持久化适配器从数据库恢复聚合。
     pub fn reconstitute(snapshot: CategorySnapshot) -> Result<Self, CategoryError> {
-        super::post::Slug::new(&snapshot.slug).map_err(|_| CategoryError::InvalidSnapshot)?;
+        super::Slug::new(&snapshot.slug).map_err(|_| CategoryError::InvalidSnapshot)?;
         if normalize_name(snapshot.name.clone())? != snapshot.name || snapshot.version < 1 {
             return Err(CategoryError::InvalidSnapshot);
         }
@@ -151,7 +151,7 @@ fn normalize_description(raw: Option<String>) -> Result<Option<String>, Category
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::content::post::Slug;
+    use crate::content::Slug;
 
     fn category() -> Category {
         Category::new(

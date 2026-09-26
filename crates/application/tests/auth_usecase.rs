@@ -348,7 +348,8 @@ impl UserRepository for FakeUserRepo {
         unimplemented!("该用例不使用头像")
     }
 
-    async fn insert(&self, snapshot: &UserSnapshot) -> Result<(), UseCaseError> {
+    async fn insert(&self, aggregate: &domain::identity::User) -> Result<(), UseCaseError> {
+        let snapshot = aggregate.snapshot();
         self.users
             .lock()
             .unwrap()

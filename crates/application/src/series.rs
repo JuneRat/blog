@@ -20,7 +20,7 @@ use crate::error::UseCaseError;
 use crate::identity::{Actor, authorize_own_or_any};
 use crate::ports::{Clock, ReorderOutcome, SeriesDeleteOutcome, SeriesRepository, SeriesWithUsage};
 use crate::version::checked_version;
-use domain::content::post::Slug;
+use domain::content::Slug;
 use domain::content::series::Series;
 
 pub struct CreateSeriesCmd {
@@ -115,7 +115,7 @@ impl SeriesInteractor {
         let series =
             Series::new(cmd.name, slug, cmd.description, self.clock.now()).map_err(map_domain)?;
         let snapshot = series.snapshot();
-        self.series.insert(&snapshot).await?;
+        self.series.insert(&series).await?;
         Ok(SeriesDto {
             id: snapshot.id,
             name: snapshot.name,

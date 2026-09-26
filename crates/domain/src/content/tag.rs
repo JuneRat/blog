@@ -39,11 +39,7 @@ pub struct Tag {
 
 impl Tag {
     /// 创建标签：name 先 trim 再校验；slug 必须已通过 [`Slug`] 验证。
-    pub fn new(
-        name: String,
-        slug: super::post::Slug,
-        now: OffsetDateTime,
-    ) -> Result<Self, TagError> {
+    pub fn new(name: String, slug: super::Slug, now: OffsetDateTime) -> Result<Self, TagError> {
         let name = normalize_name(name)?;
         Ok(Self {
             snapshot: TagSnapshot {
@@ -58,7 +54,7 @@ impl Tag {
 
     /// 受控重建入口：仅供持久化适配器从数据库恢复聚合。
     pub fn reconstitute(snapshot: TagSnapshot) -> Result<Self, TagError> {
-        super::post::Slug::new(&snapshot.slug).map_err(|_| TagError::InvalidSnapshot)?;
+        super::Slug::new(&snapshot.slug).map_err(|_| TagError::InvalidSnapshot)?;
         if normalize_name(snapshot.name.clone())? != snapshot.name || snapshot.version < 1 {
             return Err(TagError::InvalidSnapshot);
         }
@@ -109,7 +105,7 @@ fn normalize_name(raw: String) -> Result<String, TagError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::content::post::Slug;
+    use crate::content::Slug;
 
     fn tag() -> Tag {
         Tag::new(

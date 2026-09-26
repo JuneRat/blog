@@ -9,8 +9,8 @@
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use super::post::PostError;
-pub use super::post::{Slug, TITLE_MAX_CHARS, Visibility};
+use super::post::TITLE_MAX_CHARS;
+use super::{Slug, SlugError, Visibility};
 
 /// 根路径下被系统占用的保留 slug（与公开路由注册表保持同步）。
 ///
@@ -88,8 +88,8 @@ pub enum PageError {
     ContentBudget(#[from] super::budget::ContentBudgetError),
     #[error("快照结构无效：{0}")]
     InvalidSnapshot(&'static str),
-    #[error("slug 不合法：{0}")]
-    InvalidSlug(String),
+    #[error(transparent)]
+    InvalidSlug(#[from] SlugError),
     #[error("slug「{0}」是系统保留路径，不能用于页面")]
     ReservedSlug(String),
     #[error("标题长度不能超过 {TITLE_MAX_CHARS} 字符")]
@@ -138,13 +138,6 @@ pub struct Page {
     snapshot: PageSnapshot,
 }
 
-fn map_slug_error(error: PostError) -> PageError {
-    match error {
-        PostError::InvalidSlug(message) => PageError::InvalidSlug(message),
-        other => PageError::InvalidSlug(other.to_string()),
-    }
-}
-
 impl Page {
     /// 创建草稿：标题与正文可为空，slug 必须已验证且不属于保留路径。
     pub fn create_draft(
@@ -179,7 +172,7 @@ impl Page {
 
     /// 受控重建入口：仅供持久化适配器从数据库恢复聚合。
     pub fn reconstitute(snapshot: PageSnapshot) -> Result<Self, PageError> {
-        Slug::new(&snapshot.slug).map_err(map_slug_error)?;
+        Slug::new(&snapshot.slug)?;
         if is_reserved_root_slug(&snapshot.slug) {
             return Err(PageError::ReservedSlug(snapshot.slug.clone()));
         }
@@ -254,7 +247,7 @@ impl Page {
                 return Err(PageError::SlugLocked);
             }
             let raw = patch.slug.as_deref().expect("slug_changed 蕴含存在");
-            Slug::new(raw).map_err(map_slug_error)?;
+            Slug::new(raw)?;
             if is_reserved_root_slug(raw) {
                 return Err(PageError::ReservedSlug(raw.to_string()));
             }

@@ -266,7 +266,7 @@ impl MediaInteractor {
             now,
         )
         .map_err(|e| UseCaseError::Invalid(e.to_string()))?;
-        if let Err(e) = self.media.insert_staged(&media.snapshot()).await {
+        if let Err(e) = self.media.insert_staged(&media).await {
             // 文件已写入但**没有行**指向它：按数据库状态扫描的回收永远找不到这个孤儿，
             // 因此这里尽力删除。清理失败也不改变用户看到的错误（仍如实报插入失败）：
             // 文件留在暂存区，由 reclaim 的暂存清扫按宽限期兜底。

@@ -17,11 +17,11 @@ use crate::ports::{
     Clock, PostCommitOutcome, PostRecord, PostRepository, SaveOutcome, TagRepository,
 };
 use crate::version::checked_version;
-use domain::content::post::{Post, PostDraftMetadata, PostPatch, PostSnapshot, Slug, Visibility};
+use domain::content::{Post, PostDraftMetadata, PostPatch, PostSnapshot, Slug, Visibility};
 use domain::identity::UserId;
 
 /// 向接口层转出的值对象（interfaces 不直接依赖 domain crate）。
-pub use domain::content::post::Visibility as PostVisibility;
+pub use domain::content::Visibility as PostVisibility;
 
 #[derive(Debug, Clone)]
 pub struct CreatePostCmd {
@@ -514,6 +514,6 @@ impl PostInteractor {
     }
 }
 
-fn map_domain(e: domain::content::post::PostError) -> UseCaseError {
+fn map_domain(e: domain::content::PostError) -> UseCaseError {
     UseCaseError::Invalid(e.to_string())
 }

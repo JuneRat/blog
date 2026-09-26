@@ -128,7 +128,11 @@ impl FakeMediaRepo {
 
 #[async_trait]
 impl MediaRepository for FakeMediaRepo {
-    async fn insert_staged(&self, snapshot: &MediaSnapshot) -> Result<(), UseCaseError> {
+    async fn insert_staged(&self, aggregate: &domain::media::Media) -> Result<(), UseCaseError> {
+        let snapshot = aggregate.snapshot();
+        if snapshot.status != MediaStatus::Staged {
+            return Err(UseCaseError::Invalid("只能登记 staged 媒体资产".into()));
+        }
         let mut state = self.state.lock().unwrap();
         state.created.push(snapshot.id);
         state.items.insert(snapshot.id, snapshot.clone());
@@ -639,7 +643,11 @@ async fn reclaim_reports_failures_and_discards_interrupted_uploads() {
         .put_staged(&key, &png_bytes(4, 4))
         .await
         .unwrap();
-    fixture.repo.insert_staged(&staged).await.unwrap();
+    fixture
+        .repo
+        .insert_staged(&domain::media::Media::reconstitute(staged.clone()).unwrap())
+        .await
+        .unwrap();
 
     // 宽限期内：不得认领。
     let early = fixture.interactor.reclaim(&operator).await.unwrap();

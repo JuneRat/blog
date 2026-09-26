@@ -182,7 +182,7 @@ pub fn register(env: &mut Environment<'static>, scope: Arc<RenderScope>) {
         let slug = kwargs.get::<String>("slug")?;
         kwargs.assert_all_used()?;
         url_scope.check_deadline()?;
-        domain::content::post::Slug::new(&slug).map_err(|e| failure(e.to_string()))?;
+        domain::content::Slug::new(&slug).map_err(|e| failure(e.to_string()))?;
         Ok(application::seo::post_path(&slug))
     });
 }

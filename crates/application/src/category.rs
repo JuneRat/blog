@@ -17,8 +17,8 @@ use crate::error::UseCaseError;
 use crate::identity::Actor;
 use crate::ports::{CategoryDeleteOutcome, CategoryRepository, CategoryWithUsage, Clock};
 use crate::version::checked_version;
+use domain::content::Slug;
 use domain::content::category::Category;
-use domain::content::post::Slug;
 
 pub struct CreateCategoryCmd {
     pub name: String,
@@ -94,7 +94,7 @@ impl CategoryInteractor {
         let category = Category::new(cmd.name, slug, parent_id, cmd.description, self.clock.now())
             .map_err(map_domain)?;
         let snapshot = category.snapshot();
-        self.categories.insert(&snapshot).await?;
+        self.categories.insert(&category).await?;
         Ok(CategoryDto {
             id: snapshot.id,
             name: snapshot.name,

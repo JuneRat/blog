@@ -13,8 +13,8 @@ use application::ports::{
     PublishedPageQuery, PublishedPostQuery, PublishedSeriesQuery, PublishedTagQuery, RbacStore,
     SaveOutcome, SeriesRepository, SettingsStore, TagRepository, UserRepository,
 };
-use domain::content::page::{Page, PagePatch};
-use domain::content::post::{Post, PostPatch, PostSnapshot, PostStatus, Slug, Visibility};
+use domain::content::{Page, PagePatch};
+use domain::content::{Post, PostPatch, PostSnapshot, PostStatus, Slug, Visibility};
 use domain::identity::{User, UserId};
 use infrastructure::{
     PostgresOAuthAccountStore, PostgresPageRepository, PostgresPostRepository,
@@ -1363,13 +1363,20 @@ async fn duplicate_username_and_email_map_to_structured_conflicts() {
     let first = User::new("alice", Some("alice@example.com".into()), None, now)
         .unwrap()
         .snapshot();
-    users.insert(&first).await.unwrap();
+    users
+        .insert(&User::reconstitute(first.clone()).unwrap())
+        .await
+        .unwrap();
 
     // 用户名占用：唯一约束 users_username_key → Conflict(Username)。
     let same_name = User::new("alice", Some("other@example.com".into()), None, now)
         .unwrap()
         .snapshot();
-    match users.insert(&same_name).await.unwrap_err() {
+    match users
+        .insert(&User::reconstitute(same_name.clone()).unwrap())
+        .await
+        .unwrap_err()
+    {
         UseCaseError::Conflict(ConflictKind::Username) => {}
         other => panic!("期望 Conflict(Username)，得到 {other:?}"),
     }
@@ -1378,7 +1385,11 @@ async fn duplicate_username_and_email_map_to_structured_conflicts() {
     let same_email = User::new("bob", Some("alice@example.com".into()), None, now)
         .unwrap()
         .snapshot();
-    match users.insert(&same_email).await.unwrap_err() {
+    match users
+        .insert(&User::reconstitute(same_email.clone()).unwrap())
+        .await
+        .unwrap_err()
+    {
         UseCaseError::Conflict(ConflictKind::Email) => {}
         other => panic!("期望 Conflict(Email)，得到 {other:?}"),
     }
@@ -1462,12 +1473,12 @@ async fn seed_tag(pool: &sqlx::PgPool, name: &str, slug: &str) -> domain::conten
     let tags = infrastructure::PostgresTagRepository::new(pool.clone());
     let tag = domain::content::Tag::new(
         name.into(),
-        domain::content::post::Slug::new(slug).unwrap(),
+        domain::content::Slug::new(slug).unwrap(),
         OffsetDateTime::now_utc(),
     )
     .unwrap();
     let snapshot = tag.snapshot();
-    tags.insert(&snapshot).await.unwrap();
+    tags.insert(&tag).await.unwrap();
     snapshot
 }
 
@@ -1480,11 +1491,11 @@ async fn tag_slug_unique_conflict_maps_to_slug_conflict() {
 
     let dup = domain::content::Tag::new(
         "另一个".into(),
-        domain::content::post::Slug::new("rust").unwrap(),
+        domain::content::Slug::new("rust").unwrap(),
         OffsetDateTime::now_utc(),
     )
     .unwrap();
-    match repo.insert(&dup.snapshot()).await.unwrap_err() {
+    match repo.insert(&dup).await.unwrap_err() {
         UseCaseError::Conflict(ConflictKind::Slug) => {}
         other => panic!("期望 slug 冲突，得到 {other:?}"),
     }
@@ -1593,8 +1604,7 @@ async fn post_tags_saved_in_same_transaction_as_content() {
     // 仅替换标签（正文不变）：version 也递增。
     let edit = {
         let mut post = domain::content::Post::reconstitute(snapshot.clone()).unwrap();
-        post.edit(domain::content::post::PostPatch::default())
-            .unwrap();
+        post.edit(domain::content::PostPatch::default()).unwrap();
         post.snapshot()
     };
     match posts
@@ -1629,8 +1639,7 @@ async fn post_tags_saved_in_same_transaction_as_content() {
     // 清空标签。
     let edit2 = {
         let mut post = domain::content::Post::reconstitute(edit.clone()).unwrap();
-        post.edit(domain::content::post::PostPatch::default())
-            .unwrap();
+        post.edit(domain::content::PostPatch::default()).unwrap();
         post.snapshot()
     };
     posts
@@ -1825,14 +1834,14 @@ async fn seed_category(
     let repo = infrastructure::PostgresCategoryRepository::new(pool.clone());
     let category = domain::content::Category::new(
         name.into(),
-        domain::content::post::Slug::new(slug).unwrap(),
+        domain::content::Slug::new(slug).unwrap(),
         parent,
         None,
         OffsetDateTime::now_utc(),
     )
     .unwrap();
     let snapshot = category.snapshot();
-    repo.insert(&snapshot).await.unwrap();
+    repo.insert(&category).await.unwrap();
     snapshot
 }
 
@@ -2073,13 +2082,13 @@ async fn seed_series(
     let repo = infrastructure::PostgresSeriesRepository::new(pool.clone());
     let series = domain::content::Series::new(
         name.into(),
-        domain::content::post::Slug::new(slug).unwrap(),
+        domain::content::Slug::new(slug).unwrap(),
         None,
         OffsetDateTime::now_utc(),
     )
     .unwrap();
     let snapshot = series.snapshot();
-    repo.insert(&snapshot).await.unwrap();
+    repo.insert(&series).await.unwrap();
     snapshot
 }
 

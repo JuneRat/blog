@@ -280,7 +280,7 @@ impl MiniJinjaThemeRenderer {
             .get_template(template)
             .and_then(|t| t.render(context))
             .map_err(|e| UseCaseError::Render(e.to_string()))?;
-        if html.len() > domain::content::budget::MAX_PAGE_HTML_BYTES {
+        if html.len() > application::rendering_budget::MAX_PAGE_HTML_BYTES {
             return Err(UseCaseError::Render("主题输出超过 1 MiB".into()));
         }
         Ok(html)

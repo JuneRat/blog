@@ -12,8 +12,8 @@ use application::ports::{
     PublicPostDetail, PublicPostSummary, PublicSeriesRef, PublicUrlEntry, PublishedPageQuery,
     PublishedPostQuery, SaveOutcome,
 };
-use domain::content::page::{Page, PageSnapshot, PageStatus};
-use domain::content::post::{Post, PostSnapshot, PostStatus, Visibility};
+use domain::content::{Page, PageSnapshot, PageStatus};
+use domain::content::{Post, PostSnapshot, PostStatus, Visibility};
 
 use super::media::{clear_media_refs, media_ids_for, sync_media_refs};
 use super::sql::{PAGE_PUBLIC_PREDICATE, POST_PUBLIC_PREDICATE, map_row_error, map_sqlx_error};
@@ -46,7 +46,7 @@ pub async fn rebuild_content_html(
             }
             for (id, source, version, cover_media_id) in rows {
                 let rendered = renderer.render_content(&source).await?;
-                domain::content::budget::validate_html(&rendered.content_html)
+                application::rendering_budget::validate_html(&rendered.content_html)
                     .map_err(|e| UseCaseError::Invalid(e.to_string()))?;
                 let media_ids = media_ids_for(&rendered.media_ids, cover_media_id);
                 let mut tx = pool.begin().await.map_err(map_sqlx_error)?;
@@ -116,7 +116,7 @@ impl PostgresPostRepository {
         domain::content::budget::validate_source(&snapshot.content)
             .map_err(|e| UseCaseError::Invalid(e.to_string()))?;
         let rendered = self.renderer.render_content(&snapshot.content).await?;
-        domain::content::budget::validate_html(&rendered.content_html)
+        application::rendering_budget::validate_html(&rendered.content_html)
             .map_err(|e| UseCaseError::Invalid(e.to_string()))?;
         let media_ids = media_ids_for(&rendered.media_ids, snapshot.cover_media_id);
         // 正文与初始标签/系列关系同一事务：半套写入不应对外可见。
@@ -183,7 +183,7 @@ impl PostgresPostRepository {
         domain::content::budget::validate_source(&snapshot.content)
             .map_err(|e| UseCaseError::Invalid(e.to_string()))?;
         let rendered = self.renderer.render_content(&snapshot.content).await?;
-        domain::content::budget::validate_html(&rendered.content_html)
+        application::rendering_budget::validate_html(&rendered.content_html)
             .map_err(|e| UseCaseError::Invalid(e.to_string()))?;
         let media_ids = media_ids_for(&rendered.media_ids, snapshot.cover_media_id);
         // 正文（或仅标签/系列关系）与 version 递增在同一事务：
@@ -729,7 +729,7 @@ impl PostgresPageRepository {
         domain::content::budget::validate_source(&snapshot.content)
             .map_err(|e| UseCaseError::Invalid(e.to_string()))?;
         let rendered = self.renderer.render_content(&snapshot.content).await?;
-        domain::content::budget::validate_html(&rendered.content_html)
+        application::rendering_budget::validate_html(&rendered.content_html)
             .map_err(|e| UseCaseError::Invalid(e.to_string()))?;
         let media_ids = media_ids_for(&rendered.media_ids, None);
         // 正文与正文引用同一事务：引用校验失败则整页不落库。
@@ -773,7 +773,7 @@ impl PostgresPageRepository {
         domain::content::budget::validate_source(&snapshot.content)
             .map_err(|e| UseCaseError::Invalid(e.to_string()))?;
         let rendered = self.renderer.render_content(&snapshot.content).await?;
-        domain::content::budget::validate_html(&rendered.content_html)
+        application::rendering_budget::validate_html(&rendered.content_html)
             .map_err(|e| UseCaseError::Invalid(e.to_string()))?;
         let media_ids = media_ids_for(&rendered.media_ids, None);
         // 条件更新与引用替换同一事务：观察者不会看到新正文配旧引用。

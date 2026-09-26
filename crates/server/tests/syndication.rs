@@ -186,39 +186,51 @@ fn page_cmd(slug: &str, title: &str) -> CreatePageCmd {
 async fn seed_tag(stack: &Stack, name: &str, slug: &str) -> uuid::Uuid {
     let tag = domain::content::Tag::new(
         name.into(),
-        domain::content::post::Slug::new(slug).unwrap(),
+        domain::content::Slug::new(slug).unwrap(),
         time::OffsetDateTime::now_utc(),
     )
     .unwrap();
     let snapshot = tag.snapshot();
-    stack.tags.insert(&snapshot).await.unwrap();
+    stack
+        .tags
+        .insert(&domain::content::Tag::reconstitute(snapshot.clone()).unwrap())
+        .await
+        .unwrap();
     snapshot.id
 }
 
 async fn seed_category(stack: &Stack, slug: &str) -> uuid::Uuid {
     let category = domain::content::Category::new(
         slug.into(),
-        domain::content::post::Slug::new(slug).unwrap(),
+        domain::content::Slug::new(slug).unwrap(),
         None,
         None,
         time::OffsetDateTime::now_utc(),
     )
     .unwrap();
     let snapshot = category.snapshot();
-    stack.categories.insert(&snapshot).await.unwrap();
+    stack
+        .categories
+        .insert(&domain::content::Category::reconstitute(snapshot.clone()).unwrap())
+        .await
+        .unwrap();
     snapshot.id
 }
 
 async fn seed_series(stack: &Stack, slug: &str) -> uuid::Uuid {
     let series = domain::content::Series::new(
         slug.into(),
-        domain::content::post::Slug::new(slug).unwrap(),
+        domain::content::Slug::new(slug).unwrap(),
         None,
         time::OffsetDateTime::now_utc(),
     )
     .unwrap();
     let snapshot = series.snapshot();
-    stack.series.insert(&snapshot).await.unwrap();
+    stack
+        .series
+        .insert(&domain::content::Series::reconstitute(snapshot.clone()).unwrap())
+        .await
+        .unwrap();
     snapshot.id
 }
 

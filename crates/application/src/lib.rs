@@ -22,3 +22,5 @@ pub mod version;
 
 pub use error::UseCaseError;
 pub mod comments;
+
+pub mod rendering_budget;

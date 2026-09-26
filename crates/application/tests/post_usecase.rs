@@ -13,7 +13,7 @@ use application::ports::{
     TagWithUsage, UserRepository,
 };
 use domain::content::TagSnapshot;
-use domain::content::post::{PostSnapshot, Visibility};
+use domain::content::{PostSnapshot, Visibility};
 use domain::identity::{PermissionSet, UserSnapshot};
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -48,7 +48,7 @@ impl FakePostRepo {
 
     fn commit_record(
         &self,
-        post: &domain::content::post::Post,
+        post: &domain::content::Post,
         expected: i64,
         now: OffsetDateTime,
         tag_ids: Option<&[Uuid]>,
@@ -109,7 +109,7 @@ impl PostRepository for FakePostRepo {
 
     async fn insert_post(
         &self,
-        post: &domain::content::post::Post,
+        post: &domain::content::Post,
         tag_ids: &[Uuid],
     ) -> Result<application::ports::PostRecord, UseCaseError> {
         let snapshot = post.snapshot();
@@ -128,7 +128,7 @@ impl PostRepository for FakePostRepo {
 
     async fn commit_post(
         &self,
-        post: &domain::content::post::Post,
+        post: &domain::content::Post,
         expected: i64,
         now: OffsetDateTime,
         tag_ids: Option<&[Uuid]>,
@@ -138,7 +138,7 @@ impl PostRepository for FakePostRepo {
 
     async fn commit_lifecycle(
         &self,
-        post: &domain::content::post::Post,
+        post: &domain::content::Post,
         expected: i64,
         now: OffsetDateTime,
     ) -> Result<application::ports::PostCommitOutcome, UseCaseError> {
@@ -243,7 +243,8 @@ impl UserRepository for FakeUserRepo {
         Ok(())
     }
 
-    async fn insert(&self, snapshot: &UserSnapshot) -> Result<(), UseCaseError> {
+    async fn insert(&self, aggregate: &domain::identity::User) -> Result<(), UseCaseError> {
+        let snapshot = aggregate.snapshot();
         let mut users = self.users.lock().unwrap();
         if users.contains_key(&snapshot.username) {
             return Err(UseCaseError::Conflict(ConflictKind::Username));
@@ -358,7 +359,8 @@ impl FakeTagRepo {
 
 #[async_trait::async_trait]
 impl TagRepository for FakeTagRepo {
-    async fn insert(&self, snapshot: &TagSnapshot) -> Result<(), UseCaseError> {
+    async fn insert(&self, aggregate: &domain::content::Tag) -> Result<(), UseCaseError> {
+        let snapshot = aggregate.snapshot();
         self.tags.lock().unwrap().push(snapshot.clone());
         Ok(())
     }
@@ -443,10 +445,8 @@ struct FakeSeriesRepo;
 
 #[async_trait::async_trait]
 impl application::ports::SeriesRepository for FakeSeriesRepo {
-    async fn insert(
-        &self,
-        _snapshot: &domain::content::SeriesSnapshot,
-    ) -> Result<(), UseCaseError> {
+    async fn insert(&self, aggregate: &domain::content::Series) -> Result<(), UseCaseError> {
+        let _snapshot = aggregate.snapshot();
         Ok(())
     }
     async fn find_by_slug(
@@ -499,10 +499,8 @@ struct FakeCategoryRepo;
 
 #[async_trait::async_trait]
 impl application::ports::CategoryRepository for FakeCategoryRepo {
-    async fn insert(
-        &self,
-        _snapshot: &domain::content::CategorySnapshot,
-    ) -> Result<(), UseCaseError> {
+    async fn insert(&self, aggregate: &domain::content::Category) -> Result<(), UseCaseError> {
+        let _snapshot = aggregate.snapshot();
         Ok(())
     }
     async fn find_by_slug(

@@ -469,7 +469,7 @@ impl UserInteractor {
         let user = User::new(&username, email, display_name, self.clock.now())
             .map_err(|e| UseCaseError::Invalid(e.to_string()))?;
         let snapshot = user.snapshot();
-        self.users.insert(&snapshot).await?;
+        self.users.insert(&user).await?;
         Ok(UserDto::from_snapshot(&snapshot))
     }
 

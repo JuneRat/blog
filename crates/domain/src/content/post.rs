@@ -10,11 +10,11 @@
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+use super::{Slug, SlugError, Visibility};
 use crate::identity::UserId;
 
 pub const TITLE_MAX_CHARS: usize = 300;
 pub const EXCERPT_MAX_CHARS: usize = 1000;
-pub const SLUG_MAX_BYTES: usize = 200;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PostId(pub Uuid);
@@ -52,29 +52,6 @@ impl PostStatus {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Visibility {
-    Public,
-    Private,
-}
-
-impl Visibility {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Visibility::Public => "public",
-            Visibility::Private => "private",
-        }
-    }
-
-    pub fn parse(value: &str) -> Option<Self> {
-        match value {
-            "public" => Some(Visibility::Public),
-            "private" => Some(Visibility::Private),
-            _ => None,
-        }
-    }
-}
-
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum PostError {
     #[error("回收站内的文章须先恢复才能编辑或发布")]
@@ -83,8 +60,8 @@ pub enum PostError {
     ContentBudget(#[from] super::budget::ContentBudgetError),
     #[error("快照结构无效：{0}")]
     InvalidSnapshot(&'static str),
-    #[error("slug 不合法：{0}")]
-    InvalidSlug(String),
+    #[error(transparent)]
+    InvalidSlug(#[from] SlugError),
     #[error("标题长度不能超过 {TITLE_MAX_CHARS} 字符")]
     TitleTooLong,
     #[error("摘要长度不能超过 {EXCERPT_MAX_CHARS} 字符")]
@@ -103,43 +80,6 @@ pub enum PostError {
     ArchivedIsTerminal,
     #[error("归档是终态，不能编辑；需要恢复为草稿的流程另行扩展")]
     ArchivedNotEditable,
-}
-
-/// 单一路径片段 slug：非空、UTF-8 字节数不超过上限。
-/// 字符集固定为 Unicode 字母数字加 `-`、`_`；禁止其他 ASCII 符号与空白，
-/// 防止路径分隔、编码与模板输出层面的绕过。
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Slug(String);
-
-impl Slug {
-    pub fn new(raw: &str) -> Result<Self, PostError> {
-        if raw.is_empty() {
-            return Err(PostError::InvalidSlug("不能为空".into()));
-        }
-        if raw.len() > SLUG_MAX_BYTES {
-            return Err(PostError::InvalidSlug(format!(
-                "超过 {} 字节上限",
-                SLUG_MAX_BYTES
-            )));
-        }
-        for ch in raw.chars() {
-            let allowed = ch.is_alphanumeric() || ch == '-' || ch == '_';
-            if !allowed {
-                return Err(PostError::InvalidSlug(format!(
-                    "只允许 Unicode 字母数字、-、_，包含非法字符 {ch:?}"
-                )));
-            }
-        }
-        Ok(Self(raw.to_string()))
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-
-    pub fn into_string(self) -> String {
-        self.0
-    }
 }
 
 /// 系列中的有效位置。系列 ID 与序号一起设置，序号始终为正整数。
@@ -542,21 +482,6 @@ mod tests {
             OffsetDateTime::now_utc(),
         )
         .unwrap()
-    }
-
-    #[test]
-    fn slug_rejects_path_characters() {
-        assert!(Slug::new("a/b").is_err());
-        assert!(Slug::new("a.b").is_err());
-        assert!(Slug::new("a%2Fb").is_err());
-        assert!(Slug::new("a b").is_err());
-        assert!(Slug::new("").is_err());
-        assert!(Slug::new("a&b").is_err(), "符号 & 不再允许");
-        assert!(Slug::new("a+b").is_err(), "符号 + 不再允许");
-        assert!(Slug::new("a:b").is_err(), "符号 : 不再允许");
-        assert!(Slug::new(&"x".repeat(201)).is_err());
-        assert!(Slug::new("你好-世界").is_ok());
-        assert!(Slug::new("Hello_World-01").is_ok());
     }
 
     #[test]

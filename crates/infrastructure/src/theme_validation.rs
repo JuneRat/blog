@@ -231,7 +231,7 @@ pub(crate) async fn validate(
         if scenario == "maximum-body" {
             post.content_html = format!(
                 "<p>{}</p>",
-                "x".repeat(domain::content::budget::MAX_CONTENT_HTML_BYTES - 7)
+                "x".repeat(application::rendering_budget::MAX_CONTENT_HTML_BYTES - 7)
             );
         }
         let page_view = PageView {

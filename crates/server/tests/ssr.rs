@@ -426,12 +426,16 @@ async fn reserved_root_paths_are_not_shadowed_by_pages() {
 async fn seed_tag(stack: &Stack, name: &str, slug: &str) -> uuid::Uuid {
     let tag = domain::content::Tag::new(
         name.into(),
-        domain::content::post::Slug::new(slug).unwrap(),
+        domain::content::Slug::new(slug).unwrap(),
         time::OffsetDateTime::now_utc(),
     )
     .unwrap();
     let snapshot = tag.snapshot();
-    stack.tags.insert(&snapshot).await.unwrap();
+    stack
+        .tags
+        .insert(&domain::content::Tag::reconstitute(snapshot.clone()).unwrap())
+        .await
+        .unwrap();
     snapshot.id
 }
 
@@ -597,14 +601,18 @@ async fn category_page_lists_public_posts_and_hides_drafts() {
     // 直接经目录仓储预置分类（绕过权限装配）。
     let cat = domain::content::Category::new(
         "技术".into(),
-        domain::content::post::Slug::new("tech").unwrap(),
+        domain::content::Slug::new("tech").unwrap(),
         None,
         None,
         time::OffsetDateTime::now_utc(),
     )
     .unwrap();
     let cat_snapshot = cat.snapshot();
-    stack.categories.insert(&cat_snapshot).await.unwrap();
+    stack
+        .categories
+        .insert(&domain::content::Category::reconstitute(cat_snapshot.clone()).unwrap())
+        .await
+        .unwrap();
 
     for (slug, title, publish) in [
         ("cat-visible", "公开的分类文章", true),
@@ -657,13 +665,17 @@ async fn series_page_lists_public_posts_in_reading_order() {
     let stack = stack().await;
     let series = domain::content::Series::new(
         "指南".into(),
-        domain::content::post::Slug::new("guide").unwrap(),
+        domain::content::Slug::new("guide").unwrap(),
         None,
         time::OffsetDateTime::now_utc(),
     )
     .unwrap();
     let s = series.snapshot();
-    stack.series.insert(&s).await.unwrap();
+    stack
+        .series
+        .insert(&domain::content::Series::reconstitute(s.clone()).unwrap())
+        .await
+        .unwrap();
 
     // 三篇挂系列：公开(序2)、草稿(序1)、公开(序3)。草稿占位但不出现。
     for (slug, order, publish) in [
@@ -727,14 +739,17 @@ async fn paper_theme_functions_use_only_public_data() {
     let tag = seed_tag(&s, "主题标签", "paper-tag").await;
     let category = domain::content::Category::new(
         "主题分类".into(),
-        domain::content::post::Slug::new("paper-category").unwrap(),
+        domain::content::Slug::new("paper-category").unwrap(),
         None,
         None,
         time::OffsetDateTime::now_utc(),
     )
     .unwrap()
     .snapshot();
-    s.categories.insert(&category).await.unwrap();
+    s.categories
+        .insert(&domain::content::Category::reconstitute(category.clone()).unwrap())
+        .await
+        .unwrap();
     for (slug, title, publish) in [
         ("paper-visible", "纸张主题可见文章", true),
         ("paper-related", "同类可见文章", true),

@@ -236,7 +236,7 @@ impl ContentRenderer for RenderingRuntime {
         let state = self.state.clone();
         self.execute(RenderPool::Content, "markdown", move || {
             let content_html = SanitizingMarkdownRenderer::new().render_markdown(&source);
-            domain::content::budget::validate_html(&content_html)
+            application::rendering_budget::validate_html(&content_html)
                 .map_err(|e| UseCaseError::Invalid(e.to_string()))?;
             let media_ids = extract_media_ids_from_html(&content_html);
             let rendered = RenderedContent {
@@ -583,7 +583,8 @@ mod tests {
 
     #[tokio::test]
     async fn source_and_html_budgets_cover_boundaries_and_expansion() {
-        use domain::content::budget::{MAX_CONTENT_HTML_BYTES, MAX_SOURCE_BYTES};
+        use application::rendering_budget::MAX_CONTENT_HTML_BYTES;
+        use domain::content::budget::MAX_SOURCE_BYTES;
         let runtime = RenderingRuntime::default();
         let content = "x".repeat(MAX_CONTENT_HTML_BYTES - 8);
         let rendered = runtime.render_content(&content).await.unwrap();

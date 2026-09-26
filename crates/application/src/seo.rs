@@ -94,7 +94,7 @@ impl PublicBaseUrl {
 
 /// 路径片段百分号编码：只保留 RFC 3986 unreserved 字符，其余按 UTF-8 字节编码。
 ///
-/// slug 允许 Unicode 字母数字（见 `domain::content::post::Slug`），所以
+/// slug 允许 Unicode 字母数字（见 `domain::content::Slug`），所以
 /// `/posts/关于` 进入 canonical、RSS 与 sitemap 前必须变成 `%E5%85%B3%E4%BA%8E`：
 /// sitemap 协议要求 `<loc>` 是转义后的 URL，不能依赖抓取器的 IRI 宽松解析。
 pub fn encode_path_segment(segment: &str) -> String {

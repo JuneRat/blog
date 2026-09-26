@@ -18,7 +18,7 @@ use crate::error::UseCaseError;
 use crate::identity::Actor;
 use crate::ports::{Clock, TagDeleteOutcome, TagRepository, TagWithUsage};
 use crate::version::checked_version;
-use domain::content::post::Slug;
+use domain::content::Slug;
 use domain::content::tag::{Tag, TagError};
 
 pub struct CreateTagCmd {
@@ -68,7 +68,7 @@ impl TagInteractor {
         let slug = Slug::new(&cmd.slug).map_err(|e| UseCaseError::Invalid(e.to_string()))?;
         let tag = Tag::new(cmd.name, slug, self.clock.now()).map_err(map_domain)?;
         let snapshot = tag.snapshot();
-        self.tags.insert(&snapshot).await?;
+        self.tags.insert(&tag).await?;
         Ok(TagDto {
             id: snapshot.id,
             name: snapshot.name,

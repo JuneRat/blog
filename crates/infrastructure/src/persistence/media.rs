@@ -189,9 +189,11 @@ fn media_view_from_row(row: &sqlx::postgres::PgRow) -> Result<MediaWithUsage, Us
 
 #[async_trait]
 impl MediaRepository for PostgresMediaRepository {
-    async fn insert_staged(&self, snapshot: &MediaSnapshot) -> Result<(), UseCaseError> {
-        domain::media::Media::reconstitute(snapshot.clone())
-            .map_err(|e| UseCaseError::Invalid(e.to_string()))?;
+    async fn insert_staged(&self, aggregate: &domain::media::Media) -> Result<(), UseCaseError> {
+        let snapshot = aggregate.snapshot();
+        if snapshot.status != domain::media::MediaStatus::Staged {
+            return Err(UseCaseError::Invalid("只能登记 staged 媒体资产".into()));
+        }
         sqlx::query(
             r#"
             INSERT INTO media_assets (
@@ -505,5 +507,47 @@ impl application::ports::MediaRefGuard for PostgresMediaRepository {
                 publicly_referenced,
             },
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use domain::media::{ImageFormat, ImageInfo, Media};
+
+    #[tokio::test]
+    async fn insert_staged_rejects_other_states_before_accessing_storage() {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://unused:unused@127.0.0.1:1/unused")
+            .unwrap();
+        let repo = PostgresMediaRepository::new(pool);
+        let now = OffsetDateTime::UNIX_EPOCH;
+        let mut media = Media::stage(
+            Uuid::now_v7(),
+            Uuid::now_v7(),
+            "objects/image.png".into(),
+            "image.png",
+            ImageInfo::new(ImageFormat::Png, 1, 1).unwrap(),
+            26,
+            "a".repeat(64),
+            now,
+        )
+        .unwrap();
+        media.mark_ready(now).unwrap();
+        for step in 0..3 {
+            match step {
+                1 => {
+                    media.mark_pending_deletion(now).unwrap();
+                }
+                2 => {
+                    media.mark_deleted(now).unwrap();
+                }
+                _ => {}
+            }
+            assert!(matches!(
+                repo.insert_staged(&media).await,
+                Err(UseCaseError::Invalid(_))
+            ));
+        }
     }
 }
