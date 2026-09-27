@@ -317,13 +317,70 @@ async fn build(pool: PgPool) -> Stack {
     .merge(auth_router(auth_state))
     .merge(admin_router(admin_state.clone()))
     .merge(pages_router(admin_state.clone()))
-    .merge(settings_router(admin_state))
+    .merge(settings_router(admin_state.clone()))
+    .merge(interfaces::http_retention::retention_router(
+        interfaces::http_retention::RetentionState {
+            retention: Arc::new(application::retention::RetentionInteractor::new(Arc::new(
+                infrastructure::retention::PostgresRetentionStore::new(pool.clone()),
+            ))),
+            admin: admin_state,
+        },
+    ))
     .layer(middleware::from_fn(request_context));
     Stack { router, idp, pool }
 }
 
 async fn fresh_stack() -> Stack {
     build(common::fresh_database("blog_settings_test").await).await
+}
+
+#[tokio::test]
+async fn retention_requires_permission_csrf_and_current_group_versions() {
+    let _g = SERIAL.lock().await;
+    let stack = fresh_stack().await;
+    let path = "/api/admin/v1/settings/retention";
+    assert_eq!(
+        get(&stack.router, path, None).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    let (editor, editor_csrf) = login_as(&stack, "editor").await;
+    assert_eq!(
+        get(&stack.router, path, Some(&editor)).await.0,
+        StatusCode::FORBIDDEN
+    );
+    let (admin, csrf) = login_as(&stack, "admin").await;
+    let (status, mut body, cache) = get(&stack.router, path, Some(&admin)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(cache.unwrap().contains("no-store"));
+    assert_eq!(body["comment_ip_days"], 180);
+    assert_eq!(body["audit_version"], 0);
+    body["comment_ip_days"] = serde_json::json!(60);
+    assert_eq!(
+        put(&stack.router, path, &editor, &editor_csrf, body.clone())
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        put(&stack.router, path, &admin, "invalid-csrf", body.clone())
+            .await
+            .0,
+        StatusCode::BAD_REQUEST
+    );
+    let (status, saved) = put(&stack.router, path, &admin, &csrf, body.clone()).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(saved["comment_version"], 1);
+    assert_eq!(saved["audit_version"], 0);
+    assert_eq!(
+        put(&stack.router, path, &admin, &csrf, body).await.0,
+        StatusCode::CONFLICT
+    );
+    let mut invalid = saved;
+    invalid["audit_days"] = serde_json::json!(-1);
+    assert_eq!(
+        put(&stack.router, path, &admin, &csrf, invalid).await.0,
+        StatusCode::BAD_REQUEST
+    );
 }
 
 /// 只重建公开路由（新 interactor + 新 settings 存储，同一数据库）：

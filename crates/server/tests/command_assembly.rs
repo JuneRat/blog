@@ -17,6 +17,7 @@ fn cli(database_url: &str, args: &[&str], password: Option<&str>, public_url: &s
         .args(args)
         .current_dir(&project)
         .env("DATABASE_URL", database_url)
+        .env_remove("BLOG_RECOVERY_MODE")
         .env("BLOG_MIGRATIONS_DIR", project.join("migrations/postgres"))
         .env("BLOG_THEME_DIR", missing.join("theme"))
         .env("BLOG_ADMIN_DIST", missing.join("admin"))
@@ -337,4 +338,49 @@ async fn publish_due_runs_without_website_configuration_and_is_repeatable() {
             .await
             .unwrap();
     assert_eq!(published, 101);
+}
+
+#[tokio::test]
+async fn recovery_database_guard_blocks_normal_start_publishing_and_retention_before_migrations() {
+    let pool = common::fresh_database("blog_recovery_guard_test").await;
+    let database_url = common::test_db_url(&common::admin_url(), "blog_recovery_guard_test");
+    sqlx::raw_sql(
+        "COMMENT ON DATABASE blog_recovery_guard_test IS 'blog:recovery-isolated:command-test'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    for args in [
+        &["serve", "--addr", "127.0.0.1:0"][..],
+        &["publish-due"][..],
+    ] {
+        let output = cli(&database_url, args, None, "broken-site-config");
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("恢复"));
+    }
+    let project = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let maintenance = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_blog"))
+            .args(args)
+            .current_dir(&project)
+            .env("DATABASE_URL", "unused")
+            .env("BLOG_MAINTENANCE_DATABASE_URL", &database_url)
+            .env("BLOG_MIGRATIONS_DIR", "missing")
+            .env("BLOG_PUBLIC_BASE_URL", "broken")
+            .env_remove("BLOG_RECOVERY_MODE")
+            .output()
+            .unwrap()
+    };
+    let blocked = maintenance(&["maintenance", "--dry-run"]);
+    assert!(!blocked.status.success());
+    assert!(String::from_utf8_lossy(&blocked.stderr).contains("恢复隔离期间禁止保留期清理"));
+    sqlx::raw_sql("COMMENT ON DATABASE blog_recovery_guard_test IS NULL")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let json = assert_success(maintenance(&["maintenance", "--dry-run"]));
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(json.trim()).unwrap()["dry_run"],
+        true
+    );
 }

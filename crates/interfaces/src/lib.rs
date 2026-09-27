@@ -9,3 +9,5 @@ pub mod http_comments;
 pub mod http_identity;
 pub mod http_media;
 pub mod http_support;
+
+pub mod http_retention;

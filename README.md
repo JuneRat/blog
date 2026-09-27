@@ -4,7 +4,7 @@ Rust 模块化单体博客，公开站点使用服务端渲染，管理后台使
 
 目前支持文章与独立页面、标签/分类/系列、OAuth 与本地密码登录、角色权限、媒体库、站点设置、主题切换，以及 RSS、sitemap 和 SEO 元数据。项目仍在开发阶段，接口与数据模型可直接调整，不维护旧管理接口的兼容层。交付状态和后续范围见[路线图](docs/product-roadmap.md)。
 
-**正在分批切换数据库。** 新的 [19 表基线](migrations/postgres/0001_initial_schema.sql)已替换旧迁移链，身份、持久会话、媒体、内容、目录与评论已适配；保留期任务及恢复工具仍待完成，当前分支尚不能作为完整博客部署。请先用[独立空库](docs/development.md#新基线的隔离验证)验证，暂不切换原开发库。完整目标见 [blog_schema.sql](blog_schema.sql)，已实现边界见[数据库实现参考](docs/database-current.md)。
+**正在分批切换数据库。** 新的 [19 表基线](migrations/postgres/0001_initial_schema.sql)已替换旧迁移链，身份、持久会话、媒体、内容、目录与评论已适配；保留期配置/维护和新库备份恢复已接入，正式媒体物理清理、其余审计覆盖与生产部署验收仍待完成。请先用[独立空库](docs/development.md#新基线的隔离验证)验证，暂不切换原开发库。完整目标见 [blog_schema.sql](blog_schema.sql)，已实现边界见[数据库实现参考](docs/database-current.md)。
 
 ## 快速开始
 
@@ -25,7 +25,7 @@ cargo run -p server -- role assign --user sun --role owner
 cargo run -p server -- serve --addr 127.0.0.1:8080
 ```
 
-站点入口为[公开站点](http://127.0.0.1:8080/)和[管理后台](http://127.0.0.1:8080/admin/)。已验证身份、媒体、内容发布与回收站、多系列、预约发布和评论；保留期维护与完整备份恢复需等待收尾适配。
+站点入口为[公开站点](http://127.0.0.1:8080/)和[管理后台](http://127.0.0.1:8080/admin/)。已验证身份、媒体、内容发布与回收站、多系列、预约发布和评论；保留期维护、独立数据库权限和含媒体的隔离恢复已有验证，操作见[备份与恢复](docs/operations-and-recovery.md)。
 
 默认连接本地开发数据库，环境变量覆盖方式见[配置参考](docs/configuration.md)。程序不会自动加载 `.env`。旧结构不能原地升级；新迁移不会删除旧数据，需另建空库。
 

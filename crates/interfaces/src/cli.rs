@@ -32,6 +32,16 @@ pub fn parse_args() -> Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// 使用 BLOG_MAINTENANCE_DATABASE_URL 清理过期评论 IP 和审计，不运行迁移/发布任务
+    Maintenance {
+        #[arg(long, default_value_t = 1000)]
+        batch_size: i64,
+        #[arg(long, default_value_t = 100)]
+        max_batches: u32,
+        /// 只统计过期数据，不执行清理
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// 发布到期的预约文章与页面。
     PublishDue,
     /// 执行数据库迁移（由 server 装配层直接处理）

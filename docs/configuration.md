@@ -10,13 +10,15 @@ cargo run -p server -- serve
 
 当前配置入口是 [server/config.rs](../crates/server/src/config.rs)，命令依赖装配见[架构](architecture.md)。
 
-评论开关已使用 `settings.comments`，可信代理配置已支持。`settings.audit`、评论 IP/审计保留期配置和默认 180 天维护任务仍待实现，见[目标设置设计](database-design.md#6-分组设置与审计)。
+评论开关使用 `settings.comments`，可信代理配置已支持。评论 IP/审计保留期分别使用 `settings.comments.ip_retention_days`、`settings.audit.retention_days`，默认各 180 天，可在后台设置中调整。清理由独立维护任务执行，见[保留期与运维](operations-and-recovery.md)。
 
 ## 环境变量
 
 | 变量 | 默认值 | 生效范围与用途 |
 |---|---|---|
 | `DATABASE_URL` | `postgres://blog:blog@127.0.0.1:5432/blog` | 所有业务命令的 PostgreSQL 连接 |
+| `BLOG_MAINTENANCE_DATABASE_URL` | 无，必填 | 仅 `maintenance`；使用独立受限维护角色，不回退到 DATABASE_URL |
+| `BLOG_RECOVERY_MODE` | `0` | `1`/`true` 启用核验模式，serve 只监听 loopback、停用自动发布；`0`/`false` 关闭，其余非空值拒绝 |
 | `BLOG_MIGRATIONS_DIR` | `migrations/postgres` | 所有业务命令使用的结构迁移目录 |
 | `BLOG_BIND` | `127.0.0.1:8080` | `serve` 监听地址；命令行 `--addr` 优先 |
 | `BLOG_PUBLIC_BASE_URL` | `http://127.0.0.1:8080` | `serve` 的公开基础 URL，供 OAuth 回调、canonical、RSS 和 sitemap 使用 |
@@ -67,8 +69,10 @@ OAuth 提供商通过 `secret_ref` 引用任意命名的环境变量，例如 `I
 | `user` / `role` / `oauth` | 数据库、结构迁移及对应身份依赖；不加载站点主题和公开 URL |
 | `post` | 数据库、迁移及 Markdown 渲染；不加载网站模板 |
 | `media cleanup-staging` | 数据库、结构迁移和媒体目录 |
+| `maintenance` | 独立维护连接、保留期策略及恢复标记；不迁移、不重建 HTML、不加载网站配置 |
+| `publish-due` | 数据库、迁移与预约发布；恢复隔离期间拒绝执行 |
 | `serve` | 数据库、迁移与完整站点配置、主题、后台静态资源 |
 
 因此坏掉的主题或公开 URL 不会阻止 CLI 修复账号、角色与 OAuth 配置。渲染并发、排队时间、结果等待和缓存容量目前由代码中的执行策略控制，不存在对应的 `BLOG_*` 环境变量，详见[主题与渲染](themes-and-rendering.md)。
 
-媒体文件与数据库共同构成恢复单元，但恢复脚本不会自动读取 `BLOG_MEDIA_DIR`，需要显式传入资源目录。操作与当前限制见[运维与恢复](operations-and-recovery.md)。
+媒体文件与数据库共同构成恢复单元。恢复脚本读取 `--media-dir`，未指定时使用 `BLOG_MEDIA_DIR`，再回退到 `data/media`。操作与限制见[运维与恢复](operations-and-recovery.md)。

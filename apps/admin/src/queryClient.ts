@@ -36,6 +36,7 @@ export const queryKeys = {
   mediaUsage: (id: string) => ["media", "usage", id] as const,
   siteSettings: () => ["settings", "site"] as const,
   themeSettings: () => ["settings", "theme"] as const,
+  retentionSettings: () => ["settings", "retention"] as const,
 };
 
 /**

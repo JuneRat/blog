@@ -5,6 +5,7 @@ import { ApiError, settingsApi, themeSettingsApi } from "../api";
 import { permissionMessageOf } from "../apiError";
 import { useAuth } from "../auth";
 import { CoverPicker } from "../components/CoverPicker";
+import { RetentionSettingsForm } from "../components/RetentionSettingsForm";
 import { queryKeys } from "../queryClient";
 import { codePointLength } from "../text";
 import { useUnsavedGuard } from "../unsaved";
@@ -46,6 +47,7 @@ const EMPTY_DRAFT: Draft = { title: "", description: "", logoMediaId: null };
  * 同步的 change→click 会点在仍禁用的按钮上），镜像 state 是同步更新的。
  */
 export function SettingsScreen() {
+  const [retentionDirty, setRetentionDirty] = useState(false);
   const { modal } = AntdApp.useApp();
   const { me } = useAuth();
   const canReadMedia = me?.permissions.includes("media.read") ?? false;
@@ -105,7 +107,7 @@ export function SettingsScreen() {
     (draft.title !== settings.title ||
       draft.description !== settings.description ||
       draft.logoMediaId !== settings.logo_media_id);
-  useUnsavedGuard(dirty, "站点设置有未保存的修改，离开会丢失。");
+  useUnsavedGuard(dirty || retentionDirty, "站点设置有未保存的修改，离开会丢失。");
 
   useEffect(() => {
     // 只在「还没有基线」时写入表单。保存响应要和「等待期间的新输入」逐字段合并
@@ -346,6 +348,7 @@ export function SettingsScreen() {
         </>
       )}
       <ThemeSettingsForm />
+      <RetentionSettingsForm onDirtyChange={setRetentionDirty} />
     </>
   );
 }

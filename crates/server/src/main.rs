@@ -3,6 +3,7 @@
 
 mod assembly;
 mod config;
+mod recovery;
 mod website;
 
 use std::sync::Arc;
@@ -25,13 +26,56 @@ async fn main() {
 }
 
 async fn run(command: Command) -> Result<(), String> {
+    if let Command::Maintenance {
+        batch_size,
+        max_batches,
+        dry_run,
+    } = command
+    {
+        let url = std::env::var("BLOG_MAINTENANCE_DATABASE_URL")
+            .map_err(|_| "请设置独立维护连接 BLOG_MAINTENANCE_DATABASE_URL")?;
+        let pool = infrastructure::connect(&url)
+            .await
+            .map_err(|e| e.to_string())?;
+        if recovery::mode()? || recovery::is_isolated(&pool).await? {
+            return Err("恢复隔离期间禁止保留期清理".into());
+        }
+        let result =
+            infrastructure::retention::run_retention(&pool, batch_size, max_batches, dry_run)
+                .await
+                .map_err(|e| e.to_string())?;
+        println!(
+            "{}",
+            serde_json::to_string(&result).map_err(|e| e.to_string())?
+        );
+        return Ok(());
+    }
     let database = config::DatabaseConfig::from_env();
     let pool = infrastructure::connect(&database.url)
         .await
         .map_err(|error| format!("连接 PostgreSQL 失败：{error}"))?;
-    // Keep automatic schema initialization, while website-specific configuration
-    // and dependencies are evaluated only in the serve branch below.
+    let recovery_mode = recovery::mode()?;
+    let isolated = recovery::is_isolated(&pool).await?;
+    if matches!(command, Command::PublishDue) && (isolated || recovery_mode) {
+        return Err("恢复隔离期间禁止预约发布任务".into());
+    }
+    if matches!(command, Command::Serve { .. }) && isolated && !recovery_mode {
+        return Err("恢复数据库尚未解除隔离；核验请设置 BLOG_RECOVERY_MODE=1，完成后用 recovery.py release 解除".into());
+    }
+    // Validate the recovery listener before any migration or permission writes.
+    let site_config = if let Command::Serve { addr } = &command {
+        let site = config::SiteConfig::from_env(addr.clone())?;
+        if recovery_mode {
+            recovery::check_bind(&site.bind)?;
+        }
+        Some(site)
+    } else {
+        None
+    };
+    // Keep automatic schema initialization for schema owners; restricted runtime
+    // roles verify the applied migrations. Website dependencies belong to serve.
     let migration = match &command {
+        Command::Maintenance { .. } => unreachable!("maintenance returned above"),
         Command::Migrate | Command::PublishDue | Command::Post { .. } | Command::Serve { .. } => {
             infrastructure::migrate(&pool, database.migrations_dir).await
         }
@@ -53,6 +97,7 @@ async fn run(command: Command) -> Result<(), String> {
         .await
         .map_err(|error| format!("同步权限目录失败：{error}"))?;
     match command {
+        Command::Maintenance { .. } => unreachable!("maintenance returned above"),
         Command::Migrate => unreachable!("migration returned above"),
         Command::PublishDue => {
             let mut total = 0;
@@ -90,17 +135,22 @@ async fn run(command: Command) -> Result<(), String> {
         Command::Media { action } => {
             interfaces::cli::run_media(&assembly::media(&pool, config::media_dir()), action).await
         }
-        Command::Serve { addr } => {
-            let site = config::SiteConfig::from_env(addr)?;
+        Command::Serve { .. } => {
+            let site = site_config.expect("serve configuration was validated above");
             let app =
                 website::build_router(&pool, &site, roles, Arc::new(RenderingRuntime::default()))
                     .await?;
-            serve(app, &site.bind, pool).await
+            serve(app, &site.bind, pool, recovery_mode).await
         }
     }
 }
 
-async fn serve(app: axum::Router, bind: &str, pool: sqlx::PgPool) -> Result<(), String> {
+async fn serve(
+    app: axum::Router,
+    bind: &str,
+    pool: sqlx::PgPool,
+    recovery_mode: bool,
+) -> Result<(), String> {
     let listener = tokio::net::TcpListener::bind(bind)
         .await
         .map_err(|error| format!("绑定 {bind} 失败：{error}"))?;
@@ -137,6 +187,10 @@ async fn serve(app: axum::Router, bind: &str, pool: sqlx::PgPool) -> Result<(), 
             }
         }
     };
+    if recovery_mode {
+        println!("恢复核验模式：预约发布任务已停用。");
+        return server.await;
+    }
     tokio::select! { result=server=>result, _=scheduler=>unreachable!("scheduler loops until server shuts down") }
 }
 

@@ -10,20 +10,23 @@ import unittest
 from unittest.mock import patch
 
 import recovery
+import recovery_inventory as inventory
 
 
 class RecoveryTests(unittest.TestCase):
-    def test_comment_tables_are_counted_and_required_for_restore(self):
+    def test_current_baseline_tables_and_all_lifecycle_states_are_counted(self):
         class Pg:
             def query(self, sql, database):
-                for table in ("comments", "comment_settings", "post_comment_settings"):
+                for table in recovery.SCHEMA_TABLES:
                     assert f"FROM {table})" in sql
-                return "|".join(str(n) for n in range(14))
+                assert "comment_settings" not in sql
+                for state in ("draft", "scheduled", "published", "archived"):
+                    assert f"status='{state}'" in sql
+                return '{"comments":7}'
         counts = recovery.database_counts(Pg())
-        self.assertEqual(counts["comments"], 11)
-        self.assertEqual(counts["comment_settings"], 12)
-        self.assertEqual(counts["post_comment_settings"], 13)
-        self.assertTrue({"comments", "comment_settings", "post_comment_settings"}.issubset(recovery.SCHEMA_TABLES))
+        self.assertEqual(counts["comments"], 7)
+        self.assertEqual(len(recovery.SCHEMA_TABLES),19)
+        self.assertTrue({"media", "media_refs", "post_series", "audit_logs", "sessions"}.issubset(recovery.SCHEMA_TABLES))
 
     def bundle(self, root):
         data = root / "data"
@@ -33,15 +36,78 @@ class RecoveryTests(unittest.TestCase):
         (data / "theme" / "theme.json").write_text('{"theme_api_version":1}')
         dump = data / "database.dump"
         dump.write_bytes(b"PGDMPfake")
+        media = data / "resources" / "media" / "objects" / "test.png"
+        media.parent.mkdir(parents=True, exist_ok=True)
+        media.write_bytes(b"image bytes")
         manifest = {
-            "format": 1, "backup_id": "test", "secret_refs": [],
-            "source_database": "blog", "schema_version": 3,
+            "format": 2, "backup_id": "test", "secret_refs": [],
+            "source_database": "blog", "schema": {"id": recovery.SCHEMA_ID, "migrations": recovery.expected_migrations()},
+            "media": [{"id":"test-media","path":"objects/test.png","size":media.stat().st_size,"sha256":recovery.digest(media)}],
             "database_counts": {}, "files": recovery.file_records(data),
         }
         raw = json.dumps(manifest).encode()
         (root / "manifest.json").write_bytes(raw)
         (root / "COMPLETE").write_text(hashlib.sha256(raw).hexdigest())
         return dump
+
+    def rewrite(self, root, transform):
+        manifest = json.loads((root / "manifest.json").read_text())
+        transform(manifest)
+        raw = json.dumps(manifest).encode()
+        (root / "manifest.json").write_bytes(raw)
+        (root / "COMPLETE").write_text(hashlib.sha256(raw).hexdigest())
+
+    def test_verify_rejects_legacy_format_or_baseline_checksum_mismatch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            self.bundle(root)
+            self.rewrite(root,lambda m:m.update(format=1))
+            with self.assertRaisesRegex(recovery.RecoveryError,"unsupported backup format"):
+                recovery.verify(root)
+            self.bundle(root)
+            self.rewrite(root,lambda m:m["schema"].update(migrations=[{"version":1,"checksum":"old-schema"}]))
+            with self.assertRaisesRegex(recovery.RecoveryError,"checksums"):
+                recovery.verify(root)
+
+    def test_media_registry_checksum_is_checked_independently_of_file_manifest(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory); self.bundle(root)
+            # Updating file records cannot hide a missing or changed registered object.
+            media=root / "data/resources/media/objects/test.png"
+            media.write_bytes(b"corrupt")
+            self.rewrite(root,lambda m:m.update(files=recovery.file_records(root / "data")))
+            with self.assertRaisesRegex(recovery.RecoveryError,"media object missing or corrupt"):
+                recovery.verify(root)
+            media.unlink()
+            self.rewrite(root,lambda m:m.update(files=recovery.file_records(root / "data")))
+            with self.assertRaisesRegex(recovery.RecoveryError,"media object missing or corrupt"):
+                recovery.verify(root)
+
+    def test_parent_symlinks_and_unlisted_symlink_directories_are_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory); self.bundle(root)
+            (root / "data/empty-link").symlink_to(root / "data/theme",target_is_directory=True)
+            with self.assertRaises(recovery.RecoveryError): recovery.verify(root)
+            (root / "data/empty-link").unlink()
+            for path in ("/tmp/file", "../escape", "objects/../test", "objects//test", "objects/./test", "objects\\test"):
+                with self.assertRaises(recovery.RecoveryError): inventory.safe_file(root,path)
+            (root / "linked").symlink_to(root / "data",target_is_directory=True)
+            with self.assertRaises(recovery.RecoveryError): inventory.safe_file(root,"linked/database.dump")
+
+    def test_html_reference_parser_matches_only_local_media_images(self):
+        media_id="00000000-0000-0000-0000-000000000001"
+        parser=inventory.Images()
+        parser.feed(f'<img src="/media/{media_id}"><a href="/media/{media_id}">link</a><img src="https://example.com/media/{media_id}"><img src="/media/00000000-0000-0000-0000-000000000002?x=1">')
+        self.assertEqual(parser.ids,{media_id})
+
+    def test_schema_rejects_old_migration_even_if_table_count_matches(self):
+        class Pg:
+            def query(self,sql,database):
+                if "information_schema.tables" in sql: return "\n".join(recovery.SCHEMA_TABLES)
+                if "WHERE NOT success" in sql: return "0"
+                return '[{"version":1,"checksum":"legacy-baseline"}]'
+        with self.assertRaisesRegex(recovery.RecoveryError,"migration history/checksums"):
+            recovery.schema_snapshot(Pg())
 
     def test_verify_rejects_missing_completion_and_changed_dump(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -84,6 +150,19 @@ class RecoveryTests(unittest.TestCase):
         with patch.dict(os.environ, {"IDP_SECRET": "present"}):
             recovery.assert_secret_refs(["IDP_SECRET"])
 
+    def test_null_or_empty_secret_reference_cannot_disappear_from_backup(self):
+        class Pg:
+            def __init__(self, data): self.data=data
+            def query(self, sql, database): return self.data
+        for refs in ('[null]', '[""]', '["PRESENT",null]'):
+            with self.assertRaises(recovery.RecoveryError): recovery.secret_refs(Pg(refs))
+        self.assertEqual(recovery.secret_refs(Pg('["SECRET","SECRET"]')),["SECRET"])
+
+    def test_docker_container_ids_are_accepted_but_options_are_not(self):
+        recovery.PgTools("postgres://blog@localhost/blog", "1" * 64)
+        with self.assertRaises(recovery.RecoveryError):
+            recovery.PgTools("postgres://blog@localhost/blog", "--privileged")
+
     def test_database_names_are_restricted(self):
         for url in ("sqlite:///blog", "postgres://localhost/bad-name", "postgres://localhost/"):
             with self.assertRaises(recovery.RecoveryError):
@@ -98,6 +177,10 @@ class RecoveryTests(unittest.TestCase):
 
             def query(self, sql, database=None):
                 self.calls.append(("query", sql))
+                if sql.startswith("COMMENT ON DATABASE"):
+                    self.tag = sql.split("'")[1]
+                if "shobj_description" in sql:
+                    return self.tag
                 return ""
 
             def run(self, tool, args, database=None, input_path=None, output_path=None):
@@ -123,6 +206,8 @@ class RecoveryTests(unittest.TestCase):
 
             # 持久会话不能因备份回退而复活：恢复流程必须显式清空 sessions。
             self.assertIn(("query", "DELETE FROM sessions"), fake.calls)
+            self.assertTrue((args.output / "ISOLATED").read_text().startswith(recovery.ISOLATION_PREFIX))
+            self.assertTrue((args.output / "RESTORED").is_file())
 
 
 if __name__ == "__main__":

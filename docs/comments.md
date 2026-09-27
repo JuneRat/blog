@@ -40,7 +40,7 @@
 
 默认记录 socket 对端 IP，不信任转发头。`BLOG_TRUSTED_PROXIES` 可配置逗号分隔的精确 IPv4/IPv6 地址；只有 socket 对端在列表中才解析 `X-Forwarded-For`。从右向左剥离可信代理，取第一个非可信地址；无来源、缺失/非法链、超过 20 跳或全为可信地址时保存 NULL。不支持 CIDR，也不读取 `Forwarded`、`X-Real-IP`。例如 `BLOG_TRUSTED_PROXIES=127.0.0.1,::1`。非法配置会使 `serve` 启动失败，认证登录限流仍使用原有 socket 来源规则。
 
-IP 以可空 inet 保存主机地址，审核不覆盖提交 IP。默认 180 天清空评论 IP 的保留期任务及配置入口属于收尾批次，当前尚未执行自动清理。
+IP 以可空 inet 保存主机地址，审核不覆盖提交 IP。默认保留 180 天，可在后台设置中调整；独立维护账号运行 blog maintenance 分批清空超期 IP，不改编辑版本或更新时间。部署层需另行启用调度，详见[保留期与运维](operations-and-recovery.md)。
 
 ## 接口
 
@@ -62,4 +62,4 @@ IP 以可空 inet 保存主机地址，审核不覆盖提交 IP。默认 180 天
 
 评论使用独立的 `COMMENT_RENDER_VERSION`，完整 `migrate` 启动流程重建版本不匹配的 HTML。更新同时核对源文和编辑版本，不改变业务版本或修改时间，不写 media_refs。公开渲染不回退到未清洗源文。
 
-验证入口包括基础设施评论集成测试（真实 PostgreSQL 关系、权限、分页、CAS、事务回滚和重建竞争）、评论渲染单元测试、server 的评论 HTTP 测试，以及公开组件、审核界面和文章编辑器 Vitest。恢复工具仍使用旧表清单，尚不可用于新基线，见[备份恢复](operations-and-recovery.md)。
+验证入口包括基础设施评论集成测试（真实 PostgreSQL 关系、权限、分页、CAS、事务回滚和重建竞争）、评论渲染单元测试、server 的评论 HTTP 测试，以及公开组件、审核界面和文章编辑器 Vitest。恢复工具核验评论根关系、媒体引用和新迁移校验和，见[备份恢复](operations-and-recovery.md)。

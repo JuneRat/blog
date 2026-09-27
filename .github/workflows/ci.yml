@@ -57,6 +57,14 @@ jobs:
       - name: Recovery tool tests
         run: PYTHONPATH=scripts python3 -B -m unittest scripts/test_recovery.py
 
+      - name: Isolated recovery and database role drill
+        env:
+          BLOG_RECOVERY_TEST: "1"
+          BLOG_TEST_PG_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          cargo build -p server --bin blog
+          PYTHONPATH=scripts python3 -B -m unittest scripts/test_recovery_postgres.py
+
   web:
     runs-on: ubuntu-latest
 

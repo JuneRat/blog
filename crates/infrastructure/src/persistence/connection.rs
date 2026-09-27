@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use sqlx::PgPool;
+use sqlx::migrate::Migrate;
 use sqlx::postgres::PgPoolOptions;
 use time::OffsetDateTime;
 
@@ -38,6 +39,65 @@ pub async fn migrate_schema(
     let migrator = sqlx::migrate::Migrator::new(migrations_dir.as_ref())
         .await
         .map_err(|e| UseCaseError::Repository(format!("加载迁移失败：{e}")))?;
+    // SQLx creates its history table even when every migration is applied.
+    // An application role must not own the schema merely to start the server.
+    let can_create: bool =
+        sqlx::query_scalar("SELECT has_schema_privilege(current_schema(),'CREATE')")
+            .fetch_one(pool)
+            .await
+            .map_err(|e| UseCaseError::Repository(e.to_string()))?;
+    if !can_create {
+        // Share SQLx's migration lock so verification cannot observe history
+        // halfway through an owner's migration. Never pool a locked session,
+        // including on errors or cancellation.
+        let mut connection = pool
+            .acquire()
+            .await
+            .map_err(|e| UseCaseError::Repository(e.to_string()))?;
+        connection.close_on_drop();
+        connection
+            .lock()
+            .await
+            .map_err(|e| UseCaseError::Repository(e.to_string()))?;
+        let exists: bool = sqlx::query_scalar("SELECT to_regclass('_sqlx_migrations') IS NOT NULL")
+            .fetch_one(&mut *connection)
+            .await
+            .map_err(|e| UseCaseError::Repository(e.to_string()))?;
+        if !exists {
+            return Err(UseCaseError::Repository(
+                "运行账号不能建表；请先使用结构管理账号执行 migrate 和授权脚本".into(),
+            ));
+        }
+        let applied: Vec<(i64, Vec<u8>, bool)> = sqlx::query_as(
+            "SELECT version,checksum,success FROM _sqlx_migrations ORDER BY version",
+        )
+        .fetch_all(&mut *connection)
+        .await
+        .map_err(|e| UseCaseError::Repository(e.to_string()))?;
+        let expected: Vec<_> = migrator
+            .iter()
+            .filter(|m| m.migration_type.is_up_migration())
+            .collect();
+        if applied.len() != expected.len()
+            || applied
+                .iter()
+                .zip(expected)
+                .any(|((version, checksum, success), migration)| {
+                    !success
+                        || *version != migration.version
+                        || checksum.as_slice() != migration.checksum.as_ref()
+                })
+        {
+            return Err(UseCaseError::Repository(
+                "迁移版本或校验和不匹配；请先使用匹配版本与结构管理账号完成迁移".into(),
+            ));
+        }
+        connection
+            .close()
+            .await
+            .map_err(|e| UseCaseError::Repository(e.to_string()))?;
+        return Ok(());
+    }
     migrator
         .run(pool)
         .await

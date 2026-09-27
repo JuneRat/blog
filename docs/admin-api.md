@@ -2,7 +2,7 @@
 
 本文描述当前 HTTP 路由与通用请求约定。业务状态和可见性见[内容生命周期](content-lifecycle.md)，权限和会话见[身份、权限与后台](identity-and-admin.md)。项目仍在开发阶段，客户端应随接口变更同步更新。
 
-[新建库基线](database-current.md)已接入，身份、sessions、媒体、内容与目录已适配。评论旧契约仍待切换，尚不能在新库上完成评论操作。
+[新建库基线](database-current.md)已接入，身份、sessions、媒体、内容、目录、评论及保留期设置已适配。
 
 路由与传输 DTO 的实现入口：[内容和设置](../crates/interfaces/src/http_admin.rs)、[身份](../crates/interfaces/src/http_identity.rs)、[媒体](../crates/interfaces/src/http_media.rs)、[认证](../crates/interfaces/src/http_auth.rs)。
 
@@ -135,8 +135,10 @@ Page 没有作者，使用站点级 `page.*` 权限。
 | `PUT /settings/site` | `title`、`description`、`logo_media_id`、`expected_version` |
 | `GET /settings/theme` | 所选 slug、生效 slug、来源、版本与可用主题 |
 | `PUT /settings/theme` | `slug`、`expected_version` |
+| `GET /settings/retention` | 评论 IP 与审计的保留天数及两组版本 |
+| `PUT /settings/retention` | 必填 `comment_ip_days`、`comment_version`、`audit_days`、`audit_version` |
 
-`site` 是整组替换，省略或传 `null` 的 logo 会被清除；新 logo 要求图片存在且未移入回收站，原有引用可继续保留。未配置的设置版本为 0。仅注册 `site` 和 `theme`，`/settings/oauth` 等未知分组返回 404。生效优先级见[配置参考](configuration.md)。
+`site` 是整组替换，省略或传 `null` 的 logo 会被清除；新 logo 要求图片存在且未移入回收站，原有引用可继续保留。未配置的设置版本为 0。保留期默认各 180 天，范围 1–36,500 整数天；更新只合并两项字段并保留其他 JSON 设置，两组版本任一过期返回 409。未知字段拒绝，相同值不增版。评论全站开关与 IP 保留期共享 comments 分组版本。清理由独立维护命令执行，HTTP 不提供立即清理接口。`/settings/oauth` 等未知分组返回 404。生效优先级见[配置参考](configuration.md)。
 
 ## 媒体
 

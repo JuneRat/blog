@@ -2,7 +2,7 @@
 
 本文记录已确认的 PostgreSQL 18 目标设计，共 **19 张表：18 张业务表和 `sessions`**。字段、外键、CHECK 与索引以根目录的 [blog_schema.sql](../blog_schema.sql) 为准，选择理由见 [ADR-0016](adr/0016-confirmed-blog-schema.md)。
 
-**新建库基线、身份会话、媒体、内容、目录与评论已接入。** `migrate` 现在执行新的 [0001_initial_schema.sql](../migrations/postgres/0001_initial_schema.sql)，原九个迁移已替换，仅支持空库或已应用新基线的库；检测到旧结构时退出，不自动清库。保留期任务与恢复工具仍待收尾，不能据此认为完整上线验收已完成。实际适配边界见[当前数据库实现](database-current.md)，后续验收见[路线图](product-roadmap.md#已采纳数据库设计的实施)。
+**新建库基线、身份会话、媒体、内容、目录与评论已接入。** `migrate` 现在执行新的 [0001_initial_schema.sql](../migrations/postgres/0001_initial_schema.sql)，原九个迁移已替换，仅支持空库或已应用新基线的库；检测到旧结构时退出，不自动清库。保留期任务、独立授权和新库恢复工具已接入，正式媒体物理清理与生产上线验收仍待完成。实际适配边界见[当前数据库实现](database-current.md)，后续验收见[路线图](product-roadmap.md#已采纳数据库设计的实施)。
 
 ## 1. 表清单与通用约定
 
@@ -203,4 +203,4 @@ Post/Page 统一使用 draft、scheduled、published、archived 四种状态，�
 | 评论设置 | comment_settings/post_comment_settings 独立表及版本 | settings.comments 与 posts.comments_enabled |
 | 审计和 IP | 无事务业务审计，评论只存来源摘要 | audit_logs 与可空主机 IP，默认 180 天保留策略 |
 
-新初始迁移、身份会话、媒体引用、内容生命周期、多系列、评论根关系及 HTML 重建已在隔离 PostgreSQL 18 中验证。媒体正式文件清理、评论 IP/审计保留期、审计授权与完整恢复仍需实现和验收；各项交付边界以实施路线为准。
+新初始迁移、身份会话、媒体引用、内容生命周期、多系列、评论根关系及 HTML 重建已在隔离 PostgreSQL 18 中验证。评论 IP/审计保留期、独立审计授权及含媒体的隔离恢复已接入；正式媒体清理、其余审计写入覆盖及生产演练仍需完成，各项边界以实施路线为准。

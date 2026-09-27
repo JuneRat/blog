@@ -2,7 +2,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
-import { ApiError, mediaApi, settingsApi, themeSettingsApi } from "../src/api";
+import { ApiError, mediaApi, settingsApi, themeSettingsApi, retentionApi } from "../src/api";
 import { paths } from "../src/router";
 import type { SiteSettings } from "../src/types";
 
@@ -19,6 +19,7 @@ vi.mock("../src/api", async (importOriginal) => {
     ...original,
     settingsApi: { get: vi.fn(), save: vi.fn() },
     themeSettingsApi: { get: vi.fn(), save: vi.fn() },
+    retentionApi: { get: vi.fn(), save: vi.fn() },
     mediaApi: { ...original.mediaApi, list: vi.fn(), upload: vi.fn() },
   };
 });
@@ -52,11 +53,33 @@ beforeEach(() => {
   vi.resetAllMocks();
   window.history.replaceState(null, "", paths.settings);
   vi.mocked(settingsApi.get).mockResolvedValue(fallbackView);
+  vi.mocked(retentionApi.get).mockResolvedValue({ comment_ip_days: 180, comment_version: 0, audit_days: 180, audit_version: 0 });
   vi.mocked(themeSettingsApi.get).mockResolvedValue({ slug: "default", effective_slug: "default", source: "fallback", version: 0, available: [{ slug: "default", name: "Default" }, { slug: "paper", name: "Paper" }] });
 });
 afterEach(cleanup);
 
 describe("站点设置屏", () => {
+  it("保留期保存携带两组版本，冲突保留输入并阻止重复提交", async () => {
+    vi.mocked(retentionApi.save).mockRejectedValue(new ApiError(409, "版本冲突", "version_conflict"));
+    render(<App />);
+    const ip = await screen.findByLabelText("评论 IP 保留天数");
+    fireEvent.change(ip, { target: { value: "60" } });
+    fireEvent.blur(ip);
+    fireEvent.click(screen.getByRole("button", { name: "保存保留期" }));
+    await waitFor(() => expect(retentionApi.save).toHaveBeenCalledWith({ comment_ip_days: 60, comment_version: 0, audit_days: 180, audit_version: 0 }));
+    await screen.findByText(/你的输入已保留，请重新加载后再编辑/);
+    expect((ip as HTMLInputElement).value).toBe("60");
+    expect((screen.getByRole("button", { name: "保存保留期" }) as HTMLButtonElement).disabled).toBe(true);
+    vi.mocked(retentionApi.get).mockResolvedValue({ comment_ip_days: 90, comment_version: 2, audit_days: 365, audit_version: 3 });
+    fireEvent.click(screen.getByRole("button", { name: "重新加载保留期并放弃修改" }));
+    await waitFor(() => expect((ip as HTMLInputElement).value).toBe("90"));
+    vi.mocked(retentionApi.save).mockResolvedValue({ comment_ip_days: 91, comment_version: 3, audit_days: 365, audit_version: 3 });
+    fireEvent.change(ip, { target: { value: "91" } });
+    fireEvent.blur(ip);
+    fireEvent.click(screen.getByRole("button", { name: "保存保留期" }));
+    await waitFor(() => expect(retentionApi.save).toHaveBeenLastCalledWith({ comment_ip_days: 91, comment_version: 2, audit_days: 365, audit_version: 3 }));
+    await screen.findByText("保留期已保存，下次维护时生效。");
+  });
   it("切换主题携带版本并显示即时生效", async () => {
     vi.mocked(themeSettingsApi.save).mockResolvedValue({ slug: "paper", effective_slug: "paper", source: "database", version: 1, available: [{ slug: "default", name: "Default" }, { slug: "paper", name: "Paper" }] });
     render(<App />);

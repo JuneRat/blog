@@ -133,6 +133,13 @@ pub async fn build_router(
                 .trim_end_matches('/')
                 .to_string(),
         });
+    let retention =
+        interfaces::http_retention::retention_router(interfaces::http_retention::RetentionState {
+            retention: Arc::new(application::retention::RetentionInteractor::new(Arc::new(
+                infrastructure::retention::PostgresRetentionStore::new(pool.clone()),
+            ))),
+            admin: admin.clone(),
+        });
     Ok(interfaces::http::app_router(
         AppState {
             public: PublicSiteState {
@@ -147,6 +154,9 @@ pub async fn build_router(
             admin_dist: config.admin_dist.clone(),
         },
     )
+    .merge(retention.layer(axum::middleware::from_fn(
+        interfaces::http_support::request_context,
+    )))
     .merge(comments.layer(axum::middleware::from_fn(
         interfaces::http_support::request_context,
     ))))

@@ -1,108 +1,135 @@
-# 备份与恢复
+# 保留期、备份与恢复
 
-本文说明当前工具的可执行流程、边界和上线前所需证据。交付状态统一见[路线图](product-roadmap.md)；设计取舍保留在 [ADR-0005](adr/0005-consistent-backup-and-recovery.md)。当前采用单站点 PostgreSQL 的维护窗口备份与隔离恢复，不承诺在线一致备份或零数据丢失。
+当前工具适配新的 [19 表基线](database-design.md)。采用维护窗口备份和隔离恢复；部署验收仍见[路线图](product-roadmap.md)，不提供在线一致备份或零数据丢失承诺。
 
-新的 [19 表设计](database-design.md)尚未接入恢复工具。当前脚本仍使用旧表白名单、评论设置表和媒体状态；新旧结构虽然表数相同，不能互换恢复。下面的命令仅供旧结构配套版本使用，不适用于已经采用新 `0001_initial_schema.sql` 的数据库；恢复工具适配和验收将在收尾批次完成。
+## 数据库账号与保留期
 
-## 1. 当前工具实际覆盖
+数据库角色与博客 Owner/Admin 是不同层次的权限。
 
-工具为 [`scripts/recovery.py`](../scripts/recovery.py)，检查见 [`scripts/test_recovery.py`](../scripts/test_recovery.py)。
-
-| 环节 | 当前行为 |
+| 身份 | 用途 |
 |---|---|
-| 数据库 | `pg_dump` custom 格式导出整个库，包含媒体和会话表；使用 `--no-owner --no-acl`，不备份集群角色和数据库授权 |
-| 主题 | 复制指定默认主题及同级含 `theme.json` 的主题目录，检查当前数据库选择的主题包含在备份中 |
-| 附加资源 | 仅复制显式传入的 `--resource name=目录`；拒绝目录内符号链接及非普通文件/目录 |
-| 清单 | 记录 backup_id、时间、git commit、最大成功迁移版本、部分数据计数，以及全部已复制文件的大小和 SHA-256 |
-| 完成与校验 | 校验 dump 格式和 `pg_restore --list`，成功后生成清单摘要 `COMPLETE` 并把临时目录改名；`verify` 检查清单及文件完整性 |
-| 秘密 | 记录 OAuth `secret_ref` 名称，并要求同名环境变量非空；不复制秘密值，也不验证值是否正确或属于同一版本 |
-| 隔离恢复 | 只创建新的 `blog_restore_*` 数据库；导入后清空 `sessions`，复制主题/资源到新输出目录，不启动应用 |
-| 数据复核 | 检查原 13 个核心表存在、迁移版本、至少一个未删除且有密码或外部绑定的 Owner，以及记录过的内容/目录计数 |
+| 结构管理账号 | 建库、迁移、授权、备份和恢复；不注入 HTTP 服务 |
+| 普通运行账号 | 必要业务读写；audit_logs 仅 SELECT/INSERT，无建表权限 |
+| 独立维护账号 | 读取保留期、清空评论 IP、删除过期审计和写入清理摘要；不能读取评论邮箱或改正文 |
 
-媒体根目录**不会自动备份**：脚本不读取 `BLOG_MEDIA_DIR`，必须传入 `--resource "media=${BLOG_MEDIA_DIR:-data/media}"`，并确认该值就是服务实际使用的目录。当前工具不核验媒体表计数、`storage_key` 与文件对应关系、数据库中的文件校验和或图片公开/私有访问。复制整个目录及文件摘要通过，不等于媒体完整恢复通过。
+先用结构管理账号迁移，再创建两个不拥有对象、不继承其他角色的 LOGIN 角色。密码通过 psql 的交互密码命令设置，不放进命令历史。以结构管理账号执行：
 
-工具不负责停止服务或取得部署互斥，两个 `--*-confirmed` 参数只是操作者声明。它也不保存完整部署配置、未提交源码、前端构建产物或秘密存储备份；主题文件存在性检查不等于运行时兼容性验证。所有备份默认是敏感材料，输出目录权限 0700 不能替代访问控制、传输保护或加密保存。
+```sh
+psql "$DATABASE_URL" -v app_role=blog_app -v maintenance_role=blog_maintenance \
+  -f scripts/database-roles.sql
+```
 
-## 2. 维护备份
+[授权脚本](../scripts/database-roles.sql)在同一事务内重设两角色的表授权，拒绝超级用户、对象所有者和额外审计修改权限；不会替已有库撤销 PUBLIC 授权，异常授权由部署管理员核对修正。受限运行账号启动时只核对全部迁移版本、成功状态和校验和；发现不匹配便退出，由管理账号先执行迁移。新增表时同步更新授权脚本。
 
-1. 在部署层取得维护互斥，停止 HTTP 写入、上传、CLI 写命令和媒体回收；等待在途数据库事务及文件写入退出。不能只隐藏后台按钮。无法确认静止状态时不开始备份。
-2. 记录应用构建/提交、实际配置、媒体路径、已安装主题、数据库授权与秘密恢复方式。秘密材料独立受控保存；`apps/admin/dist` 可按匹配源码和 lockfile 重建，脚本不会替你保留这些构建材料。
-3. 保持全部写入停止，执行备份及文件校验。媒体目录作为完整资源目录附加，不只挑当前公开图片。
-4. 成功后核对清单确实包含目标资源；失败则保留上一份可用备份。确认原部署可安全恢复后解除维护。
+后台“设置 → 数据保留期”要求 settings.manage，默认评论 IP、审计各保留 **180 天**。范围为 1–36,500 整数天，分别保存到 settings.comments.ip_retention_days、settings.audit.retention_days，并校验两组版本、保留其他字段。缩短保留期会在下次维护时清理此前仍保留的数据。
 
-从仓库根目录执行的容器示例：`DATABASE_URL` 与 OAuth 秘密变量由受保护环境注入，目标目录必须尚不存在。
+维护只读取 BLOG_MAINTENANCE_DATABASE_URL，不回退到运行连接，不执行迁移、权限初始化或 HTML 重建：
+
+```sh
+# 维护连接由受保护环境注入，先查看预计处理量。
+blog maintenance --dry-run
+blog maintenance --batch-size 1000 --max-batches 100
+```
+
+按 created_at 严格早于截止时间处理：评论仅置空 IP，不改正文、审核状态、关系、version 或 updated_at；过期审计被永久删除。每批最多分别处理指定数量的两类记录，同事务追加不含个人信息的清理计数。审计追加失败则整批回滚。多维护进程按事务锁串行，评论遇到锁定行时跳过。JSON 结果含 comment_ips、audit_logs、batches、has_more、dry_run；has_more=true 表示达到批次上限或仍有锁定记录，可再次执行。
+
+每日调度示例为 [service](../ops/blog-maintenance.service) 与 [timer](../ops/blog-maintenance.timer)。按部署修改路径和用户，将独立维护凭据放在受保护的 /etc/blog/maintenance.env。仓库不会安装或启用这些服务。恢复隔离期间拒绝执行维护。
+
+保留期不清理备份副本；备份保留规则另行制定。正式媒体文件也不属于此命令：零引用仍可能有站外链接。当前仅 blog media cleanup-staging 清理过期暂存文件；正式对象的显式物理清理及失败重试流程仍待实现。
+
+## 维护备份
+
+在部署层取得维护互斥，停止 HTTP、上传、定时发布、保留期任务及所有 CLI 写入，等待在途事务与文件写入结束。另行保存匹配的应用构建/源码、部署配置、角色授权和秘密恢复材料。保持写入停止，执行：
 
 ```sh
 python3 -B scripts/recovery.py backup \
-  --output /secure/backups/blog-2026-09-26 \
+  --output /secure/backups/blog-2026-09-27 \
   --theme-dir "${BLOG_THEME_DIR:-themes/default}" \
-  --resource "media=${BLOG_MEDIA_DIR:-data/media}" \
+  --media-dir "${BLOG_MEDIA_DIR:-data/media}" \
   --docker-container blog-postgres --maintenance-confirmed
 
-python3 -B scripts/recovery.py verify /secure/backups/blog-2026-09-26
+python3 -B scripts/recovery.py verify /secure/backups/blog-2026-09-27
 ```
 
-Docker 模式在指定数据库容器内运行工具，忽略 URL 中的主机/端口，并依赖容器内可用的数据库认证。非容器部署去掉 `--docker-container`，在执行环境提供匹配版本的 `pg_dump`、`pg_restore`、`psql`、`createdb`。资源目录始终是脚本运行环境能访问的路径；应用容器里的媒体路径必须先通过实际挂载映射到该环境。
+目标目录必须尚不存在。工具使用 DATABASE_URL。Docker 模式在指定数据库容器内运行工具，忽略 URL 主机/端口，依赖容器内可用认证；资源路径仍是脚本所在主机的路径。非 Docker 部署省略该参数，并提供匹配版本的 pg_dump、pg_restore、psql、createdb。
 
-备份中途异常会清理临时目录，不生成可用备份；强制中止可能留下 `.partial-*`，没有完整校验和完成标记的目录不能用于恢复。
+| 检查 | 行为 |
+|---|---|
+| 结构 | 精确核对 19 表名单、全部迁移版本与 SHA-384 校验和、成功状态、关键字段；记录列结构，恢复后比对 |
+| 数据库 | custom 格式 pg_dump，使用 --no-owner --no-acl，并检查 archive 列表；不备份集群角色/授权 |
+| 媒体 | 自动复制 --media-dir（回退 BLOG_MEDIA_DIR/data/media），核对所有注册原件的 path、大小和 SHA-256，包括软删除及零引用媒体 |
+| 引用 | 复核正文 HTML、Post/Series 封面、头像、logo 与 media_refs 一致；复核评论根关系和分类树无环 |
+| 主题 | 保存默认主题及同级已安装主题，确认数据库选择的主题存在；运行时兼容性需实际启动验证 |
+| 清单 | 格式 2，包含结构、媒体清单、所有表计数、内容状态/回收站计数、文件大小与 SHA-256；COMPLETE 保存清单摘要 |
+| 秘密 | 只保存 OAuth secret_ref 名称，要求恢复环境提供非空值；不复制秘密，也不能证明值正确 |
 
-## 3. 隔离恢复
+整个媒体目录中的未注册文件也会保存，不判定为垃圾。附加目录可用 --resource name=目录，media 为保留名称。拒绝符号链接、路径越界及非普通文件。任何注册原件缺失或损坏都会阻止完成备份。
 
-先隔离目标环境，保证不会接收公开流量或运行任何写入/回收进程。`DATABASE_URL` 指向已有、具备建库权限的管理数据库，不能指向待创建的目标库；秘密变量需恢复到对应值。
+格式 1 和旧迁移链备份须使用匹配的旧工具；恢复与升级分开执行。失败不生成 COMPLETE；异常会清理临时目录，强制中止可能留下不能直接恢复的 .partial-*。备份包含私密正文、密码哈希和会话等敏感材料，0700 目录权限不能替代受控存储、传输保护或加密。
+
+## 隔离恢复与重新开放
+
+停止目标环境所有进程，隔离公开流量。DATABASE_URL 指向具备建库权限的管理数据库。恢复只创建新的 blog_restore_* 库和新输出目录：
 
 ```sh
-python3 -B scripts/recovery.py restore /secure/backups/blog-2026-09-26 \
-  --target-db blog_restore_drill_20260926 \
-  --output /secure/isolated/blog-2026-09-26 \
+python3 -B scripts/recovery.py restore /secure/backups/blog-2026-09-27 \
+  --target-db blog_restore_drill_20260927 \
+  --output /secure/isolated/blog-2026-09-27 \
   --docker-container blog-postgres --isolation-confirmed
 ```
 
-脚本拒绝已有目标数据库、备份原库及已有输出目录。恢复输出保留 `ISOLATED`；通过内置复核后写 `RESTORED`，失败写 `FAILED` 并保留现场，操作者核对后再手工清理隔离库。`RESTORED` 仅代表工具检查通过，不是上线许可。
+建库后先写数据库隔离标记，再导入和复制文件；清空 sessions，核对结构、全部表计数、媒体清单/原件/引用、评论/分类树，以及至少一个 active、未删除、带密码或外部绑定的 Owner。通过后写 RESTORED，失败写 FAILED 并保留现场。普通启动、publish-due 和保留期维护会检查数据库隔离标记；只删输出目录的 ISOLATED 文件不能绕过它。
 
-恢复出的附加媒体目录在输出目录的 `resources/media`，同级主题集合在 `resources/installed-themes`。脚本不会修改部署配置；隔离启动时须显式映射数据库、媒体和主题路径，并使用与备份匹配的应用构建。恢复与升级分开验证；当前内容服务会按渲染版本重建派生 HTML，升级前应先保留可回退的恢复基线。
+用匹配构建进行核验，显式连接恢复库并设置恢复后的路径：
 
-重新开放前人工核验：
+```sh
+# DATABASE_URL 此时指向 blog_restore_drill_20260927。
+BLOG_RECOVERY_MODE=1 \
+BLOG_MEDIA_DIR=/secure/isolated/blog-2026-09-27/resources/media \
+BLOG_THEME_DIR=/secure/isolated/blog-2026-09-27/resources/installed-themes/default \
+BLOG_PUBLIC_BASE_URL=http://127.0.0.1:8081 \
+blog serve --addr 127.0.0.1:8081
+```
 
-- Owner 实际可登录，角色/权限正确，OAuth 配置与秘密可用。脚本只检查存在密码或绑定，不能证明外部提供商仍可登录。
-- `sessions` 已清空，旧 Cookie 无效。手工 `pg_restore` 同样必须先清空会话；OAuth 临时状态和失败限流随新进程从零开始。
-- 文章/Page 正文和公开条件、回收站、分类树、系列位置、标签关系、settings 与主题选择正确。
-- 数据库所有应存在的媒体原件与 `storage_key`、大小/校验和对应；正文图片、封面、头像、logo 的私有与公开访问符合当前引用。有效引用缺失时保持隔离。
-- 此处旧版恢复流程曾使用 staged/pending_deletion 与 media reclaim。新版本已移除该状态机和命令，只提供 `blog media cleanup-staging`；不得用暂存清理代替媒体完整性检查或正式文件回收。
-- 匹配的后台 SPA 已构建，登录、编辑、发布、撤回及公开页面正常。保留核验记录后再开放写入。
+恢复模式只允许 loopback IP 监听，停用自动预约发布；它仍允许人工编辑，不是只读模式。部署层确保反向代理不转发公网流量、旧进程和其他版本 worker 已停止。标记不能约束外部程序或数据库管理员。启动仍可能重建派生 HTML，须使用匹配版本。手工 pg_restore 同样需要隔离、停用调度并清空 sessions。
 
-## 4. 后续外部系统的恢复约束
+核验至少覆盖 Owner 实际登录、授权和旧 Cookie 失效，公开/私密/预约/归档/回收站内容，评论多级关系与删除占位，正文/封面/头像/logo 和软删除媒体的独立公开链接，以及主题选择、后台编辑。哈希或绑定存在不等于能登录，OAuth 与秘密须实际验证。
 
-当前没有外部搜索、Webhook、任务队列或跨请求整页缓存，不需要执行不存在的重建命令。未来启用时，须同时交付以下恢复能力，设计输入见[扩展候选](extensions-and-data.md)：
+停止核验服务及全部写入，切回管理连接后解除隔离：
 
-- 搜索从恢复主库建立新索引和匹配水位，不能沿用高于恢复点的旧索引水位。
-- 事件系统建立新 `stream_epoch`，旧投递默认隔离；核对远端结果后显式跳过或重放，重放沿用原事件 ID。
-- 旧 worker 和外部在途请求确认停止后才能重置租约；数据库回滚不等于第三方副作用回滚。
-- 统计不批量重放旧访问事件；整页缓存如已启用，按其失效协议重建。
+```sh
+python3 -B scripts/recovery.py release \
+  --output /secure/isolated/blog-2026-09-27 \
+  --docker-container blog-postgres --verification-confirmed
+```
 
-这些约束不构成当前外部集成的支持承诺。
+release 核对该次恢复的数据库标记，重检结构、Owner、当前媒体与引用及秘密名称；再次清空包括核验期间创建的所有会话，再解除数据库标记并写 RELEASED。它不恢复流量、不启动服务。重新配置运行/维护账号授权（dump 不含 ACL），取消 BLOG_RECOVERY_MODE，核对预约时间后再启动普通服务与维护任务；普通启动会补发到期内容。
 
-## 5. 已有证据与待验收
+三个 --*-confirmed 参数均为操作者声明，工具不能证明外部所有写入或流量已停止。业务流量重新开放仍由部署层控制。
 
-已有本机隔离演练记录：2026-09-23 完成核心内容、目录、Owner 与第二主题的数据库/文件往返，并验证缺少秘密引用时拒绝恢复。脚本单元测试覆盖清单损坏、路径、资源符号链接、秘密引用及清空会话调用。
+## 验证与部署证据
 
-该证据**未覆盖当前完整媒体恢复**，也不能代替当前全部迁移版本的生产演练。脚本的核心表白名单和内容计数已纳入评论与两类评论开关，但仍不能证明媒体表及原件完整。生产维护互斥、秘密备份、备份频率/保留期与 RPO/RTO 仍需按部署规格验收。
+无数据库测试：
 
-待验收项目统一在[路线图的上线清单](product-roadmap.md#3-里程碑与验收入口)跟踪；执行时至少留下以下证据：停止写入确实生效、备份失败不产生完成结果、空环境恢复的媒体/引用逐项核验、秘密或资源缺失保持隔离、会话全部失效，以及备份大小、维护时长、实际恢复点和恢复耗时。
+```sh
+PYTHONPATH=scripts python3 -B -m unittest scripts/test_recovery.py
+```
 
-## 6. 凭据泄露处置
+真实往返演练只允许 loopback 管理地址，随机创建并清理专用库和角色：
 
-本地密码契约见[身份与后台](identity-and-admin.md)与 [ADR-0009](adr/0009-local-password-authentication.md)。处置需同时使旧密码与旧会话失效：
+```sh
+cargo build -p server --bin blog
+# 提前设置 BLOG_TEST_ADMIN_URL；本机 PostgreSQL 工具可用时省略容器变量。
+BLOG_RECOVERY_TEST=1 BLOG_TEST_PG_CONTAINER=blog-postgres \
+PYTHONPATH=scripts python3 -B -m unittest scripts/test_recovery_postgres.py
+```
 
-1. 确认受影响账号、材料与时间范围，对泄露密码或密码哈希执行凭据轮换。
-2. 使用 `blog user passwd --user <用户名>` 的隐藏交互输入，或 `--password-stdin` 重置。它更新密码、递增账号版本并撤销会话；若仍有可用外部身份，可按最后登录方式保护规则用 `--clear` 暂停密码登录。
-3. 核对账号角色与外部绑定，保护有效 Owner。运行日志只用于辅助排查，不是完整业务审计，限流计数也不会持久保留。
-4. 若部署秘密也受影响，另行轮换 OAuth client secret 等秘密并更新受控备份。数据库保存的是 `secret_ref`，并不自动包含它指向的秘密值。
-5. 不通过恢复旧备份撤销泄露：旧备份可能重新引入口令哈希及旧会话。恢复后仍需应用必要的轮换，开放前清空会话。
+覆盖授权脚本、受限运行账号、维护权限、媒体各状态及多类型引用、多系列、评论树、会话撤销、隔离启动/调度、缺文件拒绝备份、引用缺失拒绝开放。测试不代替生产维护互斥、RPO/RTO 和故障中断验收；部署层记录备份大小、维护时长、恢复点和实际恢复耗时。
 
-密码不放在命令行参数或日志中；通过标准输入传入时也不得开启会回显输入的脚本追踪。
+2026-09-27 已在独立 PostgreSQL 18 临时实例完成上述往返演练，全量检查及前端生产构建通过；受限账号迁移并发和失败后释放锁另有集成测试。现有开发数据库未重建或切换。
 
-## 目标设计的恢复适配
+## 凭据泄露与后续外部系统
 
-新方案实施时需同步表清单、版本识别和数据核验，覆盖 media/media_refs、post_series、评论根关系、settings.comments、audit_logs 与 sessions.auth_version。核验媒体时包含回收站记录及其仍公开的文件；核验预约内容时先隔离发布任务，确认恢复时间与状态后再恢复调度。
+密码泄露时通过 blog user passwd 的隐藏输入或 --password-stdin 轮换；改密递增认证版本并撤销会话。核对角色、外部绑定与有效 Owner，OAuth 秘密独立轮换。不能靠恢复旧备份撤销泄露，恢复后必须保留必要轮换并清空会话。密码不放进参数、日志或脚本回显。
 
-恢复后继续清空旧会话。审计运行账号的只追加授权及独立维护身份需重新配置，因为现有 dump 使用 `--no-acl`；评论 IP 和审计保留期任务须在核验通过后启用。这些适配尚待实现与演练，不能由设计稿建表通过推定完成。
+目前没有外部搜索、Webhook、任务队列或跨请求整页缓存。以后引入时同步交付恢复隔离：搜索重建新索引/水位，事件建立新 stream_epoch 并显式核对/重放；数据库回退不能撤销外部副作用。详见[扩展候选](extensions-and-data.md)与 [ADR-0005](adr/0005-consistent-backup-and-recovery.md)。

@@ -525,6 +525,19 @@ export const themeSettingsApi = {
     }),
 };
 
+export interface RetentionSettings {
+  comment_ip_days: number;
+  comment_version: number;
+  audit_days: number;
+  audit_version: number;
+}
+
+export const retentionApi = {
+  get: (): Promise<RetentionSettings> => request("/api/admin/v1/settings/retention"),
+  save: (input: RetentionSettings): Promise<RetentionSettings> =>
+    request("/api/admin/v1/settings/retention", { method: "PUT", body: JSON.stringify(input) }),
+};
+
 /**
  * 媒体库。
  *

@@ -22,5 +22,9 @@ echo "==> admin SPA: tsc --noEmit + vitest"
 
 echo "==> backup/restore tool tests"
 PYTHONPATH=scripts python3 -B -m unittest scripts/test_recovery.py
+if [[ "${BLOG_RECOVERY_TEST:-}" == "1" ]]; then
+  cargo build -p server --bin blog
+  PYTHONPATH=scripts python3 -B -m unittest scripts/test_recovery_postgres.py
+fi
 
 echo "全部通过。"

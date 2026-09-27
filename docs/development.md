@@ -2,7 +2,7 @@
 
 本文负责本地运行、CLI、后台联调和检查流程。完整环境变量见[配置参考](configuration.md)，业务规则见[内容生命周期](content-lifecycle.md)，接口见[管理 API](admin-api.md)。后台组件、表单、查询缓存和测试约定见[后台开发指南](admin-development.md)。
 
-迁移链已重写为新的 [19 表初始基线](../migrations/postgres/0001_initial_schema.sql)，仅支持空库。身份、会话、媒体、内容、目录和评论已适配，保留期任务与恢复工具待收尾。不要把 `blog_schema.sql` 手工导入后再执行迁移；统一通过 `migrate` 建立 SQLx 记录。进度见[实施路线](product-roadmap.md#已采纳数据库设计的实施)。
+迁移链已重写为新的 [19 表初始基线](../migrations/postgres/0001_initial_schema.sql)，仅支持空库。身份、会话、媒体、内容、目录和评论已适配，保留期任务、独立授权和新结构恢复工具已接入；正式媒体物理清理及其余审计覆盖待收尾。不要把 `blog_schema.sql` 手工导入后再执行迁移；统一通过 `migrate` 建立 SQLx 记录。进度见[实施路线](product-roadmap.md#已采纳数据库设计的实施)。
 
 ## 环境准备
 
@@ -47,7 +47,7 @@ cargo test -p server --test password_http
 cargo test -p server --test command_assembly owner_bootstrap_uses_new_identity_baseline
 ```
 
-验收链路为：空库迁移、权限初始化、CLI 创建 Owner、密码登录、资料更新保持登录、改密撤销旧会话。`PUT /api/admin/v1/me/profile` 提交展示名、纯文本简介和必填 `expected_version`，详见[管理 API](admin-api.md)。资料表单尚未接入后台界面。恢复工具尚待适配；`check.sh` 全量通过属于后续批次的验收，不能用定向测试替代。
+验收链路为：空库迁移、权限初始化、CLI 创建 Owner、密码登录、资料更新保持登录、改密撤销旧会话。`PUT /api/admin/v1/me/profile` 提交展示名、纯文本简介和必填 `expected_version`，详见[管理 API](admin-api.md)。资料表单尚未接入后台界面。新库恢复会撤销全部会话；各批次定向测试不能替代 `check.sh` 的全量检查。
 
 媒体批次在同一独立实例验证：
 
@@ -70,7 +70,7 @@ cargo test -p server --test ssr --test syndication --test command_assembly
 (cd apps/admin && pnpm test && pnpm build)
 ```
 
-覆盖多系列和重复权重、目录删除保留文章、预约与取消、恢复统一回草稿、版本冲突、公开时间过滤和事务审计。admin_api 已包括评论 HTTP 测试。恢复工具尚未按新结构验收，定向测试不代替完整检查。
+覆盖多系列和重复权重、目录删除保留文章、预约与取消、恢复统一回草稿、版本冲突、公开时间过滤和事务审计。admin_api 已包括评论 HTTP 测试。新库恢复另有真实往返演练；定向测试不代替完整检查。
 
 评论批次在同一独立实例验证：
 
@@ -188,7 +188,7 @@ pnpm dev
 (cd apps/admin && pnpm build)
 ```
 
-`check.sh` 执行 Cargo 依赖边界检查及其测试、格式检查、Clippy、Rust 工作区测试、后台类型检查与测试、恢复工具测试；前端生产构建单独运行。CI 分为后端与前端两个 job，入口见 [ci.yml](../.github/workflows/ci.yml)。
+`check.sh` 执行 Cargo 依赖边界检查及其测试、格式检查、Clippy、Rust 工作区测试、后台类型检查与测试、恢复工具测试；前端生产构建单独运行。设置 `BLOG_RECOVERY_TEST=1` 可追加真实恢复演练，需 loopback 的 `BLOG_TEST_ADMIN_URL` 与匹配的 PostgreSQL 工具；容器工具设置 `BLOG_TEST_PG_CONTAINER`。演练随机创建并清理专用库/角色，不使用开发库，详见[恢复验证](operations-and-recovery.md#验证与部署证据)。CI 分为后端与前端两个 job，入口见 [ci.yml](../.github/workflows/ci.yml)。
 
 按改动范围也可运行：
 
