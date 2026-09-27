@@ -356,13 +356,12 @@ impl PublicSiteInteractor {
             .find_public_by_slug(slug)
             .await?
             .ok_or_else(|| UseCaseError::NotFound(format!("标签 {slug}")))?;
-        let page = page.max(1);
-        let offset = (page - 1) * TAG_PAGE_SIZE;
+        let (page, offset) = public_pagination(page, TAG_PAGE_SIZE)?;
         let (posts, total) = self
             .tags
             .list_public_posts_by_tag(slug, TAG_PAGE_SIZE, offset)
             .await?;
-        let total_pages = ((total + TAG_PAGE_SIZE - 1) / TAG_PAGE_SIZE).max(1);
+        let total_pages = public_total_pages(total, TAG_PAGE_SIZE);
         let view = TagView {
             tag_slug: tag.slug,
             tag_name: tag.name,
@@ -392,13 +391,12 @@ impl PublicSiteInteractor {
             .find_public_by_slug(slug)
             .await?
             .ok_or_else(|| UseCaseError::NotFound(format!("分类 {slug}")))?;
-        let page = page.max(1);
-        let offset = (page - 1) * CATEGORY_PAGE_SIZE;
+        let (page, offset) = public_pagination(page, CATEGORY_PAGE_SIZE)?;
         let (posts, total) = self
             .categories
             .list_public_posts_by_category(slug, CATEGORY_PAGE_SIZE, offset)
             .await?;
-        let total_pages = ((total + CATEGORY_PAGE_SIZE - 1) / CATEGORY_PAGE_SIZE).max(1);
+        let total_pages = public_total_pages(total, CATEGORY_PAGE_SIZE);
         let view = CategoryView {
             category_slug: category.slug,
             category_name: category.name,
@@ -428,13 +426,12 @@ impl PublicSiteInteractor {
             .find_public_by_slug(slug)
             .await?
             .ok_or_else(|| UseCaseError::NotFound(format!("系列 {slug}")))?;
-        let page = page.max(1);
-        let offset = (page - 1) * SERIES_PAGE_SIZE;
+        let (page, offset) = public_pagination(page, SERIES_PAGE_SIZE)?;
         let (posts, total) = self
             .series
             .list_public_posts_by_series(slug, SERIES_PAGE_SIZE, offset)
             .await?;
-        let total_pages = ((total + SERIES_PAGE_SIZE - 1) / SERIES_PAGE_SIZE).max(1);
+        let total_pages = public_total_pages(total, SERIES_PAGE_SIZE);
         let view = SeriesView {
             series_slug: series.slug,
             series_name: series.name,
@@ -577,5 +574,41 @@ impl PublicSiteInteractor {
              Sitemap: {}\n",
             seo::sitemap_url(&self.base_url)
         )
+    }
+}
+
+// Reserve room for every one-based series index on the requested page.
+fn public_pagination(page: i64, size: i64) -> Result<(i64, i64), UseCaseError> {
+    let page = page.max(1);
+    let end = page
+        .checked_mul(size)
+        .ok_or_else(|| UseCaseError::Invalid("页码过大".into()))?;
+    Ok((page, end - size))
+}
+
+fn public_total_pages(total: i64, size: i64) -> i64 {
+    (total / size + i64::from(total % size != 0)).max(1)
+}
+
+#[cfg(test)]
+mod pagination_tests {
+    use super::*;
+
+    #[test]
+    fn pagination_bounds_and_totals() {
+        for size in [TAG_PAGE_SIZE, CATEGORY_PAGE_SIZE, SERIES_PAGE_SIZE] {
+            assert_eq!(public_pagination(i64::MIN, size).unwrap(), (1, 0));
+            assert_eq!(public_pagination(3, size).unwrap(), (3, 2 * size));
+            let last = i64::MAX / size;
+            assert_eq!(public_pagination(last, size).unwrap().1, (last - 1) * size);
+            assert!(matches!(
+                public_pagination(last + 1, size),
+                Err(UseCaseError::Invalid(_))
+            ));
+            assert!(public_pagination(i64::MAX, size).is_err());
+            assert_eq!(public_total_pages(0, size), 1);
+            assert_eq!(public_total_pages(size + 1, size), 2);
+            assert!(public_total_pages(i64::MAX, size) > 0);
+        }
     }
 }

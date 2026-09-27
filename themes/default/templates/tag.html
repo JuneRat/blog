@@ -18,7 +18,7 @@
   {% else %}
   <p class="empty">这个标签下还没有公开文章。</p>
   {% endif %}
-  {% if tag.total_pages > 1 %}
+  {% if tag.total_pages > 1 or tag.page > 1 %}
   <nav class="pagination">
     {% if tag.page > 1 %}<a class="pagination-prev" href="/tags/{{ tag.tag_slug }}?page={{ tag.page - 1 }}">上一页</a>{% endif %}
     <span class="pagination-state">第 {{ tag.page }} / {{ tag.total_pages }} 页</span>

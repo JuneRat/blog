@@ -19,7 +19,7 @@
   {% else %}
   <p class="empty">这个系列下还没有公开文章。</p>
   {% endif %}
-  {% if series.total_pages > 1 %}
+  {% if series.total_pages > 1 or series.page > 1 %}
   <nav class="pagination">
     {% if series.page > 1 %}<a class="pagination-prev" href="/series/{{ series.series_slug }}?page={{ series.page - 1 }}">上一页</a>{% endif %}
     <span class="pagination-state">第 {{ series.page }} / {{ series.total_pages }} 页</span>

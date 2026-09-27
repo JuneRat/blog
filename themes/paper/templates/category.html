@@ -18,7 +18,7 @@
   {% else %}
   <p class="empty">这个分类下还没有公开文章。</p>
   {% endif %}
-  {% if category.total_pages > 1 %}
+  {% if category.total_pages > 1 or category.page > 1 %}
   <nav class="pagination">
     {% if category.page > 1 %}<a class="pagination-prev" href="/categories/{{ category.category_slug }}?page={{ category.page - 1 }}">上一页</a>{% endif %}
     <span class="pagination-state">第 {{ category.page }} / {{ category.total_pages }} 页</span>

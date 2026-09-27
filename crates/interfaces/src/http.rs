@@ -209,6 +209,9 @@ async fn tag_detail(
         Err(UseCaseError::NotFound(_)) => {
             (StatusCode::NOT_FOUND, "<h1>404</h1><p>标签不存在。</p>").into_response()
         }
+        Err(UseCaseError::Invalid(_)) => {
+            (StatusCode::BAD_REQUEST, "<h1>400</h1><p>页码过大。</p>").into_response()
+        }
         Err(e) => server_error(e),
     }
 }
@@ -228,6 +231,9 @@ async fn category_detail(
         Err(UseCaseError::NotFound(_)) => {
             (StatusCode::NOT_FOUND, "<h1>404</h1><p>分类不存在。</p>").into_response()
         }
+        Err(UseCaseError::Invalid(_)) => {
+            (StatusCode::BAD_REQUEST, "<h1>400</h1><p>页码过大。</p>").into_response()
+        }
         Err(e) => server_error(e),
     }
 }
@@ -246,6 +252,9 @@ async fn series_detail(
         Ok(html) => Html(html).into_response(),
         Err(UseCaseError::NotFound(_)) => {
             (StatusCode::NOT_FOUND, "<h1>404</h1><p>系列不存在。</p>").into_response()
+        }
+        Err(UseCaseError::Invalid(_)) => {
+            (StatusCode::BAD_REQUEST, "<h1>400</h1><p>页码过大。</p>").into_response()
         }
         Err(e) => server_error(e),
     }

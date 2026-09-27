@@ -516,6 +516,9 @@ async fn tag_page_lists_public_posts_and_hides_drafts_and_private() {
         .await
         .unwrap();
 
+    let (status, _) = get(&stack.router, "/tags/rust?page=9223372036854775807").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
     let (status, body) = get(&stack.router, "/tags/rust").await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert!(body.contains("Rust"), "标签页显示标签名：{body}");
@@ -592,9 +595,111 @@ async fn tag_page_paginates_public_posts() {
     let (status, body_far) = get(&stack.router, "/tags/rust?page=99").await;
     assert_eq!(status, StatusCode::OK);
     assert!(
+        body_far.contains(r#"href="/tags/rust?page=98""#),
+        "{body_far}"
+    );
+    assert!(
         body_far.contains("还没有公开文章"),
         "越界页为空页：{body_far}"
     );
+}
+
+#[tokio::test]
+async fn taxonomy_pagination_keeps_return_links_after_shrinking_to_one_page() {
+    let _g = SERIAL.lock().await;
+    for theme in ["../../themes/default", "../../themes/paper"] {
+        let stack = stack_with_theme(theme).await;
+        let tag = seed_tag(&stack, "分页标签", "pagination-tag").await;
+        let now = time::OffsetDateTime::now_utc();
+        let category = domain::content::Category::new(
+            "分页分类".into(),
+            domain::content::Slug::new("pagination-category").unwrap(),
+            None,
+            None,
+            now,
+        )
+        .unwrap()
+        .snapshot();
+        stack
+            .categories
+            .insert(
+                &domain::content::Category::reconstitute(category.clone()).unwrap(),
+                None.into(),
+            )
+            .await
+            .unwrap();
+        let series = domain::content::Series::new(
+            "分页系列".into(),
+            domain::content::Slug::new("pagination-series").unwrap(),
+            None,
+            now,
+        )
+        .unwrap()
+        .snapshot();
+        stack
+            .series
+            .insert(
+                &domain::content::Series::reconstitute(series.clone()).unwrap(),
+                None.into(),
+            )
+            .await
+            .unwrap();
+
+        let mut published = Vec::new();
+        for i in 1..=21 {
+            let mut command = cmd(&format!("pagination-{i}"), &format!("分页文章 {i}"));
+            command.tag_ids = vec![tag];
+            command.category_id = Some(category.id);
+            command.series = vec![application::content::SeriesPlacement {
+                series_id: series.id,
+                position: i,
+            }];
+            let post = stack.posts.create(&stack.author, command).await.unwrap();
+            stack
+                .posts
+                .publish(&stack.author, post.id, None)
+                .await
+                .unwrap();
+            published.push(post.id);
+        }
+
+        let directories = [
+            "/tags/pagination-tag",
+            "/categories/pagination-category",
+            "/series/pagination-series",
+        ];
+        for directory in directories {
+            let (status, body) = get(&stack.router, &format!("{directory}?page=2")).await;
+            assert_eq!(status, StatusCode::OK, "{theme} {directory}: {body}");
+            assert!(body.contains("第 2 / 2 页"), "{theme} {directory}: {body}");
+            assert_eq!(body.matches("class=\"post-item\"").count(), 1);
+        }
+
+        // 读者仍在第 2 页时撤文：三类目录都只剩 20 篇，第 2 页成为空页。
+        stack
+            .posts
+            .withdraw(&stack.author, published[0], None)
+            .await
+            .unwrap();
+        for directory in directories {
+            let (status, body) = get(&stack.router, &format!("{directory}?page=2")).await;
+            assert_eq!(status, StatusCode::OK, "{theme} {directory}: {body}");
+            assert_eq!(body.matches("class=\"post-item\"").count(), 0);
+            assert!(
+                body.contains(&format!(
+                    "class=\"pagination-prev\" href=\"{directory}?page=1\""
+                )),
+                "缩减为一页后仍能返回：{theme} {directory}: {body}"
+            );
+            assert!(!body.contains("pagination-next"));
+
+            let (status, body) = get(&stack.router, &format!("{directory}?page=1")).await;
+            assert_eq!(status, StatusCode::OK, "{theme} {directory}: {body}");
+            assert_eq!(body.matches("class=\"post-item\"").count(), 20);
+            assert!(!body.contains("class=\"pagination\""));
+        }
+        stack.pool.close().await;
+    }
 }
 
 #[tokio::test]
@@ -650,6 +755,9 @@ async fn category_page_lists_public_posts_and_hides_drafts() {
                 .unwrap();
         }
     }
+
+    let (status, _) = get(&stack.router, "/categories/tech?page=9223372036854775807").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
 
     let (status, body) = get(&stack.router, "/categories/tech").await;
     assert_eq!(status, StatusCode::OK, "{body}");
@@ -721,6 +829,9 @@ async fn series_page_lists_public_posts_in_reading_order() {
                 .unwrap();
         }
     }
+
+    let (status, _) = get(&stack.router, "/series/guide?page=9223372036854775807").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
 
     let (status, body) = get(&stack.router, "/series/guide").await;
     assert_eq!(status, StatusCode::OK, "{body}");

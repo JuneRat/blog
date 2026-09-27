@@ -1902,6 +1902,19 @@ async fn public_tag_page_lists_only_public_posts_and_paginates() {
         "草稿不出现在公开标签页"
     );
 
+    let (empty, total) = tag_query
+        .list_public_posts_by_tag("rust", 2, 4)
+        .await
+        .unwrap();
+    assert!(empty.is_empty());
+    assert_eq!(total, 3);
+    let (empty, total) = tag_query
+        .list_public_posts_by_tag("ghost", 2, 4)
+        .await
+        .unwrap();
+    assert!(empty.is_empty());
+    assert_eq!(total, 0);
+
     // 文章详情带标签引用。
     let detail = post_query
         .find_public_by_slug("tag-page-1")
@@ -2155,6 +2168,13 @@ async fn post_category_saved_in_same_transaction_and_public_page_filters() {
         .unwrap();
     assert_eq!((page1.len(), total1), (1, 1));
     assert_eq!(page1[0].slug, "cat-post");
+
+    let (empty, total) = cat_query
+        .list_public_posts_by_category("tech", 20, 40)
+        .await
+        .unwrap();
+    assert!(empty.is_empty());
+    assert_eq!(total, 1);
 
     // 详情带分类引用。
     let detail = query
@@ -2430,6 +2450,49 @@ async fn post_series_accepts_duplicate_positions_on_edit() {
         .unwrap();
     assert!(matches!(outcome, PostCommitOutcome::Saved(_)));
     assert_eq!(repo_of(&pool).members_of(s.id).await.unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn public_series_empty_page_keeps_total() {
+    let _g = SERIAL.lock().await;
+    let pool = fresh_database().await;
+    // 已发布样本使用数据库过去时间，避免宿主机/容器时钟偏差影响公开查询。
+    let published_at: OffsetDateTime = sqlx::query_scalar("SELECT now() - interval '1 second'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let author = seed_user(&pool, "author").await;
+    let series = seed_series(&pool, "Guide", "guide").await;
+    let repo = PostgresPostRepository::new(
+        pool.clone(),
+        Arc::new(infrastructure::RenderingRuntime::default()),
+    );
+    for i in 1..=3 {
+        let mut snapshot = draft_snapshot(author, &format!("series-page-{i}"));
+        snapshot.series = vec![domain::content::SeriesPlacement {
+            series_id: series.id,
+            position: i,
+        }];
+        let mut post = Post::reconstitute(snapshot).unwrap();
+        post.publish(published_at).unwrap();
+        repo.insert_post(&post, &[], None.into()).await.unwrap();
+    }
+    let query = infrastructure::PostgresPublishedSeriesQuery::new(pool.clone());
+    let (page, total) = query
+        .list_public_posts_by_series("guide", 2, 0)
+        .await
+        .unwrap();
+    assert_eq!(total, 3);
+    assert_eq!(
+        page.iter().map(|p| p.slug.as_str()).collect::<Vec<_>>(),
+        vec!["series-page-1", "series-page-2"]
+    );
+    let (page, total) = query
+        .list_public_posts_by_series("guide", 2, 4)
+        .await
+        .unwrap();
+    assert!(page.is_empty());
+    assert_eq!(total, 3);
 }
 
 #[tokio::test]

@@ -278,21 +278,27 @@ impl PublishedTagQuery for PostgresPublishedTagQuery {
     ) -> Result<(Vec<PublicPostSummary>, i64), UseCaseError> {
         let limit = limit.clamp(1, 100);
         let offset = offset.max(0);
-        // count(*) OVER() 让总数与页面来自同一快照：分页导航不会显示
-        // 「共 N 篇」却翻出第 N+1 篇（或反之）。
+        // 总数与页面来自同一快照，LEFT JOIN 保证空页也保留总数。
         let rows = sqlx::query(&format!(
             r#"
-            SELECT p.title, p.slug, p.excerpt, p.published_at,
+            WITH matching AS (
+            SELECT p.id, p.title, p.slug, p.excerpt, p.published_at,
                    COALESCE(NULLIF(u.display_name, ''), u.username) AS author_display,
-                   u.avatar_media_id AS author_avatar_media_id,
-                   count(*) OVER() AS total
+                   u.avatar_media_id AS author_avatar_media_id
             FROM tags t
             JOIN post_tags pt ON pt.tag_id = t.id
             JOIN posts p ON p.id = pt.post_id
             JOIN users u ON u.id = p.author_id
             WHERE t.slug = $1 AND {POST_PUBLIC_PREDICATE}
-            ORDER BY p.published_at DESC, p.id DESC
-            LIMIT $2 OFFSET $3
+            )
+            SELECT page.*, totals.total
+            FROM (SELECT count(*) AS total FROM matching) totals
+            LEFT JOIN (
+                SELECT * FROM matching
+                ORDER BY published_at DESC, id DESC
+                LIMIT $2 OFFSET $3
+            ) page ON true
+            ORDER BY page.published_at DESC, page.id DESC
             "#
         ))
         .bind(tag_slug)
@@ -302,7 +308,6 @@ impl PublishedTagQuery for PostgresPublishedTagQuery {
         .await
         .map_err(map_sqlx_error)?;
 
-        // 空页时窗口函数无行可聚合，总数即 0。
         let total = rows
             .first()
             .map(|row| row.try_get::<i64, _>("total").map_err(map_row_error))
@@ -311,7 +316,14 @@ impl PublishedTagQuery for PostgresPublishedTagQuery {
         let posts = rows
             .iter()
             .map(|row| {
-                Ok(PublicPostSummary {
+                if row
+                    .try_get::<Option<String>, _>("slug")
+                    .map_err(map_row_error)?
+                    .is_none()
+                {
+                    return Ok(None);
+                }
+                Ok(Some(PublicPostSummary {
                     title: row.try_get("title").map_err(map_row_error)?,
                     slug: row.try_get("slug").map_err(map_row_error)?,
                     excerpt: row.try_get("excerpt").map_err(map_row_error)?,
@@ -320,9 +332,12 @@ impl PublishedTagQuery for PostgresPublishedTagQuery {
                     author_avatar_media_id: row
                         .try_get("author_avatar_media_id")
                         .map_err(map_row_error)?,
-                })
+                }))
             })
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect::<Result<Vec<_>, UseCaseError>>()?
+            .into_iter()
+            .flatten()
+            .collect();
         Ok((posts, total))
     }
 
@@ -735,16 +750,23 @@ impl PublishedCategoryQuery for PostgresPublishedCategoryQuery {
         // 直接归属（不含子树）：父分类不自动成为文章的另一条直接分类关系。
         let rows = sqlx::query(&format!(
             r#"
-            SELECT p.title, p.slug, p.excerpt, p.published_at,
+            WITH matching AS (
+            SELECT p.id, p.title, p.slug, p.excerpt, p.published_at,
                    COALESCE(NULLIF(u.display_name, ''), u.username) AS author_display,
-                   u.avatar_media_id AS author_avatar_media_id,
-                   count(*) OVER() AS total
+                   u.avatar_media_id AS author_avatar_media_id
             FROM categories c
             JOIN posts p ON p.category_id = c.id
             JOIN users u ON u.id = p.author_id
             WHERE c.slug = $1 AND {POST_PUBLIC_PREDICATE}
-            ORDER BY p.published_at DESC, p.id DESC
-            LIMIT $2 OFFSET $3
+            )
+            SELECT page.*, totals.total
+            FROM (SELECT count(*) AS total FROM matching) totals
+            LEFT JOIN (
+                SELECT * FROM matching
+                ORDER BY published_at DESC, id DESC
+                LIMIT $2 OFFSET $3
+            ) page ON true
+            ORDER BY page.published_at DESC, page.id DESC
             "#
         ))
         .bind(category_slug)
@@ -762,7 +784,14 @@ impl PublishedCategoryQuery for PostgresPublishedCategoryQuery {
         let posts = rows
             .iter()
             .map(|row| {
-                Ok(PublicPostSummary {
+                if row
+                    .try_get::<Option<String>, _>("slug")
+                    .map_err(map_row_error)?
+                    .is_none()
+                {
+                    return Ok(None);
+                }
+                Ok(Some(PublicPostSummary {
                     title: row.try_get("title").map_err(map_row_error)?,
                     slug: row.try_get("slug").map_err(map_row_error)?,
                     excerpt: row.try_get("excerpt").map_err(map_row_error)?,
@@ -771,9 +800,12 @@ impl PublishedCategoryQuery for PostgresPublishedCategoryQuery {
                     author_avatar_media_id: row
                         .try_get("author_avatar_media_id")
                         .map_err(map_row_error)?,
-                })
+                }))
             })
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect::<Result<Vec<_>, UseCaseError>>()?
+            .into_iter()
+            .flatten()
+            .collect();
         Ok((posts, total))
     }
 
@@ -1208,17 +1240,24 @@ impl PublishedSeriesQuery for PostgresPublishedSeriesQuery {
         // 重复权重按文章 id 稳定排序；非公开成员保留关联但不出现在结果中。
         let rows = sqlx::query(&format!(
             r#"
-            SELECT p.title, p.slug, p.excerpt, p.published_at,
+            WITH matching AS (
+            SELECT p.id, ps.position, p.title, p.slug, p.excerpt, p.published_at,
                    COALESCE(NULLIF(u.display_name, ''), u.username) AS author_display,
-                   u.avatar_media_id AS author_avatar_media_id,
-                   count(*) OVER() AS total
+                   u.avatar_media_id AS author_avatar_media_id
             FROM series s
             JOIN post_series ps ON ps.series_id = s.id
             JOIN posts p ON p.id = ps.post_id
             JOIN users u ON u.id = p.author_id
             WHERE s.slug = $1 AND {POST_PUBLIC_PREDICATE}
-            ORDER BY ps.position ASC, p.id ASC
-            LIMIT $2 OFFSET $3
+            )
+            SELECT page.*, totals.total
+            FROM (SELECT count(*) AS total FROM matching) totals
+            LEFT JOIN (
+                SELECT * FROM matching
+                ORDER BY position ASC, id ASC
+                LIMIT $2 OFFSET $3
+            ) page ON true
+            ORDER BY page.position ASC, page.id ASC
             "#
         ))
         .bind(series_slug)
@@ -1236,7 +1275,14 @@ impl PublishedSeriesQuery for PostgresPublishedSeriesQuery {
         let posts = rows
             .iter()
             .map(|row| {
-                Ok(PublicPostSummary {
+                if row
+                    .try_get::<Option<String>, _>("slug")
+                    .map_err(map_row_error)?
+                    .is_none()
+                {
+                    return Ok(None);
+                }
+                Ok(Some(PublicPostSummary {
                     title: row.try_get("title").map_err(map_row_error)?,
                     slug: row.try_get("slug").map_err(map_row_error)?,
                     excerpt: row.try_get("excerpt").map_err(map_row_error)?,
@@ -1245,9 +1291,12 @@ impl PublishedSeriesQuery for PostgresPublishedSeriesQuery {
                     author_avatar_media_id: row
                         .try_get("author_avatar_media_id")
                         .map_err(map_row_error)?,
-                })
+                }))
             })
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect::<Result<Vec<_>, UseCaseError>>()?
+            .into_iter()
+            .flatten()
+            .collect();
         Ok((posts, total))
     }
 
