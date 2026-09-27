@@ -163,6 +163,7 @@ Post/Page 统一使用 draft、scheduled、published、archived 四种状态，�
 | oauth | 非敏感提供商配置及秘密引用；秘密本身留在部署秘密存储 |
 | comments | enabled 默认 true、ip_retention_days 默认 180 |
 | audit | retention_days 默认 180 |
+| installation | 仅安装流程写入的完成标记（安装 ID、首个 Owner ID）；无后台编辑入口，不存凭据 |
 
 `audit_logs` 保存 actor_id、来源 IP、action、target_type、文本 target_id、脱敏 metadata 对象及 created_at。目标既可能是 UUID，也可能是设置/权限键，因此 target_id 使用 text。操作者和目标是历史快照，不建立业务外键。
 

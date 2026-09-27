@@ -75,6 +75,10 @@ pub fn public_router(state: PublicSiteState, assets_dir: Option<PathBuf>) -> Rou
         .route("/sitemap.xml", get(sitemap))
         .route("/robots.txt", get(robots))
         .route("/healthz", get(healthz))
+        .route(
+            "/install",
+            get(|| async { axum::response::Redirect::to("/admin/") }),
+        )
         .route("/{slug}", get(page_detail))
         .fallback(not_found)
         .with_state(state);

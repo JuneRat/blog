@@ -11,23 +11,19 @@ Rust 模块化单体博客，公开站点使用服务端渲染，管理后台使
 准备 Rust stable、Node.js 22、pnpm（版本见 [package.json](apps/admin/package.json)）和 Docker。在仓库根目录运行：
 
 ```bash
-# 启动本地 PostgreSQL 18 并初始化数据库
+# 启动本地 PostgreSQL 18（已有数据时，另建空库用于安装）
 ./scripts/dev-db.sh
-cargo run -p server -- migrate
-
-# 创建首个管理账号；密码交互输入，不回显
-cargo run -p server -- user create sun --display-name "Sun"
-cargo run -p server -- user passwd --user sun
-cargo run -p server -- role assign --user sun --role owner
 
 # 构建后台并启动站点
 (cd apps/admin && pnpm install --frozen-lockfile && pnpm build)
 cargo run -p server -- serve --addr 127.0.0.1:8080
 ```
 
+未设置 `DATABASE_URL`、也没有本地安装配置时，首次访问会跳转到安装页。填入终端显示的安装码、PostgreSQL 空库地址、站点地址和管理员账号。程序初始化结构与权限，原子创建首个 Owner，然后直接进入登录页。配置保存在 `data/config.json`（权限 600），下一次启动自动读取；容器部署需持久挂载该文件所在目录。详见[首次安装](docs/installation.md)。
+
 站点入口为[公开站点](http://127.0.0.1:8080/)和[管理后台](http://127.0.0.1:8080/admin/)。已验证身份、媒体、内容发布与回收站、多系列、预约发布和评论；保留期维护、独立数据库权限和含媒体的隔离恢复已有验证，操作见[备份与恢复](docs/operations-and-recovery.md)。
 
-默认连接本地开发数据库，环境变量覆盖方式见[配置参考](docs/configuration.md)。程序不会自动加载 `.env`。旧结构不能原地升级；新迁移不会删除旧数据，需另建空库。
+已有 CLI 初始化的数据库继续显式设置 `DATABASE_URL`，不会触发安装向导；维护 CLI 仍可分步创建用户、设置密码和分配角色。环境变量覆盖方式见[配置参考](docs/configuration.md)。程序不会自动加载 `.env`。旧结构不能原地升级；新迁移不会删除旧数据，需另建空库。
 
 ## 开发与检查
 

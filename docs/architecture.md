@@ -33,6 +33,8 @@ flowchart TD
 
 [后台 SPA](../apps/admin/package.json) 不属于 Cargo workspace。它使用 React、TypeScript、Vite、Ant Design 和 TanStack Query，通过管理 API 访问同一应用层；公开主题与后台组件各自独立。
 
+首次安装属于部署生命周期：`application::installation` 定义输入、初始凭据校验及安装端口，`interfaces::http_install` 提供内嵌页面和 HTTP 边界，`server::installation` 保存本地配置并装配站点，`infrastructure::installation` 实现空库检查和原子权限/Owner 初始化。连接配置先安全落盘，数据库完成标记与 Owner 同事务提交；动态路由在成功后原地切换，随后才启动预约发布任务。故障续装与部署边界见[首次安装](installation.md)。
+
 ## 模块与公开契约
 
 [应用端口入口](../crates/application/src/ports/mod.rs) 使用私有子模块和显式导出；调用方使用 `application::ports`，不依赖端口文件布局。

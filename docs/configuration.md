@@ -1,6 +1,8 @@
 # 配置参考
 
-程序从进程环境读取配置，**不会自动加载 `.env`**。[.env.example](../.env.example) 用于查阅变量；需要由 shell、开发工具或部署环境注入。相对路径从进程工作目录解析，本地开发建议在仓库根目录启动。
+程序读取进程环境及安装向导保存的 `BLOG_CONFIG_FILE`，**不会自动加载 `.env`**。[.env.example](../.env.example) 用于查阅变量；需要由 shell、开发工具或部署环境注入。相对路径从进程工作目录解析，本地开发建议在仓库根目录启动。
+
+`DATABASE_URL`、`BLOG_PUBLIC_BASE_URL` 各自优先于配置文件中的对应值。`serve` 在没有数据库环境变量和配置文件时进入[首次安装](installation.md)；已有配置无效、文件无法读取、权限过宽或数据库连接失败时直接报错，不回退到安装页。其他业务 CLI 在两者均缺失时仍使用本地开发 DSN。`maintenance` 只读独立维护 DSN，不读取安装文件。
 
 ```bash
 export DATABASE_URL='postgres://blog:blog@127.0.0.1:5432/blog'
@@ -16,15 +18,16 @@ cargo run -p server -- serve
 
 | 变量 | 默认值 | 生效范围与用途 |
 |---|---|---|
-| `DATABASE_URL` | `postgres://blog:blog@127.0.0.1:5432/blog` | 所有业务命令的 PostgreSQL 连接 |
+| `DATABASE_URL` | 安装文件中的地址；CLI 最后回退到 `postgres://blog:blog@127.0.0.1:5432/blog` | 所有业务命令的 PostgreSQL 连接；显式提供时 serve 按已有部署启动 |
+| `BLOG_CONFIG_FILE` | `data/config.json` | 安装连接配置与安装 ID；安装写入权限 600，不能是符号链接；包括 CLI 在内共同读取 |
 | `BLOG_MAINTENANCE_DATABASE_URL` | 无，必填 | 仅 `maintenance`；使用独立受限维护角色，不回退到 DATABASE_URL |
 | `BLOG_RECOVERY_MODE` | `0` | `1`/`true` 启用核验模式，serve 只监听 loopback、停用自动发布；`0`/`false` 关闭，其余非空值拒绝 |
 | `BLOG_MIGRATIONS_DIR` | `migrations/postgres` | 所有业务命令使用的结构迁移目录 |
 | `BLOG_BIND` | `127.0.0.1:8080` | `serve` 监听地址；命令行 `--addr` 优先 |
-| `BLOG_PUBLIC_BASE_URL` | `http://127.0.0.1:8080` | `serve` 的公开基础 URL，供 OAuth 回调、canonical、RSS 和 sitemap 使用 |
+| `BLOG_PUBLIC_BASE_URL` | 安装文件中的地址，最后回退到 `http://127.0.0.1:8080` | `serve` 的公开基础 URL，供 OAuth 回调、canonical、RSS 和 sitemap 使用 |
 | `BLOG_TRUSTED_PROXIES` | 空 | `serve` 评论与业务审计来源 IP 可信代理列表，逗号分隔精确 IP，不支持 CIDR；仅解析可信 socket 对端提供的 X-Forwarded-For |
 | `BLOG_THEME_DIR` | `themes/default` | `serve` 的默认主题目录；从同级目录发现其他已安装主题 |
-| `BLOG_ADMIN_DIST` | `apps/admin/dist` | `serve` 的后台构建产物；目录不存在时不挂载 `/admin` |
+| `BLOG_ADMIN_DIST` | `apps/admin/dist` | `serve` 的后台构建产物；已有部署目录不存在时不挂载 `/admin`，首次安装要求存在 index.html |
 | `BLOG_MEDIA_DIR` | `data/media` | `serve` 与 `media cleanup-staging` 使用的文件根目录 |
 | `BLOG_SITE_TITLE` | `Sun's Blog` | `serve` 的站点标题回退值 |
 | `BLOG_SITE_DESCRIPTION` | `一个 Rust 博客` | `serve` 的站点描述回退值 |

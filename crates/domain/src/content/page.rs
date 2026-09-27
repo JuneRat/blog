@@ -20,6 +20,7 @@ use super::{Slug, SlugError, Visibility};
 /// Page 不得占用，创建、改名与发布都会复核；固定路由优先，Page 最后匹配。
 pub const RESERVED_ROOT_SLUGS: &[&str] = &[
     "admin",
+    "install",
     "api",
     "auth",
     "posts",

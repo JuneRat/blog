@@ -14,14 +14,15 @@
 
 ```bash
 ./scripts/dev-db.sh
-cargo run -p server -- migrate
 (cd apps/admin && pnpm install --frozen-lockfile && pnpm build)
 cargo run -p server -- serve
 ```
 
+首次安装时不要预先执行 `migrate` 或注入 `DATABASE_URL`；在[安装向导](installation.md)填写空库地址即可自动初始化。已有 CLI 初始化的数据库则显式设置 `DATABASE_URL` 后启动；下方保留这条受控维护路径。
+
 数据库脚本使用容器 `blog-postgres` 和持久卷 `blog-pgdata`，只绑定本机回环地址；已有容器时直接启动。数据库连接失败时先检查 Docker 和端口。改变 `BLOG_PG_PORT` 不会修改已有容器的端口映射，也不会自动更新应用连接串。
 
-所有业务命令都会先执行结构迁移；`migrate`、`post`、`publish-due` 和 `serve` 还会重建旧渲染版本的 HTML。用户、角色、OAuth 和媒体维护命令只加载各自需要的依赖，站点 URL 或主题配置错误不会阻止身份修复。详见[架构](architecture.md)。
+已配置数据库的业务命令先执行结构迁移；`migrate`、`post`、`publish-due` 和正常 `serve` 还会重建旧渲染版本的 HTML。安装模式只在验证安装表单与空库后执行结构迁移。用户、角色、OAuth 和媒体维护命令只加载各自需要的依赖，站点 URL 或主题配置错误不会阻止身份修复。详见[架构](architecture.md)。
 
 ## 新基线的隔离验证
 
@@ -47,7 +48,7 @@ cargo test -p server --test password_http
 cargo test -p server --test command_assembly owner_bootstrap_uses_new_identity_baseline
 ```
 
-验收链路为：空库迁移、权限初始化、CLI 创建 Owner、密码登录、资料更新保持登录、改密撤销旧会话。`PUT /api/admin/v1/me/profile` 提交展示名、纯文本简介和必填 `expected_version`，详见[管理 API](admin-api.md)。资料表单尚未接入后台界面。新库恢复会撤销全部会话；各批次定向测试不能替代 `check.sh` 的全量检查。
+验收链路为：空库迁移、权限初始化、CLI 创建 Owner、密码登录、资料更新保持登录、改密撤销旧会话。`PUT /api/admin/v1/me/profile` 提交展示名、纯文本简介和必填 `expected_version`，详见[管理 API](admin-api.md)。资料表单与账号启停已接入后台。`cargo test -p server --test installation_http` 另验证真实进程的首次安装、登录、重启续装、配置文件与原子 Owner 保护。新库恢复会撤销全部会话；各批次定向测试不能替代 `check.sh` 的全量检查。
 
 媒体批次在同一独立实例验证：
 

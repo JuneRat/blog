@@ -19,6 +19,17 @@
 
 评论管理位于 `/admin/comments`。评论接口、开关和版本规则见[评论 API](comments.md#接口)。
 
+## 首次安装
+
+仅安装模式提供以下入口，不使用管理会话。正常站点 `/api/install` 返回 404，`/install` 跳转 `/admin/`；完整启动条件见[首次安装](installation.md)。
+
+| 方法与路径 | 用途 / 载荷 |
+|---|---|
+| `GET /api/install` | `{ "database_configured": false, "public_base_url": null }`；续装时仅说明配置已保存，不返回数据库地址、账号密码或安装码 |
+| `POST /api/install` | `{ "database_url": "postgres://…", "public_base_url": "https://blog.example.com", "username": "sun", "password": "…" }`；成功返回 `{ "redirect": "/admin/" }` |
+
+POST 必须带启动终端显示的 `X-Install-Token`，并执行与其他写入相同的 Origin 检查。未知字段、无效 JSON、超过 16 KiB、弱密码、非空库等返回 400 `invalid_request`；错误安装码/跨源返回 403；同时正在处理安装时返回 429 `rate_limited`。响应均 no-store，包含请求编号。续装沿用已保存数据库和站点地址，输入不能覆盖；部署设置的 `BLOG_PUBLIC_BASE_URL` 优先。配置文件不保存账号明文密码或安装码，Owner 与安装完成审计同事务提交。
+
 ## 审计日志
 
 后台入口 `/admin/audit-logs`，接口 `GET /api/admin/v1/audit-logs`，独立要求 `audit.read`；默认仅 Owner 持有。未登录返回 401，无权限返回 403。不提供写入、编辑或清除接口。

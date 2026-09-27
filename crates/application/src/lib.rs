@@ -7,6 +7,7 @@ pub mod category;
 pub mod content;
 pub mod error;
 pub mod identity;
+pub mod installation;
 pub mod media;
 pub mod page;
 pub mod password;

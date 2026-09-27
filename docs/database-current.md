@@ -33,7 +33,9 @@ SQLx 为初始迁移包事务，因此该文件没有额外的 BEGIN/COMMIT。�
 - 角色分配变更递增 users.version，保持 auth_version；同一个 Cookie 的下一次请求读取最新权限。重复分配/移除不存在的分配不增版。
 - 角色和凭据变更使用统一身份事务锁，保留最后可登录 Owner 和最后登录方式保护。可登录 Owner 必须 active、未删除，并有本地密码或外部绑定；提供商真实可用性不在计数谓词内。
 
-本人资料通过 `PUT /api/admin/v1/me/profile` 更新展示名和简介，必填 expected_version，冲突拒绝覆盖。返回同一提交的新版本，登录态不变。后台 `/admin/profile` 已接入资料表单；`/admin/users` 已提供版本控制的账号启停。状态变更与角色操作共用身份排他锁，复核当前权限和最后可登录 Owner，递增 `version/auth_version`、撤销全部会话并追加审计；启用后旧会话仍失效，软删除账号不能在此恢复。首次安装流程尚未提供，Owner 仍通过受控 CLI 分步创建、设密码、分配角色。
+本人资料通过 `PUT /api/admin/v1/me/profile` 更新展示名和简介，必填 expected_version，冲突拒绝覆盖。返回同一提交的新版本，登录态不变。后台 `/admin/profile` 已接入资料表单；`/admin/users` 已提供版本控制的账号启停。状态变更与角色操作共用身份排他锁，复核当前权限和最后可登录 Owner，递增 `version/auth_version`、撤销全部会话并追加审计；启用后旧会话仍失效，软删除账号不能在此恢复。
+
+[首次安装](installation.md)已接入：未配置数据库时跳转安装页，终端安装码保护提交。初始化权限、内置角色、首个用户/密码/Owner、完成标记与审计同事务创建，用户 version/auth_version 均从 1 起；本地连接配置先保存，崩溃后按完成标记恢复。受控 CLI 仍可分步引导，已有数据不允许重新安装。`settings.installation` 是部署完成标记，没有普通设置编辑入口；不新增数据库表。
 
 ## 4. 内容、目录与并发关系
 

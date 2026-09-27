@@ -1,0 +1,230 @@
+//! Empty-database installation. No existing account, including a deleted or
+//! disabled Owner, can make a database eligible for installation again.
+
+use application::{
+    UseCaseError,
+    audit::AuditContext,
+    identity::{BUILTIN_ROLES, PERMISSION_REGISTRY},
+    installation::InitialOwner,
+};
+use sqlx::{PgPool, Postgres, Transaction};
+use uuid::Uuid;
+
+pub async fn connect(url: &str) -> Result<PgPool, UseCaseError> {
+    use sqlx::ConnectOptions;
+    let options = url
+        .parse::<sqlx::postgres::PgConnectOptions>()
+        .map_err(|_| UseCaseError::Invalid("PostgreSQL 连接地址无效".into()))?
+        .options([("statement_timeout", "30000"), ("lock_timeout", "10000")])
+        .disable_statement_logging();
+    sqlx::postgres::PgPoolOptions::new()
+        .max_connections(2)
+        .acquire_timeout(std::time::Duration::from_secs(5))
+        .connect_with(options)
+        .await
+        .map_err(|_| {
+            UseCaseError::Invalid(
+                "连接 PostgreSQL 失败，请检查地址、数据库名、账号密码和网络".into(),
+            )
+        })
+}
+
+const TABLES: &[&str] = &[
+    "users",
+    "sessions",
+    "oauth_accounts",
+    "roles",
+    "permissions",
+    "user_roles",
+    "role_permissions",
+    "media",
+    "categories",
+    "tags",
+    "series",
+    "posts",
+    "post_tags",
+    "post_series",
+    "pages",
+    "media_refs",
+    "comments",
+    "settings",
+    "audit_logs",
+];
+
+fn database_error(_: sqlx::Error) -> UseCaseError {
+    // Connection and PostgreSQL diagnostics may contain credentials or submitted
+    // values. Installation exposes only fixed, actionable messages.
+    UseCaseError::Invalid("无法检查或初始化数据库，请检查连接账号的建表和读写权限".into())
+}
+
+fn occupied() -> UseCaseError {
+    UseCaseError::Invalid("安装仅支持空数据库；该库已有数据或不属于本次安装，未作清理".into())
+}
+
+pub async fn is_complete(pool: &PgPool, installation_id: &str) -> Result<bool, UseCaseError> {
+    let exists: bool = sqlx::query_scalar("SELECT to_regclass('public.settings') IS NOT NULL")
+        .fetch_one(pool)
+        .await
+        .map_err(database_error)?;
+    if !exists {
+        return Ok(false);
+    }
+    let id: Option<String> =
+        sqlx::query_scalar("SELECT value->>'id' FROM public.settings WHERE key='installation'")
+            .fetch_optional(pool)
+            .await
+            .map_err(database_error)?
+            .flatten();
+    match id {
+        Some(id) if id != installation_id => Err(occupied()),
+        Some(_) => Ok(true),
+        None => Ok(false),
+    }
+}
+
+/// A saved local journal permits resuming only our empty baseline. Arbitrary
+/// tables, schemas, views and recovery databases are never migrated by setup.
+pub async fn check_target(pool: &PgPool, resume: bool) -> Result<(), UseCaseError> {
+    let (schema, comment): (Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT current_schema(), shobj_description(oid,'pg_database') FROM pg_database WHERE datname=current_database()",
+    ).fetch_one(pool).await.map_err(database_error)?;
+    if schema.as_deref() != Some("public") {
+        return Err(UseCaseError::Invalid("安装须使用 public schema".into()));
+    }
+    if comment.is_some_and(|s| s.starts_with("blog:recovery-isolated:")) {
+        return Err(UseCaseError::Invalid("恢复隔离数据库不能用于安装".into()));
+    }
+    let objects: Vec<(String, String, String)> = sqlx::query_as(
+        "SELECT n.nspname,c.relname,c.relkind::text FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace \
+         WHERE n.nspname <> 'information_schema' AND n.nspname !~ '^pg_' AND c.relkind IN ('r','p','v','m','f','S')",
+    ).fetch_all(pool).await.map_err(database_error)?;
+    if objects.is_empty() {
+        return Ok(());
+    }
+    if !resume
+        || objects.iter().any(|(schema, table, kind)| {
+            schema != "public"
+                || kind != "r"
+                || (table != "_sqlx_migrations" && !TABLES.contains(&table.as_str()))
+        })
+    {
+        return Err(occupied());
+    }
+    // Also check before migration: a pending journal must never authorize writes
+    // to a database populated after an interrupted setup.
+    for (_, table, _) in objects
+        .iter()
+        .filter(|(_, table, _)| table != "_sqlx_migrations")
+    {
+        let exists: bool =
+            sqlx::query_scalar(&format!("SELECT EXISTS(SELECT 1 FROM public.{table})"))
+                .fetch_one(pool)
+                .await
+                .map_err(database_error)?;
+        if exists {
+            return Err(occupied());
+        }
+    }
+    Ok(())
+}
+
+/// Permission seeds, the credential, ownership, completion marker and audit are
+/// one transaction. Failed/competing installs cannot leave a partial account.
+pub async fn initialize(
+    pool: &PgPool,
+    installation_id: &str,
+    owner: &InitialOwner,
+    audit: AuditContext,
+) -> Result<(), UseCaseError> {
+    let mut tx = pool.begin().await.map_err(database_error)?;
+    sqlx::query("SET LOCAL lock_timeout = '10s'")
+        .execute(&mut *tx)
+        .await
+        .map_err(database_error)?;
+    crate::persistence::acquire_identity_lock(&mut *tx)
+        .await
+        .map_err(database_error)?;
+    // Include content tables: even writes that do not take the identity lock
+    // must not race the final empty-database check.
+    sqlx::query(&format!(
+        "LOCK TABLE {} IN SHARE ROW EXCLUSIVE MODE",
+        TABLES.join(",")
+    ))
+    .execute(&mut *tx)
+    .await
+    .map_err(database_error)?;
+    ensure_empty(&mut tx).await?;
+    for permission in PERMISSION_REGISTRY {
+        sqlx::query("INSERT INTO permissions(code,name) VALUES($1,$2)")
+            .bind(permission.key)
+            .bind(permission.name)
+            .execute(&mut *tx)
+            .await
+            .map_err(database_error)?;
+    }
+    for role in BUILTIN_ROLES {
+        let id = Uuid::now_v7();
+        sqlx::query("INSERT INTO roles(id,code,name,description) VALUES($1,$2,$3,$4)")
+            .bind(id)
+            .bind(role.slug)
+            .bind(role.name)
+            .bind(role.description)
+            .execute(&mut *tx)
+            .await
+            .map_err(database_error)?;
+        sqlx::query(
+            "INSERT INTO role_permissions(role_id,permission_code) SELECT $1,unnest($2::text[])",
+        )
+        .bind(id)
+        .bind(role.permissions)
+        .execute(&mut *tx)
+        .await
+        .map_err(database_error)?;
+    }
+    sqlx::query(
+        "INSERT INTO users(id,username,password_hash,created_at,updated_at) VALUES($1,$2,$3,$4,$4)",
+    )
+    .bind(owner.id)
+    .bind(&owner.username)
+    .bind(&owner.password_hash)
+    .bind(owner.created_at)
+    .execute(&mut *tx)
+    .await
+    .map_err(database_error)?;
+    sqlx::query(
+        "INSERT INTO user_roles(user_id,role_id) SELECT $1,id FROM roles WHERE code='owner'",
+    )
+    .bind(owner.id)
+    .execute(&mut *tx)
+    .await
+    .map_err(database_error)?;
+    sqlx::query("INSERT INTO settings(key,value) VALUES('installation',$1)")
+        .bind(serde_json::json!({"id":installation_id,"owner_id":owner.id}))
+        .execute(&mut *tx)
+        .await
+        .map_err(database_error)?;
+    crate::audit::record_change(
+        &mut tx,
+        audit,
+        "installation.complete",
+        "user",
+        &owner.id.to_string(),
+        serde_json::json!({"role":"owner","version":1}),
+    )
+    .await?;
+    tx.commit().await.map_err(database_error)
+}
+
+async fn ensure_empty(tx: &mut Transaction<'_, Postgres>) -> Result<(), UseCaseError> {
+    for table in TABLES {
+        let exists: bool =
+            sqlx::query_scalar(&format!("SELECT EXISTS(SELECT 1 FROM public.{table})"))
+                .fetch_one(&mut **tx)
+                .await
+                .map_err(database_error)?;
+        if exists {
+            return Err(occupied());
+        }
+    }
+    Ok(())
+}

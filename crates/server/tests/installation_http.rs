@@ -1,0 +1,493 @@
+//! Real-process acceptance: first run, interrupted setup, atomic ownership,
+//! protected one-time entry and subsequent config-based startup.
+mod common;
+
+use reqwest::{Client, StatusCode};
+use serde_json::{Value, json};
+use std::{
+    path::{Path, PathBuf},
+    process::{Child, Command},
+    time::Duration,
+};
+
+const PASSWORD: &str = "A unique initial secret 728!";
+
+struct Server {
+    child: Child,
+    url: String,
+    token: String,
+    log: PathBuf,
+}
+impl Drop for Server {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+fn command(dir: &Path) -> Command {
+    let project = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_blog"));
+    command
+        .current_dir(&project)
+        .args(["serve", "--addr", "127.0.0.1:0"])
+        .env_remove("DATABASE_URL")
+        .env_remove("BLOG_PUBLIC_BASE_URL")
+        .env_remove("BLOG_SECURE_COOKIES")
+        .env_remove("BLOG_RECOVERY_MODE")
+        .env_remove("BLOG_TRUSTED_PROXIES")
+        .env("BLOG_CONFIG_FILE", dir.join("config.json"))
+        .env("BLOG_MIGRATIONS_DIR", project.join("migrations/postgres"))
+        .env("BLOG_THEME_DIR", project.join("themes/default"))
+        .env("BLOG_ADMIN_DIST", dir.join("admin"))
+        .env("BLOG_MEDIA_DIR", dir.join("media"))
+        .env("RUST_LOG", "warn");
+    command
+}
+
+async fn start(dir: &Path, broken_theme: bool) -> Server {
+    std::fs::create_dir_all(dir.join("admin")).unwrap();
+    std::fs::write(dir.join("admin/index.html"), "<h1>Admin bundle</h1>").unwrap();
+    let log = dir.join(format!("server-{}.log", uuid::Uuid::now_v7()));
+    let output = std::fs::File::create(&log).unwrap();
+    let mut command = command(dir);
+    if broken_theme {
+        command.env("BLOG_THEME_DIR", dir.join("missing-theme"));
+    }
+    let child = command
+        .stdout(output.try_clone().unwrap())
+        .stderr(output)
+        .spawn()
+        .unwrap();
+    let mut server = Server {
+        child,
+        url: String::new(),
+        token: String::new(),
+        log,
+    };
+    for _ in 0..200 {
+        let text = std::fs::read_to_string(&server.log).unwrap();
+        for line in text.lines() {
+            if let Some(url) = line.strip_prefix("首次安装：") {
+                server.url = url.trim_end_matches("/install").to_owned();
+            }
+            if let Some(url) = line.strip_prefix("公开站点已启动：") {
+                server.url = url.to_owned();
+            }
+            if let Some(token) = line.strip_prefix("安装码：") {
+                server.token = token.to_owned();
+            }
+        }
+        if !server.url.is_empty() && (text.contains("公开站点已启动") || !server.token.is_empty())
+        {
+            return server;
+        }
+        assert!(
+            server.child.try_wait().unwrap().is_none(),
+            "server exited: {text}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!(
+        "server did not start: {}",
+        std::fs::read_to_string(&server.log).unwrap()
+    );
+}
+
+fn client() -> Client {
+    Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap()
+}
+fn input(url: &str) -> Value {
+    json!({"database_url":url,"public_base_url":"http://example.test","username":"First-Writer","password":PASSWORD})
+}
+async fn submit(server: &Server, value: Value) -> reqwest::Response {
+    client()
+        .post(format!("{}/api/install", server.url))
+        .header("x-install-token", &server.token)
+        .header("origin", &server.url)
+        .json(&value)
+        .send()
+        .await
+        .unwrap()
+}
+async fn empty_database(name: &str) -> (sqlx::PgPool, String) {
+    let pool = common::fresh_database(name).await;
+    sqlx::raw_sql("DROP SCHEMA public CASCADE; CREATE SCHEMA public")
+        .execute(&pool)
+        .await
+        .unwrap();
+    (pool, common::test_db_url(&common::admin_url(), name))
+}
+async fn login(server: &Server) -> String {
+    let response = client()
+        .post(format!("{}/auth/login/password", server.url))
+        .header("origin", &server.url)
+        .json(&json!({"username":"first-writer","password":PASSWORD}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "{}",
+        response.text().await.unwrap()
+    );
+    response
+        .headers()
+        .get("set-cookie")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_owned()
+}
+
+#[tokio::test]
+async fn empty_database_installs_once_logs_in_and_restarts_from_saved_config() {
+    let (pool, url) = empty_database("blog_install_complete_test").await;
+    let dir = common::media_dir("installation-complete");
+    let server = start(&dir, false).await;
+    let response = client()
+        .get(format!("{}/", server.url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(response.headers()["location"], "/install");
+    let info = client()
+        .get(format!("{}/api/install", server.url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(info.headers()["cache-control"], "no-store");
+    assert_eq!(
+        info.json::<Value>().await.unwrap()["database_configured"],
+        false
+    );
+    let (first, second) = tokio::join!(submit(&server, input(&url)), submit(&server, input(&url)));
+    let statuses = [first.status(), second.status()];
+    assert_eq!(
+        statuses.iter().filter(|s| **s == StatusCode::OK).count(),
+        1,
+        "{statuses:?}"
+    );
+    assert!(
+        statuses.contains(&StatusCode::TOO_MANY_REQUESTS)
+            || statuses.contains(&StatusCode::NOT_FOUND)
+    );
+    let completed = if first.status() == StatusCode::OK {
+        first
+    } else {
+        second
+    };
+    assert_eq!(
+        completed.json::<Value>().await.unwrap()["redirect"],
+        "/admin/"
+    );
+    assert_eq!(
+        submit(&server, input(&url)).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    let cookie = login(&server).await;
+    let me = client()
+        .get(format!("{}/api/admin/v1/me", server.url))
+        .header("cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(me.status(), StatusCode::OK);
+    assert!(me.text().await.unwrap().contains("ownership.manage"));
+    let row: (i64, i64, String) = sqlx::query_as("SELECT version,auth_version,status FROM users")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(row, (1, 1, "active".into()));
+    let audits: (i64, Option<String>) = sqlx::query_as("SELECT count(*),min(host(ip_address)) FROM audit_logs WHERE action='installation.complete' AND actor_id IS NULL").fetch_one(&pool).await.unwrap();
+    assert_eq!(audits, (1, Some("127.0.0.1".into())));
+    let config = std::fs::read_to_string(dir.join("config.json")).unwrap();
+    assert!(!config.contains(PASSWORD));
+    assert!(!config.contains(&server.token));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(dir.join("config.json"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+    }
+    let log = std::fs::read_to_string(&server.log).unwrap();
+    assert!(!log.contains(&url));
+    assert!(!log.contains(PASSWORD));
+    drop(server);
+    let restarted = start(&dir, false).await;
+    assert!(restarted.token.is_empty());
+    let me = client()
+        .get(format!("{}/api/admin/v1/me", restarted.url))
+        .header("cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(me.status(), StatusCode::OK);
+    assert_eq!(
+        client()
+            .get(format!("{}/install", restarted.url))
+            .send()
+            .await
+            .unwrap()
+            .headers()["location"],
+        "/admin/"
+    );
+    assert_eq!(
+        submit(&restarted, input(&url)).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    drop(restarted);
+    // Even an unusable Owner must never reopen installation.
+    sqlx::query("UPDATE users SET status='disabled'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let disabled = start(&dir, false).await;
+    assert!(disabled.token.is_empty());
+    assert_eq!(
+        submit(&disabled, input(&url)).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    drop(disabled);
+    pool.close().await;
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn authorization_and_input_failures_never_save_configuration_or_mutate_database() {
+    let (pool, url) = empty_database("blog_install_guards_test").await;
+    let dir = common::media_dir("installation-guards");
+    let server = start(&dir, false).await;
+    let endpoint = format!("{}/api/install", server.url);
+    let missing = client()
+        .post(&endpoint)
+        .json(&input(&url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), StatusCode::FORBIDDEN);
+    let origin = client()
+        .post(&endpoint)
+        .header("x-install-token", &server.token)
+        .header("origin", "https://evil.invalid")
+        .json(&input(&url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(origin.status(), StatusCode::FORBIDDEN);
+    let mut weak = input(&url);
+    weak["password"] = json!("short");
+    assert_eq!(
+        submit(&server, weak).await.status(),
+        StatusCode::BAD_REQUEST
+    );
+    let mut malformed = input(&url);
+    malformed["public_base_url"] = json!("https://example.test/blog");
+    assert_eq!(
+        submit(&server, malformed).await.status(),
+        StatusCode::BAD_REQUEST
+    );
+    let mut extra = input(&url);
+    extra["role"] = json!("owner");
+    assert_eq!(
+        submit(&server, extra).await.status(),
+        StatusCode::BAD_REQUEST
+    );
+    let bad = submit(
+        &server,
+        input("postgres://secret-user:private-password@127.0.0.1:1/missing"),
+    )
+    .await;
+    assert_eq!(bad.status(), StatusCode::BAD_REQUEST);
+    let error = bad.text().await.unwrap();
+    assert!(!error.contains("private-password"));
+    assert!(!dir.join("config.json").exists());
+    let count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM information_schema.tables WHERE table_schema='public'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(count, 0);
+    drop(server);
+    pool.close().await;
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn interrupted_install_resumes_without_overwriting_saved_database_and_rolls_back_audit_failure()
+ {
+    let (pool, url) = empty_database("blog_install_resume_test").await;
+    let dir = common::media_dir("installation-resume");
+    let server = start(&dir, true).await;
+    let old_token = server.token.clone();
+    let response = submit(&server, input(&url)).await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert!(response.text().await.unwrap().contains("主题"));
+    assert!(dir.join("config.json").exists());
+    let users: i64 = sqlx::query_scalar("SELECT count(*) FROM users")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(users, 0);
+    drop(server);
+    sqlx::raw_sql("CREATE FUNCTION reject_install_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'audit unavailable'; END $$; CREATE TRIGGER reject_install BEFORE INSERT ON audit_logs FOR EACH ROW EXECUTE FUNCTION reject_install_audit();").execute(&pool).await.unwrap();
+    let server = start(&dir, false).await;
+    assert_ne!(server.token, old_token);
+    let old = client()
+        .post(format!("{}/api/install", server.url))
+        .header("x-install-token", old_token)
+        .json(&input(&url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(old.status(), StatusCode::FORBIDDEN);
+    let retry = input("postgres://ignored:ignored@127.0.0.1:1/ignored");
+    let response = submit(&server, retry.clone()).await;
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let counts: (i64,i64,i64) = sqlx::query_as("SELECT (SELECT count(*) FROM users),(SELECT count(*) FROM roles),(SELECT count(*) FROM settings)").fetch_one(&pool).await.unwrap();
+    assert_eq!(counts, (0, 0, 0));
+    sqlx::raw_sql(
+        "DROP TRIGGER reject_install ON audit_logs; DROP FUNCTION reject_install_audit()",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let response = submit(&server, retry).await;
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "{}",
+        response.text().await.unwrap()
+    );
+    login(&server).await;
+    drop(server);
+    pool.close().await;
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn existing_and_recovery_databases_are_refused_without_cleaning_them() {
+    let (pool, url) = empty_database("blog_install_existing_test").await;
+    sqlx::raw_sql("CREATE TABLE keep_me(value text); INSERT INTO keep_me VALUES('keep');")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let dir = common::media_dir("installation-existing");
+    let server = start(&dir, false).await;
+    let response = submit(&server, input(&url)).await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert!(response.text().await.unwrap().contains("空数据库"));
+    let value: String = sqlx::query_scalar("SELECT value FROM keep_me")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(value, "keep");
+    sqlx::raw_sql(
+        "COMMENT ON DATABASE blog_install_existing_test IS 'blog:recovery-isolated:test'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let response = submit(&server, input(&url)).await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert!(response.text().await.unwrap().contains("恢复隔离"));
+    assert!(!dir.join("config.json").exists());
+    drop(server);
+    pool.close().await;
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn broken_config_or_explicit_database_never_falls_back_to_an_open_installer() {
+    let dir = common::media_dir("installation-fail-closed");
+    let output = command(&dir)
+        .env("DATABASE_URL", "postgres://blog:blog@127.0.0.1:1/missing")
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("安装码"));
+    std::fs::write(dir.join("config.json"), "broken").unwrap();
+    let output = command(&dir).output().unwrap();
+    assert!(!output.status.success());
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("安装码"));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn competing_bootstraps_commit_exactly_one_owner_and_marker() {
+    let pool = common::fresh_database("blog_install_atomic_test").await;
+    let hasher = infrastructure::Argon2PasswordHasher::with_defaults();
+    let first = application::installation::InitialOwner::prepare(
+        "first-writer",
+        PASSWORD,
+        &hasher,
+        time::OffsetDateTime::now_utc(),
+    )
+    .await
+    .unwrap();
+    let second = application::installation::InitialOwner::prepare(
+        "second-writer",
+        PASSWORD,
+        &hasher,
+        time::OffsetDateTime::now_utc(),
+    )
+    .await
+    .unwrap();
+    let first_id = "a".repeat(64);
+    let second_id = "b".repeat(64);
+    let audit = application::audit::AuditContext::system();
+    let (a, b) = tokio::join!(
+        infrastructure::installation::initialize(&pool, &first_id, &first, audit),
+        infrastructure::installation::initialize(&pool, &second_id, &second, audit),
+    );
+    assert_ne!(a.is_ok(), b.is_ok());
+    let row: (i64,i64,i64) = sqlx::query_as("SELECT (SELECT count(*) FROM users),(SELECT count(*) FROM user_roles),(SELECT count(*) FROM audit_logs WHERE action='installation.complete')").fetch_one(&pool).await.unwrap();
+    assert_eq!(row, (1, 1, 1));
+    let marker: String =
+        sqlx::query_scalar("SELECT value->>'id' FROM settings WHERE key='installation'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(marker, if a.is_ok() { first_id } else { second_id });
+    pool.close().await;
+}
+
+#[tokio::test]
+async fn a_concurrently_created_config_is_never_overwritten_and_prevents_database_writes() {
+    let (pool, url) = empty_database("blog_install_config_race_test").await;
+    let dir = common::media_dir("installation-config-race");
+    let server = start(&dir, false).await;
+    let path = dir.join("config.json");
+    std::fs::write(&path, "another process owns this path").unwrap();
+    let response = submit(&server, input(&url)).await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        std::fs::read_to_string(path).unwrap(),
+        "another process owns this path"
+    );
+    let count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM information_schema.tables WHERE table_schema='public'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(count, 0);
+    drop(server);
+    pool.close().await;
+    std::fs::remove_dir_all(dir).unwrap();
+}

@@ -3,6 +3,7 @@
 
 mod assembly;
 mod config;
+mod installation;
 mod recovery;
 mod website;
 
@@ -50,7 +51,14 @@ async fn run(command: Command) -> Result<(), String> {
         );
         return Ok(());
     }
-    let database = config::DatabaseConfig::from_env();
+    let saved = config::read_saved(&config::config_path())?;
+    if let Command::Serve { addr } = &command
+        && std::env::var_os("DATABASE_URL").is_none()
+        && saved.is_none()
+    {
+        return installation::serve(addr.clone(), None).await;
+    }
+    let database = config::DatabaseConfig::from_env(saved.as_ref());
     let pool = infrastructure::connect(&database.url)
         .await
         .map_err(|error| format!("连接 PostgreSQL 失败：{error}"))?;
@@ -62,9 +70,19 @@ async fn run(command: Command) -> Result<(), String> {
     if matches!(command, Command::Serve { .. }) && isolated && !recovery_mode {
         return Err("恢复数据库尚未解除隔离；核验请设置 BLOG_RECOVERY_MODE=1，完成后用 recovery.py release 解除".into());
     }
+    if let Command::Serve { addr } = &command
+        && std::env::var_os("DATABASE_URL").is_none()
+        && let Some(saved) = saved.as_ref()
+        && !infrastructure::installation::is_complete(&pool, &saved.installation_id)
+            .await
+            .map_err(|e| e.to_string())?
+    {
+        pool.close().await;
+        return installation::serve(addr.clone(), Some(saved.clone())).await;
+    }
     // Validate the recovery listener before any migration or permission writes.
     let site_config = if let Command::Serve { addr } = &command {
-        let site = config::SiteConfig::from_env(addr.clone())?;
+        let site = config::SiteConfig::from_env(addr.clone(), saved.as_ref())?;
         if recovery_mode {
             recovery::check_bind(&site.bind)?;
         }
@@ -154,7 +172,10 @@ async fn serve(
     let listener = tokio::net::TcpListener::bind(bind)
         .await
         .map_err(|error| format!("绑定 {bind} 失败：{error}"))?;
-    println!("公开站点已启动：http://{bind}");
+    println!(
+        "公开站点已启动：http://{}",
+        listener.local_addr().map_err(|e| e.to_string())?
+    );
     let server = async {
         axum::serve(
             listener,
@@ -164,34 +185,32 @@ async fn serve(
         .await
         .map_err(|error| format!("服务退出：{error}"))
     };
-    let scheduler = async {
-        let mut ticks = tokio::time::interval(std::time::Duration::from_secs(30));
-        ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        loop {
-            ticks.tick().await;
-            loop {
-                match infrastructure::publish_due_content(
-                    &pool,
-                    time::OffsetDateTime::now_utc(),
-                    100,
-                )
-                .await
-                {
-                    Ok(count) if count >= 100 => continue,
-                    Ok(_) => break,
-                    Err(error) => {
-                        tracing::error!(%error,"到期内容发布失败，下次轮询重试");
-                        break;
-                    }
-                }
-            }
-        }
-    };
+    let scheduler = publish_scheduler(pool);
     if recovery_mode {
         println!("恢复核验模式：预约发布任务已停用。");
         return server.await;
     }
     tokio::select! { result=server=>result, _=scheduler=>unreachable!("scheduler loops until server shuts down") }
+}
+
+async fn publish_scheduler(pool: sqlx::PgPool) {
+    let mut ticks = tokio::time::interval(std::time::Duration::from_secs(30));
+    ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        ticks.tick().await;
+        loop {
+            match infrastructure::publish_due_content(&pool, time::OffsetDateTime::now_utc(), 100)
+                .await
+            {
+                Ok(count) if count >= 100 => continue,
+                Ok(_) => break,
+                Err(error) => {
+                    tracing::error!(%error,"到期内容发布失败，下次轮询重试");
+                    break;
+                }
+            }
+        }
+    }
 }
 
 async fn shutdown_signal() {

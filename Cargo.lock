@@ -1914,6 +1914,8 @@ dependencies = [
  "http-body-util",
  "infrastructure",
  "interfaces",
+ "reqwest",
+ "serde",
  "serde_json",
  "sqlx",
  "time",

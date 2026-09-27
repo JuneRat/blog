@@ -2,6 +2,7 @@
 //! 实现应用层端口并隐藏具体库类型；数据库事务对象不暴露给 application。
 
 pub mod audit;
+pub mod installation;
 mod media_refs;
 pub mod media_storage;
 pub mod oauth;
