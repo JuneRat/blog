@@ -189,7 +189,7 @@ pnpm dev
 (cd apps/admin && pnpm build)
 ```
 
-`check.sh` 执行 Cargo 依赖边界检查及其测试、格式检查、Clippy、Rust 工作区测试、后台类型检查与测试、恢复工具测试；前端生产构建单独运行。设置 `BLOG_RECOVERY_TEST=1` 可追加真实恢复演练，需 loopback 的 `BLOG_TEST_ADMIN_URL` 与匹配的 PostgreSQL 工具；容器工具设置 `BLOG_TEST_PG_CONTAINER`。演练随机创建并清理专用库/角色，不使用开发库，详见[恢复验证](operations-and-recovery.md#验证与部署证据)。CI 分为后端与前端两个 job，入口见 [ci.yml](../.github/workflows/ci.yml)。
+`check.sh` 执行 Cargo 依赖边界检查及其测试、格式检查、Clippy、Rust 工作区测试、后台类型检查与测试，以及恢复、媒体清理和验收工具测试；前端生产构建通常单独运行。设置 `BLOG_RECOVERY_TEST=1` 可追加真实恢复异常演练；设置 `BLOG_ACCEPTANCE_TEST=1` 则构建服务端和后台，执行[首次安装到恢复的全链路验收](acceptance.md)。两者都需要 loopback 的 `BLOG_TEST_ADMIN_URL` 与匹配的 PostgreSQL 工具；容器工具设置 `BLOG_TEST_PG_CONTAINER`。演练创建并清理专用库，不使用开发库；恢复角色与清理细节见[恢复验证](operations-and-recovery.md#验证与部署证据)。CI 包含后端、前端与全链路验收三个 job，入口见 [ci.yml](../.github/workflows/ci.yml)。
 
 按改动范围也可运行：
 

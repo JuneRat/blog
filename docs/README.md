@@ -16,6 +16,7 @@
 | 使用或开发原生评论 | [评论](comments.md) |
 | 开发公开页面、主题或 SEO | [主题与渲染](themes-and-rendering.md) |
 | 备份、恢复、清理正式媒体或处置账号问题 | [运维与恢复](operations-and-recovery.md) |
+| 从空库验收安装、写作、评论及备份恢复 | [新库全链路验收](acceptance.md) |
 | 确认交付范围或选择下一步工作 | [产品路线图](product-roadmap.md) |
 | 理解决策原因及替代方案 | [ADR 索引](adr/README.md) |
 
@@ -38,6 +39,7 @@
 | [管理 API](admin-api.md) | 当前路由、请求形态、版本与错误约定 |
 | [主题与渲染](themes-and-rendering.md) | 模板契约、HTML 派生、执行预算、主题与 SEO |
 | [运维与恢复](operations-and-recovery.md) | 当前工具的操作步骤、验证范围与限制 |
+| [新库全链路验收](acceptance.md) | 独立空库 HTTP 验收、资源清理、结果报告及 CI |
 | [产品路线图](product-roadmap.md) | 交付状态、后续里程碑和验收标准 |
 | [扩展与数据能力](extensions-and-data.md) | 尚未交付的扩展接口、格式和设计约束 |
 | [ADR](adr/README.md) | 决策背景、理由、后果与替代关系 |

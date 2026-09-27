@@ -54,8 +54,8 @@ jobs:
       - name: Tests
         run: cargo test --workspace
 
-      - name: Recovery and media cleanup tool tests
-        run: PYTHONPATH=scripts python3 -B -m unittest scripts/test_recovery.py scripts/test_media_cleanup.py
+      - name: Recovery, media cleanup and acceptance tool tests
+        run: PYTHONPATH=scripts python3 -B -m unittest scripts/test_recovery.py scripts/test_media_cleanup.py scripts/test_acceptance.py
 
       - name: Isolated recovery, database roles and media purge drill
         env:
@@ -93,3 +93,62 @@ jobs:
       # tsc --noEmit + vite build：类型与产物同时自检。
       - name: Build
         run: pnpm build
+
+      - name: Share the production admin build with acceptance
+        uses: actions/upload-artifact@v4
+        with:
+          name: admin-dist
+          path: apps/admin/dist
+          retention-days: 1
+
+  acceptance:
+    needs: web
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: blog
+          POSTGRES_PASSWORD: blog
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U blog -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      BLOG_TEST_ADMIN_URL: postgres://blog:blog@127.0.0.1:5432/postgres
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: admin-dist
+          path: apps/admin/dist
+
+      - name: Build server
+        run: cargo build -p server --bin blog
+
+      - name: First install, authoring, comments and isolated recovery
+        env:
+          BLOG_TEST_PG_CONTAINER: ${{ job.services.postgres.id }}
+        run: python3 -B scripts/acceptance.py --report acceptance-report.json
+
+      - name: Save acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: acceptance-report
+          path: acceptance-report.json
+          if-no-files-found: ignore
+          retention-days: 14
