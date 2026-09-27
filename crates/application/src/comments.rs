@@ -1,8 +1,8 @@
-use crate::{error::UseCaseError, identity::Actor};
+use crate::{error::UseCaseError, identity::Actor, ports::CommentRenderer};
 use async_trait::async_trait;
 pub use domain::comment::{CommentBody, CommentNickname, CommentStatus, ModerationAction};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::{net::IpAddr, sync::Arc};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -12,6 +12,11 @@ pub struct Comment {
     pub post_slug: String,
     pub post_title: String,
     pub parent_id: Option<Uuid>,
+    pub root_id: Option<Uuid>,
+    pub parent_nickname: Option<String>,
+    pub author_email: Option<String>,
+    pub ip_address: Option<String>,
+    pub content_html: String,
     pub nickname: String,
     pub body: String,
     pub is_author: bool,
@@ -19,7 +24,28 @@ pub struct Comment {
     pub version: i64,
     pub created_at: String,
 }
+/// Public responses cannot contain source text, contact details or moderation metadata.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PublicComment {
+    pub id: Uuid,
+    pub parent_id: Option<Uuid>,
+    pub root_id: Option<Uuid>,
+    pub parent_nickname: Option<String>,
+    pub nickname: String,
+    pub content_html: String,
+    pub is_author: bool,
+    pub placeholder: bool,
+    pub deleted: bool,
+    pub created_at: String,
+}
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PublicCommentPage {
+    pub items: Vec<PublicComment>,
+    pub total: i64,
+    pub enabled: bool,
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CommentPolicy {
     pub enabled: bool,
     pub version: i64,
@@ -36,7 +62,7 @@ pub struct SubmitComment {
     pub nickname: String,
     pub body: String,
     pub parent_id: Option<Uuid>,
-    pub request_id: Uuid,
+    pub email: Option<String>,
 }
 /// Validated write command; raw HTTP input cannot reach a repository.
 #[derive(Debug, Clone)]
@@ -49,23 +75,29 @@ pub struct NewComment {
     pub author: CommentAuthor,
     pub body: CommentBody,
     pub parent_id: Option<Uuid>,
-    pub request_id: Uuid,
+    pub email: Option<domain::identity::Email>,
 }
 
 #[derive(Clone, Copy)]
 pub struct CommentScope {
     pub user_id: Uuid,
     pub all: bool,
+    pub ip_address: Option<IpAddr>,
 }
 #[async_trait]
 pub trait CommentRepository: Send + Sync {
     async fn public_list(
         &self,
         slug: &str,
-        parent: Option<Uuid>,
+        root: Option<Uuid>,
         page: i64,
-    ) -> Result<CommentPage, UseCaseError>;
-    async fn submit(&self, slug: &str, client: &str, cmd: NewComment) -> Result<(), UseCaseError>;
+    ) -> Result<PublicCommentPage, UseCaseError>;
+    async fn submit(
+        &self,
+        slug: &str,
+        client: Option<IpAddr>,
+        cmd: NewComment,
+    ) -> Result<(), UseCaseError>;
     async fn list(
         &self,
         scope: CommentScope,
@@ -89,26 +121,25 @@ pub trait CommentRepository: Send + Sync {
 }
 pub struct CommentInteractor {
     repo: Arc<dyn CommentRepository>,
+    renderer: Arc<dyn CommentRenderer>,
 }
 impl CommentInteractor {
-    pub fn new(repo: Arc<dyn CommentRepository>) -> Self {
-        Self { repo }
+    pub fn new(repo: Arc<dyn CommentRepository>, renderer: Arc<dyn CommentRenderer>) -> Self {
+        Self { repo, renderer }
     }
     pub async fn public_list(
         &self,
         slug: &str,
-        parent: Option<Uuid>,
+        root: Option<Uuid>,
         page: i64,
-    ) -> Result<CommentPage, UseCaseError> {
-        self.repo
-            .public_list(slug, parent, checked_page(page)?)
-            .await
+    ) -> Result<PublicCommentPage, UseCaseError> {
+        self.repo.public_list(slug, root, checked_page(page)?).await
     }
     pub async fn submit(
         &self,
         slug: &str,
         actor: Option<&Actor>,
-        client: &str,
+        client: Option<IpAddr>,
         cmd: SubmitComment,
     ) -> Result<(), UseCaseError> {
         if let Some(actor) = actor {
@@ -121,6 +152,16 @@ impl CommentInteractor {
             ),
         };
         let body = CommentBody::new(&cmd.body).map_err(|e| UseCaseError::Invalid(e.into()))?;
+        let email = if actor.is_none() {
+            cmd.email
+                .as_deref()
+                .filter(|s| !s.trim().is_empty())
+                .map(domain::identity::Email::new)
+                .transpose()
+                .map_err(|e| UseCaseError::Invalid(e.to_string()))?
+        } else {
+            None
+        };
         self.repo
             .submit(
                 slug,
@@ -129,10 +170,15 @@ impl CommentInteractor {
                     author,
                     body,
                     parent_id: cmd.parent_id,
-                    request_id: cmd.request_id,
+                    email,
                 },
             )
             .await
+    }
+
+    pub async fn preview(&self, source: &str) -> Result<String, UseCaseError> {
+        let body = CommentBody::new(source).map_err(|e| UseCaseError::Invalid(e.into()))?;
+        self.renderer.render_comment(body.as_str()).await
     }
 
     pub async fn list(
@@ -156,33 +202,39 @@ impl CommentInteractor {
         id: Uuid,
         version: i64,
         action: ModerationAction,
+        ip_address: Option<IpAddr>,
     ) -> Result<(), UseCaseError> {
         actor.ensure_write_channel()?;
         if version < 1 {
             return Err(UseCaseError::Invalid("缺少评论版本".into()));
         }
-        self.repo.moderate(scope(actor)?, id, version, action).await
+        let mut scope = scope(actor)?;
+        scope.ip_address = ip_address;
+        self.repo.moderate(scope, id, version, action).await
     }
     pub async fn policy(
         &self,
         actor: &Actor,
         post: Option<Uuid>,
         update: Option<CommentPolicy>,
+        ip_address: Option<IpAddr>,
     ) -> Result<CommentPolicy, UseCaseError> {
         if update.is_some() {
             actor.ensure_write_channel()?;
         }
-        let scope = if post.is_none() {
+        let mut scope = if post.is_none() {
             if !actor.has_permission("settings.manage") {
                 return Err(UseCaseError::Forbidden);
             }
             CommentScope {
                 user_id: actor.user_id.0,
                 all: true,
+                ip_address,
             }
         } else {
             scope(actor)?
         };
+        scope.ip_address = ip_address;
         self.repo.policy(scope, post, update).await
     }
 }
@@ -194,6 +246,7 @@ fn scope(actor: &Actor) -> Result<CommentScope, UseCaseError> {
     Ok(CommentScope {
         user_id: actor.user_id.0,
         all,
+        ip_address: None,
     })
 }
 fn checked_page(page: i64) -> Result<i64, UseCaseError> {

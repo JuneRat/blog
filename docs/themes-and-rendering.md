@@ -2,7 +2,7 @@
 
 公开站点使用 MiniJinja SSR，已提供 [default](../themes/default/) 和 [paper](../themes/paper/) 两个主题。应用层定义引擎无关的异步渲染端口与公开数据 DTO；基础设施负责模板、Markdown 清洗、媒体引用提取、执行预算与缓存。后台 SPA 不使用这些主题。
 
-[目标数据库设计](database-design.md)已确认评论 HTML 持久化、系列多对多、定时公开条件及媒体链接独立公开，主题 DTO、评论组件和读取条件尚待同步。本文仍描述当前主题契约；新评论只能输出服务端清洗且版本匹配的 HTML，不能直接把现有纯文本字段改作 HTML 输出。
+[数据库设计](database-design.md)中的评论 HTML 持久化、系列多对多、定时公开条件及媒体链接独立公开均已接入主题读取。评论只能输出服务端清洗的 content_html，昵称和占位继续作为文本显示。
 
 ## 主题包与加载
 
@@ -116,7 +116,7 @@ sitemap 的 50,000 条限制是整个文件的预算：首页、文章、Page、
 
 ## 执行策略与实际预算
 
-[`RenderingRuntime`](../crates/infrastructure/src/render_executor.rs) 为正文写入和公开主题分配独立的许可池：正文默认 4 个，全部主题共用 16 个。主题查询等待不会占用正文许可。两者仍共用 Tokio 阻塞线程池，许可隔离并非独立 CPU 或线程池。应用只调用异步端口，不持有 Tokio 信号量，也不自行使用 `spawn_blocking` 或超时。
+[`RenderingRuntime`](../crates/infrastructure/src/render_executor.rs) 为正文写入、评论与公开主题分配独立的许可池：正文和评论各默认 4 个，全部主题共用 16 个。评论预览和主题查询等待不会占用正文许可。三者仍共用 Tokio 阻塞线程池，许可隔离并非独立 CPU 或线程池。应用只调用异步端口，不持有 Tokio 信号量，也不自行使用 `spawn_blocking` 或超时。
 
 主题主体先异步预取；同步 MiniJinja 渲染在阻塞池内运行。模板函数缺少请求缓存时，才从该阻塞线程通过 Tokio Handle 驱动带剩余截止时间的公开查询。桥接不会新建 runtime，也不在异步工作线程中 `block_on`；每次查询等待会占用当前渲染许可。
 
@@ -124,6 +124,7 @@ sitemap 的 50,000 条限制是整个文件的预算：首页、文章、Page、
 |---|---|---|
 | 主题渲染并发 | 16 | 全部公开主题共享 |
 | 正文渲染并发 | 4 | 正文转换与引用提取，独立于主题许可 |
+| 评论渲染并发 | 4 | 评论提交与匿名预览，独立于文章保存和主题许可 |
 | 等待许可 | 250ms | 超时返回渲染错误；没有另设排队人数上限 |
 | 等待执行结果 | 2s | 从提交阻塞任务开始计时，包含阻塞池调度等待 |
 | MiniJinja fuel | 200,000 | 每次模板渲染 |
@@ -150,4 +151,4 @@ sitemap 的 50,000 条限制是整个文件的预算：首页、文章、Page、
 
 ## 文章评论组件
 
-内置 default / paper 的文章模板通过 `data-comments-slug="{{ post.slug }}"` 挂载原生评论，加载 `/assets/comments.js` 与 `/assets/comments.css`。这些共享资源由 Rust 提供，文本使用 DOM `textContent`；不得改为正文的 `safe` 输出。公开列表和提交开关由同源 API 实时检查文章可见性。行为、分页及接口见[评论](comments.md)。
+内置 default / paper 的文章模板通过 `data-comments-slug="{{ post.slug }}"` 挂载原生评论，加载 `/assets/comments.js` 与 `/assets/comments.css`。这些共享资源由 Rust 提供；昵称、错误和占位使用 DOM `textContent`，正文仅将服务端受限渲染的 `content_html` 放入 HTML 节点，不使用源文回退。公开列表和提交开关由同源 API 实时检查文章可见性。行为、分页及接口见[评论](comments.md)。

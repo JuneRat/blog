@@ -2,7 +2,7 @@
 
 本文记录已确认的 PostgreSQL 18 目标设计，共 **19 张表：18 张业务表和 `sessions`**。字段、外键、CHECK 与索引以根目录的 [blog_schema.sql](../blog_schema.sql) 为准，选择理由见 [ADR-0016](adr/0016-confirmed-blog-schema.md)。
 
-**新建库基线、身份会话、媒体、内容与目录已接入。** `migrate` 现在执行新的 [0001_initial_schema.sql](../migrations/postgres/0001_initial_schema.sql)，原九个迁移已替换，仅支持空库或已应用新基线的库；检测到旧结构时退出，不自动清库。评论与恢复工具仍待切换，不能据此认为整站可运行。实际适配边界见[当前数据库实现](database-current.md)，后续验收见[路线图](product-roadmap.md#已采纳数据库设计的实施)。
+**新建库基线、身份会话、媒体、内容、目录与评论已接入。** `migrate` 现在执行新的 [0001_initial_schema.sql](../migrations/postgres/0001_initial_schema.sql)，原九个迁移已替换，仅支持空库或已应用新基线的库；检测到旧结构时退出，不自动清库。保留期任务与恢复工具仍待收尾，不能据此认为完整上线验收已完成。实际适配边界见[当前数据库实现](database-current.md)，后续验收见[路线图](product-roadmap.md#已采纳数据库设计的实施)。
 
 ## 1. 表清单与通用约定
 
@@ -134,7 +134,7 @@ Post/Page 统一使用 draft、scheduled、published、archived 四种状态，�
 
 评论状态为 pending、approved、spam、trash；所有新评论和后台回复默认 pending，从 spam/trash 恢复也统一回 pending。普通审核不通过可移入 trash，不保留 rejected 状态。
 
-删除只把本条评论移入 trash，不删除或重新审核子评论。已删除节点仍有可见后代时，公开列表保留“该评论已删除”占位，并隐藏原文与 HTML；根已删除也不应让已通过审核的后代消失。单独物理删除被 parent_id/root_id 引用的节点会被外键拒绝；文章永久删除时可以清理整棵树。
+删除只把本条评论移入 trash，不删除或重新审核子评论。已删除节点仍有可见后代时，公开列表保留“该评论已删除”占位，并隐藏昵称、作者标记、原文与 HTML；pending/spam 祖先仍有可见后代时保留匿名的“该评论暂不可用”占位。根已删除也不应让已通过审核的后代消失。单独物理删除被 parent_id/root_id 引用的节点会被外键拒绝；文章永久删除时可以清理整棵树。
 
 ### 输入与展示
 
@@ -203,4 +203,4 @@ Post/Page 统一使用 draft、scheduled、published、archived 四种状态，�
 | 评论设置 | comment_settings/post_comment_settings 独立表及版本 | settings.comments 与 posts.comments_enabled |
 | 审计和 IP | 无事务业务审计，评论只存来源摘要 | audit_logs 与可空主机 IP，默认 180 天保留策略 |
 
-已验证新初始迁移在隔离 PostgreSQL 18 中完整建表，并验证身份、会话、媒体软删除/引用同步和审计事务基础。根评论一致性、slug 锁定、定时任务、HTML 重建、媒体文件清理和审计授权仍需应用实现及相应验证；建表成功不代表这些流程已经交付。
+新初始迁移、身份会话、媒体引用、内容生命周期、多系列、评论根关系及 HTML 重建已在隔离 PostgreSQL 18 中验证。媒体正式文件清理、评论 IP/审计保留期、审计授权与完整恢复仍需实现和验收；各项交付边界以实施路线为准。

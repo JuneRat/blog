@@ -683,7 +683,7 @@ async fn saved_settings_take_effect_on_public_pages_immediately() {
 }
 
 #[tokio::test]
-async fn page_physical_delete_removes_public_entries_and_releases_slug() {
+async fn page_trash_hides_public_entries_and_only_purge_releases_slug() {
     let _g = SERIAL.lock().await;
     let stack = fresh_stack().await;
     let (editor_cookie, editor_csrf) = login_as(&stack, "editor").await;
@@ -722,8 +722,8 @@ async fn page_physical_delete_removes_public_entries_and_releases_slug() {
     let body = serde_json::json!({"expected_version":2});
     let (status, _) = page_write(
         &stack.router,
-        "DELETE",
-        path,
+        "POST",
+        &format!("{path}/trash"),
         &author_cookie,
         &author_csrf,
         body.clone(),
@@ -732,8 +732,8 @@ async fn page_physical_delete_removes_public_entries_and_releases_slug() {
     assert_eq!(status, StatusCode::FORBIDDEN);
     let (status, _) = page_write(
         &stack.router,
-        "DELETE",
-        path,
+        "POST",
+        &format!("{path}/trash"),
         &editor_cookie,
         "bad-csrf",
         body.clone(),
@@ -743,8 +743,8 @@ async fn page_physical_delete_removes_public_entries_and_releases_slug() {
     for stale in [serde_json::json!({"expected_version":1})] {
         let (status, error) = page_write(
             &stack.router,
-            "DELETE",
-            path,
+            "POST",
+            &format!("{path}/trash"),
             &editor_cookie,
             &editor_csrf,
             stale,
@@ -757,14 +757,14 @@ async fn page_physical_delete_removes_public_entries_and_releases_slug() {
 
     let (status, _) = page_write(
         &stack.router,
-        "DELETE",
-        path,
+        "POST",
+        &format!("{path}/trash"),
         &editor_cookie,
         &editor_csrf,
         body.clone(),
     )
     .await;
-    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(status, StatusCode::OK);
     assert_eq!(
         public_text(&stack.router, "/about").await.0,
         StatusCode::NOT_FOUND
@@ -779,14 +779,51 @@ async fn page_physical_delete_removes_public_entries_and_releases_slug() {
     assert_eq!(status, StatusCode::NOT_FOUND);
     let (status, _) = page_write(
         &stack.router,
-        "DELETE",
-        path,
+        "POST",
+        &format!("{path}/trash"),
         &editor_cookie,
         &editor_csrf,
         body.clone(),
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+
+    // A trashed page retains its address; only Owner may physically purge it.
+    let (status, _) = page_write(
+        &stack.router,
+        "POST",
+        "/api/admin/v1/pages",
+        &editor_cookie,
+        &editor_csrf,
+        serde_json::json!({"slug":"about","title":"Reserved","content":"Body"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let (status, _) = page_write(
+        &stack.router,
+        "POST",
+        &format!("{path}/purge"),
+        &editor_cookie,
+        &editor_csrf,
+        serde_json::json!({"expected_version":3}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    sqlx::query("INSERT INTO user_roles(user_id,role_id) SELECT u.id,r.id FROM users u CROSS JOIN roles r WHERE u.username='admin' AND r.code='owner'")
+        .execute(&stack.pool).await.unwrap();
+    let (owner_cookie, owner_csrf) = login_as(&stack, "admin").await;
+    for (version, expected) in [(2, StatusCode::CONFLICT), (3, StatusCode::NO_CONTENT)] {
+        let (status, _) = page_write(
+            &stack.router,
+            "POST",
+            &format!("{path}/purge"),
+            &owner_cookie,
+            &owner_csrf,
+            serde_json::json!({"expected_version":version}),
+        )
+        .await;
+        assert_eq!(status, expected);
+    }
 
     let (status, replacement) = page_write(
         &stack.router,
@@ -801,8 +838,8 @@ async fn page_physical_delete_removes_public_entries_and_releases_slug() {
     assert_ne!(replacement["id"], id);
     let (status, stale) = page_write(
         &stack.router,
-        "DELETE",
-        path,
+        "POST",
+        &format!("{path}/trash"),
         &editor_cookie,
         &editor_csrf,
         serde_json::json!({"expected_version":1}),

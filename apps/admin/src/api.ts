@@ -610,6 +610,7 @@ export const seriesApi = {
 
 export interface CommentItem {
   id: string; post_id: string; post_slug: string; post_title: string; parent_id: string | null;
+  root_id: string | null; parent_nickname: string | null; author_email: string | null; ip_address: string | null; content_html: string;
   nickname: string; body: string; is_author: boolean; status: string; version: number; created_at: string;
 }
 export interface CommentPage { items: CommentItem[]; total: number; enabled: boolean }
@@ -622,21 +623,13 @@ export const commentsApi = {
     if (post) params.set('post_id', post);
     return request<CommentPage>(`/api/admin/v1/comments?${params}`);
   },
-  moderate: (item: CommentItem, status: string | null) => request<void>(`/api/admin/v1/comments/${item.id}`, {
-    method: 'POST', body: JSON.stringify({ version: item.version, ...(status ? { status } : { delete: true }) }),
+  moderate: (item: CommentItem, status: string) => request<void>(`/api/admin/v1/comments/${item.id}`, {
+    method: 'POST', body: JSON.stringify({ version: item.version, status }),
   }),
-  reply: (item: CommentItem, body: string, requestId: string) => request<{message: string}>(`/api/v1/posts/${encodeURIComponent(item.post_slug)}/comments`, {
-    method: 'POST', body: JSON.stringify({ nickname: '作者', body, parent_id: item.id, request_id: requestId }),
+  reply: (item: CommentItem, body: string) => request<{message: string}>(`/api/v1/posts/${encodeURIComponent(item.post_slug)}/comments`, {
+    method: 'POST', body: JSON.stringify({ nickname: '作者', body, parent_id: item.id }),
   }),
+  preview: (body: string) => request<{ content_html: string }>('/api/v1/comments/preview', { method: 'POST', body: JSON.stringify({ body }) }),
   policy: (post?: string) => request<CommentPolicy>(commentPolicyPath(post)),
   savePolicy: (policy: CommentPolicy, post?: string) => request<CommentPolicy>(commentPolicyPath(post), { method: 'PUT', body: JSON.stringify(policy) }),
 };
-
-/** UUIDv4 using getRandomValues, including non-HTTPS local previews. */
-export function commentRequestId(): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(16));
-  bytes[6] = (bytes[6] & 15) | 64;
-  bytes[8] = (bytes[8] & 63) | 128;
-  const hex = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
-  return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;
-}

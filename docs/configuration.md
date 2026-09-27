@@ -10,7 +10,7 @@ cargo run -p server -- serve
 
 当前配置入口是 [server/config.rs](../crates/server/src/config.rs)，命令依赖装配见[架构](architecture.md)。
 
-已采纳设计新增 `settings.comments`、`settings.audit` 及默认 180 天的评论 IP/审计保留策略，见[目标设置设计](database-design.md#6-分组设置与审计)。对应管理入口、可信代理配置与维护任务尚未实现，不属于下表已支持的运行配置。
+评论开关已使用 `settings.comments`，可信代理配置已支持。`settings.audit`、评论 IP/审计保留期配置和默认 180 天维护任务仍待实现，见[目标设置设计](database-design.md#6-分组设置与审计)。
 
 ## 环境变量
 
@@ -20,6 +20,7 @@ cargo run -p server -- serve
 | `BLOG_MIGRATIONS_DIR` | `migrations/postgres` | 所有业务命令使用的结构迁移目录 |
 | `BLOG_BIND` | `127.0.0.1:8080` | `serve` 监听地址；命令行 `--addr` 优先 |
 | `BLOG_PUBLIC_BASE_URL` | `http://127.0.0.1:8080` | `serve` 的公开基础 URL，供 OAuth 回调、canonical、RSS 和 sitemap 使用 |
+| `BLOG_TRUSTED_PROXIES` | 空 | `serve` 评论来源 IP 可信代理列表，逗号分隔精确 IP，不支持 CIDR；仅解析可信 socket 对端提供的 X-Forwarded-For |
 | `BLOG_THEME_DIR` | `themes/default` | `serve` 的默认主题目录；从同级目录发现其他已安装主题 |
 | `BLOG_ADMIN_DIST` | `apps/admin/dist` | `serve` 的后台构建产物；目录不存在时不挂载 `/admin` |
 | `BLOG_MEDIA_DIR` | `data/media` | `serve` 与 `media cleanup-staging` 使用的文件根目录 |
@@ -56,7 +57,7 @@ OAuth 提供商通过 `secret_ref` 引用任意命名的环境变量，例如 `I
 
 监听地址和公开地址分别配置：反向代理终止 TLS 时，程序可以监听 `127.0.0.1:8080`，公开地址设为 `https://blog.example.com`，cookie 默认随公开地址启用 Secure。
 
-浏览器写请求的 Origin 检查是另一条独立路径：当前实现将提供的 Origin 与请求 Host 比较，允许 `http://{Host}` 或 `https://{Host}`；未提供 Origin 时不执行该项检查，已认证写请求仍要求 CSRF token。代理须保持与浏览器入口一致的 Host。当前来源地址限流读取 socket 对端，不信任 `X-Forwarded-For`；真实客户端转发识别仍属后续范围。认证规则见[身份与权限](identity-and-admin.md)。
+浏览器写请求的 Origin 检查是另一条独立路径：后台将提供的 Origin 与请求 Host 比较，允许 `http://{Host}` 或 `https://{Host}`；未提供 Origin 时不执行该项检查，已认证写请求仍要求 CSRF token。代理须保持与浏览器入口一致的 Host。认证登录限流仍读取 socket 对端。评论提交/预览额外要求 Origin 与配置的公开地址精确匹配；评论来源 IP 支持 `BLOG_TRUSTED_PROXIES`，从 X-Forwarded-For 右侧剥离可信代理，非法或未知来源留空，规则见[评论](comments.md#请求与来源地址)。认证规则见[身份与权限](identity-and-admin.md)。
 
 ## 命令配置边界
 

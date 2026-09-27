@@ -26,7 +26,7 @@ pub use media::{
     ImageInspector, MediaChangeOutcome, MediaContentKind, MediaRefGuard, MediaRepository,
     MediaStorage, MediaUsageRow, MediaWithUsage, SITE_MEDIA_CONTENT_ID,
 };
-pub use rendering::{ContentRenderer, RenderedContent, ThemeRenderer};
+pub use rendering::{CommentRenderer, ContentRenderer, RenderedContent, ThemeRenderer};
 pub use runtime::{Clock, HealthCheck, SaveOutcome};
 pub use site::{
     SettingsStore, SiteSettingsRecord, SiteSettingsValue, ThemeSettingsRecord, ThemeSettingsStore,

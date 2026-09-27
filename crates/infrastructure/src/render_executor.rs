@@ -1,4 +1,4 @@
-//! 渲染执行策略：分离正文与主题并发预算、有限等待与阻塞任务隔离。
+//! 渲染执行策略：分离正文、评论与主题并发预算、有限等待与阻塞任务隔离。
 //!
 //! 超时或调用者取消不会终止已经开始的阻塞任务；许可随任务持有到真正完成，
 //! 防止客户端反复取消请求后绕过并发上限。只缓存纯 Markdown 结果，不缓存主题数据。
@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use application::error::UseCaseError;
-use application::ports::{ContentRenderer, RenderedContent, ThemeRenderer};
+use application::ports::{CommentRenderer, ContentRenderer, RenderedContent, ThemeRenderer};
 use application::public_site::{
     CategoryView, PageView, PostCard, PostView, SeriesView, SiteInfo, TagView,
 };
@@ -25,6 +25,8 @@ pub struct RenderingLimits {
     pub concurrency: usize,
     /// Reserved for content writes; public traffic cannot acquire these slots.
     pub content_concurrency: usize,
+    /// Anonymous comment writes and previews cannot consume article write slots.
+    pub comment_concurrency: usize,
     pub queue_timeout: Duration,
     pub execution_timeout: Duration,
     pub markdown_cache_entries: usize,
@@ -37,6 +39,7 @@ impl Default for RenderingLimits {
         Self {
             concurrency: 16,
             content_concurrency: 4,
+            comment_concurrency: 4,
             queue_timeout: Duration::from_millis(250),
             execution_timeout: Duration::from_secs(2),
             markdown_cache_entries: 64,
@@ -97,6 +100,7 @@ impl MarkdownCache {
 #[derive(Clone, Copy)]
 enum RenderPool {
     Content,
+    Comment,
     Theme,
 }
 
@@ -104,10 +108,11 @@ struct RuntimeState {
     limits: RenderingLimits,
     theme_slots: Arc<Semaphore>,
     content_slots: Arc<Semaphore>,
+    comment_slots: Arc<Semaphore>,
     markdown: Mutex<MarkdownCache>,
 }
 
-/// 进程内共享实例：正文写入与公开主题各自使用独立的并发许可。
+/// 进程内共享实例：正文写入、评论预览/提交与公开主题各有独立并发许可。
 #[derive(Clone)]
 pub struct RenderingRuntime {
     state: Arc<RuntimeState>,
@@ -125,6 +130,8 @@ impl RenderingRuntime {
             || limits.concurrency > Semaphore::MAX_PERMITS
             || limits.content_concurrency == 0
             || limits.content_concurrency > Semaphore::MAX_PERMITS
+            || limits.comment_concurrency == 0
+            || limits.comment_concurrency > Semaphore::MAX_PERMITS
             || limits.queue_timeout.is_zero()
             || limits.execution_timeout.is_zero()
         {
@@ -136,6 +143,7 @@ impl RenderingRuntime {
             state: Arc::new(RuntimeState {
                 theme_slots: Arc::new(Semaphore::new(limits.concurrency)),
                 content_slots: Arc::new(Semaphore::new(limits.content_concurrency)),
+                comment_slots: Arc::new(Semaphore::new(limits.comment_concurrency)),
                 limits,
                 markdown: Mutex::new(MarkdownCache::default()),
             }),
@@ -161,6 +169,7 @@ impl RenderingRuntime {
     {
         let slots = match pool {
             RenderPool::Content => &self.state.content_slots,
+            RenderPool::Comment => &self.state.comment_slots,
             RenderPool::Theme => &self.state.theme_slots,
         };
         let queued = Instant::now();
@@ -207,6 +216,21 @@ impl RenderingRuntime {
                 Err(UseCaseError::Render("渲染执行超时".into()))
             }
         }
+    }
+}
+
+#[async_trait]
+impl CommentRenderer for RenderingRuntime {
+    async fn render_comment(&self, source: &str) -> Result<String, UseCaseError> {
+        domain::comment::validate_body(source).map_err(|e| UseCaseError::Invalid(e.into()))?;
+        let source = source.to_owned();
+        self.execute(RenderPool::Comment, "comment", move || {
+            let html = crate::comment_rendering::render(&source);
+            application::rendering_budget::validate_html(&html)
+                .map_err(|e| UseCaseError::Invalid(e.to_string()))?;
+            Ok(html)
+        })
+        .await
     }
 }
 
@@ -361,6 +385,7 @@ mod tests {
         RenderingRuntime::with_limits(RenderingLimits {
             concurrency: 1,
             content_concurrency: 1,
+            comment_concurrency: 1,
             queue_timeout: Duration::from_millis(25),
             execution_timeout: Duration::from_millis(100),
             markdown_cache_entries: 2,
@@ -370,34 +395,37 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn saturated_public_theme_workers_leave_content_capacity_available() {
+    async fn saturated_public_workers_leave_article_write_capacity_available() {
         let runtime = RenderingRuntime::default();
-        let mut workers = Vec::new();
-        let mut releases = Vec::new();
-        for _ in 0..16 {
-            let (started, ready) = tokio::sync::oneshot::channel();
-            let (release, blocked) = std::sync::mpsc::channel();
-            releases.push(release);
-            let worker_runtime = runtime.clone();
-            workers.push(tokio::spawn(async move {
-                worker_runtime
-                    .execute(RenderPool::Theme, "theme.waiting", move || {
-                        let _ = started.send(());
-                        let _ = blocked.recv();
-                        Ok(())
-                    })
-                    .await
-            }));
-            ready.await.unwrap();
-        }
-        assert_eq!(runtime.state.theme_slots.available_permits(), 0);
-        let content = runtime.render_content("正文写入仍可运行").await;
-        for release in releases {
-            let _ = release.send(());
-        }
-        assert!(content.unwrap().content_html.contains("正文写入仍可运行"));
-        for worker in workers {
-            worker.await.unwrap().unwrap();
+        for (pool, count) in [(RenderPool::Theme, 16), (RenderPool::Comment, 4)] {
+            let mut workers = Vec::new();
+            let mut releases = Vec::new();
+            for _ in 0..count {
+                let (started, ready) = tokio::sync::oneshot::channel();
+                let (release, blocked) = std::sync::mpsc::channel();
+                releases.push(release);
+                let worker_runtime = runtime.clone();
+                workers.push(tokio::spawn(async move {
+                    worker_runtime
+                        .execute(pool, "public.waiting", move || {
+                            let _ = started.send(());
+                            let _ = blocked.recv();
+                            Ok(())
+                        })
+                        .await
+                }));
+                ready.await.unwrap();
+            }
+            let content = runtime
+                .render_content(&format!("正文写入仍可运行 {count}"))
+                .await;
+            for release in releases {
+                let _ = release.send(());
+            }
+            assert!(content.unwrap().content_html.contains("正文写入仍可运行"));
+            for worker in workers {
+                worker.await.unwrap().unwrap();
+            }
         }
     }
 

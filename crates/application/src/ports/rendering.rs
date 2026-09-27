@@ -23,6 +23,12 @@ pub trait ContentRenderer: Send + Sync {
     async fn render_content(&self, source: &str) -> Result<RenderedContent, UseCaseError>;
 }
 
+/// 受限评论 Markdown；预览与持久化使用相同规则，不生成媒体引用。
+#[async_trait]
+pub trait CommentRenderer: Send + Sync {
+    async fn render_comment(&self, source: &str) -> Result<String, UseCaseError>;
+}
+
 /// 主题渲染端口：入站层不得绕过此端口直接使用模板引擎。
 ///
 /// 每个方法都接收本次渲染的 [`SeoMeta`]：canonical/title/description 由应用层

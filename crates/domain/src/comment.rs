@@ -1,9 +1,9 @@
-//! Comments are plain text, independent of the post editing aggregate.
+//! Comments store restricted Markdown independently of the post editing aggregate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommentStatus {
     Pending,
     Approved,
-    Rejected,
+    Trash,
     Spam,
 }
 impl CommentStatus {
@@ -11,16 +11,19 @@ impl CommentStatus {
         match value {
             "pending" => Ok(Self::Pending),
             "approved" => Ok(Self::Approved),
-            "rejected" => Ok(Self::Rejected),
+            "trash" => Ok(Self::Trash),
             "spam" => Ok(Self::Spam),
             _ => Err("未知审核状态"),
         }
+    }
+    pub fn may_transition_to(self, next: Self) -> bool {
+        !matches!(self, Self::Spam | Self::Trash) || next != Self::Approved
     }
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Pending => "pending",
             Self::Approved => "approved",
-            Self::Rejected => "rejected",
+            Self::Trash => "trash",
             Self::Spam => "spam",
         }
     }
@@ -29,7 +32,6 @@ impl CommentStatus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModerationAction {
     SetStatus(CommentStatus),
-    DeletePermanently,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

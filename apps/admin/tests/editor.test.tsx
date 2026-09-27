@@ -2,7 +2,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
-import { ApiError, api, categoryApi, mediaApi, seriesApi } from "../src/api";
+import { ApiError, api, categoryApi, commentsApi, mediaApi, seriesApi } from "../src/api";
 import { navigate, paths } from "../src/router";
 import type { MediaAsset, MediaPage, PostDetail } from "../src/types";
 
@@ -18,6 +18,7 @@ vi.mock("../src/api", async (importOriginal) => {
   return {
     ...original,
     categoryApi: { list: vi.fn() },
+    commentsApi: { policy: vi.fn(), savePolicy: vi.fn() },
     seriesApi: { list: vi.fn() },
     mediaApi: { list: vi.fn(), detail: vi.fn(), upload: vi.fn(), remove: vi.fn() },
     api: {
@@ -73,6 +74,7 @@ beforeEach(() => {
   vi.resetAllMocks();
   window.history.replaceState(null, "", paths.editPost(post.id));
   vi.mocked(api.getPost).mockResolvedValue(post);
+  vi.mocked(commentsApi.policy).mockResolvedValue({ enabled: true, version: 1 });
   // 标签目录：空目录即可（编辑器只渲染选择区）。
   vi.mocked(api.listTags).mockResolvedValue([]);
   // 编辑器读的是顶层 categoryApi（不是 api.categoryApi），mock 必须打在同一处。
@@ -395,4 +397,39 @@ describe("文章编辑器封面", () => {
     fireEvent.click(screen.getByRole("menuitem", { name: "文章" }));
     expect(await screen.findByRole("dialog", { name: "有未保存的修改" })).toBeTruthy();
   });
+});
+
+
+it("评论开关使用编辑器版本并保留未保存正文，保存后衔接新版本", async () => {
+  const pending = deferred<{enabled:boolean;version:number}>();
+  vi.mocked(commentsApi.savePolicy).mockReturnValue(pending.promise);
+  vi.mocked(api.updatePost).mockResolvedValue({...post,content:"未保存正文",version:3});
+  render(<App />);
+  await screen.findByDisplayValue(post.title);
+  fireEvent.change(input("正文（Markdown）"), {target:{value:"未保存正文"}});
+  const toggle = screen.getByRole("switch",{name:"允许此文章新评论"});
+  await waitFor(() => expect(toggle.hasAttribute("disabled")).toBe(false));
+  fireEvent.click(toggle);
+  await waitFor(() => expect(commentsApi.savePolicy).toHaveBeenCalledWith({enabled:false,version:1},post.id));
+  expect(screen.getByRole("button",{name:"保存并更新线上"}).hasAttribute("disabled")).toBe(true);
+  await act(async () => { pending.resolve({enabled:false,version:2}); });
+  expect(input("正文（Markdown）").value).toBe("未保存正文");
+  fireEvent.click(screen.getByRole("button",{name:"保存并更新线上"}));
+  await waitFor(() => expect(api.updatePost).toHaveBeenCalledWith(post.id,expect.objectContaining({content:"未保存正文",expected_version:2})));
+});
+
+it("评论开关读取到更新版本时不能替编辑器接受并发正文变更", async () => {
+  vi.mocked(commentsApi.policy).mockResolvedValue({enabled:true,version:8});
+  vi.mocked(commentsApi.savePolicy).mockRejectedValue(new ApiError(409,"版本冲突","version_conflict"));
+  vi.mocked(api.updatePost).mockRejectedValue(new ApiError(409,"版本冲突","version_conflict"));
+  render(<App />);
+  await screen.findByDisplayValue(post.title);
+  const toggle = screen.getByRole("switch",{name:"允许此文章新评论"});
+  await waitFor(() => expect(toggle.hasAttribute("disabled")).toBe(false));
+  fireEvent.click(toggle);
+  await waitFor(() => expect(commentsApi.savePolicy).toHaveBeenCalledWith({enabled:false,version:1},post.id));
+  await waitFor(() => expect(screen.getByRole("button",{name:"保存并更新线上"}).hasAttribute("disabled")).toBe(false));
+  fireEvent.change(input("正文（Markdown）"),{target:{value:"我的正文"}});
+  fireEvent.click(screen.getByRole("button",{name:"保存并更新线上"}));
+  await waitFor(() => expect(api.updatePost).toHaveBeenCalledWith(post.id,expect.objectContaining({expected_version:1})));
 });

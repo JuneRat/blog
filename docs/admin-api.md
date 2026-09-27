@@ -17,7 +17,7 @@
 
 ## 评论
 
-评论管理位于 `/admin/comments`。评论接口、开关和独立版本规则见[评论 API](comments.md#接口)。
+评论管理位于 `/admin/comments`。评论接口、开关和版本规则见[评论 API](comments.md#接口)。
 
 ## 认证与本人资料
 

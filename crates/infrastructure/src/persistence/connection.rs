@@ -51,7 +51,9 @@ pub async fn migrate(
     migrations_dir: impl AsRef<std::path::Path>,
 ) -> Result<(), UseCaseError> {
     migrate_schema(pool, migrations_dir).await?;
-    rebuild_content_html(pool, &crate::rendering::RenderingRuntime::default()).await?;
+    let renderer = crate::rendering::RenderingRuntime::default();
+    rebuild_content_html(pool, &renderer).await?;
+    crate::comments::rebuild_comment_html(pool, &renderer).await?;
     Ok(())
 }
 

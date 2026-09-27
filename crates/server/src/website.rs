@@ -95,7 +95,7 @@ pub async fn build_router(
         passwords,
         posts: assembly::posts(pool, runtime.clone()),
         pages: Arc::new(PageInteractor::new(
-            Arc::new(PostgresPageRepository::new(pool.clone(), runtime)),
+            Arc::new(PostgresPageRepository::new(pool.clone(), runtime.clone())),
             clock.clone(),
         )),
         tags: Arc::new(TagInteractor::new(
@@ -118,9 +118,14 @@ pub async fn build_router(
     };
     let comments =
         interfaces::http_comments::comments_router(interfaces::http_comments::CommentState {
-            comments: Arc::new(application::comments::CommentInteractor::new(Arc::new(
-                infrastructure::comments::PostgresCommentRepository::new(pool.clone()),
-            ))),
+            comments: Arc::new(application::comments::CommentInteractor::new(
+                Arc::new(infrastructure::comments::PostgresCommentRepository::new(
+                    pool.clone(),
+                    runtime.clone(),
+                )),
+                runtime,
+            )),
+            trusted_proxies: config.trusted_proxies.clone(),
             admin: admin.clone(),
             origin: config
                 .public_base_url

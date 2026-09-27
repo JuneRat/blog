@@ -18,7 +18,10 @@ use axum::{
     routing::{get, post},
 };
 use serde::Deserialize;
-use std::{net::SocketAddr, sync::Arc};
+use std::{
+    net::{IpAddr, SocketAddr},
+    sync::Arc,
+};
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -26,6 +29,7 @@ pub struct CommentState {
     pub comments: Arc<CommentInteractor>,
     pub admin: AdminState,
     pub origin: String,
+    pub trusted_proxies: Vec<IpAddr>,
 }
 impl FromRef<CommentState> for AdminState {
     fn from_ref(s: &CommentState) -> Self {
@@ -90,6 +94,7 @@ pub fn comments_router(state: CommentState) -> Router {
             "/api/v1/posts/{slug}/comments",
             get(public_list).post(submit),
         )
+        .route("/api/v1/comments/preview", post(preview))
         .route("/api/admin/v1/comments", get(list))
         .route("/api/admin/v1/comments/{id}", post(moderate))
         .route(
@@ -108,7 +113,7 @@ pub fn comments_router(state: CommentState) -> Router {
 struct PageQuery {
     #[serde(default = "first_page")]
     page: i64,
-    parent_id: Option<Uuid>,
+    root_id: Option<Uuid>,
     status: Option<String>,
     post_id: Option<Uuid>,
 }
@@ -121,7 +126,7 @@ async fn public_list(
     Query(q): Query<PageQuery>,
     id: RequestId,
 ) -> Response {
-    match s.comments.public_list(&slug, q.parent_id, q.page).await {
+    match s.comments.public_list(&slug, q.root_id, q.page).await {
         Ok(v) => Json(v).into_response(),
         Err(e) => admin_error(e, &id),
     }
@@ -131,14 +136,18 @@ async fn submit(
     Path(slug): Path<String>,
     id: RequestId,
     auth: CommentAuth,
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    peer: Option<axum::Extension<ConnectInfo<SocketAddr>>>,
+    headers: HeaderMap,
     Json(cmd): Json<SubmitComment>,
 ) -> Response {
-    // Ignore client-supplied forwarding headers; deployments behind a proxy share
-    // its quota until a trusted proxy policy is configured explicitly.
     match s
         .comments
-        .submit(&slug, auth.0.as_ref(), &peer.ip().to_string(), cmd)
+        .submit(
+            &slug,
+            auth.0.as_ref(),
+            client_ip(peer.map(|p| p.0.0.ip()), &headers, &s.trusted_proxies),
+            cmd,
+        )
         .await
     {
         Ok(()) => (
@@ -168,32 +177,30 @@ async fn list(
 #[serde(deny_unknown_fields)]
 struct Moderate {
     version: i64,
-    status: Option<String>,
-    #[serde(default)]
-    delete: bool,
+    status: String,
 }
 async fn moderate(
     State(s): State<CommentState>,
     auth: AdminAuth,
     Path(cid): Path<Uuid>,
     id: RequestId,
+    peer: Option<axum::Extension<ConnectInfo<SocketAddr>>>,
+    headers: HeaderMap,
     Json(cmd): Json<Moderate>,
 ) -> Response {
-    if cmd.delete == cmd.status.is_some() {
-        return admin_error(UseCaseError::Invalid("请选择审核状态或删除".into()), &id);
-    }
-    let action = if cmd.delete {
-        application::comments::ModerationAction::DeletePermanently
-    } else {
-        match application::comments::CommentStatus::parse(cmd.status.as_deref().unwrap_or_default())
-        {
-            Ok(status) => application::comments::ModerationAction::SetStatus(status),
-            Err(e) => return admin_error(UseCaseError::Invalid(e.into()), &id),
-        }
+    let action = match application::comments::CommentStatus::parse(&cmd.status) {
+        Ok(status) => application::comments::ModerationAction::SetStatus(status),
+        Err(e) => return admin_error(UseCaseError::Invalid(e.into()), &id),
     };
     match s
         .comments
-        .moderate(&auth.actor, cid, cmd.version, action)
+        .moderate(
+            &auth.actor,
+            cid,
+            cmd.version,
+            action,
+            client_ip(peer.map(|p| p.0.0.ip()), &headers, &s.trusted_proxies),
+        )
         .await
     {
         Ok(()) => axum::http::StatusCode::NO_CONTENT.into_response(),
@@ -205,15 +212,20 @@ async fn policy(
     auth: AdminAuth,
     post: Option<Uuid>,
     update: Option<CommentPolicy>,
+    ip_address: Option<IpAddr>,
     id: RequestId,
 ) -> Response {
-    match s.comments.policy(&auth.actor, post, update).await {
+    match s
+        .comments
+        .policy(&auth.actor, post, update, ip_address)
+        .await
+    {
         Ok(v) => Json(v).into_response(),
         Err(e) => admin_error(e, &id),
     }
 }
 async fn global_policy(State(s): State<CommentState>, auth: AdminAuth, id: RequestId) -> Response {
-    policy(s, auth, None, None, id).await
+    policy(s, auth, None, None, None, id).await
 }
 async fn post_policy(
     State(s): State<CommentState>,
@@ -221,24 +233,65 @@ async fn post_policy(
     Path(post): Path<Uuid>,
     id: RequestId,
 ) -> Response {
-    policy(s, auth, Some(post), None, id).await
+    policy(s, auth, Some(post), None, None, id).await
 }
 async fn set_global_policy(
     State(s): State<CommentState>,
     auth: AdminAuth,
     id: RequestId,
+    peer: Option<axum::Extension<ConnectInfo<SocketAddr>>>,
+    headers: HeaderMap,
     Json(update): Json<CommentPolicy>,
 ) -> Response {
-    policy(s, auth, None, Some(update), id).await
+    let ip = client_ip(peer.map(|p| p.0.0.ip()), &headers, &s.trusted_proxies);
+    policy(s, auth, None, Some(update), ip, id).await
 }
 async fn set_post_policy(
     State(s): State<CommentState>,
     auth: AdminAuth,
     Path(post): Path<Uuid>,
     id: RequestId,
+    peer: Option<axum::Extension<ConnectInfo<SocketAddr>>>,
+    headers: HeaderMap,
     Json(update): Json<CommentPolicy>,
 ) -> Response {
-    policy(s, auth, Some(post), Some(update), id).await
+    let ip = client_ip(peer.map(|p| p.0.0.ip()), &headers, &s.trusted_proxies);
+    policy(s, auth, Some(post), Some(update), ip, id).await
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Preview {
+    body: String,
+}
+async fn preview(
+    State(s): State<CommentState>,
+    _auth: CommentAuth,
+    id: RequestId,
+    Json(cmd): Json<Preview>,
+) -> Response {
+    match s.comments.preview(&cmd.body).await {
+        Ok(html) => Json(serde_json::json!({"content_html": html})).into_response(),
+        Err(e) => admin_error(e, &id),
+    }
+}
+
+// Only explicitly configured socket peers can supply X-Forwarded-For. Traverse
+// right to left, discarding trusted hops; never trust a client-controlled prefix.
+fn client_ip(peer: Option<IpAddr>, headers: &HeaderMap, trusted: &[IpAddr]) -> Option<IpAddr> {
+    let peer = peer?;
+    if !trusted.contains(&peer) {
+        return Some(peer);
+    }
+    let mut addresses = Vec::new();
+    for value in headers.get_all("x-forwarded-for") {
+        for raw in value.to_str().ok()?.split(',') {
+            if addresses.len() >= 20 {
+                return None;
+            }
+            addresses.push(raw.trim().parse::<IpAddr>().ok()?);
+        }
+    }
+    addresses.into_iter().rev().find(|ip| !trusted.contains(ip))
 }
 #[cfg(test)]
 mod tests {
@@ -253,5 +306,22 @@ mod tests {
         assert!(check_origin(&h, "https://blog.test/").is_ok());
         h.insert("sec-fetch-site", "cross-site".parse().unwrap());
         assert!(check_origin(&h, "https://blog.test").is_err());
+    }
+
+    #[test]
+    fn forwarding_requires_a_trusted_socket_and_valid_chain() {
+        let proxy = "127.0.0.1".parse().unwrap();
+        let client = "198.51.100.5".parse().unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-forwarded-for",
+            "203.0.113.9, 198.51.100.5, 127.0.0.1".parse().unwrap(),
+        );
+        assert_eq!(client_ip(Some(client), &headers, &[proxy]), Some(client));
+        assert_eq!(client_ip(Some(proxy), &headers, &[proxy]), Some(client));
+        assert_eq!(client_ip(Some(proxy), &headers, &[]), Some(proxy));
+        assert_eq!(client_ip(None, &headers, &[proxy]), None);
+        headers.insert("x-forwarded-for", "bad, 198.51.100.5".parse().unwrap());
+        assert_eq!(client_ip(Some(proxy), &headers, &[proxy]), None);
     }
 }

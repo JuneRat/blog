@@ -1,49 +1,65 @@
 # 原生评论
 
-已确认的[目标评论设计](database-design.md#5-评论)采用受限 Markdown 并持久化清洗 HTML，多级回复通过 `parent_id/root_id` 表达、前端显示两级。删除父评论保留子评论及“该评论已删除”占位；状态改为 pending/approved/spam/trash；去掉提交去重与评论限流。全站开关进入 `settings.comments`，单篇开关进入 `posts.comments_enabled`，并分别使用设置组及文章版本。可选私密邮箱、提交 IP 与 IP 保留期也已纳入设计。
+评论已适配[新数据库设计](database-design.md#5-评论)：受限 Markdown 与清洗 HTML 一起持久化，多级回复以 `parent_id/root_id` 保存，公开界面按两级展示。default 与 paper 主题共享 Rust 提供的评论脚本和样式；需要启用 JavaScript。
 
-**上述方案尚未实现。** 以下行为和接口仍对应当前代码，不代表新的评论契约已可调用。
+## 输入与展示
 
-## 当前实现
+游客填写 1–64 字昵称、1–2,000 字正文和可选邮箱；服务端按 Unicode 字符计数。登录用户使用服务端账号名称快照，去除控制字符并截取前 64 字，忽略客户端昵称和邮箱。只有文章作者的登录账号获得独立「作者」徽标。
 
-文章页的 default 和 paper 主题都提供评论列表、提交表单及一层回复。公开组件通过同源 API 加载，需启用 JavaScript；共享脚本/CSS 随 Rust 二进制提供，不依赖后台构建产物。
+正文支持分段、换行、粗体、斜体、删除线、行内/围栏代码、引用、列表、HTTP(S) 链接、网址自动链接与 Unicode Emoji。不支持标题样式、表格和媒体嵌入；原始 HTML 按文字转义。链接只允许 HTTP(S)，附加 `nofollow ugc noopener noreferrer`。前台和后台均提供精简工具栏与服务端预览，预览与入库共用同一渲染器。
 
-游客填写 1–64 字昵称和 1–2,000 字正文；正文支持换行，按 Unicode 字符计数。登录用户的客户端昵称不参与校验或存储，使用服务端账号名称（展示名取前 64 字），正文仍需完整校验。只有文章作者本人的账号显示独立的「作者」徽标；游客昵称中的「作者」文字不会获得徽标样式。所有提交，包括后台回复，默认待审核，成功返回「已提交，等待审核」。
+公开响应只有服务端清洗的 `content_html`，不返回 Markdown 源文、邮箱或 IP。昵称、错误和占位文案使用文本节点。后台在授权范围内可读取源文、邮箱及提交来源 IP；它们不进入审计摘要。
 
-同一文章页内，评论翻页和重复打开回复表单会保留尚未提交的昵称、正文与重试请求编号；成功提交后清空正文。草稿仅保留在当前页面内，刷新或离开页面不会持久保存。
+所有新评论，包括后台回复，均为 pending，成功返回「已提交，等待审核」。同一页面内翻页、重开回复、网络失败和会话失效会保留未提交的昵称、邮箱与正文；成功后清空正文，刷新或离开页面不保存草稿。
 
-后台「评论管理」支持按状态和文章筛选、审核、回复和永久删除。`post.update` 管理本人文章评论，`post.update_any` 管理全部；全站开关要求 `settings.manage`。单篇文章编辑页有立即保存的评论开关。关闭开关保留已通过历史评论，但拒绝新评论与回复。评论和开关的独立版本冲突返回 409 `version_conflict`，重新加载后再操作。
+没有评论提交去重或频率限制，也没有 `request_id`、`client_hash` 字段。每次有效请求独立创建待审核记录，网络结果不明确时由用户决定是否重试，可能产生重复评论。HTTP 请求追踪编号与登录限流仍保留。
 
-## 可见性和安全
+## 回复、审核和回收站
 
-- 所有公开读取、计数和提交都检查文章 published + public + 未进回收站；不满足时返回 404。公开响应不缓存。
-- 只有 approved 状态可展示；回复的主评论也必须 approved。删除主评论级联删除回复；永久删除文章清理全部评论与单篇开关。
-- 回复必须关联同篇文章的主评论，不能回复一条回复。主评论和回复分别每页 20 条，页码为 1–100,000。
-- 前台使用 `textContent`，后台使用 React 文本节点，不执行 Markdown/HTML，也不使用文章正文的 `safe` 输出。依据 [OWASP 输出编码建议](https://cheatsheetseries.owasp.org/cheatsheets/Cross_Site_Scripting_Prevention_Cheat_Sheet.html)。
-- 公开提交要求 Origin 精确匹配 `BLOG_PUBLIC_BASE_URL` 的来源；拒绝缺失/跨站 Origin，若有 Sec-Fetch-Site 必须 same-origin。带会话 cookie 的写请求额外复用后台会话、CSRF 检查，不降级成游客。参见 [OWASP CSRF 建议](https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html)。
-- `/me` 确认会话失效时返回 401 并清理无效 cookie；存储故障不清理 cookie。填写过程中遇到 401，表单保留正文并重新确认身份，提示用户确认昵称或登录身份后手动重试，不自动重新提交。
-- 请求体上限 16 KiB；每个连接来源 IP 每分钟最多 3 条成功提交；相同来源、文章、父评论及正文在 10 分钟内拒绝重复。数据库事务锁和计数使多进程共享限制。IP 只保存 SHA-256 摘要，不返回公开接口。
-- 客户端为一次提交生成 `request_id` UUID，网络失败重试复用。同一请求及内容重复调用只返回相同待审核回执，不泄漏当前审核状态。变更内容后需新 UUID。
+根评论的 parent_id/root_id 均为空。回复的 parent_id 指向直接对象，root_id 指向其根；可以继续回复任意深度的已通过评论。服务端验证同篇文章和根节点形态，创建后不可修改关系。根列表和按 root_id 查询的所有后代分别每页 20 条，页码范围为 1–100,000；后代平铺在第二级，显示直接回复对象。
 
-服务端不信任客户端的 `X-Forwarded-For` 等代理头。经反向代理部署时，来自同一代理 IP 的读者共享限流；部署前需确认流量入口，当前未提供可信代理真实 IP 配置。此版本无验证码或外部反垃圾服务。
+状态为 pending、approved、spam、trash。删除只将本条移入 trash，保留全部子回复。公开查询展示 approved 节点及连接这些节点所必需的祖先占位：trash 显示「该评论已删除」，pending/spam 显示「该评论暂不可用」。占位不含原昵称、作者徽标、源文或 HTML。没有公开后代的隐藏节点不展示；已删除根节点仍有公开后代时可继续查看整条讨论。占位节点不可被直接回复，已通过的后代仍可被回复。
+
+从 spam/trash 恢复必须先回 pending，再单独审核通过。后台不提供单条评论的物理删除；数据库拒绝物理删除仍被父级/根级关系引用的节点。永久删除整篇文章时清理整棵树。
+
+后台可按状态或文章筛选。`post.update` 管理本人文章评论，`post.update_any` 管理全部；全站设置要求 `settings.manage`。审核使用评论 version，版本冲突返回 409 `version_conflict`。相同状态不递增版本，也不重复记审计；旧版本的重复请求仍返回冲突。
+
+## 开关、可见性与事务
+
+全站 `settings.comments.enabled` 与单篇 `posts.comments_enabled` 默认 true，两者均开启才允许提交。关闭只停止新增，已通过的历史评论继续展示。没有覆盖值时不预建全站设置行，返回 version 0；实际保存变化后递增设置组版本，并保留同组其他字段。
+
+单篇开关使用文章当前 version，修改后递增 posts.version。后台编辑器使用自身已加载版本保存开关，成功后接收该次更新的新版本并保留未保存正文；它不会用独立设置查询读到的新版本跳过文章冲突。评论提交/审核只改变评论，不递增文章版本。
+
+公开读取、计数、提交都要求文章已发布、公开、未进回收站且发布时间已到，否则 404。所有评论 API 响应禁用缓存。创建、审核及两个开关的更新与审计同事务提交，审计失败整体回滚。提交与关闭开关通过事务锁排序，父评论审核与回复写入也互斥。
+
+## 请求与来源地址
+
+提交和预览要求 Origin 精确匹配 `BLOG_PUBLIC_BASE_URL`，若有 Sec-Fetch-Site 则必须为 same-origin。带会话 Cookie 的写请求必须通过现有会话与 CSRF 校验，不能失败后自动降级为游客。请求体上限 16 KiB。
+
+会话失效时，公开表单保留正文并通过 `/me` 重新确认身份，等待用户确认后显式重试。只有确定失效的 Cookie 才清除；数据库故障不会清除 Cookie。
+
+默认记录 socket 对端 IP，不信任转发头。`BLOG_TRUSTED_PROXIES` 可配置逗号分隔的精确 IPv4/IPv6 地址；只有 socket 对端在列表中才解析 `X-Forwarded-For`。从右向左剥离可信代理，取第一个非可信地址；无来源、缺失/非法链、超过 20 跳或全为可信地址时保存 NULL。不支持 CIDR，也不读取 `Forwarded`、`X-Real-IP`。例如 `BLOG_TRUSTED_PROXIES=127.0.0.1,::1`。非法配置会使 `serve` 启动失败，认证登录限流仍使用原有 socket 来源规则。
+
+IP 以可空 inet 保存主机地址，审核不覆盖提交 IP。默认 180 天清空评论 IP 的保留期任务及配置入口属于收尾批次，当前尚未执行自动清理。
 
 ## 接口
 
 | 方法与路径 | 参数与行为 |
 |---|---|
-| `GET /api/v1/posts/{slug}/comments` | `page=1`；传 `parent_id=UUID` 读取该主评论的回复；返回 `{items,total,enabled}` |
-| `POST /api/v1/posts/{slug}/comments` | `{nickname,body,parent_id?,request_id}`；202 待审核回执；登录身份由会话决定 |
-| `GET /api/admin/v1/comments` | `page=1&status=pending&post_id=UUID`，状态和文章筛选可省略；返回有权限范围内分页列表 |
-| `POST /api/admin/v1/comments/{id}` | `{version,status}` 修改审核状态，或 `{version,delete:true}` 永久删除；204 |
-| `GET /api/admin/v1/comment-settings` | 读取全站开关 `{enabled,version}` |
+| `GET /api/v1/posts/{slug}/comments` | `page=1`；`root_id=UUID` 读取某根全部后代；返回 `{items,total,enabled}`，total 含必要占位 |
+| `POST /api/v1/posts/{slug}/comments` | `{nickname,body,email?,parent_id?}`；202 待审核回执；登录身份由会话决定 |
+| `POST /api/v1/comments/preview` | `{body}`；返回 `{content_html}`，不写数据库 |
+| `GET /api/admin/v1/comments` | `page=1&status=pending&post_id=UUID`；状态和文章筛选可省略 |
+| `POST /api/admin/v1/comments/{id}` | `{version,status}`，status 为 pending/approved/spam/trash；204 |
+| `GET /api/admin/v1/comment-settings` | 全站开关 `{enabled,version}`；未配置时 `{enabled:true,version:0}` |
 | `PUT /api/admin/v1/comment-settings` | `{enabled,version}`，返回保存结果 |
-| `GET /api/admin/v1/posts/{id}/comment-settings` | 读取单篇开关；未显式保存时 `{enabled:true,version:0}` |
+| `GET /api/admin/v1/posts/{id}/comment-settings` | `{enabled,version}`，version 是当前文章版本 |
 | `PUT /api/admin/v1/posts/{id}/comment-settings` | `{enabled,version}`，返回保存结果 |
 
-管理端使用现有会话和 CSRF；评论错误沿用现有业务码，包括 invalid_request、not_found、forbidden、version_conflict、rate_limited（含 Retry-After）。
+公开节点字段为 id、parent_id、root_id、parent_nickname、nickname、content_html、is_author、placeholder、deleted、created_at。被隐藏的直接父级不提供 parent_nickname。后台节点另含文章信息、body、author_email、ip_address、status、version；不直接返回数据库整行。
 
-## 升级与恢复
+## 重建与验证
 
-运行现有迁移流程应用 `0009_comments.sql`，并重新构建 Rust 服务与后台 SPA；两种主题的文章模板也需一起发布。`scripts/recovery.py` 的表存在性及数量核验包含 comments、comment_settings 和 post_comment_settings。使用迁移前的旧备份恢复旧版本服务后，再按常规流程升级迁移；当前恢复工具仍要求备份和服务的 schema 版本匹配。
+评论使用独立的 `COMMENT_RENDER_VERSION`，完整 `migrate` 启动流程重建版本不匹配的 HTML。更新同时核对源文和编辑版本，不改变业务版本或修改时间，不写 media_refs。公开渲染不回退到未清洗源文。
 
-验证入口：`crates/infrastructure/tests/comments.rs`（真实 PostgreSQL 状态、权限、分页、去重、并发、级联）、`crates/server/tests/admin_api.rs` 的评论 HTTP 测试，以及后台 Vitest 的公开组件/审核界面测试。
+验证入口包括基础设施评论集成测试（真实 PostgreSQL 关系、权限、分页、CAS、事务回滚和重建竞争）、评论渲染单元测试、server 的评论 HTTP 测试，以及公开组件、审核界面和文章编辑器 Vitest。恢复工具仍使用旧表清单，尚不可用于新基线，见[备份恢复](operations-and-recovery.md)。

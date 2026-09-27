@@ -2,7 +2,7 @@
 
 本文负责本地运行、CLI、后台联调和检查流程。完整环境变量见[配置参考](configuration.md)，业务规则见[内容生命周期](content-lifecycle.md)，接口见[管理 API](admin-api.md)。后台组件、表单、查询缓存和测试约定见[后台开发指南](admin-development.md)。
 
-迁移链已重写为新的 [19 表初始基线](../migrations/postgres/0001_initial_schema.sql)，仅支持空库。身份、会话、媒体、内容和目录已适配，评论与恢复工具仍待适配。不要把 `blog_schema.sql` 手工导入后再执行迁移；统一通过 `migrate` 建立 SQLx 记录。进度见[实施路线](product-roadmap.md#已采纳数据库设计的实施)。
+迁移链已重写为新的 [19 表初始基线](../migrations/postgres/0001_initial_schema.sql)，仅支持空库。身份、会话、媒体、内容、目录和评论已适配，保留期任务与恢复工具待收尾。不要把 `blog_schema.sql` 手工导入后再执行迁移；统一通过 `migrate` 建立 SQLx 记录。进度见[实施路线](product-roadmap.md#已采纳数据库设计的实施)。
 
 ## 环境准备
 
@@ -47,7 +47,7 @@ cargo test -p server --test password_http
 cargo test -p server --test command_assembly owner_bootstrap_uses_new_identity_baseline
 ```
 
-验收链路为：空库迁移、权限初始化、CLI 创建 Owner、密码登录、资料更新保持登录、改密撤销旧会话。`PUT /api/admin/v1/me/profile` 提交展示名、纯文本简介和必填 `expected_version`，详见[管理 API](admin-api.md)。资料表单尚未接入后台界面。评论的旧数据库集成测试和恢复工具尚待适配；`check.sh` 全量通过属于后续批次的验收，不能用定向测试替代。
+验收链路为：空库迁移、权限初始化、CLI 创建 Owner、密码登录、资料更新保持登录、改密撤销旧会话。`PUT /api/admin/v1/me/profile` 提交展示名、纯文本简介和必填 `expected_version`，详见[管理 API](admin-api.md)。资料表单尚未接入后台界面。恢复工具尚待适配；`check.sh` 全量通过属于后续批次的验收，不能用定向测试替代。
 
 媒体批次在同一独立实例验证：
 
@@ -65,12 +65,23 @@ cargo test -p server --test command_assembly media_cleanup_staging
 
 ```bash
 cargo test -p infrastructure --test postgres --test content_lifecycle --test content_html --test write_invariants
-cargo test -p server --test admin_api -- --skip native_comments_
+cargo test -p server --test admin_api
 cargo test -p server --test ssr --test syndication --test command_assembly
 (cd apps/admin && pnpm test && pnpm build)
 ```
 
-覆盖多系列和重复权重、目录删除保留文章、预约与取消、恢复统一回草稿、版本冲突、公开时间过滤和事务审计。admin_api 暂时跳过三个尚未适配的评论用例；这不是全量检查通过。
+覆盖多系列和重复权重、目录删除保留文章、预约与取消、恢复统一回草稿、版本冲突、公开时间过滤和事务审计。admin_api 已包括评论 HTTP 测试。恢复工具尚未按新结构验收，定向测试不代替完整检查。
+
+评论批次在同一独立实例验证：
+
+```bash
+cargo test -p infrastructure --test comments
+cargo test -p infrastructure --lib comment_rendering
+cargo test -p server --test admin_api native_comments_
+(cd apps/admin && pnpm test && pnpm build)
+```
+
+覆盖 HTML 持久化/重建竞争、多级回复与删除占位、私密字段、审核/开关版本、事务审计回滚、代理来源以及草稿和编辑器版本保留。详见[评论契约](comments.md)。
 
 ## 使用 CLI
 

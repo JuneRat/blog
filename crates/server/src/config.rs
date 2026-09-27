@@ -28,6 +28,7 @@ pub struct SiteConfig {
     pub public_base_url: PublicBaseUrl,
     pub secure_cookies: bool,
     pub bind: String,
+    pub trusted_proxies: Vec<std::net::IpAddr>,
 }
 
 impl SiteConfig {
@@ -42,7 +43,18 @@ impl SiteConfig {
             Ok(value) => value == "1" || value.eq_ignore_ascii_case("true"),
             Err(_) => public_base_url.as_str().starts_with("https://"),
         };
+        let trusted_proxies = std::env::var("BLOG_TRUSTED_PROXIES")
+            .unwrap_or_default()
+            .split(',')
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(|v| {
+                v.parse()
+                    .map_err(|_| format!("BLOG_TRUSTED_PROXIES 包含无效 IP：{v}"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(Self {
+            trusted_proxies,
             theme_dir: env_path("BLOG_THEME_DIR", "themes/default"),
             site: SiteInfo {
                 title: std::env::var("BLOG_SITE_TITLE").unwrap_or_else(|_| "Sun's Blog".into()),

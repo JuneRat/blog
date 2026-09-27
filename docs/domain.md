@@ -2,7 +2,7 @@
 
 本文描述当前 `domain` crate。内容的完整操作语义见[内容生命周期](content-lifecycle.md)，跨层依赖见[架构](architecture.md)，数据库并发与约束见[当前数据库实现](database-current.md)。
 
-[ADR-0016](adr/0016-confirmed-blog-schema.md) 采纳的编辑/认证版本分离、系列多对多、定时发布、Page 回收站和媒体独立公开已进入实现。多级评论仍待适配，评论类型尚对应旧流程；目标规则见[数据库设计](database-design.md)。
+[ADR-0016](adr/0016-confirmed-blog-schema.md) 采纳的编辑/认证版本分离、系列多对多、定时发布、Page 回收站和媒体独立公开已进入实现。评论已支持受限 Markdown 校验、多级关系和回收站状态；完整规则见[数据库设计](database-design.md)。
 
 ## 当前模块
 

@@ -295,9 +295,14 @@ async fn fresh_stack() -> Stack {
         .merge(interfaces::http_admin::series_router(admin_state.clone()))
         .merge(interfaces::http_comments::comments_router(
             interfaces::http_comments::CommentState {
-                comments: Arc::new(application::comments::CommentInteractor::new(Arc::new(
-                    infrastructure::comments::PostgresCommentRepository::new(pool.clone()),
-                ))),
+                comments: Arc::new(application::comments::CommentInteractor::new(
+                    Arc::new(infrastructure::comments::PostgresCommentRepository::new(
+                        pool.clone(),
+                        Arc::new(infrastructure::RenderingRuntime::default()),
+                    )),
+                    Arc::new(infrastructure::RenderingRuntime::default()),
+                )),
+                trusted_proxies: Vec::new(),
                 admin: admin_state.clone(),
                 origin: "http://127.0.0.1:18099".into(),
             },
@@ -3537,7 +3542,7 @@ async fn native_comments_guest_moderation_and_http_boundaries() {
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let endpoint = "/api/v1/posts/comments-http/comments";
-    let payload=serde_json::json!({"nickname":"<script>guest</script>","body":"<img src=x onerror=alert(1)>\nText", "request_id":Uuid::now_v7()}).to_string();
+    let payload=serde_json::json!({"nickname":"<script>guest</script>","body":"<img src=x onerror=alert(1)>\nText"}).to_string();
     // Anonymous writes require the configured origin (not arbitrary Host matching).
     for origin in [None, Some("http://evil.test")] {
         let mut req = Request::builder()
@@ -3647,7 +3652,8 @@ async fn native_comments_guest_moderation_and_http_boundaries() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    let payload=serde_json::json!({"nickname":"spoof","body":"Author reply","parent_id":cid,"request_id":Uuid::now_v7()}).to_string();
+    let payload =
+        serde_json::json!({"nickname":"spoof","body":"Author reply","parent_id":cid}).to_string();
     let response = stack
         .router
         .clone()
@@ -3746,12 +3752,12 @@ async fn native_comments_clear_stale_cookie_before_explicit_guest_retry() {
     let stack = fresh_stack().await;
     let (cookie, csrf) = login_as(&stack.router, &stack.idp, "author").await;
     let endpoint = published_comment_endpoint(&stack, &cookie, &csrf).await;
-    sqlx::query("UPDATE users SET version=version+1 WHERE username='author'")
+    sqlx::query("UPDATE users SET auth_version=auth_version+1 WHERE username='author'")
         .execute(&stack.pool)
         .await
         .unwrap();
     let payload = serde_json::json!({
-        "nickname":"Guest", "body":"A preserved draft", "request_id":Uuid::now_v7(),
+        "nickname":"Guest", "body":"A preserved draft",
     });
     // A failed authenticated write must never silently become an anonymous write.
     let response = stack
@@ -3806,7 +3812,7 @@ async fn native_comments_clear_stale_cookie_before_explicit_guest_retry() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::ACCEPTED);
     let row: (Option<Uuid>, String, String) =
-        sqlx::query_as("SELECT user_id,nickname,body FROM comments")
+        sqlx::query_as("SELECT user_id,author_name,content FROM comments")
             .fetch_one(&stack.pool)
             .await
             .unwrap();
@@ -3848,14 +3854,13 @@ async fn native_comments_use_server_name_before_guest_nickname_validation() {
         .execute(&stack.pool)
         .await
         .unwrap();
-    let request_id = Uuid::now_v7();
     for nickname in [&display_name, "ignored\n<script>", ""] {
         let response = stack
             .router
             .clone()
             .oneshot(comment_submit_request(
                 &endpoint,
-                serde_json::json!({"nickname":nickname,"body":"Signed in","request_id":request_id}),
+                serde_json::json!({"nickname":nickname,"body":"Signed in"}),
                 Some(&cookie),
                 Some(&csrf),
             ))
@@ -3873,18 +3878,24 @@ async fn native_comments_use_server_name_before_guest_nickname_validation() {
     )
     .await;
     let data: serde_json::Value = serde_json::from_str(&body).unwrap();
-    assert_eq!(data["total"], 1);
+    assert_eq!(data["total"], 3);
     assert_eq!(
         data["items"][0]["nickname"],
         format!("{}😀", "字".repeat(63))
     );
     assert_eq!(data["items"][0]["is_author"], true);
     for body in [" ".to_string(), "字".repeat(2001), "nul\0".to_string()] {
-        let response = stack.router.clone().oneshot(comment_submit_request(
-            &endpoint,
-            serde_json::json!({"nickname":display_name,"body":body,"request_id":Uuid::now_v7()}),
-            Some(&cookie), Some(&csrf),
-        )).await.unwrap();
+        let response = stack
+            .router
+            .clone()
+            .oneshot(comment_submit_request(
+                &endpoint,
+                serde_json::json!({"nickname":display_name,"body":body}),
+                Some(&cookie),
+                Some(&csrf),
+            ))
+            .await
+            .unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
     // Ignoring authenticated nicknames must not relax the anonymous input rules.
@@ -3894,7 +3905,7 @@ async fn native_comments_use_server_name_before_guest_nickname_validation() {
             .clone()
             .oneshot(comment_submit_request(
                 &endpoint,
-                serde_json::json!({"nickname":nickname,"body":"Guest","request_id":Uuid::now_v7()}),
+                serde_json::json!({"nickname":nickname,"body":"Guest"}),
                 None,
                 None,
             ))
@@ -4021,4 +4032,147 @@ async fn schedule_archive_and_recycle_content_with_version_checks() {
             "立即发布不得保留未来时间"
         );
     }
+}
+
+#[tokio::test]
+async fn native_comments_preview_private_fields_and_article_policy_cas() {
+    let _guard = SERIAL.lock().await;
+    let stack = fresh_stack().await;
+    let (cookie, csrf) = login_as(&stack.router, &stack.idp, "author").await;
+    let endpoint = published_comment_endpoint(&stack, &cookie, &csrf).await;
+    let source = "**Hello**\n<script>alert(1)</script>";
+    let response = stack
+        .router
+        .clone()
+        .oneshot(comment_submit_request(
+            "/api/v1/comments/preview",
+            serde_json::json!({"body":source}),
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let preview: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(
+        preview["content_html"]
+            .as_str()
+            .unwrap()
+            .contains("<strong>Hello</strong>")
+    );
+    assert!(
+        !preview["content_html"]
+            .as_str()
+            .unwrap()
+            .contains("<script>")
+    );
+    let mut req = comment_submit_request(
+        &endpoint,
+        serde_json::json!({"nickname":"Reader","body":source,"email":"private@example.com"}),
+        None,
+        None,
+    );
+    req.headers_mut()
+        .insert("x-forwarded-for", "198.51.100.7".parse().unwrap());
+    let response = stack.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    let (_, body) = api(
+        &stack.router,
+        "GET",
+        "/api/admin/v1/comments?status=pending",
+        Some(&cookie),
+        None,
+        None,
+    )
+    .await;
+    let data: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let comment = &data["items"][0];
+    assert_eq!(comment["content_html"], preview["content_html"]);
+    assert_eq!(comment["author_email"], "private@example.com");
+    assert_eq!(comment["ip_address"], "127.0.0.1");
+    let cid = comment["id"].as_str().unwrap();
+    assert_eq!(
+        api(
+            &stack.router,
+            "POST",
+            &format!("/api/admin/v1/comments/{cid}"),
+            Some(&cookie),
+            Some(&csrf),
+            Some(r#"{"version":1,"status":"approved"}"#)
+        )
+        .await
+        .0,
+        StatusCode::NO_CONTENT
+    );
+    let (_, body) = api(&stack.router, "GET", &endpoint, None, None, None).await;
+    let public: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(public["items"][0]["content_html"], preview["content_html"]);
+    for key in ["author_email", "ip_address", "body", "user_id"] {
+        assert!(public["items"][0].get(key).is_none());
+    }
+    let post = comment["post_id"].as_str().unwrap();
+    let path = format!("/api/admin/v1/posts/{post}/comment-settings");
+    let (_, body) = api(&stack.router, "GET", &path, Some(&cookie), None, None).await;
+    let policy: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(policy["version"], 2);
+    let (status, body) = api(
+        &stack.router,
+        "PUT",
+        &path,
+        Some(&cookie),
+        Some(&csrf),
+        Some(r#"{"enabled":false,"version":2}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&body).unwrap()["version"],
+        3
+    );
+    assert_eq!(
+        api(
+            &stack.router,
+            "PATCH",
+            &format!("/api/admin/v1/posts/{post}"),
+            Some(&cookie),
+            Some(&csrf),
+            Some(r#"{"title":"Concurrent overwrite","expected_version":2}"#)
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    let (_, body) = api(&stack.router, "GET", &endpoint, None, None, None).await;
+    let history: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(history["enabled"], false);
+    assert_eq!(history["total"], 1);
+    let response = stack
+        .router
+        .clone()
+        .oneshot(comment_submit_request(
+            &endpoint,
+            serde_json::json!({"nickname":"Reader","body":"Closed"}),
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let response = stack
+        .router
+        .clone()
+        .oneshot(comment_submit_request(
+            "/api/v1/comments/preview",
+            serde_json::json!({"body":"Source","content_html":"<script>bad</script>"}),
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
 }

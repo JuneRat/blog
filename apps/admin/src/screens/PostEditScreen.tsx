@@ -200,6 +200,7 @@ export function PostEditScreen({ id }: { id: string | null }) {
   const [publishedAt, setPublishedAt] = useState<string | null>(null);
   const [loading, setLoading] = useState(id !== null);
   const [busy, setBusy] = useState(false);
+  const [commentBusy, setCommentBusy] = useState(false);
   /**
    * 三个目录（标签/分类/系列）走 React Query：与标签、分类、系列三个管理屏
    * 共用同一份缓存，编辑器之间也不再各拉一遍。
@@ -619,10 +620,10 @@ export function PostEditScreen({ id }: { id: string | null }) {
           style={{ marginBottom: 16 }}
           action={
             <Space>
-              <Button disabled={busy} onClick={() => void reloadFromServer()}>
+              <Button disabled={busy || commentBusy} onClick={() => void reloadFromServer()}>
                 重新加载（丢弃本地改动）
               </Button>
-              <Button danger disabled={busy} onClick={overwriteWithLatest}>
+              <Button danger disabled={busy || commentBusy} onClick={overwriteWithLatest}>
                 仍然覆盖
               </Button>
             </Space>
@@ -644,21 +645,25 @@ export function PostEditScreen({ id }: { id: string | null }) {
           description="可能已被删除或暂时不可达。已禁用保存与发布，避免把上一次打开的内容写到这个地址。"
           style={{ marginBottom: 16 }}
           action={
-            <Button disabled={busy} onClick={() => void reloadFromServer()}>
+            <Button disabled={busy || commentBusy} onClick={() => void reloadFromServer()}>
               重新加载
             </Button>
           }
         />
       )}
 
-      {id !== null && <CommentSwitch key={id} post={id} />}
+      {id !== null && <CommentSwitch key={id} post={id} expectedVersion={version} disabled={busy || formMismatch}
+        onBusy={setCommentBusy} onSaved={(next, previous) => {
+          if (loadedIdRef.current === id) setVersion(current => current === previous ? next : current);
+          invalidateList();
+        }} />}
       <Form
         form={formApi}
         disabled={postStatus === "archived" || formMismatch}
         layout="vertical"
         initialValues={EMPTY_FORM}
         onValuesChange={(_changed, all) => setView(normalizeForm({ ...EMPTY_FORM, ...all }))}
-        onFinish={() => void save()}
+        onFinish={() => { if (!commentBusy) void save(); }}
       >
         <Form.Item label="slug" name="slug">
           <Input placeholder="留空则自动生成（预约或发布后锁定）" />
@@ -807,10 +812,10 @@ export function PostEditScreen({ id }: { id: string | null }) {
             查询更明显），其 `role="img" aria-label="loading"` 会污染按钮的无障碍名，
             让按名字定位变脆、读屏也会念出多余的 "loading"。
           */}
-          <Button type="primary" htmlType="submit" disabled={busy || formMismatch || postStatus === "archived"}>
+          <Button type="primary" htmlType="submit" disabled={busy || commentBusy || formMismatch || postStatus === "archived"}>
             {busy ? "处理中…" : "保存并更新线上"}
           </Button>
-          {id !== null && <ContentLifecycleControls status={postStatus} publishedAt={publishedAt} disabled={busy || formMismatch}
+          {id !== null && <ContentLifecycleControls status={postStatus} publishedAt={publishedAt} disabled={busy || commentBusy || formMismatch}
             canPublish={canPublish} canUnpublish={canUnpublish} canArchive={canUnpublish} onAction={changeStatus} />}
 
         </Space>

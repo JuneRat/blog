@@ -9,6 +9,13 @@
 .comment-identity strong { overflow-wrap:anywhere; }
 .comment-author-badge { display:inline-block; padding:.1rem .45rem; border:1px solid currentColor; border-radius:1rem; font-size:.75em; font-weight:600; }
 .comment-item time { display:block; font-size:.85em; opacity:.7; }
-.comment-body { white-space:pre-wrap; overflow-wrap:anywhere; }
+.comment-body { overflow-wrap:anywhere; }
 .comment-replies { margin-left:1.5rem; }
 .comment-pagination { display:flex; align-items:center; flex-wrap:wrap; gap:.4rem; margin:1rem 0; }
+
+.comment-body p { margin: .65rem 0; }
+.comment-body pre { overflow-x: auto; padding: .75rem; background: #8881; border-radius: 4px; }
+.comment-body code { white-space: pre-wrap; }
+.comment-body blockquote { margin-left: 0; padding-left: 1rem; border-left: 3px solid #8885; }
+.comment-toolbar { display: flex; flex-wrap: wrap; }
+.comment-preview { padding: .75rem; border: 1px solid #8885; border-radius: 4px; }
