@@ -1,3 +1,4 @@
+import { invalidateAfterWrite } from "../queryEffects";
 import { Alert, App as AntdApp, Button, Form, Input, Select, Space, Typography } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useState } from "react";
@@ -175,7 +176,7 @@ export function SettingsScreen() {
         // 服务器已按新版本落库：让查询在后台失效重取，离开再回来时不会把旧缓存
         // 当成「刚刚从服务器读到」的基线。不 await：保存响应本身就是权威值，
         // 按钮不该为这次核对多转一会儿。
-        void queryClient.invalidateQueries({ queryKey: queryKeys.siteSettings() });
+        void invalidateAfterWrite(queryClient, "site");
         setNotice(
           pendingEdits
             ? `已保存（v${saved.version}）；保存期间的新输入尚未提交，请再次保存。`

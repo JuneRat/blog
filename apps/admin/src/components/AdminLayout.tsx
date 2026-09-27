@@ -1,7 +1,9 @@
+import { invalidateAfterWrite } from "../queryEffects";
 import { Alert, Avatar, Breadcrumb, Button, Flex, Layout, Menu, Modal, Typography, theme } from "antd";
 import type { MenuProps } from "antd";
 import type { ReactNode } from "react";
 import { useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { api } from "../api";
 import { permissionMessageOf } from "../apiError";
 import { useAuth } from "../auth";
@@ -118,6 +120,7 @@ function selectedKey(route: Route): string {
 }
 
 export function AdminLayout({ children }: { children: ReactNode }) {
+  const queryClient = useQueryClient();
   const { token } = theme.useToken();
   const route = useRoute();
   // 测试里 mock 的 auth 只给 status/me，缺少的字段用可选调用兜住，
@@ -146,6 +149,7 @@ export function AdminLayout({ children }: { children: ReactNode }) {
     setAvatarError(null);
     try {
       await api.setOwnAvatar(avatarValue);
+      void invalidateAfterWrite(queryClient, "profile");
       await refresh?.();
       setAvatarOpen(false);
     } catch (e) {

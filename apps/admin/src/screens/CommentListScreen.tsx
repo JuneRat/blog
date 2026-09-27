@@ -7,6 +7,8 @@ import { useAuth } from '../auth';
 import { CommentEditor } from '../components/CommentEditor';
 import { CommentSwitch } from '../components/CommentSwitch';
 import { paths, navigate } from '../router';
+import { queryKeys } from '../queryClient';
+import { invalidateAfterWrite } from '../queryEffects';
 const labels: Record<string, string> = { pending: '待审核', approved: '已通过', trash: '回收站', spam: '垃圾评论' };
 export function CommentListScreen() {
   const { me } = useAuth();
@@ -20,17 +22,17 @@ export function CommentListScreen() {
   const [error, setError] = useState<string>();
   const [reply, setReply] = useState<CommentItem>();
   const [body, setBody] = useState('');
-  const query = useQuery({ queryKey: ['comments', page, status, post], queryFn: () => commentsApi.list(page, status, post) });
+  const query = useQuery({ queryKey: queryKeys.comments(page, status, post), queryFn: () => commentsApi.list(page, status, post) });
   async function moderate(item: CommentItem, next: string) {
     setBusy(true); setError(undefined);
     try { await commentsApi.moderate(item, next); void message.success(next === 'trash' ? '评论已移入回收站，回复仍保留' : '审核状态已保存'); }
     catch (e) { setError(permissionMessageOf(e)); }
-    finally { setBusy(false); await client.invalidateQueries({ queryKey: ['comments'] }); }
+    finally { setBusy(false); await invalidateAfterWrite(client, 'comments'); }
   }
   async function submitReply() {
     if (!reply) return;
     setBusy(true); setError(undefined);
-    try { const result = await commentsApi.reply(reply, body); void message.success(result.message); setReply(undefined); await client.invalidateQueries({queryKey:['comments']}); }
+    try { const result = await commentsApi.reply(reply, body); void message.success(result.message); setReply(undefined); await invalidateAfterWrite(client, 'comments'); }
     catch(e) { setError(permissionMessageOf(e)); }
     finally { setBusy(false); }
   }

@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
-import { App as AntdApp } from "antd";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api, mediaApi } from "../src/api";
 import { AdminLayout } from "../src/components/AdminLayout";
+import { AdminProviders } from "../src/providers";
+import { MediaLibraryScreen } from "../src/screens/MediaLibraryScreen";
 import { UnsavedChangesProvider } from "../src/unsaved";
 import type { MediaAsset } from "../src/types";
 
@@ -79,15 +80,15 @@ function me(avatarMediaId: string | null) {
   };
 }
 
-function renderLayout() {
+function renderLayout(showMedia = false) {
   return render(
-    <AntdApp>
+    <AdminProviders>
       <UnsavedChangesProvider>
         <AdminLayout>
-          <div>内容</div>
+          {showMedia ? <MediaLibraryScreen /> : <div>内容</div>}
         </AdminLayout>
       </UnsavedChangesProvider>
-    </AntdApp>,
+    </AdminProviders>,
   );
 }
 
@@ -105,11 +106,16 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("外壳头像入口", () => {
-  it("选择头像后保存：调用 setOwnAvatar 并刷新 /me", async () => {
+  it("选择头像后保存：刷新 /me 和已展示的媒体引用计数", async () => {
     h.me = me(null);
-    vi.mocked(api.setOwnAvatar).mockResolvedValue(profile("m1"));
+    let saved = false;
+    vi.mocked(api.setOwnAvatar).mockImplementation(async () => { saved = true; return profile("m1"); });
+    vi.mocked(mediaApi.list).mockImplementation(async () => ({
+      items: [{ ...asset, reference_count: saved ? 1 : 0 }], total: 1, page: 1, per_page: 24,
+    }));
 
-    renderLayout();
+    renderLayout(true);
+    await screen.findByRole("button", { name: "查看使用位置" });
     fireEvent.click(screen.getByRole("button", { name: /更换头像/ }));
     // 外层弹窗里的选择器先打开媒体库弹窗，再从网格里选第一张。
     fireEvent.click(await screen.findByRole("button", { name: "选择封面" }));
@@ -119,6 +125,7 @@ describe("外壳头像入口", () => {
 
     await waitFor(() => expect(api.setOwnAvatar).toHaveBeenCalledWith("m1"));
     await waitFor(() => expect(h.refresh).toHaveBeenCalled());
+    await screen.findByText("被 1 处引用");
   });
 
   it("移除头像：保存时提交 null", async () => {

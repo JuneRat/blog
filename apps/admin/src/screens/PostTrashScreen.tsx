@@ -7,6 +7,7 @@ import { api } from "../api";
 import { permissionMessageOf } from "../apiError";
 import { useAuth } from "../auth";
 import { queryKeys } from "../queryClient";
+import { invalidateAfterWrite } from "../queryEffects";
 import type { PostSummary, PageSummary } from "../types";
 
 /**
@@ -69,17 +70,8 @@ export function PostTrashScreen({kind = "post"}: {kind?: "post" | "page"} = {}) 
       else await (isPage ? api.restorePage(post.id, post.version) : api.restorePost(post.id, post.version));
       // 先给出成功反馈，再重取：即使重取失败，用户也知道操作已经生效。
       setNotice(purge ? `已永久删除「${post.title || post.slug}」。` : `已恢复「${post.title || post.slug}」。`);
-      /**
-       * 失效**整个回收站缓存**，而不只是当前页：页码是查询键的一部分，
-       * 只失效当前页会留下其他页的陈旧数据（总数与被删行都变了）。
-       * 用 `queryKeys.trashAll()`（`["trash"]` 前缀），而不是当前页的键。
-       */
-      await queryClient.invalidateQueries({ queryKey: isPage ? queryKeys.pageTrashAll() : queryKeys.trashAll() });
-      /**
-       * 恢复会让文章重新出现在「我的文章」列表里，所以必须同时失效文章列表；
-       * 永久删除不会改变列表（它本来就不在列表里），故只在恢复时做。
-       */
-      if (!purge) await queryClient.invalidateQueries({ queryKey: isPage ? queryKeys.pages() : queryKeys.posts() });
+      // 恢复改变列表与使用位置；永久删除还会移除媒体引用、目录关联和文章评论。
+      await invalidateAfterWrite(queryClient, isPage ? "page" : "post");
     } catch (e) {
       setActionError(permissionMessageOf(e));
     } finally {

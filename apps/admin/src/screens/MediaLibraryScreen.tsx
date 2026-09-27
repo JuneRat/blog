@@ -1,3 +1,4 @@
+import { invalidateAfterWrite } from "../queryEffects";
 import {
   Alert,
   App as AntdApp,
@@ -129,13 +130,13 @@ export function MediaLibraryScreen() {
     setNotice(null);
     setBusy(true);
     try {
-      const uploaded = await uploadImages(files);
+      const uploaded = await uploadImages(files, () => { void invalidateAfterWrite(queryClient, "media"); });
       setNotice(`已上传 ${uploaded.length} 张图片。`);
       setTrash(false);
       setPage(1);
       // 上传使全部页内容移位（新资产排在最前）：整族失效，与回收站 trashAll 同理；
       // 非活跃页的失效标记会在切回该页时触发重取，不会留下陈旧列表。
-      await queryClient.invalidateQueries({ queryKey: queryKeys.mediaAll() });
+      await invalidateAfterWrite(queryClient, "media");
     } catch (e) {
       setActionError(permissionMessageOf(e));
     } finally {
@@ -172,7 +173,7 @@ export function MediaLibraryScreen() {
       setNotice(`${asset.original_name} 已${deleted ? "移入回收站" : "恢复"}。`);
       setUsageId(null);
       // 内容会跨页移动，同时失效正常库、回收站和使用位置。
-      await queryClient.invalidateQueries({ queryKey: queryKeys.mediaAll() });
+      await invalidateAfterWrite(queryClient, "media");
       if ((media.data?.items.length ?? 0) === 1 && page > 1) setPage(page - 1);
     } catch (e) {
       setActionError(permissionMessageOf(e));

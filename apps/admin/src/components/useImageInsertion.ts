@@ -1,4 +1,6 @@
+import { invalidateAfterWrite } from "../queryEffects";
 import { useCallback, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import type { RefObject } from "react";
 import { mediaApi } from "../api";
 import { permissionMessageOf } from "../apiError";
@@ -12,12 +14,13 @@ import { defaultAltText, insertImageMarkdown, uploadRejection } from "../media";
  * 并发返回顺序不确定；图片数量很小，串行延迟可以接受。
  * 客户端预筛只拦明显不支持的输入，真正的判定在服务端（按文件内容）。
  */
-export async function uploadImages(files: File[]): Promise<MediaAsset[]> {
+export async function uploadImages(files: File[], onUploaded: () => void): Promise<MediaAsset[]> {
   const uploaded: MediaAsset[] = [];
   for (const file of files) {
     const rejection = uploadRejection(file);
     if (rejection !== null) throw new Error(rejection);
     uploaded.push(await mediaApi.upload(file));
+    onUploaded();
   }
   return uploaded;
 }
@@ -47,6 +50,7 @@ export function useImageInsertion(
   readContent: () => string,
   commitContent: (next: string) => void,
 ): ImageInsertion {
+  const queryClient = useQueryClient();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -113,7 +117,7 @@ export function useImageInsertion(
       setNotice(null);
       setBusy(true);
       try {
-        const uploaded = await uploadImages(files);
+        const uploaded = await uploadImages(files, () => { void invalidateAfterWrite(queryClient, "media"); });
         // 多张图片按选择顺序依次插入，后一张接在前一张之后。
         let value = readContent();
         let caret = selection().start;
@@ -137,7 +141,7 @@ export function useImageInsertion(
         setBusy(false);
       }
     },
-    [apply, readContent, selection],
+    [apply, queryClient, readContent, selection],
   );
 
   const clear = useCallback((): void => {

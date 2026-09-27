@@ -1,3 +1,4 @@
+import { invalidateAfterWrite } from "../queryEffects";
 import { ContentLifecycleControls, statusLabel, type ContentAction } from "../components/ContentLifecycleControls";
 import { CommentSwitch } from "../components/CommentSwitch";
 import {
@@ -311,15 +312,9 @@ export function PostEditScreen({ id }: { id: string | null }) {
   const dirty = !formEquals(view, baselineRef.current);
   useUnsavedGuard(dirty, "文章有未保存的修改，离开会丢失。");
   const queryClient = useQueryClient();
-  /**
-   * 写成功后让文章列表失效。
-   *
-   * 列表查询是 30s 新鲜度、且关闭了窗口聚焦重取；不显式失效的话，
-   * 「改完标题/改名 → 返回列表」会命中旧缓存，看到的是保存前的标题与 slug。
-   * 失效只打标记，真正取数发生在列表下次挂载时（此时它多半不在挂载状态）。
-   */
-  const invalidateList = useCallback((): void => {
-    void queryClient.invalidateQueries({ queryKey: queryKeys.posts() });
+  /** 每次提交后同步使列表、目录统计、媒体引用和评论关联信息过期。 */
+  const invalidateRelated = useCallback((): void => {
+    void invalidateAfterWrite(queryClient, "post");
   }, [queryClient]);
 
   const confirmLeave = useLeaveConfirmation();
@@ -437,7 +432,7 @@ export function PostEditScreen({ id }: { id: string | null }) {
         });
         // 先本地同步（含创建期间的新输入），再更新地址；效果钩子会跳过重载。
         applyServer(created, sent);
-        invalidateList();
+        invalidateRelated();
         navigate(paths.editPost(created.id));
         return;
       }
@@ -448,7 +443,7 @@ export function PostEditScreen({ id }: { id: string | null }) {
       });
       // 合并而不是整体覆盖：请求飞行期间的新输入必须保留。
       const stillDirty = applyServer(saved, sent);
-      invalidateList();
+      invalidateRelated();
 
       setNotice(
         stillDirty ? "已保存；等待期间的新改动尚未保存。" : "已保存（已发布内容直接更新线上）。",
@@ -498,7 +493,7 @@ export function PostEditScreen({ id }: { id: string | null }) {
             expected_version: latest.version,
           });
           const stillDirty = applyServer(saved, sent);
-          invalidateList();
+          invalidateRelated();
 
           setNotice(
             stillDirty ? "已覆盖保存；等待期间的新改动尚未保存。" : "已用服务器最新版本覆盖保存。",
@@ -548,7 +543,7 @@ export function PostEditScreen({ id }: { id: string | null }) {
          * 状态切换成功——那一步失败时返回列表看到的还是保存前的数据。
          * 下面那次失效仍要保留：状态列（已发布/草稿）只有状态切换成功才变。
          */
-        invalidateList();
+        invalidateRelated();
       }
       // 发布/撤回不改正文：只同步状态，保留（可能还在变化的）表单。
       const result = action === "publish"
@@ -557,7 +552,7 @@ export function PostEditScreen({ id }: { id: string | null }) {
         : action === "archive" ? await api.archivePost(id, expected)
         : await api.unpublishPost(id, expected);
       applyStatus(result);
-      invalidateList();
+      invalidateRelated();
       setNotice(`状态已更新为${statusLabel(result.status)}。${hasUnsaved() ? "还有未保存的改动。" : ""}`);
     } catch (e) {
       if (isVersionConflict(e)) {
@@ -655,7 +650,6 @@ export function PostEditScreen({ id }: { id: string | null }) {
       {id !== null && <CommentSwitch key={id} post={id} expectedVersion={version} disabled={busy || formMismatch}
         onBusy={setCommentBusy} onSaved={(next, previous) => {
           if (loadedIdRef.current === id) setVersion(current => current === previous ? next : current);
-          invalidateList();
         }} />}
       <Form
         form={formApi}

@@ -3,18 +3,24 @@ import { Alert, Space, Switch, Typography } from 'antd';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { commentsApi } from '../api';
 import { permissionMessageOf } from '../apiError';
+import { queryKeys } from '../queryClient';
+import { invalidateAfterWrite } from '../queryEffects';
 
 export function CommentSwitch({ post, expectedVersion, disabled = false, onSaved, onBusy }: {
   post?: string; expectedVersion?: number | null; disabled?: boolean;
   onSaved?: (version: number, previous: number) => void; onBusy?: (busy: boolean) => void;
 }) {
   const client = useQueryClient();
-  const key = ['comment-policy', post ?? 'global'];
+  const key = queryKeys.commentPolicy(post);
   const query = useQuery({ queryKey: key, queryFn: () => commentsApi.policy(post) });
-  useEffect(() => { if (post) void client.invalidateQueries({ queryKey: ['comment-policy', post] }); }, [client, post, expectedVersion]);
+  useEffect(() => { if (post) void client.invalidateQueries({ queryKey: queryKeys.commentPolicy(post) }); }, [client, post, expectedVersion]);
   const mutation = useMutation({
     mutationFn: (policy: { enabled: boolean; version: number }) => commentsApi.savePolicy(policy, post),
-    onSuccess: (data, sent) => { client.setQueryData(key, data); onSaved?.(data.version, sent.version); },
+    onSuccess: (data, sent) => {
+      client.setQueryData(key, data);
+      onSaved?.(data.version, sent.version);
+      void invalidateAfterWrite(client, post ? 'post' : 'comments');
+    },
     onError: () => { void client.invalidateQueries({ queryKey: key }); },
     onSettled: () => { onBusy?.(false); },
   });

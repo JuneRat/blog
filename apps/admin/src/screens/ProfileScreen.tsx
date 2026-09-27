@@ -1,10 +1,10 @@
+import { invalidateAfterWrite } from "../queryEffects";
 import { Alert, Button, Form, Input, Space, Spin, Typography } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { ApiError, api } from "../api";
 import { messageOf } from "../apiError";
 import { useAuth } from "../auth";
-import { queryKeys } from "../queryClient";
 import type { Profile } from "../types";
 import { useUnsavedGuard } from "../unsaved";
 
@@ -63,7 +63,7 @@ function ProfileForm({ initial }: { initial: Profile }) {
       // 使用本次提交返回的版本；刷新其他展示失败也不把已保存的输入当作未保存。
       accept(profile);
       setNotice("个人资料已保存。");
-      await queryClient.invalidateQueries({ queryKey: queryKeys.users() });
+      await invalidateAfterWrite(queryClient, "profile");
       try {
         await refresh();
       } catch (e) {

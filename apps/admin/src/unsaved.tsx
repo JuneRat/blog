@@ -1,6 +1,7 @@
 import { App as AntdApp } from "antd";
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
+import { blockHistoryNavigation } from "./router";
 
 interface UnsavedValue {
   /** 当前屏幕声明的未保存提示；null 表示没有未保存改动。 */
@@ -18,6 +19,22 @@ const UnsavedContext = createContext<UnsavedValue | null>(null);
  */
 export function UnsavedChangesProvider({ children }: { children: ReactNode }) {
   const [message, setMessage] = useState<string | null>(null);
+  const { modal } = AntdApp.useApp();
+  useLayoutEffect(() => {
+    if (message === null) return;
+    return blockHistoryNavigation(decide => {
+      const dialog = modal.confirm({
+        title: "有未保存的修改",
+        content: message,
+        okText: "放弃修改并离开",
+        cancelText: "留在此页",
+        okButtonProps: { danger: true },
+        onOk: () => decide(true),
+        onCancel: () => decide(false),
+      });
+      return () => dialog.destroy();
+    });
+  }, [message, modal]);
   const value = useMemo(() => ({ message, setMessage }), [message]);
   return <UnsavedContext.Provider value={value}>{children}</UnsavedContext.Provider>;
 }
@@ -61,17 +78,15 @@ export function useLeaveConfirmation(): (action: () => void, okText?: string) =>
 /**
  * 屏幕登记「有未保存改动」，并覆盖浏览器级的离开路径。
  *
- * 覆盖范围（有意为之，写清楚免得以后误以为覆盖全了）：
- * - 侧边栏导航：由 `AdminLayout` 在点击菜单时用 `useUnsavedChanges` 拦截；
+ * - 侧边栏与屏内导航：由 `useLeaveConfirmation` 确认；
  * - 刷新/关闭标签页：这里的 `beforeunload`；
- * - 浏览器前进后退：**不覆盖**。popstate 触发时地址已经变了，要拦就得回推
- *   一条历史再确认，代价与风险都不小；而 SPA 内的前进后退在后台是低频操作，
- *   真正的丢稿路径是「点菜单去别的屏」与「刷新页面」，这两条已经堵住。
+ * - 后台历史前进/后退：Provider 注册统一拦截，确认前不发布新路由，保留编辑组件；
+ * - 跨文档离开后台：同样由 beforeunload 请求浏览器原生确认。
  */
 export function useUnsavedGuard(dirty: boolean, message: string): void {
   const { setMessage } = useUnsavedChanges();
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!dirty) return;
     setMessage(message);
     return () => setMessage(null);

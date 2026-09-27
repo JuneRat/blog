@@ -1,3 +1,4 @@
+import { invalidateAfterWrite } from "../queryEffects";
 import { statusLabel } from "../components/ContentLifecycleControls";
 import { Alert, App as AntdApp, Button, Flex, Space, Table, Typography } from "antd";
 import type { TableProps } from "antd";
@@ -34,15 +35,6 @@ export function PostListScreen() {
   // 移入回收站的失败文案沿用同一个 setter（查询只管取数那一次）。
   const setError = setActionError;
 
-  /** 写操作后让列表失效重取（替代手写的「再拉一次」）。 */
-  const load = () => queryClient.invalidateQueries({ queryKey: queryKeys.posts() });
-
-  /**
-   * 移入回收站会同时改变两个列表：文章列表少一行，回收站多一行。
-   * 回收站按页缓存，所以要失效整族（`trashAll`），否则回去看到的是旧的一页。
-   */
-  const invalidateTrash = () => queryClient.invalidateQueries({ queryKey: queryKeys.trashAll() });
-
   function trash(post: PostSummary): void {
     modal.confirm({
       title: `将「${post.title || post.slug}」移入回收站？`,
@@ -52,8 +44,7 @@ export function PostListScreen() {
         setError(null);
         try {
           await api.trashPost(post.id, post.version);
-          await load();
-          await invalidateTrash();
+          await invalidateAfterWrite(queryClient, "post");
         } catch (e) {
           setError(permissionMessageOf(e));
         }

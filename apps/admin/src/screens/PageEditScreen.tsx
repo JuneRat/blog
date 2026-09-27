@@ -1,3 +1,4 @@
+import { invalidateAfterWrite } from "../queryEffects";
 import { ContentLifecycleControls, statusLabel, type ContentAction } from "../components/ContentLifecycleControls";
 import {
   Alert,
@@ -16,7 +17,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, api } from "../api";
 import { permissionMessageOf } from "../apiError";
 import { useAuth } from "../auth";
-import { queryKeys } from "../queryClient";
 import { navigate, paths } from "../router";
 import { useUnsavedGuard } from "../unsaved";
 import { MediaInsertPanel } from "../components/MediaInsertPanel";
@@ -184,9 +184,9 @@ export function PageEditScreen({ id }: { id: string | null }) {
   const dirty = !formEquals(view, baselineRef.current);
   useUnsavedGuard(dirty, "页面有未保存的修改，离开会丢失。");
   const queryClient = useQueryClient();
-  /** 写成功后让页面列表失效：见 PostEditScreen 的同名说明（30s 缓存 + 关闭聚焦重取）。 */
-  const invalidateList = useCallback((): void => {
-    void queryClient.invalidateQueries({ queryKey: queryKeys.pages() });
+  /** 同时刷新页面、回收站与媒体使用位置；表单始终以提交响应为基线。 */
+  const invalidateRelated = useCallback((): void => {
+    void invalidateAfterWrite(queryClient, "page");
   }, [queryClient]);
 
   useEffect(() => {
@@ -266,7 +266,7 @@ export function PageEditScreen({ id }: { id: string | null }) {
           visibility: sent.visibility,
         });
         applyServer(created, sent);
-        invalidateList();
+        invalidateRelated();
         navigate(paths.editPage(created.id));
         return;
       }
@@ -276,7 +276,7 @@ export function PageEditScreen({ id }: { id: string | null }) {
         expected_version: version ?? undefined,
       });
       const stillDirty = applyServer(saved, sent);
-      invalidateList();
+      invalidateRelated();
 
       setNotice(
         stillDirty ? "已保存；等待期间的新改动尚未保存。" : "已保存（已发布页面直接更新线上）。",
@@ -325,7 +325,7 @@ export function PageEditScreen({ id }: { id: string | null }) {
             expected_version: latest.version,
           });
           const stillDirty = applyServer(saved, sent);
-          invalidateList();
+          invalidateRelated();
 
           setNotice(
             stillDirty ? "已覆盖保存；等待期间的新改动尚未保存。" : "已用服务器最新版本覆盖保存。",
@@ -366,7 +366,7 @@ export function PageEditScreen({ id }: { id: string | null }) {
          * 状态切换成功——那一步失败时返回列表看到的还是保存前的数据。
          * 下面那次失效仍要保留：状态列（已发布/草稿）只有状态切换成功才变。
          */
-        invalidateList();
+        invalidateRelated();
       }
       const result = action === "publish"
         ? await api.publishPage(id, expected)
@@ -374,7 +374,7 @@ export function PageEditScreen({ id }: { id: string | null }) {
         : action === "archive" ? await api.archivePage(id, expected)
         : await api.unpublishPage(id, expected);
       applyStatus(result);
-      invalidateList();
+      invalidateRelated();
       setNotice(`状态已更新为${statusLabel(result.status)}。${hasUnsaved() ? "还有未保存的改动。" : ""}`);
     } catch (e) {
       if (isVersionConflict(e)) {
@@ -401,8 +401,7 @@ export function PageEditScreen({ id }: { id: string | null }) {
         setDeleteConflict(false);
         try {
           await api.trashPage(id, version);
-          invalidateList();
-          void queryClient.invalidateQueries({queryKey: queryKeys.pageTrashAll()});
+          invalidateRelated();
           navigate(paths.pages, { replace: true });
         } catch (cause) {
           if (isVersionConflict(cause)) {

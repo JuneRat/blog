@@ -1,3 +1,4 @@
+import { invalidateAfterWrite } from "../queryEffects";
 import { statusLabel } from "../components/ContentLifecycleControls";
 import {
   Alert,
@@ -75,7 +76,7 @@ export function SeriesListScreen() {
   const setError = setActionError;
 
   /** 写操作后让目录失效重取（替代手写「再拉一次」）。 */
-  const load = () => queryClient.invalidateQueries({ queryKey: queryKeys.series() });
+  const load = () => invalidateAfterWrite(queryClient, "series");
 
   /**
    * 成员目录：外层列表就绪后按系列并发拉取。
@@ -151,8 +152,6 @@ export function SeriesListScreen() {
         setBusy(true);
         try {
           await seriesApi.remove(s.slug, s.version);
-          void queryClient.invalidateQueries({queryKey: queryKeys.posts()});
-          void queryClient.invalidateQueries({queryKey: queryKeys.trashAll()});
           setNotice(`已删除系列 ${s.name}。`);
           await load();
         } catch (e) {
@@ -222,8 +221,6 @@ export function SeriesListScreen() {
         next.map((p) => p.id),
         s.version,
       );
-      void queryClient.invalidateQueries({queryKey: queryKeys.posts()});
-      void queryClient.invalidateQueries({queryKey: queryKeys.trashAll()});
       await load();
     } catch (e) {
       // 版本/权限/集合不一致：先重读目录（load 清错误位），再展示服务端原因。

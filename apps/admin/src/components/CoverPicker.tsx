@@ -1,3 +1,4 @@
+import { invalidateAfterWrite } from "../queryEffects";
 import {
   Alert,
   Button,
@@ -12,6 +13,7 @@ import {
   theme,
 } from "antd";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { mediaApi } from "../api";
 import { permissionMessageOf } from "../apiError";
 import { MEDIA_ACCEPT, MEDIA_MAX_BYTES, formatBytes, mediaUrl, uploadRejection } from "../media";
@@ -54,6 +56,7 @@ export function CoverPicker({
   label = "封面",
 }: CoverPickerProps) {
   const { token } = theme.useToken();
+  const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
   const [assets, setAssets] = useState<MediaAsset[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -112,7 +115,9 @@ export function CoverPicker({
     setError(null);
     setBusy(true);
     try {
-      choose(await mediaApi.upload(file));
+      const uploaded = await mediaApi.upload(file);
+      void invalidateAfterWrite(queryClient, "media");
+      choose(uploaded);
     } catch (e) {
       setError(permissionMessageOf(e));
     } finally {

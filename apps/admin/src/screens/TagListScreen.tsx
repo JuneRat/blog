@@ -1,3 +1,4 @@
+import { invalidateAfterWrite } from "../queryEffects";
 import { Alert, App as AntdApp, Button, Form, Input, Space, Table, Typography } from "antd";
 import type { TableProps } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -50,7 +51,7 @@ export function TagListScreen() {
   const setError = setActionError;
 
   /** 写操作后让目录失效重取（替代手写的「再拉一次」）。 */
-  const load = () => queryClient.invalidateQueries({ queryKey: queryKeys.tags() });
+  const load = () => invalidateAfterWrite(queryClient, "tag");
 
   async function create(): Promise<void> {
     const draft = form.getFieldsValue();
@@ -118,8 +119,6 @@ export function TagListScreen() {
         setBusy(true);
         try {
           await api.deleteTag(tag.slug, tag.version);
-          void queryClient.invalidateQueries({queryKey: queryKeys.posts()});
-          void queryClient.invalidateQueries({queryKey: queryKeys.trashAll()});
           setNotice(`已删除标签 ${tag.name}。`);
           await load();
         } catch (e) {

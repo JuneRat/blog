@@ -1,3 +1,4 @@
+import { invalidateAfterWrite } from "../queryEffects";
 import { Alert, App as AntdApp, Button, Form, Input, Select, Space, Table, Typography } from "antd";
 import type { TableProps } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -47,7 +48,7 @@ export function CategoryListScreen() {
   const setError = setActionError;
 
   /** 写操作后让目录失效重取（替代手写的「再拉一次」）。 */
-  const load = () => queryClient.invalidateQueries({ queryKey: queryKeys.categories() });
+  const load = () => invalidateAfterWrite(queryClient, "category");
 
   /** 由 parent_id 计算缩进深度（目录小，直接逐层上溯）。 */
   function depthOf(cat: CategorySummary): number {

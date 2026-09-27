@@ -208,6 +208,23 @@ describe("媒体库屏", () => {
     expect(mediaApi.upload).not.toHaveBeenCalled();
   });
 
+  it("批量上传部分成功后失败，媒体库仍能看到已落库的图片", async () => {
+    let uploaded = false;
+    const first = asset({ id: "first", original_name: "first.png" });
+    vi.mocked(mediaApi.list).mockImplementation(async () => pageOf(uploaded ? [first, asset()] : [asset()]));
+    vi.mocked(mediaApi.upload).mockImplementationOnce(async () => { uploaded = true; return first; })
+      .mockRejectedValueOnce(new Error("第二张上传失败"));
+    render(<App />);
+    await screen.findByText("photo.png");
+    fireEvent.change(document.querySelector<HTMLInputElement>('input[type="file"]')!, { target: { files: [
+      new File(["png"], "first.png", { type: "image/png" }),
+      new File(["png"], "second.png", { type: "image/png" }),
+    ] } });
+    await screen.findByText("第二张上传失败");
+    await screen.findByText("first.png");
+    expect(screen.queryByText(/已上传 2 张/)).toBeNull();
+  });
+
   it("上传后整族失效：翻回看过的页不展示陈旧缓存", async () => {
     // 上传让全部页内容移位（新资产排在最前）。若只失效第 1 页，
     // 已看过的第 2 页在 30s staleTime 内会展示旧缓存（条目丢失）。

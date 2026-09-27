@@ -1,4 +1,6 @@
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
+import { NavigationHistory } from "./navigationHistory";
+import type { HistoryBlocker } from "./navigationHistory";
 
 /**
  * 后台内部路由：
@@ -137,22 +139,40 @@ export const paths = {
  * 使用 History API 的最小路由；服务端对 /admin/* 深链回退到 index.html。
  * `replace` 用于删除后等无需保留旧历史项的跳转。
  */
-export function navigate(to: string, options: { replace?: boolean } = {}): void {
-  if (window.location.pathname === to) return;
-  if (options.replace === true) {
-    window.history.replaceState(null, "", to);
-  } else {
-    window.history.pushState(null, "", to);
-  }
-  window.dispatchEvent(new PopStateEvent("popstate"));
+let history: NavigationHistory | null = null;
+let consumers = 0;
+
+function getHistory(): NavigationHistory {
+  history ??= new NavigationHistory(window);
+  return history;
 }
 
+function release(unsubscribe: () => void): () => void {
+  consumers += 1;
+  return () => {
+    unsubscribe();
+    consumers -= 1;
+    if (consumers === 0) {
+      history?.dispose();
+      history = null;
+    }
+  };
+}
+
+function subscribe(listener: () => void): () => void {
+  return release(getHistory().subscribe(listener));
+}
+
+export function blockHistoryNavigation(blocker: HistoryBlocker): () => void {
+  return release(getHistory().block(blocker));
+}
+
+export function navigate(to: string, options: { replace?: boolean } = {}): void {
+  getHistory().navigate(to, options.replace);
+}
+
+const getPathname = (): string => getHistory().getPathname();
+
 export function useRoute(): Route {
-  const [route, setRoute] = useState<Route>(() => parseRoute(window.location.pathname));
-  useEffect(() => {
-    const update = (): void => setRoute(parseRoute(window.location.pathname));
-    window.addEventListener("popstate", update);
-    return () => window.removeEventListener("popstate", update);
-  }, []);
-  return route;
+  return parseRoute(useSyncExternalStore(subscribe, getPathname));
 }
