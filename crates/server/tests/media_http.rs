@@ -153,7 +153,7 @@ async fn fresh_stack() -> Stack {
                 secret_ref: "IDP_SECRET".into(),
                 scopes: vec![],
             }],
-            None,
+            None.into(),
         )
         .await
         .unwrap();
@@ -168,7 +168,7 @@ async fn fresh_stack() -> Stack {
                 "https://idp.example",
                 &format!("sub-{username}"),
                 None,
-                None,
+                None.into(),
             )
             .await
             .unwrap();

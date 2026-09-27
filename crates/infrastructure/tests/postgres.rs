@@ -140,7 +140,7 @@ async fn duplicate_slug_is_rejected_as_conflict() {
     repo.insert_post(
         &Post::reconstitute(draft_snapshot(author, "same-slug")).unwrap(),
         &[],
-        None,
+        None.into(),
     )
     .await
     .unwrap();
@@ -148,7 +148,7 @@ async fn duplicate_slug_is_rejected_as_conflict() {
         .insert_post(
             &Post::reconstitute(draft_snapshot(author, "same-slug")).unwrap(),
             &[],
-            None,
+            None.into(),
         )
         .await
         .unwrap_err();
@@ -172,7 +172,7 @@ async fn foreign_key_protects_author_reference() {
         .insert_post(
             &Post::reconstitute(draft_snapshot(ghost, "orphan")).unwrap(),
             &[],
-            None,
+            None.into(),
         )
         .await
         .unwrap_err();
@@ -221,9 +221,13 @@ async fn save_returns_three_states_and_new_version() {
     );
 
     let mut snapshot = draft_snapshot(author, "versioned");
-    repo.insert_post(&Post::reconstitute(snapshot.clone()).unwrap(), &[], None)
-        .await
-        .unwrap();
+    repo.insert_post(
+        &Post::reconstitute(snapshot.clone()).unwrap(),
+        &[],
+        None.into(),
+    )
+    .await
+    .unwrap();
     assert_eq!(snapshot.version, 1);
 
     // 正确版本：Saved 且携带新版本号，无需回读。
@@ -234,7 +238,7 @@ async fn save_returns_three_states_and_new_version() {
             1,
             OffsetDateTime::now_utc(),
             None,
-            None,
+            None.into(),
         )
         .await
         .unwrap();
@@ -250,7 +254,7 @@ async fn save_returns_three_states_and_new_version() {
             1,
             OffsetDateTime::now_utc(),
             None,
-            None,
+            None.into(),
         )
         .await
         .unwrap();
@@ -273,7 +277,7 @@ async fn save_returns_three_states_and_new_version() {
             2,
             OffsetDateTime::now_utc(),
             None,
-            None,
+            None.into(),
         )
         .await
         .unwrap();
@@ -304,7 +308,11 @@ async fn truly_concurrent_saves_exactly_one_wins() {
 
     let snapshot = draft_snapshot(author, "race-real");
     repo_a
-        .insert_post(&Post::reconstitute(snapshot.clone()).unwrap(), &[], None)
+        .insert_post(
+            &Post::reconstitute(snapshot.clone()).unwrap(),
+            &[],
+            None.into(),
+        )
         .await
         .unwrap();
 
@@ -319,8 +327,8 @@ async fn truly_concurrent_saves_exactly_one_wins() {
 
     // 两条真实连接同时 UPDATE 同一行，都带 expected_version=1。
     let (outcome_a, outcome_b) = tokio::join!(
-        repo_a.commit_post(&edit_a, 1, now, None, None),
-        repo_b.commit_post(&edit_b, 1, now, None, None)
+        repo_a.commit_post(&edit_a, 1, now, None, None.into()),
+        repo_b.commit_post(&edit_b, 1, now, None, None.into())
     );
     let outcomes = [outcome_a.unwrap(), outcome_b.unwrap()];
     let saved = outcomes
@@ -360,15 +368,19 @@ async fn public_query_filters_draft_private_and_deleted() {
         post.publish(OffsetDateTime::now_utc()).unwrap();
         published = post.snapshot();
     }
-    repo.insert_post(&Post::reconstitute(published.clone()).unwrap(), &[], None)
-        .await
-        .unwrap();
+    repo.insert_post(
+        &Post::reconstitute(published.clone()).unwrap(),
+        &[],
+        None.into(),
+    )
+    .await
+    .unwrap();
 
     // 2. 草稿
     repo.insert_post(
         &Post::reconstitute(draft_snapshot(author, "draft-one")).unwrap(),
         &[],
-        None,
+        None.into(),
     )
     .await
     .unwrap();
@@ -381,9 +393,13 @@ async fn public_query_filters_draft_private_and_deleted() {
         post.publish(OffsetDateTime::now_utc()).unwrap();
         private = post.snapshot();
     }
-    repo.insert_post(&Post::reconstitute(private.clone()).unwrap(), &[], None)
-        .await
-        .unwrap();
+    repo.insert_post(
+        &Post::reconstitute(private.clone()).unwrap(),
+        &[],
+        None.into(),
+    )
+    .await
+    .unwrap();
 
     // 4. 软删除的已发布文章
     let mut deleted = draft_snapshot(author, "deleted-one");
@@ -392,9 +408,13 @@ async fn public_query_filters_draft_private_and_deleted() {
         post.publish(OffsetDateTime::now_utc()).unwrap();
         deleted = post.snapshot();
     }
-    repo.insert_post(&Post::reconstitute(deleted.clone()).unwrap(), &[], None)
-        .await
-        .unwrap();
+    repo.insert_post(
+        &Post::reconstitute(deleted.clone()).unwrap(),
+        &[],
+        None.into(),
+    )
+    .await
+    .unwrap();
     sqlx::raw_sql("UPDATE posts SET deleted_at = now() WHERE slug = 'deleted-one'")
         .execute(&pool)
         .await
@@ -426,14 +446,18 @@ async fn status_transitions_persisted_correctly() {
     );
 
     let snapshot = draft_snapshot(author, "lifecycle");
-    repo.insert_post(&Post::reconstitute(snapshot.clone()).unwrap(), &[], None)
-        .await
-        .unwrap();
+    repo.insert_post(
+        &Post::reconstitute(snapshot.clone()).unwrap(),
+        &[],
+        None.into(),
+    )
+    .await
+    .unwrap();
 
     let mut post =
         Post::reconstitute(repo.find_by_id(snapshot.id).await.unwrap().unwrap()).unwrap();
     post.publish(OffsetDateTime::now_utc()).unwrap();
-    repo.commit_post(&post, 1, OffsetDateTime::now_utc(), None, None)
+    repo.commit_post(&post, 1, OffsetDateTime::now_utc(), None, None.into())
         .await
         .unwrap();
 
@@ -443,7 +467,7 @@ async fn status_transitions_persisted_correctly() {
     let first_published_at = post.snapshot().published_at;
 
     post.withdraw();
-    repo.commit_post(&post, 2, OffsetDateTime::now_utc(), None, None)
+    repo.commit_post(&post, 2, OffsetDateTime::now_utc(), None, None.into())
         .await
         .unwrap();
 
@@ -584,13 +608,16 @@ async fn rbac_permissions_union_and_version_bump() {
         .unwrap();
 
     // 未知角色拒绝。
-    let err = rbac.assign_role(uid, "ghost", None).await.unwrap_err();
+    let err = rbac
+        .assign_role(uid, "ghost", None.into())
+        .await
+        .unwrap_err();
     assert!(matches!(err, application::error::UseCaseError::NotFound(_)));
 
-    rbac.assign_role(uid, "author", None).await.unwrap();
-    rbac.assign_role(uid, "editor", None).await.unwrap();
+    rbac.assign_role(uid, "author", None.into()).await.unwrap();
+    rbac.assign_role(uid, "editor", None.into()).await.unwrap();
     // 重复分配幂等，不重复递增版本。
-    rbac.assign_role(uid, "author", None).await.unwrap();
+    rbac.assign_role(uid, "author", None.into()).await.unwrap();
 
     let (version_after,): (i64,) = sqlx::query_as("SELECT version FROM users WHERE id = $1")
         .bind(uid)
@@ -630,18 +657,21 @@ async fn rbac_last_owner_protection() {
     seed_binding(&pool, u1).await;
     seed_binding(&pool, u2).await;
 
-    rbac.assign_role(u1, "owner", None).await.unwrap();
+    rbac.assign_role(u1, "owner", None.into()).await.unwrap();
 
     // 唯一 Owner：移除被拒。
-    let err = rbac.remove_role(u1, "owner", None).await.unwrap_err();
+    let err = rbac
+        .remove_role(u1, "owner", None.into())
+        .await
+        .unwrap_err();
     assert!(
         matches!(err, application::error::UseCaseError::LastOwnerProtected),
         "最后 Owner 不能被移除：{err:?}"
     );
 
     // 第二个 Owner 后，允许移除第一个。
-    rbac.assign_role(u2, "owner", None).await.unwrap();
-    rbac.remove_role(u1, "owner", None).await.unwrap();
+    rbac.assign_role(u2, "owner", None.into()).await.unwrap();
+    rbac.remove_role(u1, "owner", None.into()).await.unwrap();
 
     let owners: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM user_roles ur \
@@ -656,13 +686,16 @@ async fn rbac_last_owner_protection() {
 
     // 软删除用户不计入有效 Owner：u1 重新持有 owner，u2 被软删除后
     // u1 成为唯一可登录 Owner，不可再被移除。
-    rbac.assign_role(u1, "owner", None).await.unwrap();
+    rbac.assign_role(u1, "owner", None.into()).await.unwrap();
     sqlx::query("UPDATE users SET deleted_at = now() WHERE id = $1")
         .bind(u2)
         .execute(&pool)
         .await
         .unwrap();
-    let err = rbac.remove_role(u1, "owner", None).await.unwrap_err();
+    let err = rbac
+        .remove_role(u1, "owner", None.into())
+        .await
+        .unwrap_err();
     assert!(
         matches!(err, application::error::UseCaseError::LastOwnerProtected),
         "软删除的 Owner 不计入有效数量"
@@ -683,13 +716,18 @@ async fn owner_without_login_method_does_not_satisfy_last_owner_guard() {
 
     let bound = seed_user(&pool, "bound").await;
     let unbound = seed_user(&pool, "unbound").await;
-    rbac.assign_role(bound, "owner", None).await.unwrap();
-    rbac.assign_role(unbound, "owner", None).await.unwrap();
+    rbac.assign_role(bound, "owner", None.into()).await.unwrap();
+    rbac.assign_role(unbound, "owner", None.into())
+        .await
+        .unwrap();
     // 只有 bound 有有效登录方式；unbound 是「登不进去的 Owner」。
     seed_binding(&pool, bound).await;
 
     // 移除唯一可登录的 Owner 会留下无法登录的 Owner → 拒绝（docs §3）。
-    let err = rbac.remove_role(bound, "owner", None).await.unwrap_err();
+    let err = rbac
+        .remove_role(bound, "owner", None.into())
+        .await
+        .unwrap_err();
     assert!(
         matches!(err, application::error::UseCaseError::LastOwnerProtected),
         "无登录方式的 Owner 不构成有效 Owner：{err:?}"
@@ -697,7 +735,7 @@ async fn owner_without_login_method_does_not_satisfy_last_owner_guard() {
 
     // 给 unbound 绑定登录方式后，才允许移除 bound。
     seed_binding(&pool, unbound).await;
-    assert!(rbac.remove_role(bound, "owner", None).await.is_ok());
+    assert!(rbac.remove_role(bound, "owner", None.into()).await.is_ok());
 }
 
 #[tokio::test]
@@ -714,14 +752,23 @@ async fn owner_without_login_method_can_be_cleaned_up() {
 
     let bound = seed_user(&pool, "bound").await;
     let unbound = seed_user(&pool, "unbound").await;
-    rbac.assign_role(bound, "owner", None).await.unwrap();
-    rbac.assign_role(unbound, "owner", None).await.unwrap();
+    rbac.assign_role(bound, "owner", None.into()).await.unwrap();
+    rbac.assign_role(unbound, "owner", None.into())
+        .await
+        .unwrap();
     seed_binding(&pool, bound).await;
 
     // 移除登不进去的 Owner 不会减少可用 Owner，允许清理。
-    assert!(rbac.remove_role(unbound, "owner", None).await.is_ok());
+    assert!(
+        rbac.remove_role(unbound, "owner", None.into())
+            .await
+            .is_ok()
+    );
     // bound 仍是最后可登录 Owner，受保护。
-    let err = rbac.remove_role(bound, "owner", None).await.unwrap_err();
+    let err = rbac
+        .remove_role(bound, "owner", None.into())
+        .await
+        .unwrap_err();
     assert!(matches!(
         err,
         application::error::UseCaseError::LastOwnerProtected
@@ -745,11 +792,14 @@ async fn password_only_last_owner_is_protected() {
         .unwrap();
 
     let alice = seed_user(&pool, "alice").await;
-    rbac.assign_role(alice, "owner", None).await.unwrap();
+    rbac.assign_role(alice, "owner", None.into()).await.unwrap();
     // 关键：只有本地密码，没有任何 oauth 绑定。
     seed_password(&pool, alice).await;
 
-    let err = rbac.remove_role(alice, "owner", None).await.unwrap_err();
+    let err = rbac
+        .remove_role(alice, "owner", None.into())
+        .await
+        .unwrap_err();
     assert!(
         matches!(err, application::error::UseCaseError::LastOwnerProtected),
         "密码型最后 Owner 不能被移除：{err:?}"
@@ -757,11 +807,11 @@ async fn password_only_last_owner_is_protected() {
 
     // 第二个同样只用密码的 Owner 出现后，才允许移除第一个。
     let bob = seed_user(&pool, "bob").await;
-    rbac.assign_role(bob, "owner", None).await.unwrap();
+    rbac.assign_role(bob, "owner", None.into()).await.unwrap();
     seed_password(&pool, bob).await;
-    assert!(rbac.remove_role(alice, "owner", None).await.is_ok());
+    assert!(rbac.remove_role(alice, "owner", None.into()).await.is_ok());
     assert!(
-        rbac.remove_role(bob, "owner", None).await.is_err(),
+        rbac.remove_role(bob, "owner", None.into()).await.is_err(),
         "bob 成了最后 Owner"
     );
 }
@@ -781,8 +831,8 @@ async fn deleted_password_only_owner_can_be_cleaned_up() {
 
     let alice = seed_user(&pool, "alice").await;
     let bob = seed_user(&pool, "bob").await;
-    rbac.assign_role(alice, "owner", None).await.unwrap();
-    rbac.assign_role(bob, "owner", None).await.unwrap();
+    rbac.assign_role(alice, "owner", None.into()).await.unwrap();
+    rbac.assign_role(bob, "owner", None.into()).await.unwrap();
     seed_password(&pool, alice).await;
     seed_password(&pool, bob).await;
 
@@ -792,10 +842,13 @@ async fn deleted_password_only_owner_can_be_cleaned_up() {
         .execute(&pool)
         .await
         .unwrap();
-    assert!(rbac.remove_role(bob, "owner", None).await.is_ok());
+    assert!(rbac.remove_role(bob, "owner", None.into()).await.is_ok());
 
     // alice 现在是唯一可登录 Owner，受保护。
-    let err = rbac.remove_role(alice, "owner", None).await.unwrap_err();
+    let err = rbac
+        .remove_role(alice, "owner", None.into())
+        .await
+        .unwrap_err();
     assert!(matches!(
         err,
         application::error::UseCaseError::LastOwnerProtected
@@ -816,14 +869,17 @@ async fn removing_role_the_user_does_not_hold_is_noop() {
 
     let owner = seed_user(&pool, "owner").await;
     let plain = seed_user(&pool, "plain").await;
-    rbac.assign_role(owner, "owner", None).await.unwrap();
+    rbac.assign_role(owner, "owner", None.into()).await.unwrap();
     seed_binding(&pool, owner).await;
 
     // plain 本来就不是 owner：移除不应因全局 Owner 数而误报 Forbidden。
-    assert!(rbac.remove_role(plain, "owner", None).await.is_ok());
-    assert!(rbac.remove_role(plain, "author", None).await.is_ok());
+    assert!(rbac.remove_role(plain, "owner", None.into()).await.is_ok());
+    assert!(rbac.remove_role(plain, "author", None.into()).await.is_ok());
     // 真正的最后 Owner 仍受保护。
-    let err = rbac.remove_role(owner, "owner", None).await.unwrap_err();
+    let err = rbac
+        .remove_role(owner, "owner", None.into())
+        .await
+        .unwrap_err();
     assert!(matches!(
         err,
         application::error::UseCaseError::LastOwnerProtected
@@ -844,15 +900,15 @@ async fn concurrent_last_owner_removal_keeps_at_least_one_loginable_owner() {
 
     let u1 = seed_user(&pool, "owner1").await;
     let u2 = seed_user(&pool, "owner2").await;
-    rbac.assign_role(u1, "owner", None).await.unwrap();
-    rbac.assign_role(u2, "owner", None).await.unwrap();
+    rbac.assign_role(u1, "owner", None.into()).await.unwrap();
+    rbac.assign_role(u2, "owner", None.into()).await.unwrap();
     seed_binding(&pool, u1).await;
     seed_binding(&pool, u2).await;
 
     // 两个并发移除：排他锁 + 锁内复核后应恰好一个成功，至少保留一个可登录 Owner。
     let (a, b) = tokio::join!(
-        rbac.remove_role(u1, "owner", None),
-        rbac.remove_role(u2, "owner", None)
+        rbac.remove_role(u1, "owner", None.into()),
+        rbac.remove_role(u2, "owner", None.into())
     );
     let succeeded = [a.is_ok(), b.is_ok()].into_iter().filter(|ok| *ok).count();
     assert_eq!(succeeded, 1, "并发移除只能成功一个：{a:?} / {b:?}");
@@ -890,7 +946,7 @@ async fn page_repository_crud_version_and_public_query() {
     )
     .unwrap();
     assert_eq!(
-        pages.insert_page(&page, None).await.unwrap(),
+        pages.insert_page(&page, None.into()).await.unwrap(),
         page.snapshot()
     );
 
@@ -903,7 +959,10 @@ async fn page_repository_crud_version_and_public_query() {
         now,
     )
     .unwrap();
-    let err = pages.insert_page(&duplicate, None).await.unwrap_err();
+    let err = pages
+        .insert_page(&duplicate, None.into())
+        .await
+        .unwrap_err();
     assert!(
         matches!(err, UseCaseError::Conflict(ConflictKind::Slug)),
         "{err:?}"
@@ -917,13 +976,17 @@ async fn page_repository_crud_version_and_public_query() {
 
     // 过期版本：StaleConflict（可重试），不是 Gone。
     assert_eq!(
-        pages.commit_page(&page, 99, now, None).await.unwrap(),
+        pages
+            .commit_page(&page, 99, now, None.into())
+            .await
+            .unwrap(),
         PageCommitOutcome::StaleConflict
     );
 
     // 发布并写入：命中版本后 +1。
     page.publish(now).unwrap();
-    let PageCommitOutcome::Saved(snapshot) = pages.commit_page(&page, 1, now, None).await.unwrap()
+    let PageCommitOutcome::Saved(snapshot) =
+        pages.commit_page(&page, 1, now, None.into()).await.unwrap()
     else {
         panic!("publish must succeed");
     };
@@ -949,8 +1012,10 @@ async fn page_repository_crud_version_and_public_query() {
             ..Default::default()
         })
         .unwrap();
-    let PageCommitOutcome::Saved(private) =
-        pages.commit_page(&private, 2, now, None).await.unwrap()
+    let PageCommitOutcome::Saved(private) = pages
+        .commit_page(&private, 2, now, None.into())
+        .await
+        .unwrap()
     else {
         panic!("visibility edit must succeed");
     };
@@ -962,23 +1027,26 @@ async fn page_repository_crud_version_and_public_query() {
     let mut trash = Page::reconstitute(private).unwrap();
     trash.trash(now);
     assert!(matches!(
-        pages.commit_lifecycle(&trash, 3, now, None).await.unwrap(),
+        pages
+            .commit_lifecycle(&trash, 3, now, None.into())
+            .await
+            .unwrap(),
         PageCommitOutcome::Saved(_)
     ));
     assert_eq!(
-        pages.purge(snapshot.id, 2, None).await.unwrap(),
+        pages.purge(snapshot.id, 2, None.into()).await.unwrap(),
         PageDeleteOutcome::StaleVersion
     );
     assert_eq!(
-        pages.purge(snapshot.id, 4, None).await.unwrap(),
+        pages.purge(snapshot.id, 4, None.into()).await.unwrap(),
         PageDeleteOutcome::Deleted
     );
     assert_eq!(
-        pages.purge(snapshot.id, 4, None).await.unwrap(),
+        pages.purge(snapshot.id, 4, None.into()).await.unwrap(),
         PageDeleteOutcome::Gone
     );
     assert!(pages.find_by_id(snapshot.id).await.unwrap().is_none());
-    pages.insert_page(&duplicate, None).await.unwrap();
+    pages.insert_page(&duplicate, None.into()).await.unwrap();
     assert_ne!(
         pages
             .find_by_id(duplicate.snapshot().id)
@@ -998,11 +1066,17 @@ async fn page_repository_crud_version_and_public_query() {
         now,
     )
     .unwrap();
-    let race = pages.insert_page(&race, None).await.unwrap();
+    let race = pages.insert_page(&race, None.into()).await.unwrap();
     let mut trash = Page::reconstitute(race.clone()).unwrap();
     trash.trash(now);
-    pages.commit_lifecycle(&trash, 1, now, None).await.unwrap();
-    let (left, right) = tokio::join!(pages.purge(race.id, 2, None), pages.purge(race.id, 2, None));
+    pages
+        .commit_lifecycle(&trash, 1, now, None.into())
+        .await
+        .unwrap();
+    let (left, right) = tokio::join!(
+        pages.purge(race.id, 2, None.into()),
+        pages.purge(race.id, 2, None.into())
+    );
     let outcomes = [left.unwrap(), right.unwrap()];
     assert!(outcomes.contains(&PageDeleteOutcome::Deleted));
     assert!(outcomes.contains(&PageDeleteOutcome::Gone));
@@ -1035,7 +1109,7 @@ async fn password_credentials_are_stored_and_scoped_to_active_users() {
         .set_password_hash(
             user_id,
             "$argon2id$v=19$m=19456,t=2,p=1$c2FsdA$aGFzaA",
-            None,
+            None.into(),
         )
         .await
         .unwrap();
@@ -1062,7 +1136,7 @@ async fn password_credentials_are_stored_and_scoped_to_active_users() {
                 user_id,
                 Some("$argon2id$stale"),
                 "$argon2id$upgraded",
-                None
+                None.into()
             )
             .await
             .unwrap()
@@ -1075,7 +1149,12 @@ async fn password_credentials_are_stored_and_scoped_to_active_users() {
     );
     assert_eq!(
         users
-            .compare_and_set_password_hash(user_id, Some(&current), "$argon2id$upgraded", None)
+            .compare_and_set_password_hash(
+                user_id,
+                Some(&current),
+                "$argon2id$upgraded",
+                None.into()
+            )
             .await
             .unwrap(),
         Some(after + 1),
@@ -1089,7 +1168,7 @@ async fn password_credentials_are_stored_and_scoped_to_active_users() {
     // `expected = None` 表示「当前必须为空」：已有密码时不得写入（OAuth 用户设初始密码）。
     assert!(
         users
-            .compare_and_set_password_hash(user_id, None, "$argon2id$initial", None)
+            .compare_and_set_password_hash(user_id, None, "$argon2id$initial", None.into())
             .await
             .unwrap()
             .is_none(),
@@ -1121,7 +1200,10 @@ async fn password_credentials_are_stored_and_scoped_to_active_users() {
         .execute(&pool)
         .await
         .unwrap();
-    users.clear_password_hash(user_id, None).await.unwrap();
+    users
+        .clear_password_hash(user_id, None.into())
+        .await
+        .unwrap();
     assert!(users.password_hash_of(user_id).await.unwrap().is_none());
     assert!(
         users
@@ -1135,13 +1217,16 @@ async fn password_credentials_are_stored_and_scoped_to_active_users() {
     let missing = uuid::Uuid::now_v7();
     assert!(matches!(
         users
-            .set_password_hash(missing, "x", None)
+            .set_password_hash(missing, "x", None.into())
             .await
             .unwrap_err(),
         UseCaseError::NotFound(_)
     ));
     assert!(matches!(
-        users.clear_password_hash(missing, None).await.unwrap_err(),
+        users
+            .clear_password_hash(missing, None.into())
+            .await
+            .unwrap_err(),
         UseCaseError::NotFound(_)
     ));
 }
@@ -1157,7 +1242,7 @@ async fn guarded_password_clear_requires_another_login_method() {
     // 未启用密码。
     assert_eq!(
         users
-            .clear_password_hash_guarded(user_id, None)
+            .clear_password_hash_guarded(user_id, None.into())
             .await
             .unwrap(),
         ClearPasswordOutcome::NoPassword
@@ -1167,7 +1252,7 @@ async fn guarded_password_clear_requires_another_login_method() {
     seed_password(&pool, user_id).await;
     assert_eq!(
         users
-            .clear_password_hash_guarded(user_id, None)
+            .clear_password_hash_guarded(user_id, None.into())
             .await
             .unwrap(),
         ClearPasswordOutcome::LastLoginMethod
@@ -1181,7 +1266,7 @@ async fn guarded_password_clear_requires_another_login_method() {
     seed_binding(&pool, user_id).await;
     assert_eq!(
         users
-            .clear_password_hash_guarded(user_id, None)
+            .clear_password_hash_guarded(user_id, None.into())
             .await
             .unwrap(),
         ClearPasswordOutcome::Cleared
@@ -1192,7 +1277,7 @@ async fn guarded_password_clear_requires_another_login_method() {
     let missing = uuid::Uuid::now_v7();
     assert!(matches!(
         users
-            .clear_password_hash_guarded(missing, None)
+            .clear_password_hash_guarded(missing, None.into())
             .await
             .unwrap_err(),
         UseCaseError::NotFound(_)
@@ -1217,8 +1302,8 @@ async fn clear_password_and_unbind_cannot_both_remove_the_last_login_method() {
     // 两个连接、两笔事务，真的并发。
     let external_id = format!("sub-{user_id}");
     let (clear_result, unbind_result) = tokio::join!(
-        users.clear_password_hash_guarded(user_id, None),
-        accounts.unbind(user_id, "https://idp.example", &external_id, None),
+        users.clear_password_hash_guarded(user_id, None.into()),
+        accounts.unbind(user_id, "https://idp.example", &external_id, None.into()),
     );
 
     let cleared = matches!(clear_result, Ok(ClearPasswordOutcome::Cleared));
@@ -1299,11 +1384,11 @@ async fn password_clear_and_unbind_both_block_on_the_identity_lock() {
     // 两个操作都必须阻塞在锁上，而不是各自完成。
     let clear_blocked = tokio::time::timeout(
         std::time::Duration::from_millis(300),
-        users.clear_password_hash_guarded(user_id, None),
+        users.clear_password_hash_guarded(user_id, None.into()),
     );
     let unbind_blocked = tokio::time::timeout(
         std::time::Duration::from_millis(300),
-        accounts.unbind(user_id, "https://idp.example", &external_id, None),
+        accounts.unbind(user_id, "https://idp.example", &external_id, None.into()),
     );
     let (clear_outcome, unbind_outcome) = tokio::join!(clear_blocked, unbind_blocked);
     assert!(
@@ -1320,7 +1405,7 @@ async fn password_clear_and_unbind_both_block_on_the_identity_lock() {
     holder.await.unwrap();
     let cleared = matches!(
         users
-            .clear_password_hash_guarded(user_id, None)
+            .clear_password_hash_guarded(user_id, None.into())
             .await
             .unwrap(),
         ClearPasswordOutcome::Cleared | ClearPasswordOutcome::LastLoginMethod
@@ -1349,7 +1434,7 @@ async fn duplicate_username_and_email_map_to_structured_conflicts() {
         .unwrap()
         .snapshot();
     users
-        .insert(&User::reconstitute(first.clone()).unwrap(), None)
+        .insert(&User::reconstitute(first.clone()).unwrap(), None.into())
         .await
         .unwrap();
 
@@ -1358,7 +1443,7 @@ async fn duplicate_username_and_email_map_to_structured_conflicts() {
         .unwrap()
         .snapshot();
     match users
-        .insert(&User::reconstitute(same_name.clone()).unwrap(), None)
+        .insert(&User::reconstitute(same_name.clone()).unwrap(), None.into())
         .await
         .unwrap_err()
     {
@@ -1371,7 +1456,10 @@ async fn duplicate_username_and_email_map_to_structured_conflicts() {
         .unwrap()
         .snapshot();
     match users
-        .insert(&User::reconstitute(same_email.clone()).unwrap(), None)
+        .insert(
+            &User::reconstitute(same_email.clone()).unwrap(),
+            None.into(),
+        )
         .await
         .unwrap_err()
     {
@@ -1405,8 +1493,8 @@ async fn admin_listing_reports_login_methods_and_roles_in_bulk() {
         .execute(&pool)
         .await
         .unwrap();
-    rbac.assign_role(bound, "owner", None).await.unwrap();
-    rbac.assign_role(password_only, "editor", None)
+    rbac.assign_role(bound, "owner", None.into()).await.unwrap();
+    rbac.assign_role(password_only, "editor", None.into())
         .await
         .unwrap();
 
@@ -1465,7 +1553,7 @@ async fn seed_tag(pool: &sqlx::PgPool, name: &str, slug: &str) -> domain::conten
     )
     .unwrap();
     let snapshot = tag.snapshot();
-    tags.insert(&tag, None).await.unwrap();
+    tags.insert(&tag, None.into()).await.unwrap();
     snapshot
 }
 
@@ -1482,7 +1570,7 @@ async fn tag_slug_unique_conflict_maps_to_slug_conflict() {
         OffsetDateTime::now_utc(),
     )
     .unwrap();
-    match repo.insert(&dup, None).await.unwrap_err() {
+    match repo.insert(&dup, None.into()).await.unwrap_err() {
         UseCaseError::Conflict(ConflictKind::Slug) => {}
         other => panic!("期望 slug 冲突，得到 {other:?}"),
     }
@@ -1497,7 +1585,7 @@ async fn tag_rename_is_versioned_and_slug_immutable() {
 
     // 版本不匹配：CAS 未命中。
     assert!(
-        repo.rename(tag.id, "新名", tag.version + 1, None)
+        repo.rename(tag.id, "新名", tag.version + 1, None.into())
             .await
             .unwrap()
             .is_none(),
@@ -1505,7 +1593,7 @@ async fn tag_rename_is_versioned_and_slug_immutable() {
     );
     // 版本匹配：改名成功并递增版本。
     let renamed = repo
-        .rename(tag.id, "Rust 语言", tag.version, None)
+        .rename(tag.id, "Rust 语言", tag.version, None.into())
         .await
         .unwrap()
         .unwrap();
@@ -1529,12 +1617,16 @@ async fn tag_delete_removes_references_and_keeps_drafts() {
     // 草稿文章（不可公开）也占用引用：引用保护不过滤可见性。
     let draft = draft_snapshot(author, "draft-tagged");
     posts
-        .insert_post(&Post::reconstitute(draft.clone()).unwrap(), &[tag.id], None)
+        .insert_post(
+            &Post::reconstitute(draft.clone()).unwrap(),
+            &[tag.id],
+            None.into(),
+        )
         .await
         .unwrap();
 
     assert_eq!(
-        repo.delete(tag.id, tag.version, None).await.unwrap(),
+        repo.delete(tag.id, tag.version, None.into()).await.unwrap(),
         application::ports::TagDeleteOutcome::Deleted
     );
     let record = posts.find_record_by_id(draft.id).await.unwrap().unwrap();
@@ -1561,7 +1653,7 @@ async fn post_tags_saved_in_same_transaction_as_content() {
         .insert_post(
             &Post::reconstitute(snapshot.clone()).unwrap(),
             &[rust.id, rust.id, essay.id],
-            None,
+            None.into(),
         )
         .await
         .unwrap();
@@ -1588,7 +1680,7 @@ async fn post_tags_saved_in_same_transaction_as_content() {
             snapshot.version,
             OffsetDateTime::now_utc(),
             Some(&[essay.id]),
-            None,
+            None.into(),
         )
         .await
         .unwrap()
@@ -1624,7 +1716,7 @@ async fn post_tags_saved_in_same_transaction_as_content() {
             edit.version + 1,
             OffsetDateTime::now_utc(),
             Some(&[]),
-            None,
+            None.into(),
         )
         .await
         .unwrap();
@@ -1655,7 +1747,7 @@ async fn post_tag_association_rejects_unknown_tag_via_fk() {
         .insert_post(
             &Post::reconstitute(snapshot.clone()).unwrap(),
             &[ghost],
-            None,
+            None.into(),
         )
         .await
         .unwrap_err()
@@ -1693,7 +1785,7 @@ async fn tag_directory_listing_counts_only_public_posts() {
         .insert_post(
             &Post::reconstitute(public.clone()).unwrap(),
             &[tag.id],
-            None,
+            None.into(),
         )
         .await
         .unwrap();
@@ -1701,7 +1793,7 @@ async fn tag_directory_listing_counts_only_public_posts() {
         .insert_post(
             &Post::reconstitute(draft_snapshot(author, "tag-draft")).unwrap(),
             &[tag.id],
-            None,
+            None.into(),
         )
         .await
         .unwrap();
@@ -1716,7 +1808,7 @@ async fn tag_directory_listing_counts_only_public_posts() {
         .insert_post(
             &Post::reconstitute(private.clone()).unwrap(),
             &[tag.id],
-            None,
+            None.into(),
         )
         .await
         .unwrap();
@@ -1760,7 +1852,7 @@ async fn public_tag_page_lists_only_public_posts_and_paginates() {
             .insert_post(
                 &Post::reconstitute(public.clone()).unwrap(),
                 &[tag.id],
-                None,
+                None.into(),
             )
             .await
             .unwrap();
@@ -1769,7 +1861,7 @@ async fn public_tag_page_lists_only_public_posts_and_paginates() {
         .insert_post(
             &Post::reconstitute(draft_snapshot(author, "tag-page-draft")).unwrap(),
             &[tag.id],
-            None,
+            None.into(),
         )
         .await
         .unwrap();
@@ -1841,7 +1933,7 @@ async fn seed_category(
     )
     .unwrap();
     let snapshot = category.snapshot();
-    repo.insert(&category, None).await.unwrap();
+    repo.insert(&category, None.into()).await.unwrap();
     snapshot
 }
 
@@ -1855,14 +1947,14 @@ async fn category_move_rejects_cycles_even_indirect() {
 
     // 直接自父。
     let err = repo
-        .update(a.id, "A", None, Some(a.id), a.version, None)
+        .update(a.id, "A", None, Some(a.id), a.version, None.into())
         .await
         .unwrap_err();
     assert!(matches!(err, UseCaseError::Invalid(_)), "得到 {err:?}");
 
     // 一级环：A 的父设为子 B。
     let err = repo
-        .update(a.id, "A", None, Some(b.id), a.version, None)
+        .update(a.id, "A", None, Some(b.id), a.version, None.into())
         .await
         .unwrap_err();
     assert!(err.to_string().contains("环"), "得到 {err:?}");
@@ -1870,20 +1962,20 @@ async fn category_move_rejects_cycles_even_indirect() {
     // 二级环：A→C→B→A。
     let c = seed_category(&pool, "C", "c", Some(b.id)).await;
     let err = repo
-        .update(a.id, "A", None, Some(c.id), a.version, None)
+        .update(a.id, "A", None, Some(c.id), a.version, None.into())
         .await
         .unwrap_err();
     assert!(err.to_string().contains("环"), "得到 {err:?}");
 
     // 合法移动（叶子互换父）不受影响；父设为根也合法。
     let moved = repo
-        .update(c.id, "C", None, Some(a.id), c.version, None)
+        .update(c.id, "C", None, Some(a.id), c.version, None.into())
         .await
         .unwrap()
         .unwrap();
     assert_eq!(moved.parent_id, Some(a.id));
     let rooted = repo
-        .update(c.id, "C", None, None, moved.version, None)
+        .update(c.id, "C", None, None, moved.version, None.into())
         .await
         .unwrap()
         .unwrap();
@@ -1899,13 +1991,13 @@ async fn category_move_rejects_missing_parent_and_checks_version() {
 
     let ghost = uuid::Uuid::now_v7();
     let err = repo
-        .update(a.id, "A", None, Some(ghost), a.version, None)
+        .update(a.id, "A", None, Some(ghost), a.version, None.into())
         .await
         .unwrap_err();
     assert!(err.to_string().contains("父分类不存在"), "得到 {err:?}");
 
     assert!(
-        repo.update(a.id, "新名", None, None, a.version + 5, None)
+        repo.update(a.id, "新名", None, None, a.version + 5, None.into())
             .await
             .unwrap()
             .is_none(),
@@ -1927,7 +2019,11 @@ async fn category_delete_protects_posts_and_children() {
     let child = seed_category(&pool, "子", "child", Some(parent.id)).await;
 
     // 子分类存在：父分类删除被拒。
-    match repo.delete(parent.id, parent.version, None).await.unwrap() {
+    match repo
+        .delete(parent.id, parent.version, None.into())
+        .await
+        .unwrap()
+    {
         application::ports::CategoryDeleteOutcome::Referenced {
             posts: 0,
             children: 1,
@@ -1938,7 +2034,11 @@ async fn category_delete_protects_posts_and_children() {
     // 文章引用（含草稿）同样占用。
     let draft = draft_snapshot(author, "categorized-draft");
     posts
-        .insert_post(&Post::reconstitute(draft.clone()).unwrap(), &[], None)
+        .insert_post(
+            &Post::reconstitute(draft.clone()).unwrap(),
+            &[],
+            None.into(),
+        )
         .await
         .unwrap();
     sqlx::query("UPDATE posts SET category_id = $1 WHERE slug = 'categorized-draft'")
@@ -1946,7 +2046,11 @@ async fn category_delete_protects_posts_and_children() {
         .execute(&pool)
         .await
         .unwrap();
-    match repo.delete(child.id, child.version, None).await.unwrap() {
+    match repo
+        .delete(child.id, child.version, None.into())
+        .await
+        .unwrap()
+    {
         application::ports::CategoryDeleteOutcome::Referenced {
             posts: 1,
             children: 0,
@@ -1965,8 +2069,12 @@ async fn category_delete_protects_posts_and_children() {
         .execute(&pool)
         .await
         .unwrap();
-    repo.delete(child.id, child.version, None).await.unwrap();
-    repo.delete(parent.id, parent.version, None).await.unwrap();
+    repo.delete(child.id, child.version, None.into())
+        .await
+        .unwrap();
+    repo.delete(parent.id, parent.version, None.into())
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -1990,7 +2098,11 @@ async fn post_category_saved_in_same_transaction_and_public_page_filters() {
     // 创建即带分类；仅改分类也递增 version。
     let snapshot = draft_snapshot(author, "cat-post");
     posts
-        .insert_post(&Post::reconstitute(snapshot.clone()).unwrap(), &[], None)
+        .insert_post(
+            &Post::reconstitute(snapshot.clone()).unwrap(),
+            &[],
+            None.into(),
+        )
         .await
         .unwrap();
     let edit = {
@@ -2004,7 +2116,7 @@ async fn post_category_saved_in_same_transaction_and_public_page_filters() {
             snapshot.version,
             OffsetDateTime::now_utc(),
             None,
-            None,
+            None.into(),
         )
         .await
         .unwrap()
@@ -2033,7 +2145,7 @@ async fn post_category_saved_in_same_transaction_and_public_page_filters() {
             snapshot.version + 1,
             OffsetDateTime::now_utc(),
             None,
-            None,
+            None.into(),
         )
         .await
         .unwrap();
@@ -2068,7 +2180,11 @@ async fn post_category_saved_in_same_transaction_and_public_page_filters() {
         s
     };
     match posts
-        .insert_post(&Post::reconstitute(ghost_edit.clone()).unwrap(), &[], None)
+        .insert_post(
+            &Post::reconstitute(ghost_edit.clone()).unwrap(),
+            &[],
+            None.into(),
+        )
         .await
         .unwrap_err()
     {
@@ -2095,7 +2211,7 @@ async fn seed_series(
     )
     .unwrap();
     let snapshot = series.snapshot();
-    repo.insert(&series, None).await.unwrap();
+    repo.insert(&series, None.into()).await.unwrap();
     snapshot
 }
 
@@ -2116,9 +2232,13 @@ async fn post_in_series(
         series_id: series,
         position: order,
     }];
-    repo.insert_post(&Post::reconstitute(snapshot.clone()).unwrap(), &[], None)
-        .await
-        .unwrap();
+    repo.insert_post(
+        &Post::reconstitute(snapshot.clone()).unwrap(),
+        &[],
+        None.into(),
+    )
+    .await
+    .unwrap();
     snapshot
 }
 
@@ -2134,7 +2254,7 @@ async fn series_reorder_rewrites_orders_and_bumps_versions() {
     // 基线：两篇 post_in_series 的 insert 已递增系列版本两次。
     // 完整排列倒序。
     let outcome = repo_of(&pool)
-        .reorder(s.id, s.version + 2, &[b.id, a.id], None)
+        .reorder(s.id, s.version + 2, &[b.id, a.id], None.into())
         .await
         .unwrap();
     assert_eq!(
@@ -2183,7 +2303,7 @@ async fn series_reorder_rejects_stale_version_and_mismatched_membership() {
     // 旧 series.version：拒绝（防旧目录重排）。
     assert_eq!(
         repo_of(&pool)
-            .reorder(s.id, s.version + 99, &[a.id, b.id], None)
+            .reorder(s.id, s.version + 99, &[a.id, b.id], None.into())
             .await
             .unwrap(),
         application::ports::ReorderOutcome::StaleSeriesVersion
@@ -2191,7 +2311,7 @@ async fn series_reorder_rejects_stale_version_and_mismatched_membership() {
     // 不完整的集合：拒绝，不落任何写入。
     assert_eq!(
         repo_of(&pool)
-            .reorder(s.id, s.version + 2, &[a.id], None)
+            .reorder(s.id, s.version + 2, &[a.id], None.into())
             .await
             .unwrap(),
         application::ports::ReorderOutcome::MembershipMismatch
@@ -2219,13 +2339,13 @@ async fn concurrent_reorders_exactly_one_wins_on_series_version() {
     let (first, second) = tokio::join!(
         async {
             repo_of(&pool)
-                .reorder(s.id, base, &[a.id, b.id], None)
+                .reorder(s.id, base, &[a.id, b.id], None.into())
                 .await
                 .unwrap()
         },
         async {
             repo_of(&pool2)
-                .reorder(s.id, base, &[b.id, a.id], None)
+                .reorder(s.id, base, &[b.id, a.id], None.into())
                 .await
                 .unwrap()
         },
@@ -2256,7 +2376,7 @@ async fn series_delete_keeps_posts_and_bumps_versions() {
 
     assert_eq!(
         repo_of(&pool)
-            .delete(s.id, s.version + 1, None)
+            .delete(s.id, s.version + 1, None.into())
             .await
             .unwrap(),
         application::ports::SeriesDeleteOutcome::Deleted
@@ -2283,9 +2403,13 @@ async fn post_series_accepts_duplicate_positions_on_edit() {
 
     // 多篇文章可以使用相同的排序权重。
     let snapshot = draft_snapshot(author, "occ-2");
-    repo.insert_post(&Post::reconstitute(snapshot.clone()).unwrap(), &[], None)
-        .await
-        .unwrap();
+    repo.insert_post(
+        &Post::reconstitute(snapshot.clone()).unwrap(),
+        &[],
+        None.into(),
+    )
+    .await
+    .unwrap();
     let edit = {
         let mut snap = snapshot.clone();
         snap.series = vec![domain::content::SeriesPlacement {
@@ -2300,7 +2424,7 @@ async fn post_series_accepts_duplicate_positions_on_edit() {
             snapshot.version,
             OffsetDateTime::now_utc(),
             None,
-            None,
+            None.into(),
         )
         .await
         .unwrap();
@@ -2335,7 +2459,7 @@ async fn post_series_edit_participates_in_series_version_protocol() {
             a.version,
             OffsetDateTime::now_utc(),
             None,
-            None,
+            None.into(),
         )
         .await
         .unwrap()
@@ -2354,7 +2478,7 @@ async fn post_series_edit_participates_in_series_version_protocol() {
     // 用编辑前的系列版本重排：现在必须被拒（旧目录失效）。
     assert_eq!(
         series_repo
-            .reorder(s.id, s.version, &[a.id, b.id], None)
+            .reorder(s.id, s.version, &[a.id, b.id], None.into())
             .await
             .unwrap(),
         application::ports::ReorderOutcome::StaleSeriesVersion,
@@ -2372,7 +2496,7 @@ async fn post_series_edit_participates_in_series_version_protocol() {
         moved.version + 1,
         OffsetDateTime::now_utc(),
         None,
-        None,
+        None.into(),
     )
     .await
     .unwrap();
@@ -2394,7 +2518,7 @@ async fn post_series_edit_participates_in_series_version_protocol() {
         left.version + 1,
         OffsetDateTime::now_utc(),
         None,
-        None,
+        None.into(),
     )
     .await
     .unwrap();
@@ -2444,7 +2568,7 @@ async fn settings_site_upsert_and_version_cas() {
                 &site_value("数据库标题", "数据库描述"),
                 0,
                 OffsetDateTime::now_utc(),
-                None,
+                None.into(),
             )
             .await
             .unwrap(),
@@ -2467,7 +2591,7 @@ async fn settings_site_upsert_and_version_cas() {
                 &site_value("抢写", "抢写"),
                 0,
                 OffsetDateTime::now_utc(),
-                None
+                None.into()
             )
             .await
             .unwrap(),
@@ -2481,7 +2605,7 @@ async fn settings_site_upsert_and_version_cas() {
                 &site_value("新标题", "新描述"),
                 1,
                 OffsetDateTime::now_utc(),
-                None,
+                None.into(),
             )
             .await
             .unwrap(),
@@ -2516,7 +2640,7 @@ async fn settings_site_upsert_and_version_cas() {
                 &site_value("过期", "过期"),
                 1,
                 OffsetDateTime::now_utc(),
-                None
+                None.into()
             )
             .await
             .unwrap(),
@@ -2561,7 +2685,7 @@ async fn settings_row_survives_new_pool_and_keeps_oauth_group_isolated() {
             &site_value("持久标题", "持久描述"),
             0,
             OffsetDateTime::now_utc(),
-            None,
+            None.into(),
         )
         .await
         .unwrap();
@@ -2587,7 +2711,7 @@ async fn settings_row_survives_new_pool_and_keeps_oauth_group_isolated() {
                 secret_ref: "IDP_SECRET".into(),
                 scopes: vec![],
             }],
-            None,
+            None.into(),
         )
         .await
         .unwrap();
@@ -2596,7 +2720,7 @@ async fn settings_row_survives_new_pool_and_keeps_oauth_group_isolated() {
             &site_value("再改一次", "描述"),
             1,
             OffsetDateTime::now_utc(),
-            None,
+            None.into(),
         )
         .await
         .unwrap();
@@ -2626,7 +2750,7 @@ async fn settings_concurrent_saves_on_two_connections_exactly_one_wins() {
         &site_value("初版", "描述"),
         0,
         OffsetDateTime::now_utc(),
-        None,
+        None.into(),
     )
     .await
     .unwrap();
@@ -2636,8 +2760,8 @@ async fn settings_concurrent_saves_on_two_connections_exactly_one_wins() {
         let right = site_value("连接乙", "描述");
         let now = OffsetDateTime::now_utc();
         tokio::join!(
-            a.save_site(&left, 1, now, None),
-            b.save_site(&right, 1, now, None),
+            a.save_site(&left, 1, now, None.into()),
+            b.save_site(&right, 1, now, None.into()),
         )
     };
     let outcomes = [ra.unwrap(), rb.unwrap()];
@@ -2691,18 +2815,18 @@ async fn trash_restore_purge_and_series_reorder_obey_versions() {
         position: 2,
     }];
     posts
-        .insert_post(&Post::reconstitute(a.clone()).unwrap(), &[], None)
+        .insert_post(&Post::reconstitute(a.clone()).unwrap(), &[], None.into())
         .await
         .unwrap();
     posts
-        .insert_post(&Post::reconstitute(b.clone()).unwrap(), &[], None)
+        .insert_post(&Post::reconstitute(b.clone()).unwrap(), &[], None.into())
         .await
         .unwrap();
     let now = OffsetDateTime::now_utc();
     let mut a_post = Post::reconstitute(a.clone()).unwrap();
     assert!(a_post.trash(now));
     assert!(matches!(
-        posts.commit_lifecycle(&a_post, a.version, now, None).await.unwrap(),
+        posts.commit_lifecycle(&a_post, a.version, now, None.into()).await.unwrap(),
         PostCommitOutcome::Saved(record) if record.snapshot.version == 2
     ));
     assert!(
@@ -2743,11 +2867,14 @@ async fn trash_restore_purge_and_series_reorder_obey_versions() {
     );
     assert!(a_post.restore());
     assert_eq!(
-        posts.commit_lifecycle(&a_post, 1, now, None).await.unwrap(),
+        posts
+            .commit_lifecycle(&a_post, 1, now, None.into())
+            .await
+            .unwrap(),
         PostCommitOutcome::StaleConflict
     );
     assert!(matches!(
-        posts.commit_lifecycle(&a_post, 2, now, None).await.unwrap(),
+        posts.commit_lifecycle(&a_post, 2, now, None.into()).await.unwrap(),
         PostCommitOutcome::Saved(record) if record.snapshot.version == 3
     ));
     let restored = posts.find_by_id(a.id).await.unwrap().unwrap();
@@ -2755,7 +2882,7 @@ async fn trash_restore_purge_and_series_reorder_obey_versions() {
     assert!(restored.published_at.is_some());
     assert!(a_post.trash(now));
     assert!(matches!(
-        posts.commit_lifecycle(&a_post, 3, now, None).await.unwrap(),
+        posts.commit_lifecycle(&a_post, 3, now, None.into()).await.unwrap(),
         PostCommitOutcome::Saved(record) if record.snapshot.version == 4
     ));
     let (series_version,): (i64,) = sqlx::query_as("SELECT version FROM series WHERE id = $1")
@@ -2765,8 +2892,8 @@ async fn trash_restore_purge_and_series_reorder_obey_versions() {
         .unwrap();
     let order = [b.id, a.id];
     let (purge, reorder) = tokio::join!(
-        posts.purge(a.id, 4, None),
-        series.reorder(series_id, series_version, &order, None)
+        posts.purge(a.id, 4, None.into()),
+        series.reorder(series_id, series_version, &order, None.into())
     );
     let purge = purge.unwrap();
     let reorder = reorder.unwrap();
@@ -2800,11 +2927,15 @@ async fn purge_releases_slug_and_cascades_tags_only_after_trash() {
         .unwrap();
     let post = draft_snapshot(author, "purge-slug");
     posts
-        .insert_post(&Post::reconstitute(post.clone()).unwrap(), &[tag_id], None)
+        .insert_post(
+            &Post::reconstitute(post.clone()).unwrap(),
+            &[tag_id],
+            None.into(),
+        )
         .await
         .unwrap();
     assert_eq!(
-        posts.purge(post.id, 1, None).await.unwrap(),
+        posts.purge(post.id, 1, None.into()).await.unwrap(),
         SaveOutcome::Gone
     );
     assert_eq!(
@@ -2820,15 +2951,15 @@ async fn purge_releases_slug_and_cascades_tags_only_after_trash() {
     let mut trashed = Post::reconstitute(post.clone()).unwrap();
     assert!(trashed.trash(now));
     assert!(matches!(
-        posts.commit_lifecycle(&trashed, 1, now, None).await.unwrap(),
+        posts.commit_lifecycle(&trashed, 1, now, None.into()).await.unwrap(),
         PostCommitOutcome::Saved(record) if record.snapshot.version == 2
     ));
     assert_eq!(
-        posts.purge(post.id, 1, None).await.unwrap(),
+        posts.purge(post.id, 1, None.into()).await.unwrap(),
         SaveOutcome::StaleConflict
     );
     assert!(matches!(
-        posts.purge(post.id, 2, None).await.unwrap(),
+        posts.purge(post.id, 2, None.into()).await.unwrap(),
         SaveOutcome::Saved { .. }
     ));
     assert!(posts.find_record_by_id(post.id).await.unwrap().is_none());
@@ -2836,26 +2967,30 @@ async fn purge_releases_slug_and_cascades_tags_only_after_trash() {
         .insert_post(
             &Post::reconstitute(draft_snapshot(author, "purge-slug")).unwrap(),
             &[],
-            None,
+            None.into(),
         )
         .await
         .unwrap();
     let mut archived = draft_snapshot(author, "archived-trash");
     archived.status = PostStatus::Archived;
     posts
-        .insert_post(&Post::reconstitute(archived.clone()).unwrap(), &[], None)
+        .insert_post(
+            &Post::reconstitute(archived.clone()).unwrap(),
+            &[],
+            None.into(),
+        )
         .await
         .unwrap();
     let now = OffsetDateTime::now_utc();
     let mut archived_post = Post::reconstitute(archived.clone()).unwrap();
     assert!(archived_post.trash(now));
     posts
-        .commit_lifecycle(&archived_post, 1, now, None)
+        .commit_lifecycle(&archived_post, 1, now, None.into())
         .await
         .unwrap();
     assert!(archived_post.restore());
     posts
-        .commit_lifecycle(&archived_post, 2, now, None)
+        .commit_lifecycle(&archived_post, 2, now, None.into())
         .await
         .unwrap();
     assert_eq!(
@@ -2883,7 +3018,7 @@ async fn content_commit_returns_complete_record_and_rolls_back_failed_references
     );
     let post = Post::reconstitute(draft_snapshot(author, "commit-record")).unwrap();
     let inserted = repo
-        .insert_post(&post, &[tags[1], tags[0], tags[1]], None)
+        .insert_post(&post, &[tags[1], tags[0], tags[1]], None.into())
         .await
         .unwrap();
     let mut sorted = tags.to_vec();
@@ -2908,7 +3043,7 @@ async fn content_commit_returns_complete_record_and_rolls_back_failed_references
             inserted.snapshot.version,
             now,
             Some(&[tags[1]]),
-            None,
+            None.into(),
         )
         .await
         .unwrap()
@@ -2939,7 +3074,7 @@ async fn content_commit_returns_complete_record_and_rolls_back_failed_references
             committed.snapshot.version,
             now,
             Some(&[tags[0]]),
-            None
+            None.into()
         )
         .await
         .is_err()
@@ -2949,7 +3084,7 @@ async fn content_commit_returns_complete_record_and_rolls_back_failed_references
         Some((*committed).clone())
     );
     assert!(matches!(
-        repo.commit_post(&edited, inserted.snapshot.version, now, None, None)
+        repo.commit_post(&edited, inserted.snapshot.version, now, None, None.into())
             .await
             .unwrap(),
         PostCommitOutcome::StaleConflict
@@ -2973,7 +3108,7 @@ async fn content_commit_reads_never_mix_body_and_tags_during_concurrent_edits() 
         ..Default::default()
     })
     .unwrap();
-    let initial = repo.insert_post(&post, &[a], None).await.unwrap();
+    let initial = repo.insert_post(&post, &[a], None.into()).await.unwrap();
     let id = initial.snapshot.id;
     let barrier = Arc::new(tokio::sync::Barrier::new(2));
     let writer_repo = repo.clone();
@@ -2995,7 +3130,7 @@ async fn content_commit_reads_never_mix_body_and_tags_during_concurrent_edits() 
                     current.snapshot.version,
                     OffsetDateTime::now_utc(),
                     Some(&[tag]),
-                    None,
+                    None.into(),
                 )
                 .await
                 .unwrap()
@@ -3033,17 +3168,17 @@ async fn content_commit_lifecycle_preserves_relations_and_checks_original_state(
     let mut post = Post::reconstitute(draft_snapshot(author, "lifecycle-record")).unwrap();
     let now = OffsetDateTime::now_utc();
     post.publish(now).unwrap();
-    let inserted = repo.insert_post(&post, &[tag], None).await.unwrap();
+    let inserted = repo.insert_post(&post, &[tag], None.into()).await.unwrap();
     let mut trashed = Post::reconstitute(inserted.snapshot.clone()).unwrap();
     assert!(trashed.trash(now));
     assert!(matches!(
-        repo.commit_lifecycle(&trashed, inserted.snapshot.version + 1, now, None)
+        repo.commit_lifecycle(&trashed, inserted.snapshot.version + 1, now, None.into())
             .await
             .unwrap(),
         PostCommitOutcome::StaleConflict
     ));
     let PostCommitOutcome::Saved(deleted) = repo
-        .commit_lifecycle(&trashed, inserted.snapshot.version, now, None)
+        .commit_lifecycle(&trashed, inserted.snapshot.version, now, None.into())
         .await
         .unwrap()
     else {
@@ -3054,7 +3189,7 @@ async fn content_commit_lifecycle_preserves_relations_and_checks_original_state(
     assert!(deleted.snapshot.deleted_at.is_some());
     // 即使携带最新版本，重复提交旧的移入操作也不能作用于已在回收站的记录。
     assert!(matches!(
-        repo.commit_lifecycle(&trashed, deleted.snapshot.version, now, None)
+        repo.commit_lifecycle(&trashed, deleted.snapshot.version, now, None.into())
             .await
             .unwrap(),
         PostCommitOutcome::Gone
@@ -3062,7 +3197,7 @@ async fn content_commit_lifecycle_preserves_relations_and_checks_original_state(
     let mut restored = Post::reconstitute(deleted.snapshot.clone()).unwrap();
     assert!(restored.restore());
     let PostCommitOutcome::Saved(restored) = repo
-        .commit_lifecycle(&restored, deleted.snapshot.version, now, None)
+        .commit_lifecycle(&restored, deleted.snapshot.version, now, None.into())
         .await
         .unwrap()
     else {

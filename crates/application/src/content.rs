@@ -216,7 +216,7 @@ impl PostInteractor {
         .map_err(|e| UseCaseError::Invalid(e.to_string()))?;
         let record = self
             .posts
-            .insert_post(&post, &tag_ids, actor.audit_actor_id())
+            .insert_post(&post, &tag_ids, actor.audit_context())
             .await?;
         Ok(PostDto::from_record(record))
     }
@@ -432,7 +432,7 @@ impl PostInteractor {
         post.trash(now);
         Self::committed(
             self.posts
-                .commit_lifecycle(&post, expected, now, actor.audit_actor_id())
+                .commit_lifecycle(&post, expected, now, actor.audit_context())
                 .await?,
         )
     }
@@ -460,7 +460,7 @@ impl PostInteractor {
         post.restore();
         Self::committed(
             self.posts
-                .commit_lifecycle(&post, expected, self.clock.now(), actor.audit_actor_id())
+                .commit_lifecycle(&post, expected, self.clock.now(), actor.audit_context())
                 .await?,
         )
     }
@@ -482,7 +482,7 @@ impl PostInteractor {
         let expected = checked_version(record.snapshot.version, version)?;
         match self
             .posts
-            .purge(record.snapshot.id, expected, actor.audit_actor_id())
+            .purge(record.snapshot.id, expected, actor.audit_context())
             .await?
         {
             SaveOutcome::Saved { .. } => Ok(()),
@@ -506,7 +506,7 @@ impl PostInteractor {
                     expected,
                     self.clock.now(),
                     new_tags.as_deref(),
-                    actor.audit_actor_id(),
+                    actor.audit_context(),
                 )
                 .await?,
         )

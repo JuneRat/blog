@@ -67,7 +67,7 @@ impl UserRepository for PostgresUserRepository {
     async fn insert(
         &self,
         aggregate: &domain::identity::User,
-        audit_actor: Option<uuid::Uuid>,
+        audit_actor: application::audit::AuditContext,
     ) -> Result<(), UseCaseError> {
         let snapshot = aggregate.snapshot();
         let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
@@ -125,6 +125,7 @@ impl UserRepository for PostgresUserRepository {
         user: &domain::identity::User,
         expected_version: i64,
         now: OffsetDateTime,
+        audit: application::audit::AuditContext,
     ) -> Result<UserSnapshot, UseCaseError> {
         let snapshot = user.snapshot();
         let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
@@ -139,8 +140,8 @@ impl UserRepository for PostgresUserRepository {
         append_audit_log(
             &mut tx,
             AuditEntry {
-                actor_id: Some(snapshot.id),
-                ip_address: None,
+                actor_id: audit.actor_id,
+                ip_address: audit.ip_address,
                 action: "user.profile.update",
                 target_type: "user",
                 target_id: &snapshot.id.to_string(),
@@ -155,7 +156,7 @@ impl UserRepository for PostgresUserRepository {
     async fn revoke_authentication(
         &self,
         user_id: Uuid,
-        audit_actor: Option<uuid::Uuid>,
+        audit_actor: application::audit::AuditContext,
     ) -> Result<(), UseCaseError> {
         let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
         acquire_identity_lock(&mut *tx)
@@ -191,6 +192,7 @@ impl UserRepository for PostgresUserRepository {
         user_id: Uuid,
         avatar_media_id: Option<Uuid>,
         now: OffsetDateTime,
+        audit: application::audit::AuditContext,
     ) -> Result<(), UseCaseError> {
         let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
         let version: i64 = sqlx::query_scalar(
@@ -214,8 +216,8 @@ impl UserRepository for PostgresUserRepository {
         append_audit_log(
             &mut tx,
             AuditEntry {
-                actor_id: Some(user_id),
-                ip_address: None,
+                actor_id: audit.actor_id,
+                ip_address: audit.ip_address,
                 action: "user.avatar.update",
                 target_type: "user",
                 target_id: &user_id.to_string(),
@@ -267,7 +269,7 @@ impl UserRepository for PostgresUserRepository {
         &self,
         user_id: Uuid,
         phc_hash: &str,
-        audit_actor: Option<uuid::Uuid>,
+        audit_actor: application::audit::AuditContext,
     ) -> Result<(), UseCaseError> {
         self.change_password_hash(user_id, None, false, Some(phc_hash), audit_actor)
             .await?
@@ -280,7 +282,7 @@ impl UserRepository for PostgresUserRepository {
         user_id: Uuid,
         expected: Option<&str>,
         new_hash: &str,
-        audit_actor: Option<uuid::Uuid>,
+        audit_actor: application::audit::AuditContext,
     ) -> Result<Option<i64>, UseCaseError> {
         self.change_password_hash(user_id, expected, true, Some(new_hash), audit_actor)
             .await
@@ -289,7 +291,7 @@ impl UserRepository for PostgresUserRepository {
     async fn clear_password_hash(
         &self,
         user_id: Uuid,
-        audit_actor: Option<uuid::Uuid>,
+        audit_actor: application::audit::AuditContext,
     ) -> Result<(), UseCaseError> {
         self.change_password_hash(user_id, None, false, None, audit_actor)
             .await?
@@ -300,7 +302,7 @@ impl UserRepository for PostgresUserRepository {
     async fn clear_password_hash_guarded(
         &self,
         user_id: Uuid,
-        audit_actor: Option<uuid::Uuid>,
+        audit_actor: application::audit::AuditContext,
     ) -> Result<ClearPasswordOutcome, UseCaseError> {
         let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
         // 与解绑外部身份同一把排他锁：检查与清除在锁内完成，两条路径不可能同时通过。
@@ -410,7 +412,7 @@ impl PostgresUserRepository {
         expected: Option<&str>,
         check_expected: bool,
         new_hash: Option<&str>,
-        audit_actor: Option<Uuid>,
+        audit_actor: application::audit::AuditContext,
     ) -> Result<Option<i64>, UseCaseError> {
         let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
         acquire_identity_lock(&mut *tx)

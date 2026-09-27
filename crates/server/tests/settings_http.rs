@@ -35,6 +35,7 @@ use interfaces::http::{PublicSiteState, mount_theme_assets, public_router};
 use interfaces::http_admin::{pages_router, settings_router};
 use interfaces::http_auth::{AdminState, AuthState, admin_router, auth_router};
 use interfaces::http_support::request_context;
+use serde_json::json;
 use sqlx::PgPool;
 use tower::ServiceExt;
 use uuid::Uuid;
@@ -127,6 +128,7 @@ async fn build(pool: PgPool) -> Stack {
     let mut ids = std::collections::HashMap::new();
     for (username, role) in [
         ("admin", Some("admin")),
+        ("owner", Some("owner")),
         ("editor", Some("editor")),
         ("author", Some("author")),
     ] {
@@ -162,7 +164,7 @@ async fn build(pool: PgPool) -> Stack {
                 secret_ref: "IDP_SECRET".into(),
                 scopes: vec![],
             }],
-            None,
+            None.into(),
         )
         .await
         .unwrap();
@@ -175,7 +177,7 @@ async fn build(pool: PgPool) -> Stack {
                 "https://idp.example",
                 &format!("sub-{username}"),
                 None,
-                None,
+                None.into(),
             )
             .await
             .unwrap();
@@ -322,6 +324,14 @@ async fn build(pool: PgPool) -> Stack {
     .merge(admin_router(admin_state.clone()))
     .merge(pages_router(admin_state.clone()))
     .merge(settings_router(admin_state.clone()))
+    .merge(interfaces::http_audit::audit_router(
+        interfaces::http_audit::AuditState {
+            audit: Arc::new(application::audit::AuditInteractor::new(Arc::new(
+                infrastructure::audit::PostgresAuditQuery::new(pool.clone()),
+            ))),
+            admin: admin_state.clone(),
+        },
+    ))
     .merge(interfaces::http_retention::retention_router(
         interfaces::http_retention::RetentionState {
             retention: Arc::new(application::retention::RetentionInteractor::new(Arc::new(
@@ -336,6 +346,112 @@ async fn build(pool: PgPool) -> Stack {
 
 async fn fresh_stack() -> Stack {
     build(common::fresh_database("blog_settings_test").await).await
+}
+
+#[tokio::test]
+async fn audit_history_has_its_own_permission_and_no_write_endpoint() {
+    let _guard = SERIAL.lock().await;
+    let stack = fresh_stack().await;
+    let path = "/api/admin/v1/audit-logs";
+    let (status, _, cache) = get(&stack.router, path, None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(cache.as_deref(), Some("no-store"));
+    let (admin, _) = login_as(&stack, "admin").await;
+    assert_eq!(
+        get(&stack.router, path, Some(&admin)).await.0,
+        StatusCode::FORBIDDEN
+    );
+    let (owner, csrf) = login_as(&stack, "owner").await;
+    let (status, body, cache) = get(&stack.router, &format!("{path}?limit=1"), Some(&owner)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(cache.as_deref(), Some("no-store"));
+    assert_eq!(body["items"].as_array().unwrap().len(), 1);
+    assert!(body["next_cursor"].is_string());
+    for query in [
+        "limit=0",
+        "limit=101",
+        "cursor=bad",
+        "actor_id=bad",
+        "unrecognized=true",
+        "from=2026-09-27",
+    ] {
+        let (status, body, _) = get(&stack.router, &format!("{path}?{query}"), Some(&owner)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{query}");
+        assert_eq!(body["code"], "invalid_request");
+    }
+    assert_eq!(
+        put(&stack.router, path, &owner, &csrf, json!({})).await.0,
+        StatusCode::METHOD_NOT_ALLOWED
+    );
+}
+
+#[tokio::test]
+async fn request_ip_is_verified_and_stays_with_its_business_transaction() {
+    let _guard = SERIAL.lock().await;
+    let stack = fresh_stack().await;
+    let (owner, csrf) = login_as(&stack, "owner").await;
+    let router =
+        stack
+            .router
+            .clone()
+            .layer(axum::Extension(interfaces::http_client_ip::TrustedProxies(
+                vec!["127.0.0.1".parse().unwrap()],
+            )));
+    // One trusted proxy chain, an untrusted socket with a forged prefix, an
+    // invalid chain, and an unknown peer. Only verified addresses are persisted.
+    for (version, peer, forwarded, expected) in [
+        (
+            0,
+            Some("127.0.0.1:4000"),
+            "203.0.113.99, 2001:db8::42, 127.0.0.1",
+            Some("2001:db8::42"),
+        ),
+        (
+            1,
+            Some("198.51.100.8:4000"),
+            "203.0.113.99",
+            Some("198.51.100.8"),
+        ),
+        (2, Some("127.0.0.1:4000"), "invalid, 2001:db8::42", None),
+        (3, None, "203.0.113.99", None),
+    ] {
+        let mut request = Request::builder()
+            .method("PUT")
+            .uri("/api/admin/v1/settings/site")
+            .header("cookie", format!("blog_session={owner}"))
+            .header("x-csrf-token", &csrf)
+            .header("x-forwarded-for", forwarded)
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({"title":format!("Revision {version}"),"expected_version":version})
+                    .to_string(),
+            ))
+            .unwrap();
+        if let Some(peer) = peer {
+            request.extensions_mut().insert(axum::extract::ConnectInfo(
+                peer.parse::<std::net::SocketAddr>().unwrap(),
+            ));
+        }
+        let response = router.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let (actor, ip): (Option<Uuid>, Option<String>) = sqlx::query_as("SELECT actor_id,host(ip_address) FROM audit_logs WHERE action='settings.site' ORDER BY created_at DESC,id DESC LIMIT 1")
+            .fetch_one(&stack.pool).await.unwrap();
+        let owner_id: Uuid = sqlx::query_scalar("SELECT id FROM users WHERE username='owner'")
+            .fetch_one(&stack.pool)
+            .await
+            .unwrap();
+        assert_eq!(actor, Some(owner_id));
+        assert_eq!(ip.as_deref(), expected);
+    }
+    let (_, logs, _) = get(
+        &router,
+        "/api/admin/v1/audit-logs?action=settings.site",
+        Some(&owner),
+    )
+    .await;
+    assert_eq!(logs["items"].as_array().unwrap().len(), 4);
+    assert_eq!(logs["items"][3]["ip_address"], "2001:db8::42");
+    assert_eq!(logs["items"][3]["actor_display"], "owner");
 }
 
 #[tokio::test]

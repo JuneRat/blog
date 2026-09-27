@@ -28,7 +28,7 @@
 
 | 角色 | 默认权限范围 |
 |---|---|
-| Owner | 全部已注册权限，包括文章/页面永久删除、OAuth 维护和所有权操作 |
+| Owner | 全部已注册权限，包括文章/页面永久删除、OAuth 维护、审计读取和所有权操作 |
 | Administrator | `user.manage`、`role.manage`、`settings.manage` |
 | Editor | 文章 read/update/publish/unpublish/delete 的 any 权限；页面、分类、标签、系列管理；媒体 read/upload/delete_any |
 | Author | 创建文章及本人文章 read/update/publish/unpublish/delete；媒体 read/upload/delete |
@@ -115,6 +115,6 @@
 
 编辑器的未保存提醒覆盖菜单跳转及刷新/关闭，当前不拦截浏览器前进、后退，不能把它视为完整的离开页面保护。
 
-`PUT /api/admin/v1/me/profile` 已支持本人展示名和纯文本简介更新，必填编辑版本，冲突返回 409；成功变更与脱敏摘要在同事务写入 `audit_logs`。该接口尚无后台表单。用户创建、密码与 OAuth 登录方式变更、明确撤销全部会话、角色分配及权限目录同步也已接入事务审计；操作者与目标用户分开记录，CLI/系统任务使用空 actor，摘要不含邮箱、哈希或 OAuth subject。审计失败连同认证版本和会话删除一起回滚。普通会话活跃刷新/退出不作为业务变更审计；评论以外的来源 IP 传递、后台审计读取仍待实现。运行账号只追加和独立保留期维护权限见[运维](operations-and-recovery.md)。
+`PUT /api/admin/v1/me/profile` 已支持本人展示名和纯文本简介更新，必填编辑版本，冲突返回 409；成功变更与脱敏摘要在同事务写入 `audit_logs`。该接口尚无后台表单。用户创建、密码与 OAuth 登录方式变更、明确撤销全部会话、角色分配及权限目录同步也已接入事务审计；操作者与目标用户分开记录，CLI/系统任务使用空 actor，摘要不含邮箱、哈希或 OAuth subject。审计失败连同认证版本和会话删除一起回滚。普通会话活跃刷新/退出不作为业务变更审计；HTTP 写入通过显式上下文记录经可信代理规则提取的 IP，`/admin/audit-logs` 已提供只读查询，独立要求 `audit.read`（默认仅 Owner，Administrator 的 `settings.manage` 不包含此权限）。运行账号只追加和独立保留期维护权限见[运维](operations-and-recovery.md)。
 
-访问日志记录请求 ID、method/path、状态、耗时和经服务端验证的 actor；不记录查询串、Cookie、密码、授权码或 token。预期 4xx 记 info，5xx 记 warn。它能关联请求结果，但不是包含业务对象和事务结果的持久审计账本。需要不可遗漏的身份操作审计时，须补充相应存储和事务实现，不能把现有访问日志视为该保证。
+访问日志记录请求 ID、method/path、状态、耗时和经服务端验证的 actor；不记录查询串、Cookie、密码、授权码或 token。预期 4xx 记 info，5xx 记 warn。它能关联请求结果；上述成功业务变更另由事务审计记录，不能把访问日志当作事务审计保证。

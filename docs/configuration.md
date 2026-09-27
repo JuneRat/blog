@@ -22,7 +22,7 @@ cargo run -p server -- serve
 | `BLOG_MIGRATIONS_DIR` | `migrations/postgres` | 所有业务命令使用的结构迁移目录 |
 | `BLOG_BIND` | `127.0.0.1:8080` | `serve` 监听地址；命令行 `--addr` 优先 |
 | `BLOG_PUBLIC_BASE_URL` | `http://127.0.0.1:8080` | `serve` 的公开基础 URL，供 OAuth 回调、canonical、RSS 和 sitemap 使用 |
-| `BLOG_TRUSTED_PROXIES` | 空 | `serve` 评论来源 IP 可信代理列表，逗号分隔精确 IP，不支持 CIDR；仅解析可信 socket 对端提供的 X-Forwarded-For |
+| `BLOG_TRUSTED_PROXIES` | 空 | `serve` 评论与业务审计来源 IP 可信代理列表，逗号分隔精确 IP，不支持 CIDR；仅解析可信 socket 对端提供的 X-Forwarded-For |
 | `BLOG_THEME_DIR` | `themes/default` | `serve` 的默认主题目录；从同级目录发现其他已安装主题 |
 | `BLOG_ADMIN_DIST` | `apps/admin/dist` | `serve` 的后台构建产物；目录不存在时不挂载 `/admin` |
 | `BLOG_MEDIA_DIR` | `data/media` | `serve` 与 `media cleanup-staging` 使用的文件根目录 |
@@ -59,7 +59,9 @@ OAuth 提供商通过 `secret_ref` 引用任意命名的环境变量，例如 `I
 
 监听地址和公开地址分别配置：反向代理终止 TLS 时，程序可以监听 `127.0.0.1:8080`，公开地址设为 `https://blog.example.com`，cookie 默认随公开地址启用 Secure。
 
-浏览器写请求的 Origin 检查是另一条独立路径：后台将提供的 Origin 与请求 Host 比较，允许 `http://{Host}` 或 `https://{Host}`；未提供 Origin 时不执行该项检查，已认证写请求仍要求 CSRF token。代理须保持与浏览器入口一致的 Host。认证登录限流仍读取 socket 对端。评论提交/预览额外要求 Origin 与配置的公开地址精确匹配；评论来源 IP 支持 `BLOG_TRUSTED_PROXIES`，从 X-Forwarded-For 右侧剥离可信代理，非法或未知来源留空，规则见[评论](comments.md#请求与来源地址)。认证规则见[身份与权限](identity-and-admin.md)。
+浏览器写请求的 Origin 检查是另一条独立路径：后台将提供的 Origin 与请求 Host 比较，允许 `http://{Host}` 或 `https://{Host}`；未提供 Origin 时不执行该项检查，已认证写请求仍要求 CSRF token。代理须保持与浏览器入口一致的 Host。认证登录限流仍读取 socket 对端。评论提交/预览额外要求 Origin 与配置的公开地址精确匹配；评论与业务审计来源 IP 共用 `BLOG_TRUSTED_PROXIES`，从 X-Forwarded-For 右侧剥离可信代理，非法或未知来源留空，规则见[评论](comments.md#请求与来源地址)。认证规则见[身份与权限](identity-and-admin.md)。
+
+业务审计通过显式上下文把已验证账号和来源 IP 传入写事务，不接受客户端请求体声明操作者/IP。可信代理链缺失、包含非法值、超过 20 个地址或没有可识别客户端时留空；非可信 socket 对端的转发头被忽略。审计 IP 随整条审计记录按 audit 保留期删除，评论 IP 单独按 comment 保留期清空。
 
 ## 命令配置边界
 

@@ -8,7 +8,6 @@ use async_trait::async_trait;
 use serde::Serialize;
 use serde_json::{Value, json};
 use sqlx::{PgPool, Postgres, Row, Transaction};
-use uuid::Uuid;
 
 fn db(e: sqlx::Error) -> UseCaseError {
     UseCaseError::Repository(e.to_string())
@@ -83,7 +82,7 @@ impl RetentionStore for PostgresRetentionStore {
     async fn save(
         &self,
         value: RetentionSettings,
-        actor: Uuid,
+        actor: application::audit::AuditContext,
     ) -> Result<RetentionSettings, UseCaseError> {
         validate_days(value.comment_ip_days)?;
         validate_days(value.audit_days)?;
@@ -121,8 +120,8 @@ impl RetentionStore for PostgresRetentionStore {
             append_audit_log(
                 &mut tx,
                 AuditEntry {
-                    actor_id: Some(actor),
-                    ip_address: None,
+                    actor_id: actor.actor_id,
+                    ip_address: actor.ip_address,
                     action: "settings.retention",
                     target_type: "settings",
                     target_id: key,

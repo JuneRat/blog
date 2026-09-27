@@ -158,6 +158,7 @@ where
 
         // 身份已由会话验证：只有这里可以补录 actor，完成日志才带上它。
         request_id.set_actor(actor.user_id.0);
+        let actor = actor.with_audit_ip(crate::http_client_ip::ClientAddress::from_parts(parts).0);
         Ok(Self { actor })
     }
 }

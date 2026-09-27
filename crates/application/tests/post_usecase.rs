@@ -111,7 +111,7 @@ impl PostRepository for FakePostRepo {
         &self,
         post: &domain::content::Post,
         tag_ids: &[Uuid],
-        _actor_id: Option<uuid::Uuid>,
+        _actor_id: application::audit::AuditContext,
     ) -> Result<application::ports::PostRecord, UseCaseError> {
         let snapshot = post.snapshot();
         let mut posts = self.posts.lock().unwrap();
@@ -133,7 +133,7 @@ impl PostRepository for FakePostRepo {
         expected: i64,
         now: OffsetDateTime,
         tag_ids: Option<&[Uuid]>,
-        _actor_id: Option<uuid::Uuid>,
+        _actor_id: application::audit::AuditContext,
     ) -> Result<application::ports::PostCommitOutcome, UseCaseError> {
         self.commit_record(post, expected, now, tag_ids, false)
     }
@@ -143,7 +143,7 @@ impl PostRepository for FakePostRepo {
         post: &domain::content::Post,
         expected: i64,
         now: OffsetDateTime,
-        _actor_id: Option<uuid::Uuid>,
+        _actor_id: application::audit::AuditContext,
     ) -> Result<application::ports::PostCommitOutcome, UseCaseError> {
         self.commit_record(post, expected, now, None, true)
     }
@@ -201,7 +201,7 @@ impl PostRepository for FakePostRepo {
         &self,
         id: Uuid,
         expected_version: i64,
-        _actor_id: Option<uuid::Uuid>,
+        _actor_id: application::audit::AuditContext,
     ) -> Result<SaveOutcome, UseCaseError> {
         let mut posts = self.posts.lock().unwrap();
         let Some(post) = posts
@@ -241,6 +241,7 @@ impl UserRepository for FakeUserRepo {
         user: &domain::identity::User,
         expected_version: i64,
         now: time::OffsetDateTime,
+        _audit: application::audit::AuditContext,
     ) -> Result<UserSnapshot, UseCaseError> {
         let snapshot = user.snapshot();
         let mut users = self.users.lock().unwrap();
@@ -261,7 +262,7 @@ impl UserRepository for FakeUserRepo {
     async fn revoke_authentication(
         &self,
         user_id: Uuid,
-        _audit_actor: Option<uuid::Uuid>,
+        _audit_actor: application::audit::AuditContext,
     ) -> Result<(), UseCaseError> {
         let mut users = self.users.lock().unwrap();
         let user = users
@@ -277,6 +278,7 @@ impl UserRepository for FakeUserRepo {
         user_id: uuid::Uuid,
         avatar_media_id: Option<uuid::Uuid>,
         now: time::OffsetDateTime,
+        _audit: application::audit::AuditContext,
     ) -> Result<(), UseCaseError> {
         let mut users = self.users.lock().unwrap();
         let Some(user) = users.values_mut().find(|u| u.id == user_id) else {
@@ -290,7 +292,7 @@ impl UserRepository for FakeUserRepo {
     async fn insert(
         &self,
         aggregate: &domain::identity::User,
-        _audit_actor: Option<uuid::Uuid>,
+        _audit_actor: application::audit::AuditContext,
     ) -> Result<(), UseCaseError> {
         let snapshot = aggregate.snapshot();
         let mut users = self.users.lock().unwrap();
@@ -344,7 +346,7 @@ impl UserRepository for FakeUserRepo {
         &self,
         _user_id: Uuid,
         _phc_hash: &str,
-        _audit_actor: Option<uuid::Uuid>,
+        _audit_actor: application::audit::AuditContext,
     ) -> Result<(), UseCaseError> {
         unimplemented!("post 用例不使用密码凭据")
     }
@@ -354,7 +356,7 @@ impl UserRepository for FakeUserRepo {
         _user_id: Uuid,
         _expected: Option<&str>,
         _new_hash: &str,
-        _audit_actor: Option<uuid::Uuid>,
+        _audit_actor: application::audit::AuditContext,
     ) -> Result<Option<i64>, UseCaseError> {
         unimplemented!("post 用例不使用密码凭据")
     }
@@ -362,7 +364,7 @@ impl UserRepository for FakeUserRepo {
     async fn clear_password_hash_guarded(
         &self,
         _user_id: Uuid,
-        _audit_actor: Option<uuid::Uuid>,
+        _audit_actor: application::audit::AuditContext,
     ) -> Result<application::ports::ClearPasswordOutcome, UseCaseError> {
         unimplemented!("post 用例不使用密码凭据")
     }
@@ -370,7 +372,7 @@ impl UserRepository for FakeUserRepo {
     async fn clear_password_hash(
         &self,
         _user_id: Uuid,
-        _audit_actor: Option<uuid::Uuid>,
+        _audit_actor: application::audit::AuditContext,
     ) -> Result<(), UseCaseError> {
         unimplemented!("post 用例不使用密码凭据")
     }
@@ -422,7 +424,7 @@ impl TagRepository for FakeTagRepo {
     async fn insert(
         &self,
         aggregate: &domain::content::Tag,
-        _actor_id: Option<uuid::Uuid>,
+        _actor_id: application::audit::AuditContext,
     ) -> Result<(), UseCaseError> {
         let snapshot = aggregate.snapshot();
         self.tags.lock().unwrap().push(snapshot.clone());
@@ -459,7 +461,7 @@ impl TagRepository for FakeTagRepo {
         id: Uuid,
         new_name: &str,
         expected_version: i64,
-        _actor_id: Option<uuid::Uuid>,
+        _actor_id: application::audit::AuditContext,
     ) -> Result<Option<TagSnapshot>, UseCaseError> {
         let mut tags = self.tags.lock().unwrap();
         let Some(tag) = tags.iter_mut().find(|t| t.id == id) else {
@@ -477,7 +479,7 @@ impl TagRepository for FakeTagRepo {
         &self,
         id: Uuid,
         expected_version: i64,
-        _actor_id: Option<uuid::Uuid>,
+        _actor_id: application::audit::AuditContext,
     ) -> Result<TagDeleteOutcome, UseCaseError> {
         let mut tags = self.tags.lock().unwrap();
         let Some(tag) = tags.iter().find(|t| t.id == id) else {
@@ -514,7 +516,7 @@ impl application::ports::SeriesRepository for FakeSeriesRepo {
     async fn insert(
         &self,
         aggregate: &domain::content::Series,
-        _actor_id: Option<uuid::Uuid>,
+        _actor_id: application::audit::AuditContext,
     ) -> Result<(), UseCaseError> {
         let _snapshot = aggregate.snapshot();
         Ok(())
@@ -535,7 +537,7 @@ impl application::ports::SeriesRepository for FakeSeriesRepo {
         _description: Option<&str>,
         _cover_media_id: Option<uuid::Uuid>,
         _expected_version: i64,
-        _actor_id: Option<uuid::Uuid>,
+        _actor_id: application::audit::AuditContext,
     ) -> Result<Option<domain::content::SeriesSnapshot>, UseCaseError> {
         Ok(None)
     }
@@ -543,7 +545,7 @@ impl application::ports::SeriesRepository for FakeSeriesRepo {
         &self,
         _id: uuid::Uuid,
         _expected_version: i64,
-        _actor_id: Option<uuid::Uuid>,
+        _actor_id: application::audit::AuditContext,
     ) -> Result<application::ports::SeriesDeleteOutcome, UseCaseError> {
         Ok(application::ports::SeriesDeleteOutcome::Gone)
     }
@@ -561,7 +563,7 @@ impl application::ports::SeriesRepository for FakeSeriesRepo {
         _series_id: uuid::Uuid,
         _expected: i64,
         _ordered: &[uuid::Uuid],
-        _actor_id: Option<uuid::Uuid>,
+        _actor_id: application::audit::AuditContext,
     ) -> Result<application::ports::ReorderOutcome, UseCaseError> {
         Ok(application::ports::ReorderOutcome::Reordered { new_version: 1 })
     }
@@ -575,7 +577,7 @@ impl application::ports::CategoryRepository for FakeCategoryRepo {
     async fn insert(
         &self,
         aggregate: &domain::content::Category,
-        _audit_actor: Option<uuid::Uuid>,
+        _audit_actor: application::audit::AuditContext,
     ) -> Result<(), UseCaseError> {
         let _snapshot = aggregate.snapshot();
         Ok(())
@@ -596,7 +598,7 @@ impl application::ports::CategoryRepository for FakeCategoryRepo {
         _description: Option<&str>,
         _parent_id: Option<uuid::Uuid>,
         _expected_version: i64,
-        _audit_actor: Option<uuid::Uuid>,
+        _audit_actor: application::audit::AuditContext,
     ) -> Result<Option<domain::content::CategorySnapshot>, UseCaseError> {
         Ok(None)
     }
@@ -604,7 +606,7 @@ impl application::ports::CategoryRepository for FakeCategoryRepo {
         &self,
         _id: uuid::Uuid,
         _expected_version: i64,
-        _audit_actor: Option<uuid::Uuid>,
+        _audit_actor: application::audit::AuditContext,
     ) -> Result<application::ports::CategoryDeleteOutcome, UseCaseError> {
         Ok(application::ports::CategoryDeleteOutcome::Gone)
     }
@@ -693,7 +695,7 @@ impl RbacStore for FakeRbacStore {
         &self,
         user_id: Uuid,
         role_slug: &str,
-        _audit_actor: Option<uuid::Uuid>,
+        _audit_actor: application::audit::AuditContext,
     ) -> Result<(), UseCaseError> {
         if !self.roles.lock().unwrap().contains_key(role_slug) {
             return Err(UseCaseError::NotFound(format!("角色 {role_slug}")));
@@ -709,7 +711,7 @@ impl RbacStore for FakeRbacStore {
         &self,
         user_id: Uuid,
         role_slug: &str,
-        _audit_actor: Option<uuid::Uuid>,
+        _audit_actor: application::audit::AuditContext,
     ) -> Result<(), UseCaseError> {
         if role_slug == "owner" && self.owners() <= 1 {
             return Err(UseCaseError::LastOwnerProtected);

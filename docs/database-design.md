@@ -168,6 +168,8 @@ Post/Page 统一使用 draft、scheduled、published、archived 四种状态，�
 
 应用运行账号只能按需读取/追加审计，不允许 UPDATE/DELETE/TRUNCATE；默认 180 天保留期的删除由单独授权的维护身份执行。运行账号授权、维护任务和可信代理配置需随实现交付，DDL 不自动配置这些能力。该表不保证抵御数据库管理员篡改。
 
+后台读取独立检查 `audit.read`（默认仅 Owner）；支持动作、账号、目标及时间筛选，按时间和 ID 倒序游标分页。HTTP 写入的审计上下文显式传入事务，与评论共用可信代理解析规则；缺失或未知 IP 留空。记录和 IP 随审计保留期一起清理，不复制到摘要。当前实现及 API 见[数据库实现参考](database-current.md#8-审计基础)和[审计接口](admin-api.md#审计日志)。
+
 ## 7. 持久会话
 
 `sessions` 是独立运行表，不放入 settings，也不增加通用 metadata、UUID 或编辑 version。

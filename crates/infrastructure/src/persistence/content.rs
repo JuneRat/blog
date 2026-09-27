@@ -69,7 +69,7 @@ pub async fn rebuild_content_html(
                     sync_media_refs(&mut tx, kind, id, &media_ids).await?;
                     audit_content(
                         &mut tx,
-                        None,
+                        application::audit::AuditContext::system(),
                         &format!("{}.html.rebuild", kind.as_str()),
                         kind.as_str(),
                         id,
@@ -119,7 +119,7 @@ impl PostgresPostRepository {
         &self,
         snapshot: &PostSnapshot,
         tag_ids: &[Uuid],
-        actor_id: Option<Uuid>,
+        actor_id: application::audit::AuditContext,
     ) -> Result<PostRecord, UseCaseError> {
         let rendered = render_content(&*self.renderer, &snapshot.content).await?;
         let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
@@ -162,7 +162,7 @@ impl PostgresPostRepository {
         expected_version: i64,
         now: OffsetDateTime,
         tag_ids: Option<&[Uuid]>,
-        actor_id: Option<Uuid>,
+        actor_id: application::audit::AuditContext,
     ) -> Result<PostCommitOutcome, UseCaseError> {
         let rendered = render_content(&*self.renderer, &snapshot.content).await?;
         let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
@@ -276,7 +276,7 @@ impl PostRepository for PostgresPostRepository {
         &self,
         post: &Post,
         tag_ids: &[Uuid],
-        actor_id: Option<Uuid>,
+        actor_id: application::audit::AuditContext,
     ) -> Result<PostRecord, UseCaseError> {
         self.insert_record(&post.snapshot(), tag_ids, actor_id)
             .await
@@ -288,7 +288,7 @@ impl PostRepository for PostgresPostRepository {
         expected_version: i64,
         now: OffsetDateTime,
         tag_ids: Option<&[Uuid]>,
-        actor_id: Option<Uuid>,
+        actor_id: application::audit::AuditContext,
     ) -> Result<PostCommitOutcome, UseCaseError> {
         self.save_record(&post.snapshot(), expected_version, now, tag_ids, actor_id)
             .await
@@ -299,7 +299,7 @@ impl PostRepository for PostgresPostRepository {
         post: &Post,
         expected_version: i64,
         now: OffsetDateTime,
-        actor_id: Option<Uuid>,
+        actor_id: application::audit::AuditContext,
     ) -> Result<PostCommitOutcome, UseCaseError> {
         let snapshot = post.snapshot();
         let expected_deleted = snapshot.deleted_at.is_none();
@@ -404,7 +404,7 @@ impl PostRepository for PostgresPostRepository {
         &self,
         id: Uuid,
         expected_version: i64,
-        actor_id: Option<Uuid>,
+        actor_id: application::audit::AuditContext,
     ) -> Result<SaveOutcome, UseCaseError> {
         let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
         lock_content_relations(&mut tx).await?;
@@ -468,7 +468,7 @@ pub(super) async fn lock_content_relations(
 
 pub(super) async fn audit_content(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    actor_id: Option<Uuid>,
+    actor_id: application::audit::AuditContext,
     action: &str,
     target_type: &str,
     id: Uuid,
@@ -477,8 +477,8 @@ pub(super) async fn audit_content(
     append_audit_log(
         tx,
         AuditEntry {
-            actor_id,
-            ip_address: None,
+            actor_id: actor_id.actor_id,
+            ip_address: actor_id.ip_address,
             action,
             target_type,
             target_id: &id.to_string(),
@@ -785,7 +785,7 @@ impl PageRepository for PostgresPageRepository {
     async fn insert_page(
         &self,
         page: &Page,
-        actor_id: Option<Uuid>,
+        actor_id: application::audit::AuditContext,
     ) -> Result<PageSnapshot, UseCaseError> {
         let s = page.snapshot();
         let rendered = render_content(&*self.renderer, &s.content).await?;
@@ -814,7 +814,7 @@ impl PageRepository for PostgresPageRepository {
         page: &Page,
         expected_version: i64,
         now: OffsetDateTime,
-        actor_id: Option<Uuid>,
+        actor_id: application::audit::AuditContext,
     ) -> Result<PageCommitOutcome, UseCaseError> {
         let s = page.snapshot();
         let rendered = render_content(&*self.renderer, &s.content).await?;
@@ -848,7 +848,7 @@ impl PageRepository for PostgresPageRepository {
         page: &Page,
         expected_version: i64,
         now: OffsetDateTime,
-        actor_id: Option<Uuid>,
+        actor_id: application::audit::AuditContext,
     ) -> Result<PageCommitOutcome, UseCaseError> {
         let s = page.snapshot();
         let expected_deleted = s.deleted_at.is_none();
@@ -927,7 +927,7 @@ impl PageRepository for PostgresPageRepository {
         &self,
         id: Uuid,
         expected_version: i64,
-        actor_id: Option<Uuid>,
+        actor_id: application::audit::AuditContext,
     ) -> Result<PageDeleteOutcome, UseCaseError> {
         let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
         let prior: Option<(i64,)> = sqlx::query_as(
@@ -993,7 +993,7 @@ pub async fn publish_due_content(
         for (id, version) in rows {
             audit_content(
                 &mut tx,
-                None,
+                application::audit::AuditContext::system(),
                 &format!("{kind}.publish_due"),
                 kind,
                 id,

@@ -19,6 +19,24 @@
 
 评论管理位于 `/admin/comments`。评论接口、开关和版本规则见[评论 API](comments.md#接口)。
 
+## 审计日志
+
+后台入口 `/admin/audit-logs`，接口 `GET /api/admin/v1/audit-logs`，独立要求 `audit.read`；默认仅 Owner 持有。未登录返回 401，无权限返回 403。不提供写入、编辑或清除接口。
+
+| 查询参数 | 规则 |
+|---|---|
+| `action` | 动作精确匹配，如 `post.update`；最长 128 字符 |
+| `actor_id` | 账号 UUID；账号已被物理删除也可查询历史 |
+| `without_actor` | `true` 只取空 actor，不能同时指定 actor_id；包含访客、系统或 CLI |
+| `target_type` / `target_id` | 目标类型 / ID 精确匹配，最长分别 64 / 256 字符，可组合 |
+| `from` / `until` | 含时区 RFC3339，下限包含、上限不包含；同时提供时 from 必须早于 until |
+| `limit` | 默认 50，整数 1–100 |
+| `cursor` | 使用上一次返回的 next_cursor 原值，经 URL 编码传入 |
+
+响应为 `{ "items": [...], "next_cursor": "…" }`，末页 next_cursor 为 null。单条含 `id`、`created_at`、`actor_id`、`actor_display`、`ip_address`、`action`、`target_type`、`target_id` 和 `summary: [{ "key": "version", "value": "2" }]`。actor_display 是当前展示名（无展示名时为用户名），不是历史名字快照；历史 actor_id 保留，账号不存在时 display 为 null。IP 未知时为 null。摘要只提供存储时允许的变更信息，全部按文本展示。
+
+按 `(created_at DESC, id DESC)` 连续读取，不返回总数；新增日志及旧边界记录清理不移动已取得的分页边界。它不是冻结快照，已经超过保留期的记录不会继续显示。更改筛选后丢弃旧 cursor，刷新从首页开始。未知查询字段、非法 UUID、游标、范围或日期返回 400 `invalid_request`。响应均使用 `Cache-Control: no-store`，不写入浏览器持久缓存。
+
 ## 认证与本人资料
 
 此表列出完整路径，不应用管理前缀。

@@ -195,7 +195,7 @@ async fn seed_tag(stack: &Stack, name: &str, slug: &str) -> uuid::Uuid {
         .tags
         .insert(
             &domain::content::Tag::reconstitute(snapshot.clone()).unwrap(),
-            None,
+            None.into(),
         )
         .await
         .unwrap();
@@ -216,7 +216,7 @@ async fn seed_category(stack: &Stack, slug: &str) -> uuid::Uuid {
         .categories
         .insert(
             &domain::content::Category::reconstitute(snapshot.clone()).unwrap(),
-            None,
+            None.into(),
         )
         .await
         .unwrap();
@@ -236,7 +236,7 @@ async fn seed_series(stack: &Stack, slug: &str) -> uuid::Uuid {
         .series
         .insert(
             &domain::content::Series::reconstitute(snapshot.clone()).unwrap(),
-            None,
+            None.into(),
         )
         .await
         .unwrap();
@@ -524,7 +524,7 @@ async fn site_settings_change_is_reflected_in_feed_and_html() {
             },
             0,
             time::OffsetDateTime::now_utc(),
-            None,
+            None.into(),
         )
         .await
         .unwrap();

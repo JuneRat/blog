@@ -165,6 +165,7 @@ async fn password_login(
     request_id: RequestId,
     headers: HeaderMap,
     connect_info: Option<Extension<ConnectInfo<SocketAddr>>>,
+    client: crate::http_client_ip::ClientAddress,
     Json(body): Json<PasswordLoginBody>,
 ) -> Response {
     if let Err(e) = ensure_same_origin(&headers) {
@@ -175,7 +176,13 @@ async fn password_login(
     let next = body.next.unwrap_or_else(|| "/admin/".to_string());
     match state
         .passwords
-        .login(&body.username, &body.password, client_key.as_deref(), &next)
+        .login(
+            &body.username,
+            &body.password,
+            client_key.as_deref(),
+            &next,
+            client.0,
+        )
         .await
     {
         Ok(login) => {
@@ -374,6 +381,7 @@ async fn change_password(
     request_id: RequestId,
     headers: HeaderMap,
     connect_info: Option<Extension<ConnectInfo<SocketAddr>>>,
+    client: crate::http_client_ip::ClientAddress,
     Json(body): Json<ChangePasswordBody>,
 ) -> Response {
     let Some(token) = cookie_value(&headers, SESSION_COOKIE_NAME) else {
@@ -397,6 +405,7 @@ async fn change_password(
     request_id.set_actor(actor.user_id.0);
 
     // 重新认证与登录共用失败预算；来源地址维度只取 socket 对端，不读转发头。
+    let actor = actor.with_audit_ip(client.0);
     let client_key = connect_info.map(|Extension(ConnectInfo(addr))| addr.ip().to_string());
     match state
         .passwords

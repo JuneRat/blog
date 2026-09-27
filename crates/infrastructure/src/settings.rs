@@ -50,7 +50,7 @@ impl SettingsStore for PostgresSettingsStore {
         value: &SiteSettingsValue,
         expected_version: i64,
         now: OffsetDateTime,
-        audit_actor: Option<uuid::Uuid>,
+        audit_actor: application::audit::AuditContext,
     ) -> Result<SaveOutcome, UseCaseError> {
         let stored = serde_json::json!({
             "schema_version": 1,
@@ -126,7 +126,7 @@ impl ThemeSettingsStore for PostgresSettingsStore {
         slug: &str,
         expected_version: i64,
         now: OffsetDateTime,
-        audit_actor: Option<uuid::Uuid>,
+        audit_actor: application::audit::AuditContext,
     ) -> Result<SaveOutcome, UseCaseError> {
         let value = serde_json::json!({ "schema_version": 1, "slug": slug });
         let mut tx = self.pool.begin().await.map_err(map_repo_error)?;

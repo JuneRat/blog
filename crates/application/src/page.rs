@@ -107,10 +107,7 @@ impl PageInteractor {
             self.clock.now(),
         )
         .map_err(map_domain)?;
-        let snapshot = self
-            .pages
-            .insert_page(&page, actor.audit_actor_id())
-            .await?;
+        let snapshot = self.pages.insert_page(&page, actor.audit_context()).await?;
         Ok(PageDto::from_snapshot(&snapshot))
     }
 
@@ -234,7 +231,7 @@ impl PageInteractor {
         page.trash(self.clock.now());
         Self::committed(
             self.pages
-                .commit_lifecycle(&page, expected, self.clock.now(), actor.audit_actor_id())
+                .commit_lifecycle(&page, expected, self.clock.now(), actor.audit_context())
                 .await?,
         )
     }
@@ -250,7 +247,7 @@ impl PageInteractor {
         page.restore();
         Self::committed(
             self.pages
-                .commit_lifecycle(&page, expected, self.clock.now(), actor.audit_actor_id())
+                .commit_lifecycle(&page, expected, self.clock.now(), actor.audit_context())
                 .await?,
         )
     }
@@ -265,7 +262,7 @@ impl PageInteractor {
         checked_version(page.version(), Some(cmd.expected_version))?;
         match self
             .pages
-            .purge(cmd.id, cmd.expected_version, actor.audit_actor_id())
+            .purge(cmd.id, cmd.expected_version, actor.audit_context())
             .await?
         {
             PageDeleteOutcome::Deleted => Ok(()),
@@ -329,7 +326,7 @@ impl PageInteractor {
     ) -> Result<PageDto, UseCaseError> {
         match self
             .pages
-            .commit_page(&page, expected, self.clock.now(), actor.audit_actor_id())
+            .commit_page(&page, expected, self.clock.now(), actor.audit_context())
             .await?
         {
             PageCommitOutcome::Saved(snapshot) => Ok(PageDto::from_snapshot(&snapshot)),

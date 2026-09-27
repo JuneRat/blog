@@ -64,7 +64,7 @@ async fn post_and_page_commit_sanitized_html_and_public_reads_use_it() {
     assert!(!expected.contains("javascript:"));
     let mut post = draft(author, source);
     post.publish(OffsetDateTime::now_utc()).unwrap();
-    let record = posts.insert_post(&post, &[], None).await.unwrap();
+    let record = posts.insert_post(&post, &[], None.into()).await.unwrap();
     let post_id = record.snapshot.id;
     let mut page = Page::create_draft(
         Slug::new("rendered-page").unwrap(),
@@ -75,7 +75,7 @@ async fn post_and_page_commit_sanitized_html_and_public_reads_use_it() {
     )
     .unwrap();
     page.publish(OffsetDateTime::now_utc()).unwrap();
-    let page_record = pages.insert_page(&page, None).await.unwrap();
+    let page_record = pages.insert_page(&page, None.into()).await.unwrap();
     let page_id = page_record.id;
     for (table, id) in [("posts", post_id), ("pages", page_id)] {
         let (raw, html, render_version, version, _) = stored(&pool, table, id).await;
@@ -110,7 +110,7 @@ async fn post_and_page_commit_sanitized_html_and_public_reads_use_it() {
     .unwrap();
     assert!(matches!(
         posts
-            .commit_post(&post, 1, OffsetDateTime::now_utc(), None, None)
+            .commit_post(&post, 1, OffsetDateTime::now_utc(), None, None.into())
             .await
             .unwrap(),
         PostCommitOutcome::Saved(_)
@@ -122,7 +122,7 @@ async fn post_and_page_commit_sanitized_html_and_public_reads_use_it() {
     .unwrap();
     assert!(matches!(
         pages
-            .commit_page(&page, 1, OffsetDateTime::now_utc(), None)
+            .commit_page(&page, 1, OffsetDateTime::now_utc(), None.into())
             .await
             .unwrap(),
         PageCommitOutcome::Saved(_)
@@ -167,7 +167,7 @@ async fn media_failure_and_stale_version_leave_source_html_and_refs_unchanged() 
         Uuid::now_v7()
     );
     let record = repo
-        .insert_post(&draft(author, &source), &[], None)
+        .insert_post(&draft(author, &source), &[], None.into())
         .await
         .unwrap();
     let id = record.snapshot.id;
@@ -179,7 +179,7 @@ async fn media_failure_and_stale_version_leave_source_html_and_refs_unchanged() 
     })
     .unwrap();
     assert!(
-        repo.commit_post(&post, 1, OffsetDateTime::now_utc(), None, None)
+        repo.commit_post(&post, 1, OffsetDateTime::now_utc(), None, None.into())
             .await
             .is_err()
     );
@@ -190,7 +190,7 @@ async fn media_failure_and_stale_version_leave_source_html_and_refs_unchanged() 
     })
     .unwrap();
     assert!(matches!(
-        repo.commit_post(&post, 0, OffsetDateTime::now_utc(), None, None)
+        repo.commit_post(&post, 0, OffsetDateTime::now_utc(), None, None.into())
             .await
             .unwrap(),
         PostCommitOutcome::StaleConflict
@@ -213,7 +213,7 @@ async fn migration_rebuilds_outdated_html_without_editing_business_versions() {
     let author = common::seed_user(&pool, "writer").await;
     let posts = PostgresPostRepository::new(pool.clone(), Arc::new(RenderingRuntime::default()));
     let record = posts
-        .insert_post(&draft(author, "# 既有文章"), &[], None)
+        .insert_post(&draft(author, "# 既有文章"), &[], None.into())
         .await
         .unwrap();
     let pages = PostgresPageRepository::new(pool.clone(), Arc::new(RenderingRuntime::default()));
@@ -225,7 +225,7 @@ async fn migration_rebuilds_outdated_html_without_editing_business_versions() {
         OffsetDateTime::now_utc(),
     )
     .unwrap();
-    let page_record = pages.insert_page(&page, None).await.unwrap();
+    let page_record = pages.insert_page(&page, None.into()).await.unwrap();
     let before_post = stored(&pool, "posts", record.snapshot.id).await;
     let before_page = stored(&pool, "pages", page_record.id).await;
     // 基线直接包含派生列；模拟另一渲染规则版本，启动时重建但不改业务版本。
@@ -268,7 +268,7 @@ async fn rebuild_cannot_overwrite_a_concurrent_editor_commit() {
     let author = common::seed_user(&pool, "writer").await;
     let repo = PostgresPostRepository::new(pool.clone(), Arc::new(RenderingRuntime::default()));
     let record = repo
-        .insert_post(&draft(author, "旧正文"), &[], None)
+        .insert_post(&draft(author, "旧正文"), &[], None.into())
         .await
         .unwrap();
     let id = record.snapshot.id;
@@ -293,7 +293,7 @@ async fn rebuild_cannot_overwrite_a_concurrent_editor_commit() {
         ..Default::default()
     })
     .unwrap();
-    repo.commit_post(&post, 1, OffsetDateTime::now_utc(), None, None)
+    repo.commit_post(&post, 1, OffsetDateTime::now_utc(), None, None.into())
         .await
         .unwrap();
     let committed = stored(&pool, "posts", id).await;

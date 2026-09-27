@@ -135,7 +135,7 @@ impl RbacStore for PostgresRbacStore {
         if changed > 0 {
             record_change(
                 &mut tx,
-                None,
+                application::audit::AuditContext::system(),
                 "permissions.sync",
                 "system",
                 "permissions",
@@ -186,7 +186,7 @@ impl RbacStore for PostgresRbacStore {
                 .map_err(Self::map_err)?;
                 record_change(
                     &mut tx,
-                    None,
+                    application::audit::AuditContext::system(),
                     "role.create",
                     "role",
                     &role_id.to_string(),
@@ -264,7 +264,7 @@ impl RbacStore for PostgresRbacStore {
                 .map_err(Self::map_err)?;
             record_change(
                 &mut tx,
-                None,
+                application::audit::AuditContext::system(),
                 "role.sync",
                 "role",
                 &role_id.to_string(),
@@ -316,7 +316,7 @@ impl RbacStore for PostgresRbacStore {
         &self,
         user_id: Uuid,
         role_slug: &str,
-        audit_actor: Option<uuid::Uuid>,
+        audit_actor: application::audit::AuditContext,
     ) -> Result<(), UseCaseError> {
         let mut tx = self.pool.begin().await.map_err(Self::map_err)?;
         crate::persistence::acquire_identity_lock(&mut *tx)
@@ -365,7 +365,7 @@ impl RbacStore for PostgresRbacStore {
         &self,
         user_id: Uuid,
         role_slug: &str,
-        audit_actor: Option<uuid::Uuid>,
+        audit_actor: application::audit::AuditContext,
     ) -> Result<(), UseCaseError> {
         let mut tx = self.pool.begin().await.map_err(Self::map_err)?;
         crate::persistence::acquire_identity_lock(&mut *tx)

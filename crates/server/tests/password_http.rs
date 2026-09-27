@@ -151,12 +151,18 @@ async fn fresh_stack_with(throttle_config: ThrottleConfig) -> Stack {
                 secret_ref: "IDP_SECRET".into(),
                 scopes: vec![],
             }],
-            None,
+            None.into(),
         )
         .await
         .unwrap();
     accounts
-        .bind(member.id, "https://idp.example", "sub-sun", None, None)
+        .bind(
+            member.id,
+            "https://idp.example",
+            "sub-sun",
+            None,
+            None.into(),
+        )
         .await
         .unwrap();
 
@@ -437,12 +443,13 @@ async fn owner_can_edit_profile_keep_session_and_log_out() {
         StatusCode::BAD_REQUEST,
         "通用管理写入口拒绝缺失的 CSRF"
     );
-    let (status, _, saved) = request(
+    let (status, _, saved) = request_with_client(
         &stack.router,
         "PUT",
         "/api/admin/v1/me/profile",
         &[("cookie", &cookie_header), ("x-csrf-token", csrf)],
         Some(body.clone()),
+        Some("198.51.100.24:4444".parse().unwrap()),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{saved}");
@@ -474,6 +481,9 @@ async fn owner_can_edit_profile_keep_session_and_log_out() {
     .await
     .unwrap();
     assert_eq!(audits, vec![serde_json::json!({"version": version + 1})]);
+    let ip: Option<String> = sqlx::query_scalar("SELECT host(ip_address) FROM audit_logs WHERE actor_id=$1 AND action='user.profile.update'")
+        .bind(stack.user_id).fetch_one(&stack.pool).await.unwrap();
+    assert_eq!(ip.as_deref(), Some("198.51.100.24"));
     let (status, _, _) = request(
         &stack.router,
         "POST",
@@ -614,7 +624,7 @@ async fn change_password_requires_csrf_and_current_password_then_rotates_session
     assert_eq!(body["code"].as_str().unwrap(), "invalid_credentials");
 
     // 正确改密 → 200 + 新会话 cookie。
-    let (status, headers, body) = request(
+    let (status, headers, body) = request_with_client(
         &stack.router,
         "POST",
         "/api/admin/v1/me/password",
@@ -623,11 +633,15 @@ async fn change_password_requires_csrf_and_current_password_then_rotates_session
             ("x-csrf-token", &csrf),
         ],
         Some(serde_json::json!({ "current_password": PASSWORD, "new_password": NEW_PASSWORD })),
+        Some("[2001:db8::25]:4444".parse().unwrap()),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let rotated = session_cookie(&headers).expect("改密后必须重签会话 cookie");
     assert_ne!(rotated, cookie, "会话必须轮换");
+    let ip: Option<String> = sqlx::query_scalar("SELECT host(ip_address) FROM audit_logs WHERE actor_id=$1 AND action='user.password.set' ORDER BY created_at DESC,id DESC LIMIT 1")
+        .bind(stack.user_id).fetch_one(&stack.pool).await.unwrap();
+    assert_eq!(ip.as_deref(), Some("2001:db8::25"));
 
     // 旧会话已失效，新会话可用。
     let (status, _) = me(&stack, &cookie).await;

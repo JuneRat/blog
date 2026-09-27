@@ -167,12 +167,7 @@ impl SettingsInteractor {
             ));
         }
         match store
-            .save_theme(
-                &cmd.slug,
-                expected,
-                self.clock.now(),
-                actor.audit_actor_id(),
-            )
+            .save_theme(&cmd.slug, expected, self.clock.now(), actor.audit_context())
             .await?
         {
             SaveOutcome::Saved { new_version } => Ok(self.theme_view_of(
@@ -283,7 +278,7 @@ impl SettingsInteractor {
 
         match self
             .store
-            .save_site(&value, expected, self.clock.now(), actor.audit_actor_id())
+            .save_site(&value, expected, self.clock.now(), actor.audit_context())
             .await?
         {
             SaveOutcome::Saved { new_version } => Ok(self.view_of(value, new_version)),

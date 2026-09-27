@@ -120,7 +120,11 @@ impl FakeMediaRepo {
 
 #[async_trait]
 impl MediaRepository for FakeMediaRepo {
-    async fn insert(&self, aggregate: &Media, _actor: Option<Uuid>) -> Result<(), UseCaseError> {
+    async fn insert(
+        &self,
+        aggregate: &Media,
+        _actor: application::audit::AuditContext,
+    ) -> Result<(), UseCaseError> {
         if *self.fail_insert.lock().unwrap() {
             return Err(UseCaseError::Repository("insert failed".into()));
         }
@@ -191,7 +195,7 @@ impl MediaRepository for FakeMediaRepo {
         version: i64,
         deleted: bool,
         now: OffsetDateTime,
-        _actor: Option<Uuid>,
+        _actor: application::audit::AuditContext,
     ) -> Result<MediaChangeOutcome, UseCaseError> {
         let mut state = self.state.lock().unwrap();
         let Some(s) = state.items.get_mut(&id) else {

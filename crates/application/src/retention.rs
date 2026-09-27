@@ -35,7 +35,7 @@ pub trait RetentionStore: Send + Sync {
     async fn save(
         &self,
         value: RetentionSettings,
-        actor: uuid::Uuid,
+        actor: crate::audit::AuditContext,
     ) -> Result<RetentionSettings, UseCaseError>;
 }
 pub struct RetentionInteractor {
@@ -61,7 +61,7 @@ impl RetentionInteractor {
         if value.comment_version < 0 || value.audit_version < 0 {
             return Err(UseCaseError::Invalid("设置版本不能为负数".into()));
         }
-        self.store.save(value, actor.user_id.0).await
+        self.store.save(value, actor.audit_context()).await
     }
 }
 fn authorize(actor: &Actor) -> Result<(), UseCaseError> {

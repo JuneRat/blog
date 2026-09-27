@@ -95,7 +95,7 @@ impl CategoryInteractor {
             .map_err(map_domain)?;
         let snapshot = category.snapshot();
         self.categories
-            .insert(&category, actor.audit_actor_id())
+            .insert(&category, actor.audit_context())
             .await?;
         Ok(CategoryDto {
             id: snapshot.id,
@@ -149,7 +149,7 @@ impl CategoryInteractor {
                 snapshot.description.as_deref(),
                 parent_id,
                 expected,
-                actor.audit_actor_id(),
+                actor.audit_context(),
             )
             .await?
         {
@@ -185,7 +185,7 @@ impl CategoryInteractor {
 
         match self
             .categories
-            .delete(category.id(), expected, actor.audit_actor_id())
+            .delete(category.id(), expected, actor.audit_context())
             .await?
         {
             CategoryDeleteOutcome::Deleted => Ok(()),

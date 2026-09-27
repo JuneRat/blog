@@ -31,10 +31,10 @@ async fn multiple_series_allow_tied_weights_and_directory_deletion_keeps_posts()
     let now = OffsetDateTime::now_utc();
     let a = Series::new("甲".into(), Slug::new("a").unwrap(), None, now).unwrap();
     let b = Series::new("乙".into(), Slug::new("b").unwrap(), None, now).unwrap();
-    series.insert(&a, Some(author)).await.unwrap();
-    series.insert(&b, Some(author)).await.unwrap();
+    series.insert(&a, Some(author).into()).await.unwrap();
+    series.insert(&b, Some(author).into()).await.unwrap();
     let tag = Tag::new("标签".into(), Slug::new("tag").unwrap(), now).unwrap();
-    tags.insert(&tag, Some(author)).await.unwrap();
+    tags.insert(&tag, Some(author).into()).await.unwrap();
     let mut ids = Vec::new();
     for slug in ["one", "two"] {
         let mut post = Post::create_draft_with_metadata(
@@ -56,7 +56,7 @@ async fn multiple_series_allow_tied_weights_and_directory_deletion_keeps_posts()
         .unwrap();
         post.publish(now).unwrap();
         let record = posts
-            .insert_post(&post, &[tag.id()], Some(author))
+            .insert_post(&post, &[tag.id()], Some(author).into())
             .await
             .unwrap();
         assert_eq!(record.snapshot.series.len(), 2);
@@ -92,12 +92,18 @@ async fn multiple_series_allow_tied_weights_and_directory_deletion_keeps_posts()
         .unwrap();
     let version = series.find_by_slug("a").await.unwrap().unwrap().version;
     series
-        .reorder(a.id(), version, &[ids[1], ids[0]], Some(author))
+        .reorder(a.id(), version, &[ids[1], ids[0]], Some(author).into())
         .await
         .unwrap();
     assert_eq!(
         posts
-            .commit_post(&stale, previous.snapshot.version, now, None, Some(author))
+            .commit_post(
+                &stale,
+                previous.snapshot.version,
+                now,
+                None,
+                Some(author).into()
+            )
             .await
             .unwrap(),
         PostCommitOutcome::StaleConflict
@@ -112,12 +118,15 @@ async fn multiple_series_allow_tied_weights_and_directory_deletion_keeps_posts()
             .all(|m| m.position == 7)
     );
     let before = posts.find_record_by_id(ids[0]).await.unwrap().unwrap();
-    tags.delete(tag.id(), 1, Some(author)).await.unwrap();
+    tags.delete(tag.id(), 1, Some(author).into()).await.unwrap();
     let after = posts.find_record_by_id(ids[0]).await.unwrap().unwrap();
     assert_eq!(after.snapshot.version, before.snapshot.version + 1);
     assert!(after.tag_ids.is_empty());
     let version = series.find_by_slug("a").await.unwrap().unwrap().version;
-    series.delete(a.id(), version, Some(author)).await.unwrap();
+    series
+        .delete(a.id(), version, Some(author).into())
+        .await
+        .unwrap();
     let record = posts.find_record_by_id(ids[0]).await.unwrap().unwrap();
     assert_eq!(
         record.snapshot.series,
@@ -157,10 +166,13 @@ async fn due_publishing_is_atomic_idempotent_and_does_not_revive_cancelled_or_tr
             now,
         )
         .unwrap();
-        posts.insert_post(&post, &[], Some(author)).await.unwrap();
+        posts
+            .insert_post(&post, &[], Some(author).into())
+            .await
+            .unwrap();
         post.schedule(at, now).unwrap();
         let PostCommitOutcome::Saved(record) = posts
-            .commit_post(&post, 1, now, None, Some(author))
+            .commit_post(&post, 1, now, None, Some(author).into())
             .await
             .unwrap()
         else {
@@ -170,14 +182,14 @@ async fn due_publishing_is_atomic_idempotent_and_does_not_revive_cancelled_or_tr
         if slug == "cancelled" {
             post.withdraw();
             posts
-                .commit_post(&post, 2, now, None, Some(author))
+                .commit_post(&post, 2, now, None, Some(author).into())
                 .await
                 .unwrap();
         }
         if slug == "trashed" {
             post.trash(now);
             posts
-                .commit_lifecycle(&post, 2, now, Some(author))
+                .commit_lifecycle(&post, 2, now, Some(author).into())
                 .await
                 .unwrap();
         }
@@ -198,10 +210,10 @@ async fn due_publishing_is_atomic_idempotent_and_does_not_revive_cancelled_or_tr
         now,
     )
     .unwrap();
-    pages.insert_page(&page, Some(author)).await.unwrap();
+    pages.insert_page(&page, Some(author).into()).await.unwrap();
     page.schedule(at, now).unwrap();
     pages
-        .commit_page(&page, 1, now, Some(author))
+        .commit_page(&page, 1, now, Some(author).into())
         .await
         .unwrap();
     assert!(
@@ -256,22 +268,24 @@ async fn due_publishing_is_atomic_idempotent_and_does_not_revive_cancelled_or_tr
     let mut page =
         Page::reconstitute(pages.find_by_id(page.id().0).await.unwrap().unwrap()).unwrap();
     page.archive().unwrap();
-    let PageCommitOutcome::Saved(snapshot) =
-        pages.commit_page(&page, 3, at, Some(author)).await.unwrap()
+    let PageCommitOutcome::Saved(snapshot) = pages
+        .commit_page(&page, 3, at, Some(author).into())
+        .await
+        .unwrap()
     else {
         panic!()
     };
     page = Page::reconstitute(snapshot).unwrap();
     page.trash(at);
     pages
-        .commit_lifecycle(&page, 4, at, Some(author))
+        .commit_lifecycle(&page, 4, at, Some(author).into())
         .await
         .unwrap();
     assert!(pages.list().await.unwrap().is_empty());
     assert_eq!(pages.list_trash(20, 0).await.unwrap().1, 1);
     page.restore();
     let PageCommitOutcome::Saved(restored) = pages
-        .commit_lifecycle(&page, 5, at, Some(author))
+        .commit_lifecycle(&page, 5, at, Some(author).into())
         .await
         .unwrap()
     else {
@@ -308,7 +322,9 @@ async fn purge_deletes_entire_comment_tree_and_audit_failure_rolls_back_content(
     )
     .unwrap();
     let id = post.id().0;
-    repo.insert_post(&post, &[], Some(author)).await.unwrap();
+    repo.insert_post(&post, &[], Some(author).into())
+        .await
+        .unwrap();
     let root = uuid::Uuid::now_v7();
     let reply = uuid::Uuid::now_v7();
     let leaf = uuid::Uuid::now_v7();
@@ -329,23 +345,23 @@ async fn purge_deletes_entire_comment_tree_and_audit_failure_rolls_back_content(
         })
         .unwrap();
     assert!(
-        repo.commit_post(&changed, 1, now, None, Some(author))
+        repo.commit_post(&changed, 1, now, None, Some(author).into())
             .await
             .is_err()
     );
     let unchanged = repo.find_record_by_id(id).await.unwrap().unwrap();
     assert_eq!(unchanged.snapshot, post.snapshot());
     assert!(matches!(
-        repo.purge(id, 1, Some(author)).await.unwrap(),
+        repo.purge(id, 1, Some(author).into()).await.unwrap(),
         application::ports::SaveOutcome::Gone
     ));
     let mut trash = post;
     trash.trash(now);
-    repo.commit_lifecycle(&trash, 1, now, Some(author))
+    repo.commit_lifecycle(&trash, 1, now, Some(author).into())
         .await
         .unwrap();
     assert!(matches!(
-        repo.purge(id, 2, Some(author)).await.unwrap(),
+        repo.purge(id, 2, Some(author).into()).await.unwrap(),
         application::ports::SaveOutcome::Saved { .. }
     ));
     assert!(repo.find_by_id(id).await.unwrap().is_none());

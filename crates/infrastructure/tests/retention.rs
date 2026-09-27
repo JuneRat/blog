@@ -34,7 +34,13 @@ async fn policy_defaults_merges_and_conflicts_are_atomic() {
     let actor = Uuid::now_v7();
     let default = store.read().await.unwrap();
     assert_eq!(default, RetentionSettings::default());
-    assert_eq!(store.save(default.clone(), actor).await.unwrap(), default);
+    assert_eq!(
+        store
+            .save(default.clone(), Some(actor).into())
+            .await
+            .unwrap(),
+        default
+    );
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT count(*) FROM settings")
             .fetch_one(&pool)
@@ -51,7 +57,7 @@ async fn policy_defaults_merges_and_conflicts_are_atomic() {
     let mut value = store.read().await.unwrap();
     value.comment_ip_days = 90;
     value.audit_days = 365;
-    let saved = store.save(value.clone(), actor).await.unwrap();
+    let saved = store.save(value.clone(), Some(actor).into()).await.unwrap();
     assert_eq!((saved.comment_version, saved.audit_version), (2, 1));
     assert_eq!(
         sqlx::query_scalar::<_, Value>("SELECT value FROM settings WHERE key='comments'")
@@ -61,7 +67,7 @@ async fn policy_defaults_merges_and_conflicts_are_atomic() {
         json!({"enabled":false,"other":true,"ip_retention_days":90})
     );
     assert!(matches!(
-        store.save(value, actor).await,
+        store.save(value, Some(actor).into()).await,
         Err(UseCaseError::VersionConflict)
     ));
     // A concurrent global comment switch shares the comments group version.
@@ -69,14 +75,14 @@ async fn policy_defaults_merges_and_conflicts_are_atomic() {
     let mut stale = saved.clone();
     stale.audit_days = 30;
     assert!(matches!(
-        store.save(stale, actor).await,
+        store.save(stale, Some(actor).into()).await,
         Err(UseCaseError::VersionConflict)
     ));
     assert_eq!(store.read().await.unwrap().audit_days, 365);
     let mut invalid = store.read().await.unwrap();
     invalid.comment_ip_days = 0;
     assert!(matches!(
-        store.save(invalid, actor).await,
+        store.save(invalid, Some(actor).into()).await,
         Err(UseCaseError::Invalid(_))
     ));
     // The policy change rolls back if its audit cannot be appended.
@@ -84,7 +90,7 @@ async fn policy_defaults_merges_and_conflicts_are_atomic() {
     let before = store.read().await.unwrap();
     let mut change = before.clone();
     change.audit_days = 30;
-    assert!(store.save(change, actor).await.is_err());
+    assert!(store.save(change, Some(actor).into()).await.is_err());
     assert_eq!(store.read().await.unwrap(), before);
 }
 

@@ -1,11 +1,13 @@
 import { QueryClient } from "@tanstack/react-query";
 import { ApiError } from "./api";
+import type { AuditFilter } from "./types";
 
 /**
  * 服务端状态的查询键。集中定义，避免各屏各写一份字符串数组——
  * 失效（invalidate）写错键是这类库最常见、也最难发现的 bug。
  */
 export const queryKeys = {
+  auditLogs: (filter: AuditFilter, cursor?: string) => ["audit-logs", filter, cursor] as const,
   posts: () => ["posts"] as const,
   pages: () => ["pages"] as const,
   trash: (page: number) => ["trash", page] as const,

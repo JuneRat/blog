@@ -54,7 +54,7 @@ impl PageRepository for FakePageRepo {
     async fn insert_page(
         &self,
         page: &domain::content::Page,
-        _actor_id: Option<uuid::Uuid>,
+        _actor_id: application::audit::AuditContext,
     ) -> Result<PageSnapshot, UseCaseError> {
         let snapshot = page.snapshot();
         let mut pages = self.pages.lock().unwrap();
@@ -70,7 +70,7 @@ impl PageRepository for FakePageRepo {
         page: &domain::content::Page,
         expected_version: i64,
         now: OffsetDateTime,
-        _actor_id: Option<uuid::Uuid>,
+        _actor_id: application::audit::AuditContext,
     ) -> Result<PageCommitOutcome, UseCaseError> {
         let snapshot = page.snapshot();
         let mut pages = self.pages.lock().unwrap();
@@ -115,7 +115,7 @@ impl PageRepository for FakePageRepo {
         page: &domain::content::Page,
         expected_version: i64,
         now: OffsetDateTime,
-        _actor_id: Option<Uuid>,
+        _actor_id: application::audit::AuditContext,
     ) -> Result<PageCommitOutcome, UseCaseError> {
         let snapshot = page.snapshot();
         let mut pages = self.pages.lock().unwrap();
@@ -137,7 +137,7 @@ impl PageRepository for FakePageRepo {
         &self,
         id: Uuid,
         expected_version: i64,
-        _actor_id: Option<uuid::Uuid>,
+        _actor_id: application::audit::AuditContext,
     ) -> Result<PageDeleteOutcome, UseCaseError> {
         let mut pages = self.pages.lock().unwrap();
         let Some(existing) = pages

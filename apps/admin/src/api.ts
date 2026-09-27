@@ -1,5 +1,7 @@
 import type { SeriesPlacement, PageTrash } from "./types";
 import type {
+  AuditFilter,
+  AuditPage,
   AdminUser,
   CreatedUser,
   Me,
@@ -22,6 +24,17 @@ import type {
   TagSummary,
   Visibility,
 } from "./types";
+
+export const auditApi = {
+  list: (filter: AuditFilter, cursor?: string): Promise<AuditPage> => {
+    const params = new URLSearchParams({ limit: "50" });
+    for (const [key, value] of Object.entries(filter)) {
+      if (value !== undefined && value !== "" && value !== false) params.set(key, String(value));
+    }
+    if (cursor) params.set("cursor", cursor);
+    return request<AuditPage>(`/api/admin/v1/audit-logs?${params}`);
+  },
+};
 
 /**
  * 后端统一错误契约 `{error, code}`；status 供调用方分支（401/403/409）。

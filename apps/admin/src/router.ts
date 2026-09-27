@@ -28,6 +28,7 @@ export type Route =
   | { name: "userList" }
   | { name: "roleList" }
   | { name: "settings" }
+  | { name: "auditLogs" }
   /** 畸形或多余的路径段：显示提示而不是白屏/静默进入别的页面。 */
   | { name: "invalid" };
 
@@ -90,6 +91,9 @@ export function parseRoute(pathname: string): Route {
   if (segments[0] === "settings") {
     return segments.length === 1 ? { name: "settings" } : { name: "invalid" };
   }
+  if (segments[0] === "audit-logs") {
+    return segments.length === 1 ? { name: "auditLogs" } : { name: "invalid" };
+  }
 
   if (segments[0] === "pages") {
     if (segments.length === 1) return { name: "pageList" };
@@ -121,6 +125,7 @@ export const paths = {
   users: `${BASE}/users`,
   roles: `${BASE}/roles`,
   settings: `${BASE}/settings`,
+  auditLogs: `${BASE}/audit-logs`,
 };
 
 /**

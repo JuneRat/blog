@@ -208,7 +208,7 @@ impl MediaInteractor {
         )
         .map_err(|e| UseCaseError::Invalid(e.to_string()))?;
         self.storage.promote(&key).await?;
-        self.media.insert(&media, audit_actor_id(actor)).await?;
+        self.media.insert(&media, actor.audit_context()).await?;
         self.detail_of(actor, id).await.map(|view| view.media)
     }
 
@@ -272,7 +272,7 @@ impl MediaInteractor {
                 expected_version,
                 deleted,
                 self.clock.now(),
-                audit_actor_id(actor),
+                actor.audit_context(),
             )
             .await?
         {

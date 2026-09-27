@@ -252,3 +252,28 @@ export interface MediaUsageView {
 
 export interface SeriesPlacement { series_id: string; position: number; }
 export interface PageTrash { items: PageSummary[]; total: number; page: number; per_page: number; }
+/** 只读审计查询；时间范围为 [from, until)。 */
+export interface AuditFilter {
+  action?: string;
+  actor_id?: string;
+  without_actor?: boolean;
+  target_type?: string;
+  target_id?: string;
+  from?: string;
+  until?: string;
+}
+export interface AuditRecord {
+  id: string;
+  created_at: string;
+  actor_id: string | null;
+  actor_display: string | null;
+  ip_address: string | null;
+  action: string;
+  target_type: string;
+  target_id: string;
+  summary: { key: string; value: string }[];
+}
+export interface AuditPage {
+  items: AuditRecord[];
+  next_cursor: string | null;
+}

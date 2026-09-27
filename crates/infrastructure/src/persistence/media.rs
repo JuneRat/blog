@@ -126,7 +126,11 @@ fn media_view_from_row(row: &sqlx::postgres::PgRow) -> Result<MediaWithUsage, Us
 
 #[async_trait]
 impl MediaRepository for PostgresMediaRepository {
-    async fn insert(&self, aggregate: &Media, actor_id: Option<Uuid>) -> Result<(), UseCaseError> {
+    async fn insert(
+        &self,
+        aggregate: &Media,
+        actor_id: application::audit::AuditContext,
+    ) -> Result<(), UseCaseError> {
         let s = aggregate.snapshot();
         if s.deleted_at.is_some() {
             return Err(UseCaseError::Invalid("不能登记已删除媒体".into()));
@@ -137,7 +141,7 @@ impl MediaRepository for PostgresMediaRepository {
             .bind(s.id).bind(s.owner_id).bind(&s.storage_key).bind(&s.original_name).bind(&s.mime).bind(s.byte_size)
             .bind(s.width).bind(s.height).bind(&s.checksum_sha256).bind(s.version).bind(s.created_at).bind(s.updated_at)
             .execute(&mut *tx).await.map_err(map_sqlx_error)?;
-        append_audit_log(&mut tx, AuditEntry { actor_id, ip_address: None, action: "media.upload", target_type: "media", target_id: &s.id.to_string(),
+        append_audit_log(&mut tx, AuditEntry { actor_id: actor_id.actor_id, ip_address: actor_id.ip_address, action: "media.upload", target_type: "media", target_id: &s.id.to_string(),
             metadata: serde_json::json!({"version": s.version, "size": s.byte_size, "mime_type": s.mime}) }).await?;
         tx.commit().await.map_err(map_sqlx_error)
     }
@@ -230,7 +234,7 @@ impl MediaRepository for PostgresMediaRepository {
         expected_version: i64,
         deleted: bool,
         now: OffsetDateTime,
-        actor_id: Option<Uuid>,
+        actor_id: application::audit::AuditContext,
     ) -> Result<MediaChangeOutcome, UseCaseError> {
         let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
         let row = sqlx::query(&format!(
@@ -263,8 +267,8 @@ impl MediaRepository for PostgresMediaRepository {
         append_audit_log(
             &mut tx,
             AuditEntry {
-                actor_id,
-                ip_address: None,
+                actor_id: actor_id.actor_id,
+                ip_address: actor_id.ip_address,
                 action: if deleted {
                     "media.trash"
                 } else {

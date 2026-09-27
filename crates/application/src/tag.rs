@@ -68,7 +68,7 @@ impl TagInteractor {
         let slug = Slug::new(&cmd.slug).map_err(|e| UseCaseError::Invalid(e.to_string()))?;
         let tag = Tag::new(cmd.name, slug, self.clock.now()).map_err(map_domain)?;
         let snapshot = tag.snapshot();
-        self.tags.insert(&tag, actor.audit_actor_id()).await?;
+        self.tags.insert(&tag, actor.audit_context()).await?;
         Ok(TagDto {
             id: snapshot.id,
             name: snapshot.name,
@@ -121,12 +121,7 @@ impl TagInteractor {
         let snapshot = tag.snapshot();
         match self
             .tags
-            .rename(
-                snapshot.id,
-                &snapshot.name,
-                expected,
-                actor.audit_actor_id(),
-            )
+            .rename(snapshot.id, &snapshot.name, expected, actor.audit_context())
             .await?
         {
             Some(updated) => {
@@ -160,7 +155,7 @@ impl TagInteractor {
 
         match self
             .tags
-            .delete(tag.id(), expected, actor.audit_actor_id())
+            .delete(tag.id(), expected, actor.audit_context())
             .await?
         {
             TagDeleteOutcome::Deleted => Ok(()),

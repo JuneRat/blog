@@ -373,7 +373,7 @@ pub async fn rebuild_comment_html(
             if changed == 1 {
                 crate::audit::record_change(
                     &mut tx,
-                    None,
+                    application::audit::AuditContext::system(),
                     "comment.html.rebuild",
                     "comment",
                     &id.to_string(),

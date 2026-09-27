@@ -20,6 +20,13 @@ use uuid::Uuid;
 
 static SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+fn context(actor: Uuid) -> application::audit::AuditContext {
+    application::audit::AuditContext {
+        actor_id: Some(actor),
+        ip_address: Some("2001:db8::42".parse().unwrap()),
+    }
+}
+
 async fn count(pool: &PgPool) -> i64 {
     sqlx::query_scalar("SELECT count(*) FROM audit_logs")
         .fetch_one(pool)
@@ -40,15 +47,16 @@ async fn unblock_audit(pool: &PgPool) {
 }
 
 async fn assert_actor(pool: &PgPool, action: &str, target: &str, actor: Uuid) -> Value {
-    let rows: Vec<(Option<Uuid>, Value)> =
-        sqlx::query_as("SELECT actor_id,metadata FROM audit_logs WHERE action=$1 AND target_id=$2")
+    let rows: Vec<(Option<Uuid>, Value, Option<String>)> =
+        sqlx::query_as("SELECT actor_id,metadata,host(ip_address) FROM audit_logs WHERE action=$1 AND target_id=$2")
             .bind(action)
             .bind(target)
             .fetch_all(pool)
             .await
             .unwrap();
     assert!(!rows.is_empty(), "missing {action}");
-    for (actual, _) in &rows {
+    for (actual, _, ip) in &rows {
+        assert_eq!(ip.as_deref(), Some("2001:db8::42"), "{action}");
         assert_eq!(*actual, Some(actor), "{action}");
     }
     rows[0].1.clone()
@@ -71,9 +79,9 @@ async fn credential_changes_record_the_operator_and_rollback_sessions_on_audit_f
     let users = PostgresUserRepository::new(pool.clone());
     let accounts = PostgresOAuthAccountStore::new(pool.clone());
     let sessions = PostgresSessionStore::with_defaults(pool.clone());
-    users.insert(&user, Some(actor)).await.unwrap();
+    users.insert(&user, context(actor)).await.unwrap();
     users
-        .set_password_hash(id, "$argon2id$private-hash", Some(actor))
+        .set_password_hash(id, "$argon2id$private-hash", context(actor))
         .await
         .unwrap();
     accounts
@@ -82,7 +90,7 @@ async fn credential_changes_record_the_operator_and_rollback_sessions_on_audit_f
             "github",
             "private-subject",
             Some("private@example.com".into()),
-            Some(actor),
+            context(actor),
         )
         .await
         .unwrap();
@@ -91,10 +99,10 @@ async fn credential_changes_record_the_operator_and_rollback_sessions_on_audit_f
     let audit_count = count(&pool).await;
     block_audit(&pool).await;
     let rejected = User::new("rejected", None, None, OffsetDateTime::now_utc()).unwrap();
-    assert!(users.insert(&rejected, Some(actor)).await.is_err());
+    assert!(users.insert(&rejected, context(actor)).await.is_err());
     assert!(
         users
-            .set_password_hash(id, "replacement", Some(actor))
+            .set_password_hash(id, "replacement", context(actor))
             .await
             .is_err()
     );
@@ -104,28 +112,33 @@ async fn credential_changes_record_the_operator_and_rollback_sessions_on_audit_f
                 id,
                 Some("$argon2id$private-hash"),
                 "replacement",
-                Some(actor)
+                context(actor)
             )
             .await
             .is_err()
     );
-    assert!(users.clear_password_hash(id, Some(actor)).await.is_err());
+    assert!(users.clear_password_hash(id, context(actor)).await.is_err());
     assert!(
         users
-            .clear_password_hash_guarded(id, Some(actor))
-            .await
-            .is_err()
-    );
-    assert!(users.revoke_authentication(id, Some(actor)).await.is_err());
-    assert!(
-        accounts
-            .bind(id, "other", "another-subject", None, Some(actor))
+            .clear_password_hash_guarded(id, context(actor))
             .await
             .is_err()
     );
     assert!(
+        users
+            .revoke_authentication(id, context(actor))
+            .await
+            .is_err()
+    );
+    assert!(
         accounts
-            .unbind(id, "github", "private-subject", Some(actor))
+            .bind(id, "other", "another-subject", None, context(actor))
+            .await
+            .is_err()
+    );
+    assert!(
+        accounts
+            .unbind(id, "github", "private-subject", context(actor))
             .await
             .is_err()
     );
@@ -141,19 +154,19 @@ async fn credential_changes_record_the_operator_and_rollback_sessions_on_audit_f
     // Failed CAS and absent binding are legitimate no-ops even with auditing unavailable.
     assert_eq!(
         users
-            .compare_and_set_password_hash(id, Some("stale"), "replacement", Some(actor))
+            .compare_and_set_password_hash(id, Some("stale"), "replacement", context(actor))
             .await
             .unwrap(),
         None
     );
     accounts
-        .unbind(id, "github", "absent", Some(actor))
+        .unbind(id, "github", "absent", context(actor))
         .await
         .unwrap();
     unblock_audit(&pool).await;
     assert_eq!(
         users
-            .clear_password_hash_guarded(id, Some(actor))
+            .clear_password_hash_guarded(id, context(actor))
             .await
             .unwrap(),
         ClearPasswordOutcome::Cleared
@@ -162,22 +175,25 @@ async fn credential_changes_record_the_operator_and_rollback_sessions_on_audit_f
     let audit_count = count(&pool).await;
     assert_eq!(
         users
-            .clear_password_hash_guarded(id, Some(actor))
+            .clear_password_hash_guarded(id, context(actor))
             .await
             .unwrap(),
         ClearPasswordOutcome::NoPassword
     );
     assert_eq!(count(&pool).await, audit_count);
     users
-        .compare_and_set_password_hash(id, None, "$argon2id$new-private-hash", Some(actor))
+        .compare_and_set_password_hash(id, None, "$argon2id$new-private-hash", context(actor))
         .await
         .unwrap()
         .unwrap();
     accounts
-        .unbind(id, "github", "private-subject", Some(actor))
+        .unbind(id, "github", "private-subject", context(actor))
         .await
         .unwrap();
-    users.revoke_authentication(id, Some(actor)).await.unwrap();
+    users
+        .revoke_authentication(id, context(actor))
+        .await
+        .unwrap();
     for action in [
         "user.create",
         "user.password.set",
@@ -224,11 +240,11 @@ async fn role_and_registry_audits_are_atomic_and_idempotent() {
         initial_count,
         "startup no-op must stay quiet"
     );
-    rbac.assign_role(target, "author", Some(actor))
+    rbac.assign_role(target, "author", context(actor))
         .await
         .unwrap();
     let assigned_count = count(&pool).await;
-    rbac.assign_role(target, "author", Some(actor))
+    rbac.assign_role(target, "author", context(actor))
         .await
         .unwrap();
     assert_eq!(count(&pool).await, assigned_count);
@@ -239,12 +255,12 @@ async fn role_and_registry_audits_are_atomic_and_idempotent() {
         .unwrap();
     block_audit(&pool).await;
     assert!(
-        rbac.assign_role(target, "editor", Some(actor))
+        rbac.assign_role(target, "editor", context(actor))
             .await
             .is_err()
     );
     assert!(
-        rbac.remove_role(target, "author", Some(actor))
+        rbac.remove_role(target, "author", context(actor))
             .await
             .is_err()
     );
@@ -272,11 +288,11 @@ async fn role_and_registry_audits_are_atomic_and_idempotent() {
     assert_eq!(rbac.roles_of_user(target).await.unwrap(), vec!["author"]);
     assert_eq!(count(&pool).await, assigned_count);
     unblock_audit(&pool).await;
-    rbac.remove_role(target, "author", Some(actor))
+    rbac.remove_role(target, "author", context(actor))
         .await
         .unwrap();
     let removed_count = count(&pool).await;
-    rbac.remove_role(target, "author", Some(actor))
+    rbac.remove_role(target, "author", context(actor))
         .await
         .unwrap();
     assert_eq!(count(&pool).await, removed_count);
@@ -305,9 +321,9 @@ async fn settings_and_category_audit_failures_restore_values_versions_and_logo_r
     )
     .unwrap();
     let cid = category.snapshot().id;
-    categories.insert(&category, Some(actor)).await.unwrap();
+    categories.insert(&category, context(actor)).await.unwrap();
     categories
-        .update(cid, "Updated", None, None, 1, Some(actor))
+        .update(cid, "Updated", None, None, 1, context(actor))
         .await
         .unwrap()
         .unwrap();
@@ -319,11 +335,11 @@ async fn settings_and_category_audit_failures_restore_values_versions_and_logo_r
         logo_media_id: Some(mid),
     };
     settings
-        .save_site(&site, 0, now, Some(actor))
+        .save_site(&site, 0, now, context(actor))
         .await
         .unwrap();
     settings
-        .save_theme("default", 0, now, Some(actor))
+        .save_theme("default", 0, now, context(actor))
         .await
         .unwrap();
     let providers = [ProviderConfig {
@@ -335,7 +351,7 @@ async fn settings_and_category_audit_failures_restore_values_versions_and_logo_r
         secret_ref: "PRIVATE_SECRET".into(),
         scopes: vec![],
     }];
-    oauth.save(&providers, Some(actor)).await.unwrap();
+    oauth.save(&providers, context(actor)).await.unwrap();
     let snapshot = "SELECT jsonb_build_object('settings',(SELECT jsonb_agg(s ORDER BY key) FROM settings s),'categories',(SELECT jsonb_agg(c ORDER BY id) FROM categories c),'refs',(SELECT jsonb_agg(r ORDER BY media_id,source_type,source_id) FROM media_refs r))";
     let before: Value = sqlx::query_scalar(snapshot).fetch_one(&pool).await.unwrap();
     let audit_count = count(&pool).await;
@@ -348,58 +364,58 @@ async fn settings_and_category_audit_failures_restore_values_versions_and_logo_r
         now,
     )
     .unwrap();
-    assert!(categories.insert(&rejected, Some(actor)).await.is_err());
+    assert!(categories.insert(&rejected, context(actor)).await.is_err());
     assert!(
         categories
-            .update(cid, "Rejected", None, None, 2, Some(actor))
+            .update(cid, "Rejected", None, None, 2, context(actor))
             .await
             .is_err()
     );
-    assert!(categories.delete(cid, 2, Some(actor)).await.is_err());
+    assert!(categories.delete(cid, 2, context(actor)).await.is_err());
     let without_logo = SiteSettingsValue {
         logo_media_id: None,
         ..site.clone()
     };
     assert!(
         settings
-            .save_site(&without_logo, 1, now, Some(actor))
+            .save_site(&without_logo, 1, now, context(actor))
             .await
             .is_err()
     );
     assert!(
         settings
-            .save_theme("paper", 1, now, Some(actor))
+            .save_theme("paper", 1, now, context(actor))
             .await
             .is_err()
     );
-    assert!(oauth.save(&[], Some(actor)).await.is_err());
+    assert!(oauth.save(&[], context(actor)).await.is_err());
     assert!(
         categories
-            .update(cid, "Stale", None, None, 1, Some(actor))
+            .update(cid, "Stale", None, None, 1, context(actor))
             .await
             .unwrap()
             .is_none()
     );
     assert_eq!(
         settings
-            .save_site(&without_logo, 0, now, Some(actor))
+            .save_site(&without_logo, 0, now, context(actor))
             .await
             .unwrap(),
         SaveOutcome::StaleConflict
     );
     assert_eq!(
         settings
-            .save_theme("paper", 0, now, Some(actor))
+            .save_theme("paper", 0, now, context(actor))
             .await
             .unwrap(),
         SaveOutcome::StaleConflict
     );
-    oauth.save(&providers, Some(actor)).await.unwrap();
+    oauth.save(&providers, context(actor)).await.unwrap();
     let after: Value = sqlx::query_scalar(snapshot).fetch_one(&pool).await.unwrap();
     assert_eq!(before, after);
     assert_eq!(count(&pool).await, audit_count);
     unblock_audit(&pool).await;
-    categories.delete(cid, 2, Some(actor)).await.unwrap();
+    categories.delete(cid, 2, context(actor)).await.unwrap();
     for action in ["category.create", "category.update", "category.purge"] {
         assert_actor(&pool, action, &cid.to_string(), actor).await;
     }

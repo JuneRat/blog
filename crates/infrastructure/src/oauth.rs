@@ -456,7 +456,7 @@ impl OAuthConfigStore for PostgresOAuthConfigStore {
     async fn save(
         &self,
         providers: &[ProviderConfig],
-        audit_actor: Option<uuid::Uuid>,
+        audit_actor: application::audit::AuditContext,
     ) -> Result<(), UseCaseError> {
         let value = serde_json::json!({
             "schema_version": 1,
@@ -534,7 +534,7 @@ impl OAuthAccountStore for PostgresOAuthAccountStore {
         provider_key: &str,
         provider_user_id: &str,
         _email: Option<String>,
-        audit_actor: Option<uuid::Uuid>,
+        audit_actor: application::audit::AuditContext,
     ) -> Result<(), UseCaseError> {
         let mut tx = self
             .pool
@@ -595,7 +595,7 @@ impl OAuthAccountStore for PostgresOAuthAccountStore {
         user_id: Uuid,
         provider_key: &str,
         provider_user_id: &str,
-        audit_actor: Option<uuid::Uuid>,
+        audit_actor: application::audit::AuditContext,
     ) -> Result<(), UseCaseError> {
         let mut tx = self
             .pool

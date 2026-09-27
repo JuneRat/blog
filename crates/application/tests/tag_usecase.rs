@@ -49,7 +49,7 @@ impl TagRepository for FakeTagRepo {
     async fn insert(
         &self,
         aggregate: &domain::content::Tag,
-        _actor_id: Option<uuid::Uuid>,
+        _actor_id: application::audit::AuditContext,
     ) -> Result<(), UseCaseError> {
         let snapshot = aggregate.snapshot();
         let mut tags = self.tags.lock().unwrap();
@@ -92,7 +92,7 @@ impl TagRepository for FakeTagRepo {
         id: Uuid,
         new_name: &str,
         expected_version: i64,
-        _actor_id: Option<uuid::Uuid>,
+        _actor_id: application::audit::AuditContext,
     ) -> Result<Option<TagSnapshot>, UseCaseError> {
         let mut tags = self.tags.lock().unwrap();
         let Some(tag) = tags.values_mut().find(|t| t.id == id) else {
@@ -110,7 +110,7 @@ impl TagRepository for FakeTagRepo {
         &self,
         id: Uuid,
         expected_version: i64,
-        _actor_id: Option<uuid::Uuid>,
+        _actor_id: application::audit::AuditContext,
     ) -> Result<TagDeleteOutcome, UseCaseError> {
         let mut tags = self.tags.lock().unwrap();
         let Some(tag) = tags.values().find(|t| t.id == id).cloned() else {
@@ -216,7 +216,7 @@ impl RbacStore for FakeRbacStore {
         &self,
         user_id: Uuid,
         role_slug: &str,
-        _audit_actor: Option<uuid::Uuid>,
+        _audit_actor: application::audit::AuditContext,
     ) -> Result<(), UseCaseError> {
         self.assignments
             .lock()
@@ -235,7 +235,7 @@ impl RbacStore for FakeRbacStore {
         &self,
         _user_id: Uuid,
         _role_slug: &str,
-        _audit_actor: Option<uuid::Uuid>,
+        _audit_actor: application::audit::AuditContext,
     ) -> Result<(), UseCaseError> {
         Ok(())
     }
@@ -279,6 +279,7 @@ impl UserRepository for FakeUserRepo {
         user: &domain::identity::User,
         expected_version: i64,
         now: time::OffsetDateTime,
+        _audit: application::audit::AuditContext,
     ) -> Result<UserSnapshot, UseCaseError> {
         let snapshot = user.snapshot();
         let mut users = self.users.lock().unwrap();
@@ -299,7 +300,7 @@ impl UserRepository for FakeUserRepo {
     async fn revoke_authentication(
         &self,
         user_id: Uuid,
-        _audit_actor: Option<uuid::Uuid>,
+        _audit_actor: application::audit::AuditContext,
     ) -> Result<(), UseCaseError> {
         let mut users = self.users.lock().unwrap();
         let user = users
@@ -316,6 +317,7 @@ impl UserRepository for FakeUserRepo {
         _user_id: uuid::Uuid,
         _avatar_media_id: Option<uuid::Uuid>,
         _now: time::OffsetDateTime,
+        _audit: application::audit::AuditContext,
     ) -> Result<(), UseCaseError> {
         unimplemented!("该用例不使用头像")
     }
@@ -323,7 +325,7 @@ impl UserRepository for FakeUserRepo {
     async fn insert(
         &self,
         aggregate: &domain::identity::User,
-        _audit_actor: Option<uuid::Uuid>,
+        _audit_actor: application::audit::AuditContext,
     ) -> Result<(), UseCaseError> {
         let snapshot = aggregate.snapshot();
         self.users
@@ -349,7 +351,7 @@ impl UserRepository for FakeUserRepo {
         &self,
         _user_id: Uuid,
         _phc_hash: &str,
-        _audit_actor: Option<uuid::Uuid>,
+        _audit_actor: application::audit::AuditContext,
     ) -> Result<(), UseCaseError> {
         Ok(())
     }
@@ -358,21 +360,21 @@ impl UserRepository for FakeUserRepo {
         _user_id: Uuid,
         _expected: Option<&str>,
         _new_hash: &str,
-        _audit_actor: Option<uuid::Uuid>,
+        _audit_actor: application::audit::AuditContext,
     ) -> Result<Option<i64>, UseCaseError> {
         Ok(None)
     }
     async fn clear_password_hash(
         &self,
         _user_id: Uuid,
-        _audit_actor: Option<uuid::Uuid>,
+        _audit_actor: application::audit::AuditContext,
     ) -> Result<(), UseCaseError> {
         Ok(())
     }
     async fn clear_password_hash_guarded(
         &self,
         _user_id: Uuid,
-        _audit_actor: Option<uuid::Uuid>,
+        _audit_actor: application::audit::AuditContext,
     ) -> Result<application::ports::ClearPasswordOutcome, UseCaseError> {
         Ok(application::ports::ClearPasswordOutcome::NoPassword)
     }

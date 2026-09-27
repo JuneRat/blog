@@ -30,7 +30,7 @@ pub trait TagRepository: Send + Sync {
     async fn insert(
         &self,
         aggregate: &domain::content::Tag,
-        actor_id: Option<Uuid>,
+        actor_id: crate::audit::AuditContext,
     ) -> Result<(), UseCaseError>;
     async fn find_by_slug(
         &self,
@@ -46,7 +46,7 @@ pub trait TagRepository: Send + Sync {
         id: Uuid,
         new_name: &str,
         expected_version: i64,
-        actor_id: Option<Uuid>,
+        actor_id: crate::audit::AuditContext,
     ) -> Result<Option<domain::content::TagSnapshot>, UseCaseError>;
 
     /// 条件删除标签并解除关联；保留文章并递增受影响文章版本。
@@ -54,7 +54,7 @@ pub trait TagRepository: Send + Sync {
         &self,
         id: Uuid,
         expected_version: i64,
-        actor_id: Option<Uuid>,
+        actor_id: crate::audit::AuditContext,
     ) -> Result<TagDeleteOutcome, UseCaseError>;
 
     /// 返回 `ids` 中确实存在的标签 id（去重、按 id 排序）。
@@ -96,7 +96,7 @@ pub trait CategoryRepository: Send + Sync {
     async fn insert(
         &self,
         aggregate: &domain::content::Category,
-        audit_actor: Option<uuid::Uuid>,
+        audit_actor: crate::audit::AuditContext,
     ) -> Result<(), UseCaseError>;
     async fn find_by_slug(
         &self,
@@ -116,7 +116,7 @@ pub trait CategoryRepository: Send + Sync {
         description: Option<&str>,
         parent_id: Option<Uuid>,
         expected_version: i64,
-        audit_actor: Option<uuid::Uuid>,
+        audit_actor: crate::audit::AuditContext,
     ) -> Result<Option<domain::content::CategorySnapshot>, UseCaseError>;
 
     /// 条件删除：树锁内先检查文章引用与子分类，再按版本条件删除。
@@ -124,7 +124,7 @@ pub trait CategoryRepository: Send + Sync {
         &self,
         id: Uuid,
         expected_version: i64,
-        audit_actor: Option<uuid::Uuid>,
+        audit_actor: crate::audit::AuditContext,
     ) -> Result<CategoryDeleteOutcome, UseCaseError>;
 
     /// 文章设置分类前的存在性校验。
@@ -185,7 +185,7 @@ pub trait SeriesRepository: Send + Sync {
     async fn insert(
         &self,
         aggregate: &domain::content::Series,
-        actor_id: Option<Uuid>,
+        actor_id: crate::audit::AuditContext,
     ) -> Result<(), UseCaseError>;
     async fn find_by_slug(
         &self,
@@ -201,7 +201,7 @@ pub trait SeriesRepository: Send + Sync {
         description: Option<&str>,
         cover_media_id: Option<Uuid>,
         expected_version: i64,
-        actor_id: Option<Uuid>,
+        actor_id: crate::audit::AuditContext,
     ) -> Result<Option<domain::content::SeriesSnapshot>, UseCaseError>;
 
     /// 条件删除系列并解除关联；保留文章并递增受影响文章版本。
@@ -209,7 +209,7 @@ pub trait SeriesRepository: Send + Sync {
         &self,
         id: Uuid,
         expected_version: i64,
-        actor_id: Option<Uuid>,
+        actor_id: crate::audit::AuditContext,
     ) -> Result<SeriesDeleteOutcome, UseCaseError>;
 
     /// 文章设置系列前的存在性校验。
@@ -225,6 +225,6 @@ pub trait SeriesRepository: Send + Sync {
         series_id: Uuid,
         expected_series_version: i64,
         ordered_post_ids: &[Uuid],
-        actor_id: Option<Uuid>,
+        actor_id: crate::audit::AuditContext,
     ) -> Result<ReorderOutcome, UseCaseError>;
 }

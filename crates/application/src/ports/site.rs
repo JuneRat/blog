@@ -52,7 +52,7 @@ pub trait SettingsStore: Send + Sync {
         value: &SiteSettingsValue,
         expected_version: i64,
         now: OffsetDateTime,
-        audit_actor: Option<uuid::Uuid>,
+        audit_actor: crate::audit::AuditContext,
     ) -> Result<SaveOutcome, UseCaseError>;
 }
 
@@ -71,6 +71,6 @@ pub trait ThemeSettingsStore: Send + Sync {
         slug: &str,
         expected_version: i64,
         now: OffsetDateTime,
-        audit_actor: Option<uuid::Uuid>,
+        audit_actor: crate::audit::AuditContext,
     ) -> Result<SaveOutcome, UseCaseError>;
 }

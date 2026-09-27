@@ -179,6 +179,11 @@ pub const PERMISSION_REGISTRY: &[PermissionDescriptor] = &[
         description: "管理 OAuth 提供商与外部身份绑定；不受普通 settings.manage 覆盖。",
     },
     PermissionDescriptor {
+        key: "audit.read",
+        name: "查看审计记录",
+        description: "读取全站成功业务变更及来源信息；默认仅 Owner，独立于 settings.manage。",
+    },
+    PermissionDescriptor {
         key: "ownership.manage",
         name: "所有权操作",
         description: "授予/移除 Owner 与所有权转移；普通角色分配不得授予 Owner。",
@@ -204,6 +209,7 @@ pub const BUILTIN_ROLES: &[BuiltinRoleDef] = &[
         name: "Owner",
         description: "站点所有者：全部已注册权限；受最后 Owner 保护。",
         permissions: &[
+            "audit.read",
             "post.create",
             "post.read",
             "post.read_any",
@@ -294,6 +300,7 @@ pub struct Actor {
     pub user_id: UserId,
     pub channel: ActorChannel,
     permissions: PermissionSet,
+    audit_ip: Option<std::net::IpAddr>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -305,6 +312,17 @@ pub enum ActorChannel {
 }
 
 impl Actor {
+    pub fn with_audit_ip(mut self, ip: Option<std::net::IpAddr>) -> Self {
+        self.audit_ip = ip;
+        self
+    }
+
+    pub fn audit_context(&self) -> crate::audit::AuditContext {
+        crate::audit::AuditContext {
+            actor_id: self.audit_actor_id(),
+            ip_address: self.audit_ip,
+        }
+    }
     /// 安装/恢复 CLI 的空身份及系统任务不伪造用户外键。
     pub fn audit_actor_id(&self) -> Option<Uuid> {
         if self.channel == ActorChannel::ControlledCli && self.user_id.0.is_nil() {
@@ -319,6 +337,7 @@ impl Actor {
             user_id,
             channel,
             permissions,
+            audit_ip: None,
         }
     }
 
@@ -488,7 +507,7 @@ impl UserInteractor {
         let user = User::new(&username, email, display_name, self.clock.now())
             .map_err(|e| UseCaseError::Invalid(e.to_string()))?;
         let snapshot = user.snapshot();
-        self.users.insert(&user, actor.audit_actor_id()).await?;
+        self.users.insert(&user, actor.audit_context()).await?;
         Ok(UserDto::from_snapshot(&snapshot))
     }
 
@@ -529,13 +548,20 @@ impl UserInteractor {
             .map_err(|error| UseCaseError::Invalid(error.to_string()))?;
         let result = self
             .users
-            .save_profile(&user, expected_version, self.clock.now())
+            .save_profile(
+                &user,
+                expected_version,
+                self.clock.now(),
+                actor.audit_context(),
+            )
             .await?;
         Ok(ProfileView::from_snapshot(&result))
     }
 
     pub async fn revoke_authentication(&self, user_id: Uuid) -> Result<(), UseCaseError> {
-        self.users.revoke_authentication(user_id, None).await
+        self.users
+            .revoke_authentication(user_id, crate::audit::AuditContext::system())
+            .await
     }
 
     /// 自助设置/清除头像：只允许改本人，不需要额外权限。
@@ -560,7 +586,12 @@ impl UserInteractor {
             crate::media::ensure_attachable(&*self.media_guard, id).await?;
         }
         self.users
-            .set_avatar(snapshot.id, avatar_media_id, self.clock.now())
+            .set_avatar(
+                snapshot.id,
+                avatar_media_id,
+                self.clock.now(),
+                actor.audit_context(),
+            )
             .await?;
         self.profile_of(actor).await
     }
@@ -750,7 +781,7 @@ impl RoleInteractor {
         }
         let user = self.find_active_user(username).await?;
         self.rbac
-            .assign_role(user.id, role_slug, actor.audit_actor_id())
+            .assign_role(user.id, role_slug, actor.audit_context())
             .await
     }
 
@@ -770,7 +801,7 @@ impl RoleInteractor {
         let user = self.find_active_user(username).await?;
         // 最后 Owner 保护由存储在排他锁下判定并拒绝。
         self.rbac
-            .remove_role(user.id, role_slug, actor.audit_actor_id())
+            .remove_role(user.id, role_slug, actor.audit_context())
             .await
     }
 

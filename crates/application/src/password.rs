@@ -59,6 +59,7 @@ impl PasswordInteractor {
         password: &str,
         client_key: Option<&str>,
         next: &str,
+        ip_address: Option<std::net::IpAddr>,
     ) -> Result<PasswordLogin, UseCaseError> {
         // 回跳路径先校验：非法值必须在任何写入（含签发会话）之前失败，避免留下孤儿会话。
         let next = crate::auth::sanitize_next(next)?.to_string();
@@ -72,7 +73,7 @@ impl PasswordInteractor {
             Some(credential) => {
                 // 成功：账号维度清空计数，来源地址维度只归还预占（实现按主体区分）。
                 reservation.finish(true)?;
-                self.finish_login(username, password, credential, next)
+                self.finish_login(username, password, credential, next, ip_address)
                     .await
             }
             None => {
@@ -128,9 +129,12 @@ impl PasswordInteractor {
         password: &str,
         credential: crate::ports::PasswordCredential,
         next: String,
+        ip_address: Option<std::net::IpAddr>,
     ) -> Result<PasswordLogin, UseCaseError> {
         // 透明升级（条件写入）+ 并发复核：改密与登录同时发生时，不能用已失效的口令建会话。
-        let current_hash = self.upgrade_hash_if_needed(password, &credential).await;
+        let current_hash = self
+            .upgrade_hash_if_needed(password, &credential, ip_address)
+            .await;
         let normalized =
             domain::identity::normalize_username(username).expect("持有凭据时用户名必然规范化成功");
         let current = self
@@ -176,7 +180,7 @@ impl PasswordInteractor {
         let hash = self.deps.hasher.hash(new_password).await?;
         self.deps
             .users
-            .set_password_hash(target.id, &hash, actor.audit_actor_id())
+            .set_password_hash(target.id, &hash, actor.audit_context())
             .await?;
         // 凭据变更即撤销全部既有会话：被盗会话不能靠旧 cookie 存活。
         self.deps.sessions.revoke_all_for_user(target.id).await?;
@@ -197,7 +201,7 @@ impl PasswordInteractor {
         match self
             .deps
             .users
-            .clear_password_hash_guarded(target.id, actor.audit_actor_id())
+            .clear_password_hash_guarded(target.id, actor.audit_context())
             .await?
         {
             ClearPasswordOutcome::Cleared => {
@@ -244,7 +248,13 @@ impl PasswordInteractor {
         let Some(existing) = existing else {
             // 未启用密码登录（OAuth 用户设置初始密码）：没有可校验的凭据，也就没有爆破面。
             return self
-                .apply_new_password(actor.user_id.0, &target.username, new_password, None)
+                .apply_new_password(
+                    actor.user_id.0,
+                    &target.username,
+                    new_password,
+                    None,
+                    actor.audit_context(),
+                )
                 .await;
         };
         let Some(current) = current_password else {
@@ -268,6 +278,7 @@ impl PasswordInteractor {
             &target.username,
             new_password,
             Some(&existing),
+            actor.audit_context(),
         )
         .await
     }
@@ -282,6 +293,7 @@ impl PasswordInteractor {
         username: &str,
         new_password: &str,
         expected_current: Option<&str>,
+        audit: crate::audit::AuditContext,
     ) -> Result<String, UseCaseError> {
         domain::identity::validate_password(new_password, username)
             .map_err(|e| UseCaseError::Invalid(e.to_string()))?;
@@ -289,7 +301,7 @@ impl PasswordInteractor {
         let revision = self
             .deps
             .users
-            .compare_and_set_password_hash(user_id, expected_current, &hash, Some(user_id))
+            .compare_and_set_password_hash(user_id, expected_current, &hash, audit)
             .await?
             .ok_or(UseCaseError::VersionConflict)?;
         self.deps.sessions.revoke_all_for_user(user_id).await?;
@@ -340,6 +352,7 @@ impl PasswordInteractor {
         &self,
         password: &str,
         credential: &crate::ports::PasswordCredential,
+        ip_address: Option<std::net::IpAddr>,
     ) -> String {
         if !self.deps.hasher.needs_rehash(&credential.password_hash) {
             return credential.password_hash.clone();
@@ -354,7 +367,10 @@ impl PasswordInteractor {
                 credential.user_id,
                 Some(&credential.password_hash),
                 &upgraded,
-                Some(credential.user_id),
+                crate::audit::AuditContext {
+                    actor_id: Some(credential.user_id),
+                    ip_address,
+                },
             )
             .await
         {

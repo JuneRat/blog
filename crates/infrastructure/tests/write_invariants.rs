@@ -47,7 +47,7 @@ async fn body_budget_rejects_create_edit_and_publish_before_database_changes() {
     );
     let mut post = draft("post-budget", "small".into());
     post.publish(now).unwrap();
-    let stored_post = posts.insert_post(&post, &[], None).await.unwrap();
+    let stored_post = posts.insert_post(&post, &[], None.into()).await.unwrap();
     let mut page = Page::create_draft(
         Slug::new("about-budget").unwrap(),
         "Title".into(),
@@ -57,11 +57,11 @@ async fn body_budget_rejects_create_edit_and_publish_before_database_changes() {
     )
     .unwrap();
     page.publish(now).unwrap();
-    let stored_page = pages.insert_page(&page, None).await.unwrap();
+    let stored_page = pages.insert_page(&page, None.into()).await.unwrap();
 
     let mut invalid_post = draft("invalid-budget", expanded.clone());
     assert!(matches!(
-        posts.insert_post(&invalid_post, &[], None).await,
+        posts.insert_post(&invalid_post, &[], None.into()).await,
         Err(UseCaseError::Invalid(_))
     ));
     let mut invalid_page = Page::create_draft(
@@ -73,7 +73,7 @@ async fn body_budget_rejects_create_edit_and_publish_before_database_changes() {
     )
     .unwrap();
     assert!(matches!(
-        pages.insert_page(&invalid_page, None).await,
+        pages.insert_page(&invalid_page, None.into()).await,
         Err(UseCaseError::Invalid(_))
     ));
 
@@ -88,11 +88,11 @@ async fn body_budget_rejects_create_edit_and_publish_before_database_changes() {
     })
     .unwrap();
     assert!(matches!(
-        posts.commit_post(&post, 1, now, None, None).await,
+        posts.commit_post(&post, 1, now, None, None.into()).await,
         Err(UseCaseError::Invalid(_))
     ));
     assert!(matches!(
-        pages.commit_page(&page, 1, now, None).await,
+        pages.commit_page(&page, 1, now, None.into()).await,
         Err(UseCaseError::Invalid(_))
     ));
     assert_eq!(
@@ -134,11 +134,13 @@ async fn body_budget_rejects_create_edit_and_publish_before_database_changes() {
     invalid_post.publish(now).unwrap();
     invalid_page.publish(now).unwrap();
     assert!(matches!(
-        posts.commit_post(&invalid_post, 1, now, None, None).await,
+        posts
+            .commit_post(&invalid_post, 1, now, None, None.into())
+            .await,
         Err(UseCaseError::Invalid(_))
     ));
     assert!(matches!(
-        pages.commit_page(&invalid_page, 1, now, None).await,
+        pages.commit_page(&invalid_page, 1, now, None.into()).await,
         Err(UseCaseError::Invalid(_))
     ));
     assert_eq!(
@@ -183,12 +185,12 @@ async fn media_trash_restore_matches_aggregate_and_version_checks() {
         now,
     )
     .unwrap();
-    repo.insert(&media, Some(owner)).await.unwrap();
+    repo.insert(&media, Some(owner).into()).await.unwrap();
     for deleted in [true, true, false, false, true] {
         let version = media.version();
         let changed = media.set_deleted(deleted, now);
         let result = repo
-            .set_deleted(id, version, deleted, now, Some(owner))
+            .set_deleted(id, version, deleted, now, Some(owner).into())
             .await
             .unwrap();
         assert_eq!(
@@ -204,7 +206,7 @@ async fn media_trash_restore_matches_aggregate_and_version_checks() {
             media.snapshot()
         );
         assert_eq!(
-            repo.set_deleted(id, version - 1, !deleted, now, Some(owner))
+            repo.set_deleted(id, version - 1, !deleted, now, Some(owner).into())
                 .await
                 .unwrap(),
             application::ports::MediaChangeOutcome::StaleVersion

@@ -140,6 +140,12 @@ pub async fn build_router(
             ))),
             admin: admin.clone(),
         });
+    let audits = interfaces::http_audit::audit_router(interfaces::http_audit::AuditState {
+        audit: Arc::new(application::audit::AuditInteractor::new(Arc::new(
+            infrastructure::audit::PostgresAuditQuery::new(pool.clone()),
+        ))),
+        admin: admin.clone(),
+    });
     Ok(interfaces::http::app_router(
         AppState {
             public: PublicSiteState {
@@ -157,8 +163,14 @@ pub async fn build_router(
     .merge(retention.layer(axum::middleware::from_fn(
         interfaces::http_support::request_context,
     )))
+    .merge(audits.layer(axum::middleware::from_fn(
+        interfaces::http_support::request_context,
+    )))
     .merge(comments.layer(axum::middleware::from_fn(
         interfaces::http_support::request_context,
+    )))
+    .layer(axum::Extension(interfaces::http_client_ip::TrustedProxies(
+        config.trusted_proxies.clone(),
     ))))
 }
 

@@ -125,7 +125,7 @@ async fn fresh_stack_with(secure_cookies: bool) -> Stack {
                 secret_ref: "IDP_SECRET".into(),
                 scopes: vec![],
             }],
-            None,
+            None.into(),
         )
         .await
         .unwrap();
@@ -133,7 +133,13 @@ async fn fresh_stack_with(secure_cookies: bool) -> Stack {
     let accounts: Arc<dyn OAuthAccountStore> =
         Arc::new(PostgresOAuthAccountStore::new(pool.clone()));
     accounts
-        .bind(member.id, "https://idp.example", "sub-http-42", None, None)
+        .bind(
+            member.id,
+            "https://idp.example",
+            "sub-http-42",
+            None,
+            None.into(),
+        )
         .await
         .unwrap();
 

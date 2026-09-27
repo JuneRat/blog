@@ -82,7 +82,7 @@ pub trait MediaRepository: Send + Sync {
     async fn insert(
         &self,
         aggregate: &domain::media::Media,
-        actor_id: Option<Uuid>,
+        actor_id: crate::audit::AuditContext,
     ) -> Result<(), UseCaseError>;
     /// 含软删除记录，用于独立公开的文件读取。
     async fn find_by_id(
@@ -105,7 +105,7 @@ pub trait MediaRepository: Send + Sync {
         expected_version: i64,
         deleted: bool,
         now: OffsetDateTime,
-        actor_id: Option<Uuid>,
+        actor_id: crate::audit::AuditContext,
     ) -> Result<MediaChangeOutcome, UseCaseError>;
 }
 

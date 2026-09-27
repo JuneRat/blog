@@ -41,7 +41,7 @@ pub trait PostRepository: Send + Sync {
         &self,
         post: &Post,
         tag_ids: &[Uuid],
-        actor_id: Option<Uuid>,
+        actor_id: crate::audit::AuditContext,
     ) -> Result<PostRecord, UseCaseError>;
 
     /// 提交领域变更与 CAS：正文/标签/媒体引用及受影响系列版本必须原子更新。
@@ -52,7 +52,7 @@ pub trait PostRepository: Send + Sync {
         expected_version: i64,
         now: OffsetDateTime,
         tag_ids: Option<&[Uuid]>,
-        actor_id: Option<Uuid>,
+        actor_id: crate::audit::AuditContext,
     ) -> Result<PostCommitOutcome, UseCaseError>;
 
     /// 提交领域已决定的回收站转换（status/deleted_at），不修改内容与系列关系。
@@ -62,7 +62,7 @@ pub trait PostRepository: Send + Sync {
         post: &Post,
         expected_version: i64,
         now: OffsetDateTime,
-        actor_id: Option<Uuid>,
+        actor_id: crate::audit::AuditContext,
     ) -> Result<PostCommitOutcome, UseCaseError>;
 
     async fn find_by_id(&self, id: Uuid) -> Result<Option<PostSnapshot>, UseCaseError>;
@@ -77,7 +77,7 @@ pub trait PostRepository: Send + Sync {
         &self,
         id: Uuid,
         expected_version: i64,
-        actor_id: Option<Uuid>,
+        actor_id: crate::audit::AuditContext,
     ) -> Result<SaveOutcome, UseCaseError>;
 }
 
@@ -94,7 +94,7 @@ pub trait PageRepository: Send + Sync {
     async fn insert_page(
         &self,
         page: &Page,
-        actor_id: Option<Uuid>,
+        actor_id: crate::audit::AuditContext,
     ) -> Result<PageSnapshot, UseCaseError>;
 
     /// Page 没有独立标签集合，结果属于同次 CAS，不做提交后回读。
@@ -103,7 +103,7 @@ pub trait PageRepository: Send + Sync {
         page: &Page,
         expected_version: i64,
         now: OffsetDateTime,
-        actor_id: Option<Uuid>,
+        actor_id: crate::audit::AuditContext,
     ) -> Result<PageCommitOutcome, UseCaseError>;
 
     async fn find_by_id(&self, id: Uuid) -> Result<Option<PageSnapshot>, UseCaseError>;
@@ -119,14 +119,14 @@ pub trait PageRepository: Send + Sync {
         page: &Page,
         expected_version: i64,
         now: OffsetDateTime,
-        actor_id: Option<Uuid>,
+        actor_id: crate::audit::AuditContext,
     ) -> Result<PageCommitOutcome, UseCaseError>;
     /// 只永久删除回收站内指定 id 与版本；slug 可重用。
     async fn purge(
         &self,
         id: Uuid,
         expected_version: i64,
-        actor_id: Option<Uuid>,
+        actor_id: crate::audit::AuditContext,
     ) -> Result<PageDeleteOutcome, UseCaseError>;
 }
 

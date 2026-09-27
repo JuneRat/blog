@@ -59,7 +59,7 @@ impl SettingsStore for FakeSettingsStore {
         value: &SiteSettingsValue,
         expected_version: i64,
         _now: OffsetDateTime,
-        _audit_actor: Option<uuid::Uuid>,
+        _audit_actor: application::audit::AuditContext,
     ) -> Result<SaveOutcome, UseCaseError> {
         let mut row = self.row.lock().unwrap();
         match row.as_mut() {

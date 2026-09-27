@@ -435,7 +435,7 @@ async fn seed_tag(stack: &Stack, name: &str, slug: &str) -> uuid::Uuid {
         .tags
         .insert(
             &domain::content::Tag::reconstitute(snapshot.clone()).unwrap(),
-            None,
+            None.into(),
         )
         .await
         .unwrap();
@@ -615,7 +615,7 @@ async fn category_page_lists_public_posts_and_hides_drafts() {
         .categories
         .insert(
             &domain::content::Category::reconstitute(cat_snapshot.clone()).unwrap(),
-            None,
+            None.into(),
         )
         .await
         .unwrap();
@@ -681,7 +681,7 @@ async fn series_page_lists_public_posts_in_reading_order() {
         .series
         .insert(
             &domain::content::Series::reconstitute(s.clone()).unwrap(),
-            None,
+            None.into(),
         )
         .await
         .unwrap();
@@ -761,7 +761,7 @@ async fn paper_theme_functions_use_only_public_data() {
     s.categories
         .insert(
             &domain::content::Category::reconstitute(category.clone()).unwrap(),
-            None,
+            None.into(),
         )
         .await
         .unwrap();

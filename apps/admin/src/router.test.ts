@@ -30,6 +30,7 @@ describe("parseRoute", () => {
     expect(parseRoute("/admin/users")).toEqual({ name: "userList" });
     expect(parseRoute("/admin/roles")).toEqual({ name: "roleList" });
     expect(parseRoute("/admin/settings")).toEqual({ name: "settings" });
+    expect(parseRoute("/admin/audit-logs")).toEqual({ name: "auditLogs" });
   });
 
   it.each(["posts", "pages"])("%s 编辑地址缺少 /edit 后缀时进入 invalid", (section) => {
@@ -47,5 +48,6 @@ describe("parseRoute", () => {
     expect(parseRoute("/admin/users/author")).toEqual({ name: "invalid" });
     expect(parseRoute("/admin/roles/owner")).toEqual({ name: "invalid" });
     expect(parseRoute("/admin/settings/site")).toEqual({ name: "invalid" });
+    expect(parseRoute("/admin/audit-logs/edit")).toEqual({ name: "invalid" });
   });
 });

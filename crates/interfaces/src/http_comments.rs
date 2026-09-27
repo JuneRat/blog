@@ -1,4 +1,5 @@
 //! Comment HTTP boundaries: no cached visibility, session writes reuse AdminAuth.
+use crate::http_client_ip::client_ip;
 use crate::{
     http_admin::AdminAuth,
     http_auth::AdminState,
@@ -275,24 +276,6 @@ async fn preview(
     }
 }
 
-// Only explicitly configured socket peers can supply X-Forwarded-For. Traverse
-// right to left, discarding trusted hops; never trust a client-controlled prefix.
-fn client_ip(peer: Option<IpAddr>, headers: &HeaderMap, trusted: &[IpAddr]) -> Option<IpAddr> {
-    let peer = peer?;
-    if !trusted.contains(&peer) {
-        return Some(peer);
-    }
-    let mut addresses = Vec::new();
-    for value in headers.get_all("x-forwarded-for") {
-        for raw in value.to_str().ok()?.split(',') {
-            if addresses.len() >= 20 {
-                return None;
-            }
-            addresses.push(raw.trim().parse::<IpAddr>().ok()?);
-        }
-    }
-    addresses.into_iter().rev().find(|ip| !trusted.contains(ip))
-}
 #[cfg(test)]
 mod tests {
     use super::*;

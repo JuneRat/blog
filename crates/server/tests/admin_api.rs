@@ -181,7 +181,7 @@ async fn fresh_stack() -> Stack {
                 secret_ref: "IDP_SECRET".into(),
                 scopes: vec![],
             }],
-            None,
+            None.into(),
         )
         .await
         .unwrap();
@@ -191,7 +191,7 @@ async fn fresh_stack() -> Stack {
     for (username, uid) in &ids {
         let external = format!("sub-{username}");
         accounts
-            .bind(*uid, "https://idp.example", &external, None, None)
+            .bind(*uid, "https://idp.example", &external, None, None.into())
             .await
             .unwrap();
     }

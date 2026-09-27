@@ -117,7 +117,7 @@ impl OAuthConfigStore for FakeProviderConfigStore {
     async fn save(
         &self,
         _providers: &[ProviderConfig],
-        _audit_actor: Option<uuid::Uuid>,
+        _audit_actor: application::audit::AuditContext,
     ) -> Result<(), UseCaseError> {
         unimplemented!("测试不覆盖保存")
     }
@@ -149,7 +149,7 @@ impl OAuthAccountStore for FakeAccountStore {
         provider_key: &str,
         provider_user_id: &str,
         _email: Option<String>,
-        _audit_actor: Option<uuid::Uuid>,
+        _audit_actor: application::audit::AuditContext,
     ) -> Result<(), UseCaseError> {
         self.bindings
             .lock()
@@ -162,7 +162,7 @@ impl OAuthAccountStore for FakeAccountStore {
         _user_id: Uuid,
         _provider_key: &str,
         _provider_user_id: &str,
-        _audit_actor: Option<uuid::Uuid>,
+        _audit_actor: application::audit::AuditContext,
     ) -> Result<(), UseCaseError> {
         unimplemented!()
     }
@@ -289,7 +289,13 @@ async fn fixture() -> Fixture {
     ];
     let accounts = Arc::new(FakeAccountStore::default());
     accounts
-        .bind(member.id, "https://idp.example", "sub-42", None, None)
+        .bind(
+            member.id,
+            "https://idp.example",
+            "sub-42",
+            None,
+            None.into(),
+        )
         .await
         .unwrap();
 
@@ -349,6 +355,7 @@ impl UserRepository for FakeUserRepo {
         user: &domain::identity::User,
         expected_version: i64,
         now: time::OffsetDateTime,
+        _audit: application::audit::AuditContext,
     ) -> Result<UserSnapshot, UseCaseError> {
         let snapshot = user.snapshot();
         let mut users = self.users.lock().unwrap();
@@ -369,7 +376,7 @@ impl UserRepository for FakeUserRepo {
     async fn revoke_authentication(
         &self,
         user_id: Uuid,
-        _audit_actor: Option<uuid::Uuid>,
+        _audit_actor: application::audit::AuditContext,
     ) -> Result<(), UseCaseError> {
         let mut users = self.users.lock().unwrap();
         let user = users
@@ -386,6 +393,7 @@ impl UserRepository for FakeUserRepo {
         _user_id: uuid::Uuid,
         _avatar_media_id: Option<uuid::Uuid>,
         _now: time::OffsetDateTime,
+        _audit: application::audit::AuditContext,
     ) -> Result<(), UseCaseError> {
         unimplemented!("该用例不使用头像")
     }
@@ -393,7 +401,7 @@ impl UserRepository for FakeUserRepo {
     async fn insert(
         &self,
         aggregate: &domain::identity::User,
-        _audit_actor: Option<uuid::Uuid>,
+        _audit_actor: application::audit::AuditContext,
     ) -> Result<(), UseCaseError> {
         let snapshot = aggregate.snapshot();
         self.users
@@ -429,7 +437,7 @@ impl UserRepository for FakeUserRepo {
         &self,
         _user_id: Uuid,
         _phc_hash: &str,
-        _audit_actor: Option<uuid::Uuid>,
+        _audit_actor: application::audit::AuditContext,
     ) -> Result<(), UseCaseError> {
         unimplemented!("auth 用例不使用密码凭据")
     }
@@ -439,7 +447,7 @@ impl UserRepository for FakeUserRepo {
         _user_id: Uuid,
         _expected: Option<&str>,
         _new_hash: &str,
-        _audit_actor: Option<uuid::Uuid>,
+        _audit_actor: application::audit::AuditContext,
     ) -> Result<Option<i64>, UseCaseError> {
         unimplemented!("auth 用例不使用密码凭据")
     }
@@ -447,7 +455,7 @@ impl UserRepository for FakeUserRepo {
     async fn clear_password_hash_guarded(
         &self,
         _user_id: Uuid,
-        _audit_actor: Option<uuid::Uuid>,
+        _audit_actor: application::audit::AuditContext,
     ) -> Result<application::ports::ClearPasswordOutcome, UseCaseError> {
         unimplemented!("auth 用例不使用密码凭据")
     }
@@ -455,7 +463,7 @@ impl UserRepository for FakeUserRepo {
     async fn clear_password_hash(
         &self,
         _user_id: Uuid,
-        _audit_actor: Option<uuid::Uuid>,
+        _audit_actor: application::audit::AuditContext,
     ) -> Result<(), UseCaseError> {
         unimplemented!("auth 用例不使用密码凭据")
     }
@@ -507,7 +515,7 @@ impl application::ports::RbacStore for NoopRbac {
         &self,
         _user_id: Uuid,
         _role_slug: &str,
-        _audit_actor: Option<uuid::Uuid>,
+        _audit_actor: application::audit::AuditContext,
     ) -> Result<(), UseCaseError> {
         Ok(())
     }
@@ -515,7 +523,7 @@ impl application::ports::RbacStore for NoopRbac {
         &self,
         _user_id: Uuid,
         _role_slug: &str,
-        _audit_actor: Option<uuid::Uuid>,
+        _audit_actor: application::audit::AuditContext,
     ) -> Result<(), UseCaseError> {
         Ok(())
     }

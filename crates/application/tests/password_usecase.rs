@@ -151,6 +151,7 @@ struct FakeUserRepo {
     /// 模拟「写入之前另一请求改了密码」：条件写入时改写存储并报告未命中。
     concurrent_replacement: Mutex<Option<String>>,
     replacement_after_write: Mutex<Option<String>>,
+    last_password_audit: Mutex<Option<application::audit::AuditContext>>,
 }
 
 impl FakeUserRepo {
@@ -188,6 +189,7 @@ impl UserRepository for FakeUserRepo {
         user: &domain::identity::User,
         expected_version: i64,
         now: time::OffsetDateTime,
+        _audit: application::audit::AuditContext,
     ) -> Result<UserSnapshot, UseCaseError> {
         let snapshot = user.snapshot();
         let mut users = self.users.lock().unwrap();
@@ -208,7 +210,7 @@ impl UserRepository for FakeUserRepo {
     async fn revoke_authentication(
         &self,
         user_id: Uuid,
-        _audit_actor: Option<uuid::Uuid>,
+        _audit_actor: application::audit::AuditContext,
     ) -> Result<(), UseCaseError> {
         let mut users = self.users.lock().unwrap();
         let user = users
@@ -225,6 +227,7 @@ impl UserRepository for FakeUserRepo {
         _user_id: uuid::Uuid,
         _avatar_media_id: Option<uuid::Uuid>,
         _now: time::OffsetDateTime,
+        _audit: application::audit::AuditContext,
     ) -> Result<(), UseCaseError> {
         unimplemented!("该用例不使用头像")
     }
@@ -232,7 +235,7 @@ impl UserRepository for FakeUserRepo {
     async fn insert(
         &self,
         aggregate: &domain::identity::User,
-        _audit_actor: Option<uuid::Uuid>,
+        _audit_actor: application::audit::AuditContext,
     ) -> Result<(), UseCaseError> {
         let snapshot = aggregate.snapshot();
         self.insert_user(snapshot.clone());
@@ -266,7 +269,7 @@ impl UserRepository for FakeUserRepo {
         &self,
         user_id: Uuid,
         phc_hash: &str,
-        _audit_actor: Option<uuid::Uuid>,
+        _audit_actor: application::audit::AuditContext,
     ) -> Result<(), UseCaseError> {
         self.set_hash(user_id, phc_hash);
         Ok(())
@@ -277,7 +280,7 @@ impl UserRepository for FakeUserRepo {
         user_id: Uuid,
         expected: Option<&str>,
         new_hash: &str,
-        _audit_actor: Option<uuid::Uuid>,
+        audit_actor: application::audit::AuditContext,
     ) -> Result<Option<i64>, UseCaseError> {
         // 模拟「读取之后、写入之前别人改了密码」：改写存储并报告未命中。
         if let Some(replacement) = self.concurrent_replacement.lock().unwrap().take() {
@@ -287,6 +290,7 @@ impl UserRepository for FakeUserRepo {
         let mut passwords = self.passwords.lock().unwrap();
         let current = passwords.get(&user_id).map(String::as_str);
         if current == expected {
+            *self.last_password_audit.lock().unwrap() = Some(audit_actor);
             passwords.insert(user_id, new_hash.to_string());
             let mut users = self.users.lock().unwrap();
             let user = users.values_mut().find(|user| user.id == user_id).unwrap();
@@ -308,7 +312,7 @@ impl UserRepository for FakeUserRepo {
     async fn clear_password_hash(
         &self,
         user_id: Uuid,
-        _audit_actor: Option<uuid::Uuid>,
+        _audit_actor: application::audit::AuditContext,
     ) -> Result<(), UseCaseError> {
         self.passwords.lock().unwrap().remove(&user_id);
         Ok(())
@@ -317,7 +321,7 @@ impl UserRepository for FakeUserRepo {
     async fn clear_password_hash_guarded(
         &self,
         user_id: Uuid,
-        _audit_actor: Option<uuid::Uuid>,
+        _audit_actor: application::audit::AuditContext,
     ) -> Result<ClearPasswordOutcome, UseCaseError> {
         // 生产实现把「检查 + 清除」放在同一把身份锁里；fake 在这里等价地一次完成。
         if !self.passwords.lock().unwrap().contains_key(&user_id) {
@@ -436,7 +440,7 @@ impl OAuthAccountStore for FakeUserRepo {
         provider_key: &str,
         provider_user_id: &str,
         email: Option<String>,
-        _audit_actor: Option<uuid::Uuid>,
+        _audit_actor: application::audit::AuditContext,
     ) -> Result<(), UseCaseError> {
         self.bindings
             .lock()
@@ -456,7 +460,7 @@ impl OAuthAccountStore for FakeUserRepo {
         user_id: Uuid,
         provider_key: &str,
         provider_user_id: &str,
-        _audit_actor: Option<uuid::Uuid>,
+        _audit_actor: application::audit::AuditContext,
     ) -> Result<(), UseCaseError> {
         if let Some(list) = self.bindings.lock().unwrap().get_mut(&user_id) {
             list.retain(|b| {
@@ -567,7 +571,7 @@ async fn login_with_correct_password_issues_session() {
 
     let login = f
         .passwords
-        .login("  Sun ", PASSWORD, Some("203.0.113.7"), "/admin")
+        .login("  Sun ", PASSWORD, Some("203.0.113.7"), "/admin", None)
         .await
         .unwrap();
     assert_eq!(login.user_id, f.user_id);
@@ -588,7 +592,7 @@ async fn invalid_next_fails_before_creating_a_session() {
     let f = fixture().await;
     let err = f
         .passwords
-        .login("sun", PASSWORD, None, "https://evil.example/steal")
+        .login("sun", PASSWORD, None, "https://evil.example/steal", None)
         .await
         .unwrap_err();
     assert!(matches!(err, UseCaseError::Invalid(_)), "{err:?}");
@@ -606,7 +610,7 @@ async fn unknown_user_and_wrong_password_are_indistinguishable() {
     let before = f.hasher.verify_calls();
     let wrong = f
         .passwords
-        .login("sun", "wrong password value", None, "/")
+        .login("sun", "wrong password value", None, "/", None)
         .await
         .unwrap_err();
     let wrong_calls = f.hasher.verify_calls() - before;
@@ -614,7 +618,7 @@ async fn unknown_user_and_wrong_password_are_indistinguishable() {
     let before = f.hasher.verify_calls();
     let unknown = f
         .passwords
-        .login("nobody", "wrong password value", None, "/")
+        .login("nobody", "wrong password value", None, "/", None)
         .await
         .unwrap_err();
     let unknown_calls = f.hasher.verify_calls() - before;
@@ -633,7 +637,7 @@ async fn throttle_rejects_before_verifying() {
     let f = fixture_with_threshold(1).await;
 
     f.passwords
-        .login("sun", "wrong password value", None, "/")
+        .login("sun", "wrong password value", None, "/", None)
         .await
         .unwrap_err();
     let calls_after_failure = f.hasher.verify_calls();
@@ -641,7 +645,7 @@ async fn throttle_rejects_before_verifying() {
     // 即使密码正确，达到阈值后也不再校验、不再签发会话。
     let err = f
         .passwords
-        .login("sun", PASSWORD, None, "/")
+        .login("sun", PASSWORD, None, "/", None)
         .await
         .unwrap_err();
     match err {
@@ -661,7 +665,13 @@ async fn client_counter_is_not_cleared_by_successful_login() {
     let f = fixture().await;
 
     f.passwords
-        .login("sun", "wrong password value", Some("198.51.100.9"), "/")
+        .login(
+            "sun",
+            "wrong password value",
+            Some("198.51.100.9"),
+            "/",
+            None,
+        )
         .await
         .unwrap_err();
     assert_eq!(
@@ -671,7 +681,7 @@ async fn client_counter_is_not_cleared_by_successful_login() {
     );
 
     f.passwords
-        .login("sun", PASSWORD, Some("198.51.100.9"), "/")
+        .login("sun", PASSWORD, Some("198.51.100.9"), "/", None)
         .await
         .unwrap();
     assert_eq!(
@@ -694,10 +704,26 @@ async fn weak_hash_is_upgraded_on_successful_login() {
     f.repo.set_hash(f.user_id, &weak);
     assert_eq!(f.repo.hash_of(f.user_id).as_deref(), Some(weak.as_str()));
 
-    f.passwords.login("sun", PASSWORD, None, "/").await.unwrap();
+    f.passwords
+        .login(
+            "sun",
+            PASSWORD,
+            None,
+            "/",
+            Some("198.51.100.42".parse().unwrap()),
+        )
+        .await
+        .unwrap();
     assert_eq!(
         f.repo.hash_of(f.user_id).as_deref(),
         Some(format!("phc::{PASSWORD}").as_str())
+    );
+    assert_eq!(
+        *f.repo.last_password_audit.lock().unwrap(),
+        Some(application::audit::AuditContext {
+            actor_id: Some(f.user_id),
+            ip_address: Some("198.51.100.42".parse().unwrap())
+        })
     );
 }
 
@@ -710,7 +736,7 @@ async fn login_that_races_a_password_change_is_rejected() {
 
     let err = f
         .passwords
-        .login("sun", PASSWORD, None, "/")
+        .login("sun", PASSWORD, None, "/", None)
         .await
         .unwrap_err();
     assert!(matches!(err, UseCaseError::InvalidCredentials));
@@ -727,7 +753,7 @@ async fn malformed_username_shares_the_failure_path() {
     let f = fixture().await;
     let err = f
         .passwords
-        .login("空间 用户", "wrong password value", None, "/")
+        .login("空间 用户", "wrong password value", None, "/", None)
         .await
         .unwrap_err();
     assert!(matches!(err, UseCaseError::InvalidCredentials));
@@ -800,7 +826,7 @@ async fn clear_password_refuses_to_remove_the_last_login_method() {
 async fn clear_password_succeeds_when_another_binding_exists() {
     let f = fixture().await;
     f.accounts
-        .bind(f.user_id, "https://idp.example", "sub-1", None, None)
+        .bind(f.user_id, "https://idp.example", "sub-1", None, None.into())
         .await
         .unwrap();
     f.sessions.create(f.user_id, 1).await.unwrap();
@@ -818,7 +844,7 @@ async fn clear_password_succeeds_when_another_binding_exists() {
 async fn clear_password_rejects_when_not_enabled() {
     let f = fixture().await;
     f.accounts
-        .bind(f.user_id, "https://idp.example", "sub-1", None, None)
+        .bind(f.user_id, "https://idp.example", "sub-1", None, None.into())
         .await
         .unwrap();
     // 直接清空存储，模拟「本来就没启用密码」。
@@ -907,12 +933,12 @@ async fn change_own_password_rotates_sessions_and_sets_new_secret() {
 
     // 新密码可用，旧密码不可用。
     f.passwords
-        .login("sun", "brand new passphrase", None, "/")
+        .login("sun", "brand new passphrase", None, "/", None)
         .await
         .unwrap();
     let err = f
         .passwords
-        .login("sun", PASSWORD, None, "/")
+        .login("sun", PASSWORD, None, "/", None)
         .await
         .unwrap_err();
     assert!(matches!(err, UseCaseError::InvalidCredentials));
@@ -923,7 +949,7 @@ async fn change_own_password_allows_setting_initial_password_for_oauth_user() {
     let f = fixture().await;
     f.repo.passwords.lock().unwrap().clear();
     f.accounts
-        .bind(f.user_id, "https://idp.example", "sub-1", None, None)
+        .bind(f.user_id, "https://idp.example", "sub-1", None, None.into())
         .await
         .unwrap();
 
@@ -949,12 +975,12 @@ async fn concurrent_logins_cannot_exceed_the_failure_budget() {
     let f = fixture_with_threshold(5).await;
 
     let (r1, r2, r3, r4, r5, r6) = tokio::join!(
-        f.passwords.login("sun", "wrong-1", None, "/"),
-        f.passwords.login("sun", "wrong-2", None, "/"),
-        f.passwords.login("sun", "wrong-3", None, "/"),
-        f.passwords.login("sun", "wrong-4", None, "/"),
-        f.passwords.login("sun", "wrong-5", None, "/"),
-        f.passwords.login("sun", "wrong-6", None, "/"),
+        f.passwords.login("sun", "wrong-1", None, "/", None),
+        f.passwords.login("sun", "wrong-2", None, "/", None),
+        f.passwords.login("sun", "wrong-3", None, "/", None),
+        f.passwords.login("sun", "wrong-4", None, "/", None),
+        f.passwords.login("sun", "wrong-5", None, "/", None),
+        f.passwords.login("sun", "wrong-6", None, "/", None),
     );
     let results = [r1, r2, r3, r4, r5, r6];
 
@@ -1003,7 +1029,7 @@ async fn cancelled_authentication_releases_only_its_own_reservations() {
                     .map(|_| ())
             } else {
                 f.passwords
-                    .login("sun", PASSWORD, Some("203.0.113.7"), "/")
+                    .login("sun", PASSWORD, Some("203.0.113.7"), "/", None)
                     .await
                     .map(|_| ())
             }
@@ -1023,7 +1049,7 @@ async fn cancelled_authentication_releases_only_its_own_reservations() {
         }
         // 取消后额度立即可用，成功结算也不能重复释放其他请求的预占。
         f.passwords
-            .login("sun", PASSWORD, Some("203.0.113.7"), "/")
+            .login("sun", PASSWORD, Some("203.0.113.7"), "/", None)
             .await
             .unwrap();
         assert_eq!(f.throttle.in_flight_of(&user), 1);
@@ -1039,7 +1065,7 @@ async fn second_dimension_denial_releases_first_reservation() {
     assert!(f.throttle.reserve(&client).unwrap().allowed);
     let result = f
         .passwords
-        .login("sun", PASSWORD, Some("203.0.113.7"), "/")
+        .login("sun", PASSWORD, Some("203.0.113.7"), "/", None)
         .await;
     assert!(matches!(result, Err(UseCaseError::RateLimited { .. })));
     assert_eq!(f.throttle.in_flight_of(&user), 0);
@@ -1124,7 +1150,7 @@ async fn initial_password_set_does_not_overwrite_a_concurrent_admin_reset() {
     let f = fixture().await;
     f.repo.passwords.lock().unwrap().clear();
     f.accounts
-        .bind(f.user_id, "https://idp.example", "sub-1", None, None)
+        .bind(f.user_id, "https://idp.example", "sub-1", None, None.into())
         .await
         .unwrap();
     *f.repo.concurrent_replacement.lock().unwrap() = Some("phc::admin-forced-reset".into());

@@ -52,7 +52,7 @@ impl TagRepository for PostgresTagRepository {
     async fn insert(
         &self,
         aggregate: &domain::content::Tag,
-        actor_id: Option<Uuid>,
+        actor_id: application::audit::AuditContext,
     ) -> Result<(), UseCaseError> {
         let snapshot = aggregate.snapshot();
         let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
@@ -117,7 +117,7 @@ impl TagRepository for PostgresTagRepository {
         id: Uuid,
         new_name: &str,
         expected_version: i64,
-        actor_id: Option<Uuid>,
+        actor_id: application::audit::AuditContext,
     ) -> Result<Option<domain::content::TagSnapshot>, UseCaseError> {
         let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
         let row = sqlx::query(
@@ -150,7 +150,7 @@ impl TagRepository for PostgresTagRepository {
         &self,
         id: Uuid,
         expected_version: i64,
-        actor_id: Option<Uuid>,
+        actor_id: application::audit::AuditContext,
     ) -> Result<TagDeleteOutcome, UseCaseError> {
         let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
         lock_content_relations(&mut tx).await?;
@@ -431,7 +431,7 @@ impl CategoryRepository for PostgresCategoryRepository {
     async fn insert(
         &self,
         aggregate: &domain::content::Category,
-        audit_actor: Option<uuid::Uuid>,
+        audit_actor: application::audit::AuditContext,
     ) -> Result<(), UseCaseError> {
         let snapshot = aggregate.snapshot();
         // 新节点不可能是自己的祖先，创建本身无环；树锁仍统一取得，
@@ -510,7 +510,7 @@ impl CategoryRepository for PostgresCategoryRepository {
         description: Option<&str>,
         parent_id: Option<Uuid>,
         expected_version: i64,
-        audit_actor: Option<uuid::Uuid>,
+        audit_actor: application::audit::AuditContext,
     ) -> Result<Option<domain::content::CategorySnapshot>, UseCaseError> {
         let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
         // 树锁内完成「环检查 + 写入」：锁外的检查结果可能被并发移动作废。
@@ -598,7 +598,7 @@ impl CategoryRepository for PostgresCategoryRepository {
         &self,
         id: Uuid,
         expected_version: i64,
-        audit_actor: Option<uuid::Uuid>,
+        audit_actor: application::audit::AuditContext,
     ) -> Result<CategoryDeleteOutcome, UseCaseError> {
         let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
         sqlx::query("SELECT pg_advisory_xact_lock($1::int, $2::int)")
@@ -842,7 +842,7 @@ impl SeriesRepository for PostgresSeriesRepository {
     async fn insert(
         &self,
         aggregate: &domain::content::Series,
-        actor_id: Option<Uuid>,
+        actor_id: application::audit::AuditContext,
     ) -> Result<(), UseCaseError> {
         let snapshot = aggregate.snapshot();
         let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
@@ -926,7 +926,7 @@ impl SeriesRepository for PostgresSeriesRepository {
         description: Option<&str>,
         cover_media_id: Option<Uuid>,
         expected_version: i64,
-        actor_id: Option<Uuid>,
+        actor_id: application::audit::AuditContext,
     ) -> Result<Option<domain::content::SeriesSnapshot>, UseCaseError> {
         // name/描述/封面与引用行在同一事务：封面替换时旧图必须同时被释放，
         // 否则会出现「列里已换新图、引用表还占着旧图」的幽灵占用。
@@ -975,7 +975,7 @@ impl SeriesRepository for PostgresSeriesRepository {
         &self,
         id: Uuid,
         expected_version: i64,
-        actor_id: Option<Uuid>,
+        actor_id: application::audit::AuditContext,
     ) -> Result<SeriesDeleteOutcome, UseCaseError> {
         let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
         lock_content_relations(&mut tx).await?;
@@ -1072,7 +1072,7 @@ impl SeriesRepository for PostgresSeriesRepository {
         series_id: Uuid,
         expected_series_version: i64,
         ordered_post_ids: &[Uuid],
-        actor_id: Option<Uuid>,
+        actor_id: application::audit::AuditContext,
     ) -> Result<ReorderOutcome, UseCaseError> {
         let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
         lock_content_relations(&mut tx).await?;

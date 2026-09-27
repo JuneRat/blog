@@ -114,7 +114,7 @@ impl SeriesInteractor {
         let series =
             Series::new(cmd.name, slug, cmd.description, self.clock.now()).map_err(map_domain)?;
         let snapshot = series.snapshot();
-        self.series.insert(&series, actor.audit_actor_id()).await?;
+        self.series.insert(&series, actor.audit_context()).await?;
         Ok(SeriesDto {
             id: snapshot.id,
             name: snapshot.name,
@@ -161,7 +161,7 @@ impl SeriesInteractor {
                 snapshot.description.as_deref(),
                 snapshot.cover_media_id,
                 expected,
-                actor.audit_actor_id(),
+                actor.audit_context(),
             )
             .await?
         {
@@ -184,7 +184,7 @@ impl SeriesInteractor {
         let expected = checked_version(series.version(), expected_version)?;
         match self
             .series
-            .delete(series.id(), expected, actor.audit_actor_id())
+            .delete(series.id(), expected, actor.audit_context())
             .await?
         {
             SeriesDeleteOutcome::Deleted => Ok(()),
@@ -252,7 +252,7 @@ impl SeriesInteractor {
                 series.id(),
                 expected,
                 &cmd.ordered_post_ids,
-                actor.audit_actor_id(),
+                actor.audit_context(),
             )
             .await?
         {
