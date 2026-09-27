@@ -364,9 +364,24 @@ pub async fn rebuild_comment_html(
         for row in rows {
             let source: String = row.get("content");
             let html = renderer.render_comment(&source).await?;
-            sqlx::query("UPDATE comments SET content_html=$2,content_render_version=$3 WHERE id=$1 AND content=$4 AND version=$5 AND content_render_version<>$3")
-                .bind(row.get::<Uuid,_>("id")).bind(html).bind(COMMENT_RENDER_VERSION).bind(source).bind(row.get::<i64,_>("version"))
-                .execute(pool).await.map_err(db)?;
+            let id: Uuid = row.get("id");
+            let version: i64 = row.get("version");
+            let mut tx = pool.begin().await.map_err(db)?;
+            let changed = sqlx::query("UPDATE comments SET content_html=$2,content_render_version=$3 WHERE id=$1 AND content=$4 AND version=$5 AND content_render_version<>$3")
+                .bind(id).bind(html).bind(COMMENT_RENDER_VERSION).bind(source).bind(version)
+                .execute(&mut *tx).await.map_err(db)?.rows_affected();
+            if changed == 1 {
+                crate::audit::record_change(
+                    &mut tx,
+                    None,
+                    "comment.html.rebuild",
+                    "comment",
+                    &id.to_string(),
+                    json!({"version": version, "render_version": COMMENT_RENDER_VERSION}),
+                )
+                .await?;
+            }
+            tx.commit().await.map_err(db)?;
         }
     }
 }

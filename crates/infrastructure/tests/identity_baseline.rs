@@ -44,7 +44,7 @@ async fn authentication_changes_invalidate_even_late_stale_sessions() {
     let sessions = PostgresSessionStore::with_defaults(pool.clone());
     let old = sessions.create(user, 1).await.unwrap();
     users
-        .set_password_hash(user, "$argon2id$test")
+        .set_password_hash(user, "$argon2id$test", None)
         .await
         .unwrap();
     let snapshot = users.find_by_id(user).await.unwrap().unwrap();
@@ -56,7 +56,13 @@ async fn authentication_changes_invalidate_even_late_stale_sessions() {
 
     let token = sessions.create(user, 2).await.unwrap();
     accounts
-        .bind(user, "github", "123", Some("unused@example.com".into()))
+        .bind(
+            user,
+            "github",
+            "123",
+            Some("unused@example.com".into()),
+            None,
+        )
         .await
         .unwrap();
     assert!(sessions.validate(&token).await.unwrap().is_none());
@@ -64,16 +70,19 @@ async fn authentication_changes_invalidate_even_late_stale_sessions() {
     assert_eq!(bindings[0].provider_user_id, "123");
     assert!(bindings[0].email.is_none(), "绑定表不持久化提供商邮箱");
     let token = sessions.create(user, 3).await.unwrap();
-    accounts.unbind(user, "github", "missing").await.unwrap();
+    accounts
+        .unbind(user, "github", "missing", None)
+        .await
+        .unwrap();
     assert!(
         sessions.validate(&token).await.unwrap().is_some(),
         "无变化不撤销登录"
     );
-    accounts.unbind(user, "github", "123").await.unwrap();
+    accounts.unbind(user, "github", "123", None).await.unwrap();
     assert!(sessions.validate(&token).await.unwrap().is_none());
     let before = users.find_by_id(user).await.unwrap().unwrap();
     let token = sessions.create(user, before.auth_version).await.unwrap();
-    users.revoke_authentication(user).await.unwrap();
+    users.revoke_authentication(user, None).await.unwrap();
     let after = users.find_by_id(user).await.unwrap().unwrap();
     assert_eq!(after.auth_version, before.auth_version + 1);
     assert_eq!(after.version, before.version, "撤销登录不算资料编辑");

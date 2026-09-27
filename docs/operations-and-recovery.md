@@ -1,4 +1,4 @@
-# 保留期、备份与恢复
+# 保留期、媒体清理与备份恢复
 
 当前工具适配新的 [19 表基线](database-design.md)。采用维护窗口备份和隔离恢复；部署验收仍见[路线图](product-roadmap.md)，不提供在线一致备份或零数据丢失承诺。
 
@@ -8,7 +8,7 @@
 
 | 身份 | 用途 |
 |---|---|
-| 结构管理账号 | 建库、迁移、授权、备份和恢复；不注入 HTTP 服务 |
+| 结构管理账号 | 建库、迁移、授权、备份、恢复和显式媒体清理；不注入 HTTP 服务 |
 | 普通运行账号 | 必要业务读写；audit_logs 仅 SELECT/INSERT，无建表权限 |
 | 独立维护账号 | 读取保留期、清空评论 IP、删除过期审计和写入清理摘要；不能读取评论邮箱或改正文 |
 
@@ -35,7 +35,42 @@ blog maintenance --batch-size 1000 --max-batches 100
 
 每日调度示例为 [service](../ops/blog-maintenance.service) 与 [timer](../ops/blog-maintenance.timer)。按部署修改路径和用户，将独立维护凭据放在受保护的 /etc/blog/maintenance.env。仓库不会安装或启用这些服务。恢复隔离期间拒绝执行维护。
 
-保留期不清理备份副本；备份保留规则另行制定。正式媒体文件也不属于此命令：零引用仍可能有站外链接。当前仅 blog media cleanup-staging 清理过期暂存文件；正式对象的显式物理清理及失败重试流程仍待实现。
+保留期不清理备份副本；备份保留规则另行制定。正式媒体文件也不属于此命令：零引用仍可能有站外链接。blog media cleanup-staging 仅清理过期暂存文件；正式对象按下面的显式计划清理。
+
+## 正式媒体物理清理
+
+[media_cleanup.py](../scripts/media_cleanup.py) 只接受明确选中的媒体 UUID，每份计划最多 1,000 个。所选媒体必须已进回收站、没有已知引用，文件路径、大小及 SHA-256 与登记一致。不会按软删除时间、零引用或未登记文件自动清扫，也不扫描全站正文。草稿、私密、归档和回收站内容仍计入 media_refs；封面、头像外键及站点 logo 另行复核，缺少引用记账也不会绕过它们。
+
+结构管理连接由 DATABASE_URL 注入；执行主机必须能访问正式媒体目录，并有删除所选文件的权限。Docker 模式只在指定容器内执行 PostgreSQL 工具，媒体路径仍属于脚本所在主机；非 Docker 部署省略 --docker-container 并提供 psql。不要把这些权限授予保留期维护账号。
+
+```sh
+# 只读生成计划；重复 --id 明确选择每一个媒体 UUID。
+python3 -B scripts/media_cleanup.py plan \
+  --id 00000000-0000-0000-0000-000000000001 \
+  --media-dir "${BLOG_MEDIA_DIR:-data/media}" \
+  --output /secure/maintenance/media-purge.json \
+  --docker-container blog-postgres
+
+# 复核计划、站外链接影响，并停止全部写入后执行。
+python3 -B scripts/media_cleanup.py apply /secure/maintenance/media-purge.json \
+  --docker-container blog-postgres \
+  --maintenance-confirmed --break-links-confirmed
+```
+
+示例 UUID 须替换为实际选中记录。计划文件以 0600 独占创建，包含数据库名称/OID/连接端点、媒体根目录、所选 ID/path/版本/删除时间/大小/校验和及操作编号。复核后保留原文件，不能编辑或覆盖部分执行的计划。计划摘要用于检测损坏，不是签名或权限凭据；文件和媒体目录由部署方保护。
+
+执行前在部署层取得维护互斥，停止 HTTP、上传、定时任务、保留期任务和所有 CLI 写入，等待在途操作结束；整个执行及重试期间均须维持这一条件。两个确认参数仅记录操作者声明，工具不能验证进程已停止。站外链接无法完整枚举，--break-links-confirmed 表示接受所选图片 URL 永久失效。恢复隔离库禁止清理，旧计划也不能直接用于新恢复库。
+
+| 阶段 | 保护与失败行为 |
+|---|---|
+| 预检 | 全部文件和计划身份先通过校验；不接受路径越界或符号链接 |
+| 数据库事务 | 按 ID 排序取得媒体行 FOR UPDATE，与引用同步的 FOR SHARE 互斥；重检版本、回收站状态和引用；全部所选媒体行及 media.purge 审计凭据一起提交，任一失败整体回滚 |
+| 文件删除 | 只有确认该计划的数据库凭据已提交且 ID/path 未重新登记，才复核并删除文件；对象变更、凭据丢失或磁盘错误时保留文件并报告失败 |
+| 重试 | 数据库提交结果不确定时不碰文件；用同一份计划再次 apply，根据持久审计凭据继续。已完成文件允许缺失，不重复追加审计 |
+
+JSON 结果含 operation_id、records_purged、files_deleted、files_already_absent、failures。records_purged 是本计划已确认清除的记录总数，重试时不表示本轮新增删除量。files_deleted/已缺失计数只描述本轮观察结果。有失败时进程返回非零；修复权限等外部故障后，用原计划重试，直到 failures 为空。数据库记录删除后图片入口立即不可用，文件删除失败会留下受控残留，不会恢复公开访问。
+
+media.purge 记录数据库账号和必要文件摘要，actor_id 为空，不冒充某个博客用户；该记录证明数据库阶段完成，不能单独证明文件已删除。保留计划及执行结果直至结束，及时重试：审计凭据也受保留期约束，凭据过期/丢失后工具拒绝继续，须人工核对。ID 和存储路径不得复用。清理不删除旧备份或外部缓存；恢复旧备份会带回旧图片，需重新核对清理范围。
 
 ## 维护备份
 
@@ -112,7 +147,7 @@ release 核对该次恢复的数据库标记，重检结构、Owner、当前媒�
 无数据库测试：
 
 ```sh
-PYTHONPATH=scripts python3 -B -m unittest scripts/test_recovery.py
+PYTHONPATH=scripts python3 -B -m unittest scripts/test_recovery.py scripts/test_media_cleanup.py
 ```
 
 真实往返演练只允许 loopback 管理地址，随机创建并清理专用库和角色：
@@ -124,9 +159,11 @@ BLOG_RECOVERY_TEST=1 BLOG_TEST_PG_CONTAINER=blog-postgres \
 PYTHONPATH=scripts python3 -B -m unittest scripts/test_recovery_postgres.py
 ```
 
-覆盖授权脚本、受限运行账号、维护权限、媒体各状态及多类型引用、多系列、评论树、会话撤销、隔离启动/调度、缺文件拒绝备份、引用缺失拒绝开放。测试不代替生产维护互斥、RPO/RTO 和故障中断验收；部署层记录备份大小、维护时长、恢复点和实际恢复耗时。
+覆盖授权脚本、受限运行账号、维护权限、媒体各状态及多类型引用、多系列、评论树、会话撤销、隔离启动/调度、缺文件拒绝备份、引用缺失拒绝开放，以及媒体清理的审计回滚、版本/引用复核、并发恢复、提交结果丢失、部分文件失败和重试。测试不代替生产维护互斥、RPO/RTO 和故障中断验收；部署层记录备份大小、维护时长、恢复点和实际恢复耗时。
 
 2026-09-27 已在独立 PostgreSQL 18 临时实例完成上述往返演练，全量检查及前端生产构建通过；受限账号迁移并发和失败后释放锁另有集成测试。现有开发数据库未重建或切换。
+
+同日补充验证了正式媒体清理的 4 组 PostgreSQL 故障/并发场景，与恢复往返共 5 项通过；维护工具单元测试 20 项、前端测试 209 项及 Rust 全量检查通过。业务审计另有身份/会话、权限同步、设置/引用和 HTML 重建的事务回滚验证。
 
 ## 凭据泄露与后续外部系统
 

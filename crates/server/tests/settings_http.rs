@@ -152,15 +152,18 @@ async fn build(pool: PgPool) -> Stack {
 
     let configs = Arc::new(PostgresOAuthConfigStore::new(pool.clone()));
     configs
-        .save(&[ProviderConfig {
-            id: "idp".into(),
-            name: Some("示例 IdP".into()),
-            kind: ProviderKind::Oidc,
-            issuer: Some("https://idp.example".into()),
-            client_id: "client".into(),
-            secret_ref: "IDP_SECRET".into(),
-            scopes: vec![],
-        }])
+        .save(
+            &[ProviderConfig {
+                id: "idp".into(),
+                name: Some("示例 IdP".into()),
+                kind: ProviderKind::Oidc,
+                issuer: Some("https://idp.example".into()),
+                client_id: "client".into(),
+                secret_ref: "IDP_SECRET".into(),
+                scopes: vec![],
+            }],
+            None,
+        )
         .await
         .unwrap();
     let accounts: Arc<dyn OAuthAccountStore> =
@@ -171,6 +174,7 @@ async fn build(pool: PgPool) -> Stack {
                 *uid,
                 "https://idp.example",
                 &format!("sub-{username}"),
+                None,
                 None,
             )
             .await
@@ -725,6 +729,42 @@ async fn saved_settings_take_effect_on_public_pages_immediately() {
     assert_eq!(body["version"], 1);
     assert_eq!(body["source"], "database");
     assert_eq!(body["title"], "数据库站点标题", "响应为规范化后的值");
+
+    let actor: Uuid = sqlx::query_scalar("SELECT id FROM users WHERE username='admin'")
+        .fetch_one(&stack.pool)
+        .await
+        .unwrap();
+    let audits: Vec<(Uuid, serde_json::Value)> = sqlx::query_as("SELECT actor_id,metadata FROM audit_logs WHERE action='settings.site' AND target_id='site'")
+        .fetch_all(&stack.pool).await.unwrap();
+    assert_eq!(audits, vec![(actor, serde_json::json!({"version":1}))]);
+    // Repeated same-value saves and stale submissions must not invent audit events.
+    for (version, expected) in [(1, StatusCode::OK), (0, StatusCode::CONFLICT)] {
+        let (status, _) = put(&stack.router, "/api/admin/v1/settings/site", &cookie, &csrf,
+            serde_json::json!({"title":"数据库站点标题","description":"数据库站点描述","expected_version":version})).await;
+        assert_eq!(status, expected);
+    }
+    // Exercise the actual HTTP path: failed audit means no settings change.
+    sqlx::raw_sql("CREATE FUNCTION fail_site_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'audit unavailable'; END $$; CREATE TRIGGER fail_site_audit BEFORE INSERT ON audit_logs FOR EACH ROW WHEN (NEW.action='settings.site') EXECUTE FUNCTION fail_site_audit()")
+        .execute(&stack.pool).await.unwrap();
+    let (status, _) = put(
+        &stack.router,
+        "/api/admin/v1/settings/site",
+        &cookie,
+        &csrf,
+        serde_json::json!({"title":"Rejected","description":"Rejected","expected_version":1}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    let version: i64 = sqlx::query_scalar("SELECT version FROM settings WHERE key='site'")
+        .fetch_one(&stack.pool)
+        .await
+        .unwrap();
+    let count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM audit_logs WHERE action='settings.site'")
+            .fetch_one(&stack.pool)
+            .await
+            .unwrap();
+    assert_eq!((version, count), (1, 1));
 
     // 无缓存：同一次进程内下一次公开渲染即用数据库值。
     let html = public_home(&stack.router).await;

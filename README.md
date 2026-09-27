@@ -4,7 +4,7 @@ Rust 模块化单体博客，公开站点使用服务端渲染，管理后台使
 
 目前支持文章与独立页面、标签/分类/系列、OAuth 与本地密码登录、角色权限、媒体库、站点设置、主题切换，以及 RSS、sitemap 和 SEO 元数据。项目仍在开发阶段，接口与数据模型可直接调整，不维护旧管理接口的兼容层。交付状态和后续范围见[路线图](docs/product-roadmap.md)。
 
-**正在分批切换数据库。** 新的 [19 表基线](migrations/postgres/0001_initial_schema.sql)已替换旧迁移链，身份、持久会话、媒体、内容、目录与评论已适配；保留期配置/维护和新库备份恢复已接入，正式媒体物理清理、其余审计覆盖与生产部署验收仍待完成。请先用[独立空库](docs/development.md#新基线的隔离验证)验证，暂不切换原开发库。完整目标见 [blog_schema.sql](blog_schema.sql)，已实现边界见[数据库实现参考](docs/database-current.md)。
+**正在分批切换数据库。** 新的 [19 表基线](migrations/postgres/0001_initial_schema.sql)已替换旧迁移链，身份、持久会话、媒体、内容、目录与评论已适配；保留期维护、新库备份恢复和正式媒体显式清理已接入，已有业务写入口已补齐事务审计，生产部署验收仍待完成。请先用[独立空库](docs/development.md#新基线的隔离验证)验证，暂不切换原开发库。完整目标见 [blog_schema.sql](blog_schema.sql)，已实现边界见[数据库实现参考](docs/database-current.md)。
 
 ## 快速开始
 

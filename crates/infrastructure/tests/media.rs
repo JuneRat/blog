@@ -207,7 +207,7 @@ async fn avatar_and_site_logo_preserve_old_trashed_refs_and_reject_new_ones() {
         .set_avatar(owner, Some(media.id()), now)
         .await
         .unwrap();
-    settings.save_site(&site, 0, now).await.unwrap();
+    settings.save_site(&site, 0, now, None).await.unwrap();
     assert_eq!(refs(&pool, media.id()).await, 2);
     let auth_version = users.find_by_id(owner).await.unwrap().unwrap().auth_version;
     repo.set_deleted(media.id(), 1, true, now, Some(owner))
@@ -217,7 +217,7 @@ async fn avatar_and_site_logo_preserve_old_trashed_refs_and_reject_new_ones() {
         .set_avatar(owner, Some(media.id()), now)
         .await
         .unwrap();
-    settings.save_site(&site, 1, now).await.unwrap();
+    settings.save_site(&site, 1, now, None).await.unwrap();
     assert!(matches!(
         users.set_avatar(other, Some(media.id()), now).await,
         Err(UseCaseError::Invalid(_))
@@ -234,10 +234,10 @@ async fn avatar_and_site_logo_preserve_old_trashed_refs_and_reject_new_ones() {
         logo_media_id: None,
         ..site.clone()
     };
-    settings.save_site(&empty_site, 2, now).await.unwrap();
+    settings.save_site(&empty_site, 2, now, None).await.unwrap();
     assert_eq!(refs(&pool, media.id()).await, 0);
     assert!(matches!(
-        settings.save_site(&site, 3, now).await,
+        settings.save_site(&site, 3, now, None).await,
         Err(UseCaseError::Invalid(_))
     ));
     assert_eq!(settings.find_site().await.unwrap().unwrap().version, 3);

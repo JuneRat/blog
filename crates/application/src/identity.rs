@@ -488,7 +488,7 @@ impl UserInteractor {
         let user = User::new(&username, email, display_name, self.clock.now())
             .map_err(|e| UseCaseError::Invalid(e.to_string()))?;
         let snapshot = user.snapshot();
-        self.users.insert(&user).await?;
+        self.users.insert(&user, actor.audit_actor_id()).await?;
         Ok(UserDto::from_snapshot(&snapshot))
     }
 
@@ -535,7 +535,7 @@ impl UserInteractor {
     }
 
     pub async fn revoke_authentication(&self, user_id: Uuid) -> Result<(), UseCaseError> {
-        self.users.revoke_authentication(user_id).await
+        self.users.revoke_authentication(user_id, None).await
     }
 
     /// 自助设置/清除头像：只允许改本人，不需要额外权限。
@@ -749,7 +749,9 @@ impl RoleInteractor {
             return Err(UseCaseError::Forbidden);
         }
         let user = self.find_active_user(username).await?;
-        self.rbac.assign_role(user.id, role_slug).await
+        self.rbac
+            .assign_role(user.id, role_slug, actor.audit_actor_id())
+            .await
     }
 
     pub async fn remove_from_username(
@@ -767,7 +769,9 @@ impl RoleInteractor {
         }
         let user = self.find_active_user(username).await?;
         // 最后 Owner 保护由存储在排他锁下判定并拒绝。
-        self.rbac.remove_role(user.id, role_slug).await
+        self.rbac
+            .remove_role(user.id, role_slug, actor.audit_actor_id())
+            .await
     }
 
     async fn find_active_user(

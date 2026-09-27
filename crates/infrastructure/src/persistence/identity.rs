@@ -3,7 +3,7 @@ use sqlx::{Executor, PgPool, Row};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use crate::audit::{AuditEntry, append_audit_log};
+use crate::audit::{AuditEntry, append_audit_log, record_change};
 use application::error::UseCaseError;
 use application::ports::{AdminUserRow, ClearPasswordOutcome, PasswordCredential, UserRepository};
 use domain::identity::{UserSnapshot, UserStatus};
@@ -64,8 +64,13 @@ fn user_from_row(row: &sqlx::postgres::PgRow) -> Result<UserSnapshot, UseCaseErr
 
 #[async_trait]
 impl UserRepository for PostgresUserRepository {
-    async fn insert(&self, aggregate: &domain::identity::User) -> Result<(), UseCaseError> {
+    async fn insert(
+        &self,
+        aggregate: &domain::identity::User,
+        audit_actor: Option<uuid::Uuid>,
+    ) -> Result<(), UseCaseError> {
         let snapshot = aggregate.snapshot();
+        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
         sqlx::query(
             r#"
             INSERT INTO users (id, username, email, display_name, version, created_at, updated_at)
@@ -79,9 +84,19 @@ impl UserRepository for PostgresUserRepository {
         .bind(snapshot.version)
         .bind(snapshot.created_at)
         .bind(snapshot.updated_at)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(map_sqlx_error)?;
+        record_change(
+            &mut tx,
+            audit_actor,
+            "user.create",
+            "user",
+            &snapshot.id.to_string(),
+            serde_json::json!({"version":snapshot.version}),
+        )
+        .await?;
+        tx.commit().await.map_err(map_sqlx_error)?;
         Ok(())
     }
 
@@ -137,24 +152,37 @@ impl UserRepository for PostgresUserRepository {
         Ok(result)
     }
 
-    async fn revoke_authentication(&self, user_id: Uuid) -> Result<(), UseCaseError> {
+    async fn revoke_authentication(
+        &self,
+        user_id: Uuid,
+        audit_actor: Option<uuid::Uuid>,
+    ) -> Result<(), UseCaseError> {
         let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
         acquire_identity_lock(&mut *tx)
             .await
             .map_err(map_sqlx_error)?;
-        let changed = sqlx::query("UPDATE users SET auth_version=auth_version+1 WHERE id=$1")
-            .bind(user_id)
-            .execute(&mut *tx)
-            .await
-            .map_err(map_sqlx_error)?;
-        if changed.rows_affected() == 0 {
-            return Err(UseCaseError::NotFound("用户".into()));
-        }
+        let changed: Option<i64> = sqlx::query_scalar(
+            "UPDATE users SET auth_version=auth_version+1 WHERE id=$1 RETURNING auth_version",
+        )
+        .bind(user_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(map_sqlx_error)?;
+        let revision = changed.ok_or_else(|| UseCaseError::NotFound("用户".into()))?;
         sqlx::query("DELETE FROM sessions WHERE user_id=$1")
             .bind(user_id)
             .execute(&mut *tx)
             .await
             .map_err(map_sqlx_error)?;
+        record_change(
+            &mut tx,
+            audit_actor,
+            "user.sessions.revoke",
+            "user",
+            &user_id.to_string(),
+            serde_json::json!({"auth_version":revision}),
+        )
+        .await?;
         tx.commit().await.map_err(map_sqlx_error)
     }
 
@@ -235,8 +263,13 @@ impl UserRepository for PostgresUserRepository {
             .collect()
     }
 
-    async fn set_password_hash(&self, user_id: Uuid, phc_hash: &str) -> Result<(), UseCaseError> {
-        self.change_password_hash(user_id, None, false, Some(phc_hash))
+    async fn set_password_hash(
+        &self,
+        user_id: Uuid,
+        phc_hash: &str,
+        audit_actor: Option<uuid::Uuid>,
+    ) -> Result<(), UseCaseError> {
+        self.change_password_hash(user_id, None, false, Some(phc_hash), audit_actor)
             .await?
             .ok_or_else(|| UseCaseError::NotFound("用户".into()))?;
         Ok(())
@@ -247,13 +280,18 @@ impl UserRepository for PostgresUserRepository {
         user_id: Uuid,
         expected: Option<&str>,
         new_hash: &str,
+        audit_actor: Option<uuid::Uuid>,
     ) -> Result<Option<i64>, UseCaseError> {
-        self.change_password_hash(user_id, expected, true, Some(new_hash))
+        self.change_password_hash(user_id, expected, true, Some(new_hash), audit_actor)
             .await
     }
 
-    async fn clear_password_hash(&self, user_id: Uuid) -> Result<(), UseCaseError> {
-        self.change_password_hash(user_id, None, false, None)
+    async fn clear_password_hash(
+        &self,
+        user_id: Uuid,
+        audit_actor: Option<uuid::Uuid>,
+    ) -> Result<(), UseCaseError> {
+        self.change_password_hash(user_id, None, false, None, audit_actor)
             .await?
             .ok_or_else(|| UseCaseError::NotFound("用户".into()))?;
         Ok(())
@@ -262,6 +300,7 @@ impl UserRepository for PostgresUserRepository {
     async fn clear_password_hash_guarded(
         &self,
         user_id: Uuid,
+        audit_actor: Option<uuid::Uuid>,
     ) -> Result<ClearPasswordOutcome, UseCaseError> {
         let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
         // 与解绑外部身份同一把排他锁：检查与清除在锁内完成，两条路径不可能同时通过。
@@ -295,12 +334,12 @@ impl UserRepository for PostgresUserRepository {
             return Ok(ClearPasswordOutcome::LastLoginMethod);
         }
 
-        sqlx::query(
+        let revision:i64=sqlx::query_scalar(
             "UPDATE users SET password_hash = NULL, version = version + 1, auth_version = auth_version + 1, updated_at = now() \
-             WHERE id = $1",
+             WHERE id = $1 RETURNING auth_version",
         )
         .bind(user_id)
-        .execute(&mut *tx)
+        .fetch_one(&mut *tx)
         .await
         .map_err(map_sqlx_error)?;
         sqlx::query("DELETE FROM sessions WHERE user_id=$1")
@@ -308,6 +347,15 @@ impl UserRepository for PostgresUserRepository {
             .execute(&mut *tx)
             .await
             .map_err(map_sqlx_error)?;
+        record_change(
+            &mut tx,
+            audit_actor,
+            "user.password.clear",
+            "user",
+            &user_id.to_string(),
+            serde_json::json!({"auth_version":revision}),
+        )
+        .await?;
         tx.commit().await.map_err(map_sqlx_error)?;
         Ok(ClearPasswordOutcome::Cleared)
     }
@@ -362,6 +410,7 @@ impl PostgresUserRepository {
         expected: Option<&str>,
         check_expected: bool,
         new_hash: Option<&str>,
+        audit_actor: Option<Uuid>,
     ) -> Result<Option<i64>, UseCaseError> {
         let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
         acquire_identity_lock(&mut *tx)
@@ -373,12 +422,25 @@ impl PostgresUserRepository {
              AND (NOT $2 OR password_hash IS NOT DISTINCT FROM $3) RETURNING auth_version"
         ).bind(user_id).bind(check_expected).bind(expected).bind(new_hash)
             .fetch_optional(&mut *tx).await.map_err(map_sqlx_error)?;
-        if revision.is_some() {
+        if let Some(revision) = revision {
             sqlx::query("DELETE FROM sessions WHERE user_id=$1")
                 .bind(user_id)
                 .execute(&mut *tx)
                 .await
                 .map_err(map_sqlx_error)?;
+            record_change(
+                &mut tx,
+                audit_actor,
+                if new_hash.is_some() {
+                    "user.password.set"
+                } else {
+                    "user.password.clear"
+                },
+                "user",
+                &user_id.to_string(),
+                serde_json::json!({"auth_version":revision}),
+            )
+            .await?;
         }
         tx.commit().await.map_err(map_sqlx_error)?;
         Ok(revision)

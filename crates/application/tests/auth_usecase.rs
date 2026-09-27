@@ -114,7 +114,11 @@ impl OAuthConfigStore for FakeProviderConfigStore {
     async fn list(&self) -> Result<Vec<ProviderConfig>, UseCaseError> {
         Ok(self.providers.clone())
     }
-    async fn save(&self, _providers: &[ProviderConfig]) -> Result<(), UseCaseError> {
+    async fn save(
+        &self,
+        _providers: &[ProviderConfig],
+        _audit_actor: Option<uuid::Uuid>,
+    ) -> Result<(), UseCaseError> {
         unimplemented!("测试不覆盖保存")
     }
 }
@@ -145,6 +149,7 @@ impl OAuthAccountStore for FakeAccountStore {
         provider_key: &str,
         provider_user_id: &str,
         _email: Option<String>,
+        _audit_actor: Option<uuid::Uuid>,
     ) -> Result<(), UseCaseError> {
         self.bindings
             .lock()
@@ -157,6 +162,7 @@ impl OAuthAccountStore for FakeAccountStore {
         _user_id: Uuid,
         _provider_key: &str,
         _provider_user_id: &str,
+        _audit_actor: Option<uuid::Uuid>,
     ) -> Result<(), UseCaseError> {
         unimplemented!()
     }
@@ -283,7 +289,7 @@ async fn fixture() -> Fixture {
     ];
     let accounts = Arc::new(FakeAccountStore::default());
     accounts
-        .bind(member.id, "https://idp.example", "sub-42", None)
+        .bind(member.id, "https://idp.example", "sub-42", None, None)
         .await
         .unwrap();
 
@@ -360,7 +366,11 @@ impl UserRepository for FakeUserRepo {
         Ok(current.clone())
     }
 
-    async fn revoke_authentication(&self, user_id: Uuid) -> Result<(), UseCaseError> {
+    async fn revoke_authentication(
+        &self,
+        user_id: Uuid,
+        _audit_actor: Option<uuid::Uuid>,
+    ) -> Result<(), UseCaseError> {
         let mut users = self.users.lock().unwrap();
         let user = users
             .values_mut()
@@ -380,7 +390,11 @@ impl UserRepository for FakeUserRepo {
         unimplemented!("该用例不使用头像")
     }
 
-    async fn insert(&self, aggregate: &domain::identity::User) -> Result<(), UseCaseError> {
+    async fn insert(
+        &self,
+        aggregate: &domain::identity::User,
+        _audit_actor: Option<uuid::Uuid>,
+    ) -> Result<(), UseCaseError> {
         let snapshot = aggregate.snapshot();
         self.users
             .lock()
@@ -411,7 +425,12 @@ impl UserRepository for FakeUserRepo {
     }
 
     // OAuth 用例不涉及本地密码；保持显式失败以便误用时立刻暴露。
-    async fn set_password_hash(&self, _user_id: Uuid, _phc_hash: &str) -> Result<(), UseCaseError> {
+    async fn set_password_hash(
+        &self,
+        _user_id: Uuid,
+        _phc_hash: &str,
+        _audit_actor: Option<uuid::Uuid>,
+    ) -> Result<(), UseCaseError> {
         unimplemented!("auth 用例不使用密码凭据")
     }
 
@@ -420,6 +439,7 @@ impl UserRepository for FakeUserRepo {
         _user_id: Uuid,
         _expected: Option<&str>,
         _new_hash: &str,
+        _audit_actor: Option<uuid::Uuid>,
     ) -> Result<Option<i64>, UseCaseError> {
         unimplemented!("auth 用例不使用密码凭据")
     }
@@ -427,11 +447,16 @@ impl UserRepository for FakeUserRepo {
     async fn clear_password_hash_guarded(
         &self,
         _user_id: Uuid,
+        _audit_actor: Option<uuid::Uuid>,
     ) -> Result<application::ports::ClearPasswordOutcome, UseCaseError> {
         unimplemented!("auth 用例不使用密码凭据")
     }
 
-    async fn clear_password_hash(&self, _user_id: Uuid) -> Result<(), UseCaseError> {
+    async fn clear_password_hash(
+        &self,
+        _user_id: Uuid,
+        _audit_actor: Option<uuid::Uuid>,
+    ) -> Result<(), UseCaseError> {
         unimplemented!("auth 用例不使用密码凭据")
     }
 
@@ -478,10 +503,20 @@ impl application::ports::RbacStore for NoopRbac {
     ) -> Result<domain::identity::PermissionSet, UseCaseError> {
         Ok(domain::identity::PermissionSet::from_keys([role_slug]))
     }
-    async fn assign_role(&self, _user_id: Uuid, _role_slug: &str) -> Result<(), UseCaseError> {
+    async fn assign_role(
+        &self,
+        _user_id: Uuid,
+        _role_slug: &str,
+        _audit_actor: Option<uuid::Uuid>,
+    ) -> Result<(), UseCaseError> {
         Ok(())
     }
-    async fn remove_role(&self, _user_id: Uuid, _role_slug: &str) -> Result<(), UseCaseError> {
+    async fn remove_role(
+        &self,
+        _user_id: Uuid,
+        _role_slug: &str,
+        _audit_actor: Option<uuid::Uuid>,
+    ) -> Result<(), UseCaseError> {
         Ok(())
     }
     async fn list_roles(&self) -> Result<Vec<application::ports::RoleDto>, UseCaseError> {

@@ -143,15 +143,18 @@ async fn fresh_stack() -> Stack {
 
     let configs = Arc::new(PostgresOAuthConfigStore::new(pool.clone()));
     configs
-        .save(&[ProviderConfig {
-            id: "idp".into(),
-            name: Some("示例 IdP".into()),
-            kind: ProviderKind::Oidc,
-            issuer: Some("https://idp.example".into()),
-            client_id: "client".into(),
-            secret_ref: "IDP_SECRET".into(),
-            scopes: vec![],
-        }])
+        .save(
+            &[ProviderConfig {
+                id: "idp".into(),
+                name: Some("示例 IdP".into()),
+                kind: ProviderKind::Oidc,
+                issuer: Some("https://idp.example".into()),
+                client_id: "client".into(),
+                secret_ref: "IDP_SECRET".into(),
+                scopes: vec![],
+            }],
+            None,
+        )
         .await
         .unwrap();
 
@@ -164,6 +167,7 @@ async fn fresh_stack() -> Stack {
                 user,
                 "https://idp.example",
                 &format!("sub-{username}"),
+                None,
                 None,
             )
             .await

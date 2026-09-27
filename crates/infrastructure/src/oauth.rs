@@ -4,6 +4,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::audit::record_change;
 use async_trait::async_trait;
 use jsonwebtoken::jwk::Jwk;
 use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header};
@@ -452,20 +453,43 @@ impl OAuthConfigStore for PostgresOAuthConfigStore {
         Ok(value.map(|j| j.0.providers).unwrap_or_default())
     }
 
-    async fn save(&self, providers: &[ProviderConfig]) -> Result<(), UseCaseError> {
+    async fn save(
+        &self,
+        providers: &[ProviderConfig],
+        audit_actor: Option<uuid::Uuid>,
+    ) -> Result<(), UseCaseError> {
         let value = serde_json::json!({
             "schema_version": 1,
             "providers": providers,
         });
-        sqlx::query(
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| UseCaseError::Repository(e.to_string()))?;
+        let version:Option<i64>=sqlx::query_scalar(
             "INSERT INTO settings (key, value, version, updated_at) \
              VALUES ('oauth', $1, 1, now()) \
-             ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, version = settings.version + 1, updated_at = now() WHERE settings.value IS DISTINCT FROM EXCLUDED.value",
+             ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, version = settings.version + 1, updated_at = now() WHERE settings.value IS DISTINCT FROM EXCLUDED.value RETURNING version",
         )
         .bind(value)
-        .execute(&self.pool)
+        .fetch_optional(&mut *tx)
         .await
         .map_err(|e| UseCaseError::Repository(e.to_string()))?;
+        if let Some(version) = version {
+            record_change(
+                &mut tx,
+                audit_actor,
+                "settings.oauth",
+                "settings",
+                "oauth",
+                serde_json::json!({"version":version,"provider_count":providers.len()}),
+            )
+            .await?;
+        }
+        tx.commit()
+            .await
+            .map_err(|e| UseCaseError::Repository(e.to_string()))?;
         Ok(())
     }
 }
@@ -510,6 +534,7 @@ impl OAuthAccountStore for PostgresOAuthAccountStore {
         provider_key: &str,
         provider_user_id: &str,
         _email: Option<String>,
+        audit_actor: Option<uuid::Uuid>,
     ) -> Result<(), UseCaseError> {
         let mut tx = self
             .pool
@@ -543,6 +568,23 @@ impl OAuthAccountStore for PostgresOAuthAccountStore {
             .execute(&mut *tx)
             .await
             .map_err(|e| UseCaseError::Repository(e.to_string()))?;
+        let (version, auth_version): (i64, i64) =
+            sqlx::query_as("SELECT version,auth_version FROM users WHERE id=$1")
+                .bind(user_id)
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(|e| UseCaseError::Repository(e.to_string()))?;
+        record_change(
+            &mut tx,
+            audit_actor,
+            "user.oauth.bind",
+            "user",
+            &user_id.to_string(),
+            serde_json::json!({
+                "provider": provider_key, "version": version, "auth_version": auth_version,
+            }),
+        )
+        .await?;
         tx.commit()
             .await
             .map_err(|e| UseCaseError::Repository(e.to_string()))
@@ -553,6 +595,7 @@ impl OAuthAccountStore for PostgresOAuthAccountStore {
         user_id: Uuid,
         provider_key: &str,
         provider_user_id: &str,
+        audit_actor: Option<uuid::Uuid>,
     ) -> Result<(), UseCaseError> {
         let mut tx = self
             .pool
@@ -613,6 +656,23 @@ impl OAuthAccountStore for PostgresOAuthAccountStore {
                 .await
                 .map_err(|e| UseCaseError::Repository(e.to_string()))?;
         }
+        let (version, auth_version): (i64, i64) =
+            sqlx::query_as("SELECT version,auth_version FROM users WHERE id=$1")
+                .bind(user_id)
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(|e| UseCaseError::Repository(e.to_string()))?;
+        record_change(
+            &mut tx,
+            audit_actor,
+            "user.oauth.unbind",
+            "user",
+            &user_id.to_string(),
+            serde_json::json!({
+                "provider": provider_key, "version": version, "auth_version": auth_version,
+            }),
+        )
+        .await?;
         tx.commit()
             .await
             .map_err(|e| UseCaseError::Repository(e.to_string()))

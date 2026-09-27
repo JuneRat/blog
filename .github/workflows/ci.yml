@@ -54,10 +54,10 @@ jobs:
       - name: Tests
         run: cargo test --workspace
 
-      - name: Recovery tool tests
-        run: PYTHONPATH=scripts python3 -B -m unittest scripts/test_recovery.py
+      - name: Recovery and media cleanup tool tests
+        run: PYTHONPATH=scripts python3 -B -m unittest scripts/test_recovery.py scripts/test_media_cleanup.py
 
-      - name: Isolated recovery and database role drill
+      - name: Isolated recovery, database roles and media purge drill
         env:
           BLOG_RECOVERY_TEST: "1"
           BLOG_TEST_PG_CONTAINER: ${{ job.services.postgres.id }}

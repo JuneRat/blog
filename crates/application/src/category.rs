@@ -94,7 +94,9 @@ impl CategoryInteractor {
         let category = Category::new(cmd.name, slug, parent_id, cmd.description, self.clock.now())
             .map_err(map_domain)?;
         let snapshot = category.snapshot();
-        self.categories.insert(&category).await?;
+        self.categories
+            .insert(&category, actor.audit_actor_id())
+            .await?;
         Ok(CategoryDto {
             id: snapshot.id,
             name: snapshot.name,
@@ -147,6 +149,7 @@ impl CategoryInteractor {
                 snapshot.description.as_deref(),
                 parent_id,
                 expected,
+                actor.audit_actor_id(),
             )
             .await?
         {
@@ -180,7 +183,11 @@ impl CategoryInteractor {
         let category = self.load(target_slug).await?;
         let expected = checked_version(category.version(), expected_version)?;
 
-        match self.categories.delete(category.id(), expected).await? {
+        match self
+            .categories
+            .delete(category.id(), expected, actor.audit_actor_id())
+            .await?
+        {
             CategoryDeleteOutcome::Deleted => Ok(()),
             CategoryDeleteOutcome::StaleVersion => Err(UseCaseError::VersionConflict),
             CategoryDeleteOutcome::Referenced { posts, children } => {

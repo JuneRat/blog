@@ -212,7 +212,12 @@ impl RbacStore for FakeRbacStore {
         Ok(PermissionSet::from_keys(Vec::<String>::new()))
     }
 
-    async fn assign_role(&self, user_id: Uuid, role_slug: &str) -> Result<(), UseCaseError> {
+    async fn assign_role(
+        &self,
+        user_id: Uuid,
+        role_slug: &str,
+        _audit_actor: Option<uuid::Uuid>,
+    ) -> Result<(), UseCaseError> {
         self.assignments
             .lock()
             .unwrap()
@@ -226,7 +231,12 @@ impl RbacStore for FakeRbacStore {
         Ok(())
     }
 
-    async fn remove_role(&self, _user_id: Uuid, _role_slug: &str) -> Result<(), UseCaseError> {
+    async fn remove_role(
+        &self,
+        _user_id: Uuid,
+        _role_slug: &str,
+        _audit_actor: Option<uuid::Uuid>,
+    ) -> Result<(), UseCaseError> {
         Ok(())
     }
 
@@ -286,7 +296,11 @@ impl UserRepository for FakeUserRepo {
         Ok(current.clone())
     }
 
-    async fn revoke_authentication(&self, user_id: Uuid) -> Result<(), UseCaseError> {
+    async fn revoke_authentication(
+        &self,
+        user_id: Uuid,
+        _audit_actor: Option<uuid::Uuid>,
+    ) -> Result<(), UseCaseError> {
         let mut users = self.users.lock().unwrap();
         let user = users
             .values_mut()
@@ -306,7 +320,11 @@ impl UserRepository for FakeUserRepo {
         unimplemented!("该用例不使用头像")
     }
 
-    async fn insert(&self, aggregate: &domain::identity::User) -> Result<(), UseCaseError> {
+    async fn insert(
+        &self,
+        aggregate: &domain::identity::User,
+        _audit_actor: Option<uuid::Uuid>,
+    ) -> Result<(), UseCaseError> {
         let snapshot = aggregate.snapshot();
         self.users
             .lock()
@@ -327,7 +345,12 @@ impl UserRepository for FakeUserRepo {
     ) -> Result<Vec<application::ports::AdminUserRow>, UseCaseError> {
         Ok(Vec::new())
     }
-    async fn set_password_hash(&self, _user_id: Uuid, _phc_hash: &str) -> Result<(), UseCaseError> {
+    async fn set_password_hash(
+        &self,
+        _user_id: Uuid,
+        _phc_hash: &str,
+        _audit_actor: Option<uuid::Uuid>,
+    ) -> Result<(), UseCaseError> {
         Ok(())
     }
     async fn compare_and_set_password_hash(
@@ -335,15 +358,21 @@ impl UserRepository for FakeUserRepo {
         _user_id: Uuid,
         _expected: Option<&str>,
         _new_hash: &str,
+        _audit_actor: Option<uuid::Uuid>,
     ) -> Result<Option<i64>, UseCaseError> {
         Ok(None)
     }
-    async fn clear_password_hash(&self, _user_id: Uuid) -> Result<(), UseCaseError> {
+    async fn clear_password_hash(
+        &self,
+        _user_id: Uuid,
+        _audit_actor: Option<uuid::Uuid>,
+    ) -> Result<(), UseCaseError> {
         Ok(())
     }
     async fn clear_password_hash_guarded(
         &self,
         _user_id: Uuid,
+        _audit_actor: Option<uuid::Uuid>,
     ) -> Result<application::ports::ClearPasswordOutcome, UseCaseError> {
         Ok(application::ports::ClearPasswordOutcome::NoPassword)
     }

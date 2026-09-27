@@ -49,7 +49,11 @@ impl AdminUserRow {
 #[async_trait]
 pub trait UserRepository: Send + Sync {
     /// 创建接收已校验的聚合；快照仅用于读取、重建与返回结果。
-    async fn insert(&self, aggregate: &domain::identity::User) -> Result<(), UseCaseError>;
+    async fn insert(
+        &self,
+        aggregate: &domain::identity::User,
+        audit_actor: Option<uuid::Uuid>,
+    ) -> Result<(), UseCaseError>;
     async fn find_by_id(&self, id: Uuid) -> Result<Option<UserSnapshot>, UseCaseError>;
     async fn find_by_username(&self, username: &str) -> Result<Option<UserSnapshot>, UseCaseError>;
 
@@ -62,7 +66,11 @@ pub trait UserRepository: Send + Sync {
     ) -> Result<UserSnapshot, UseCaseError>;
 
     /// 同事务递增认证修订号并清理会话，用于明确的全部会话撤销。
-    async fn revoke_authentication(&self, user_id: Uuid) -> Result<(), UseCaseError>;
+    async fn revoke_authentication(
+        &self,
+        user_id: Uuid,
+        audit_actor: Option<uuid::Uuid>,
+    ) -> Result<(), UseCaseError>;
 
     /// 设置/清除头像（自助；仅本人）。
     ///
@@ -87,7 +95,12 @@ pub trait UserRepository: Send + Sync {
     ///
     /// **无条件覆盖**，只用于受控重置/设置（`user.manage`）：那是明确要「以本次为准」。
     /// 任何可能被并发写入抢先的场景都必须走 [`Self::compare_and_set_password_hash`]。
-    async fn set_password_hash(&self, user_id: Uuid, phc_hash: &str) -> Result<(), UseCaseError>;
+    async fn set_password_hash(
+        &self,
+        user_id: Uuid,
+        phc_hash: &str,
+        audit_actor: Option<uuid::Uuid>,
+    ) -> Result<(), UseCaseError>;
 
     /// 条件写入（compare-and-swap）：仅当当前值等于 `expected` 时替换，并递增版本。
     ///
@@ -102,13 +115,18 @@ pub trait UserRepository: Send + Sync {
         user_id: Uuid,
         expected: Option<&str>,
         new_hash: &str,
+        audit_actor: Option<uuid::Uuid>,
     ) -> Result<Option<i64>, UseCaseError>;
 
     /// 清除密码哈希，递增 version/auth_version 并删除既有持久会话。
     ///
     /// 不做保护：只应在「确定还有其他登录方式」时调用。带保护请用
     /// [`Self::clear_password_hash_guarded`]。
-    async fn clear_password_hash(&self, user_id: Uuid) -> Result<(), UseCaseError>;
+    async fn clear_password_hash(
+        &self,
+        user_id: Uuid,
+        audit_actor: Option<uuid::Uuid>,
+    ) -> Result<(), UseCaseError>;
 
     /// 在身份排他锁内清除密码，并原子校验该用户仍有其他登录方式。
     ///
@@ -118,6 +136,7 @@ pub trait UserRepository: Send + Sync {
     async fn clear_password_hash_guarded(
         &self,
         user_id: Uuid,
+        audit_actor: Option<uuid::Uuid>,
     ) -> Result<ClearPasswordOutcome, UseCaseError>;
 
     /// active 且未软删除用户的密码凭据；未设置密码或已停用返回 None。
@@ -177,10 +196,20 @@ pub trait RbacStore: Send + Sync {
         role_slug: &str,
     ) -> Result<domain::identity::PermissionSet, UseCaseError>;
 
-    async fn assign_role(&self, user_id: Uuid, role_slug: &str) -> Result<(), UseCaseError>;
+    async fn assign_role(
+        &self,
+        user_id: Uuid,
+        role_slug: &str,
+        audit_actor: Option<uuid::Uuid>,
+    ) -> Result<(), UseCaseError>;
 
     /// 移除角色分配；内置保护（如最后一个有效 Owner）由实现拒绝。
-    async fn remove_role(&self, user_id: Uuid, role_slug: &str) -> Result<(), UseCaseError>;
+    async fn remove_role(
+        &self,
+        user_id: Uuid,
+        role_slug: &str,
+        audit_actor: Option<uuid::Uuid>,
+    ) -> Result<(), UseCaseError>;
 
     async fn list_roles(&self) -> Result<Vec<RoleDto>, UseCaseError>;
 
@@ -290,7 +319,11 @@ pub struct ProviderConfig {
 #[async_trait]
 pub trait OAuthConfigStore: Send + Sync {
     async fn list(&self) -> Result<Vec<ProviderConfig>, UseCaseError>;
-    async fn save(&self, providers: &[ProviderConfig]) -> Result<(), UseCaseError>;
+    async fn save(
+        &self,
+        providers: &[ProviderConfig],
+        audit_actor: Option<uuid::Uuid>,
+    ) -> Result<(), UseCaseError>;
 }
 
 /// 外部身份（身份命名空间键 + 稳定用户 ID + 资料快照邮箱）。
@@ -316,6 +349,7 @@ pub trait OAuthAccountStore: Send + Sync {
         provider_key: &str,
         provider_user_id: &str,
         email: Option<String>,
+        audit_actor: Option<uuid::Uuid>,
     ) -> Result<(), UseCaseError>;
     /// 解绑；当它是该用户最后一种有效登录方式时返回 Err 拒绝。
     async fn unbind(
@@ -323,6 +357,7 @@ pub trait OAuthAccountStore: Send + Sync {
         user_id: Uuid,
         provider_key: &str,
         provider_user_id: &str,
+        audit_actor: Option<uuid::Uuid>,
     ) -> Result<(), UseCaseError>;
     async fn list_for_user(&self, user_id: Uuid) -> Result<Vec<ExternalIdentity>, UseCaseError>;
 }

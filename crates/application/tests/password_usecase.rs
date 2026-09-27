@@ -205,7 +205,11 @@ impl UserRepository for FakeUserRepo {
         Ok(current.clone())
     }
 
-    async fn revoke_authentication(&self, user_id: Uuid) -> Result<(), UseCaseError> {
+    async fn revoke_authentication(
+        &self,
+        user_id: Uuid,
+        _audit_actor: Option<uuid::Uuid>,
+    ) -> Result<(), UseCaseError> {
         let mut users = self.users.lock().unwrap();
         let user = users
             .values_mut()
@@ -225,7 +229,11 @@ impl UserRepository for FakeUserRepo {
         unimplemented!("该用例不使用头像")
     }
 
-    async fn insert(&self, aggregate: &domain::identity::User) -> Result<(), UseCaseError> {
+    async fn insert(
+        &self,
+        aggregate: &domain::identity::User,
+        _audit_actor: Option<uuid::Uuid>,
+    ) -> Result<(), UseCaseError> {
         let snapshot = aggregate.snapshot();
         self.insert_user(snapshot.clone());
         Ok(())
@@ -254,7 +262,12 @@ impl UserRepository for FakeUserRepo {
         Ok(vec![])
     }
 
-    async fn set_password_hash(&self, user_id: Uuid, phc_hash: &str) -> Result<(), UseCaseError> {
+    async fn set_password_hash(
+        &self,
+        user_id: Uuid,
+        phc_hash: &str,
+        _audit_actor: Option<uuid::Uuid>,
+    ) -> Result<(), UseCaseError> {
         self.set_hash(user_id, phc_hash);
         Ok(())
     }
@@ -264,6 +277,7 @@ impl UserRepository for FakeUserRepo {
         user_id: Uuid,
         expected: Option<&str>,
         new_hash: &str,
+        _audit_actor: Option<uuid::Uuid>,
     ) -> Result<Option<i64>, UseCaseError> {
         // 模拟「读取之后、写入之前别人改了密码」：改写存储并报告未命中。
         if let Some(replacement) = self.concurrent_replacement.lock().unwrap().take() {
@@ -291,7 +305,11 @@ impl UserRepository for FakeUserRepo {
         }
     }
 
-    async fn clear_password_hash(&self, user_id: Uuid) -> Result<(), UseCaseError> {
+    async fn clear_password_hash(
+        &self,
+        user_id: Uuid,
+        _audit_actor: Option<uuid::Uuid>,
+    ) -> Result<(), UseCaseError> {
         self.passwords.lock().unwrap().remove(&user_id);
         Ok(())
     }
@@ -299,6 +317,7 @@ impl UserRepository for FakeUserRepo {
     async fn clear_password_hash_guarded(
         &self,
         user_id: Uuid,
+        _audit_actor: Option<uuid::Uuid>,
     ) -> Result<ClearPasswordOutcome, UseCaseError> {
         // 生产实现把「检查 + 清除」放在同一把身份锁里；fake 在这里等价地一次完成。
         if !self.passwords.lock().unwrap().contains_key(&user_id) {
@@ -417,6 +436,7 @@ impl OAuthAccountStore for FakeUserRepo {
         provider_key: &str,
         provider_user_id: &str,
         email: Option<String>,
+        _audit_actor: Option<uuid::Uuid>,
     ) -> Result<(), UseCaseError> {
         self.bindings
             .lock()
@@ -436,6 +456,7 @@ impl OAuthAccountStore for FakeUserRepo {
         user_id: Uuid,
         provider_key: &str,
         provider_user_id: &str,
+        _audit_actor: Option<uuid::Uuid>,
     ) -> Result<(), UseCaseError> {
         if let Some(list) = self.bindings.lock().unwrap().get_mut(&user_id) {
             list.retain(|b| {
@@ -779,7 +800,7 @@ async fn clear_password_refuses_to_remove_the_last_login_method() {
 async fn clear_password_succeeds_when_another_binding_exists() {
     let f = fixture().await;
     f.accounts
-        .bind(f.user_id, "https://idp.example", "sub-1", None)
+        .bind(f.user_id, "https://idp.example", "sub-1", None, None)
         .await
         .unwrap();
     f.sessions.create(f.user_id, 1).await.unwrap();
@@ -797,7 +818,7 @@ async fn clear_password_succeeds_when_another_binding_exists() {
 async fn clear_password_rejects_when_not_enabled() {
     let f = fixture().await;
     f.accounts
-        .bind(f.user_id, "https://idp.example", "sub-1", None)
+        .bind(f.user_id, "https://idp.example", "sub-1", None, None)
         .await
         .unwrap();
     // 直接清空存储，模拟「本来就没启用密码」。
@@ -902,7 +923,7 @@ async fn change_own_password_allows_setting_initial_password_for_oauth_user() {
     let f = fixture().await;
     f.repo.passwords.lock().unwrap().clear();
     f.accounts
-        .bind(f.user_id, "https://idp.example", "sub-1", None)
+        .bind(f.user_id, "https://idp.example", "sub-1", None, None)
         .await
         .unwrap();
 
@@ -1103,7 +1124,7 @@ async fn initial_password_set_does_not_overwrite_a_concurrent_admin_reset() {
     let f = fixture().await;
     f.repo.passwords.lock().unwrap().clear();
     f.accounts
-        .bind(f.user_id, "https://idp.example", "sub-1", None)
+        .bind(f.user_id, "https://idp.example", "sub-1", None, None)
         .await
         .unwrap();
     *f.repo.concurrent_replacement.lock().unwrap() = Some("phc::admin-forced-reset".into());

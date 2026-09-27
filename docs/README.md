@@ -15,7 +15,7 @@
 | 接入管理接口 | [管理 API](admin-api.md) → [身份、权限与后台](identity-and-admin.md) |
 | 使用或开发原生评论 | [评论](comments.md) |
 | 开发公开页面、主题或 SEO | [主题与渲染](themes-and-rendering.md) |
-| 备份、恢复或处置账号问题 | [运维与恢复](operations-and-recovery.md) |
+| 备份、恢复、清理正式媒体或处置账号问题 | [运维与恢复](operations-and-recovery.md) |
 | 确认交付范围或选择下一步工作 | [产品路线图](product-roadmap.md) |
 | 理解决策原因及替代方案 | [ADR 索引](adr/README.md) |
 

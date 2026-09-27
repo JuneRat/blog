@@ -428,7 +428,11 @@ async fn parent_chain_contains(
 
 #[async_trait]
 impl CategoryRepository for PostgresCategoryRepository {
-    async fn insert(&self, aggregate: &domain::content::Category) -> Result<(), UseCaseError> {
+    async fn insert(
+        &self,
+        aggregate: &domain::content::Category,
+        audit_actor: Option<uuid::Uuid>,
+    ) -> Result<(), UseCaseError> {
         let snapshot = aggregate.snapshot();
         // 新节点不可能是自己的祖先，创建本身无环；树锁仍统一取得，
         // 与并发删除父分类互斥（否则插入成功后父已消失，靠 FK 报裸错误）。
@@ -454,6 +458,15 @@ impl CategoryRepository for PostgresCategoryRepository {
         .execute(&mut *tx)
         .await
         .map_err(map_sqlx_error)?;
+        audit_content(
+            &mut tx,
+            audit_actor,
+            "category.create",
+            "category",
+            snapshot.id,
+            serde_json::json!({"version":snapshot.version,"parent_id":snapshot.parent_id}),
+        )
+        .await?;
         tx.commit().await.map_err(map_sqlx_error)?;
         Ok(())
     }
@@ -497,6 +510,7 @@ impl CategoryRepository for PostgresCategoryRepository {
         description: Option<&str>,
         parent_id: Option<Uuid>,
         expected_version: i64,
+        audit_actor: Option<uuid::Uuid>,
     ) -> Result<Option<domain::content::CategorySnapshot>, UseCaseError> {
         let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
         // 树锁内完成「环检查 + 写入」：锁外的检查结果可能被并发移动作废。
@@ -564,6 +578,18 @@ impl CategoryRepository for PostgresCategoryRepository {
         .fetch_optional(&mut *tx)
         .await
         .map_err(map_sqlx_error)?;
+        if let Some(row) = &row {
+            let snapshot = category_from_row(row)?;
+            audit_content(
+                &mut tx,
+                audit_actor,
+                "category.update",
+                "category",
+                id,
+                serde_json::json!({"version":snapshot.version,"parent_id":snapshot.parent_id}),
+            )
+            .await?;
+        }
         tx.commit().await.map_err(map_sqlx_error)?;
         row.as_ref().map(category_from_row).transpose()
     }
@@ -572,6 +598,7 @@ impl CategoryRepository for PostgresCategoryRepository {
         &self,
         id: Uuid,
         expected_version: i64,
+        audit_actor: Option<uuid::Uuid>,
     ) -> Result<CategoryDeleteOutcome, UseCaseError> {
         let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
         sqlx::query("SELECT pg_advisory_xact_lock($1::int, $2::int)")
@@ -618,6 +645,15 @@ impl CategoryRepository for PostgresCategoryRepository {
             .execute(&mut *tx)
             .await
             .map_err(map_sqlx_error)?;
+        audit_content(
+            &mut tx,
+            audit_actor,
+            "category.purge",
+            "category",
+            id,
+            serde_json::json!({"version":expected_version}),
+        )
+        .await?;
         tx.commit().await.map_err(map_sqlx_error)?;
         Ok(CategoryDeleteOutcome::Deleted)
     }

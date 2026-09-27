@@ -258,7 +258,11 @@ impl UserRepository for FakeUserRepo {
         Ok(current.clone())
     }
 
-    async fn revoke_authentication(&self, user_id: Uuid) -> Result<(), UseCaseError> {
+    async fn revoke_authentication(
+        &self,
+        user_id: Uuid,
+        _audit_actor: Option<uuid::Uuid>,
+    ) -> Result<(), UseCaseError> {
         let mut users = self.users.lock().unwrap();
         let user = users
             .values_mut()
@@ -283,7 +287,11 @@ impl UserRepository for FakeUserRepo {
         Ok(())
     }
 
-    async fn insert(&self, aggregate: &domain::identity::User) -> Result<(), UseCaseError> {
+    async fn insert(
+        &self,
+        aggregate: &domain::identity::User,
+        _audit_actor: Option<uuid::Uuid>,
+    ) -> Result<(), UseCaseError> {
         let snapshot = aggregate.snapshot();
         let mut users = self.users.lock().unwrap();
         if users.contains_key(&snapshot.username) {
@@ -332,7 +340,12 @@ impl UserRepository for FakeUserRepo {
     }
 
     // 文章用例不涉及本地密码；保持显式失败以便误用时立刻暴露。
-    async fn set_password_hash(&self, _user_id: Uuid, _phc_hash: &str) -> Result<(), UseCaseError> {
+    async fn set_password_hash(
+        &self,
+        _user_id: Uuid,
+        _phc_hash: &str,
+        _audit_actor: Option<uuid::Uuid>,
+    ) -> Result<(), UseCaseError> {
         unimplemented!("post 用例不使用密码凭据")
     }
 
@@ -341,6 +354,7 @@ impl UserRepository for FakeUserRepo {
         _user_id: Uuid,
         _expected: Option<&str>,
         _new_hash: &str,
+        _audit_actor: Option<uuid::Uuid>,
     ) -> Result<Option<i64>, UseCaseError> {
         unimplemented!("post 用例不使用密码凭据")
     }
@@ -348,11 +362,16 @@ impl UserRepository for FakeUserRepo {
     async fn clear_password_hash_guarded(
         &self,
         _user_id: Uuid,
+        _audit_actor: Option<uuid::Uuid>,
     ) -> Result<application::ports::ClearPasswordOutcome, UseCaseError> {
         unimplemented!("post 用例不使用密码凭据")
     }
 
-    async fn clear_password_hash(&self, _user_id: Uuid) -> Result<(), UseCaseError> {
+    async fn clear_password_hash(
+        &self,
+        _user_id: Uuid,
+        _audit_actor: Option<uuid::Uuid>,
+    ) -> Result<(), UseCaseError> {
         unimplemented!("post 用例不使用密码凭据")
     }
 
@@ -553,7 +572,11 @@ struct FakeCategoryRepo;
 
 #[async_trait::async_trait]
 impl application::ports::CategoryRepository for FakeCategoryRepo {
-    async fn insert(&self, aggregate: &domain::content::Category) -> Result<(), UseCaseError> {
+    async fn insert(
+        &self,
+        aggregate: &domain::content::Category,
+        _audit_actor: Option<uuid::Uuid>,
+    ) -> Result<(), UseCaseError> {
         let _snapshot = aggregate.snapshot();
         Ok(())
     }
@@ -573,6 +596,7 @@ impl application::ports::CategoryRepository for FakeCategoryRepo {
         _description: Option<&str>,
         _parent_id: Option<uuid::Uuid>,
         _expected_version: i64,
+        _audit_actor: Option<uuid::Uuid>,
     ) -> Result<Option<domain::content::CategorySnapshot>, UseCaseError> {
         Ok(None)
     }
@@ -580,6 +604,7 @@ impl application::ports::CategoryRepository for FakeCategoryRepo {
         &self,
         _id: uuid::Uuid,
         _expected_version: i64,
+        _audit_actor: Option<uuid::Uuid>,
     ) -> Result<application::ports::CategoryDeleteOutcome, UseCaseError> {
         Ok(application::ports::CategoryDeleteOutcome::Gone)
     }
@@ -664,7 +689,12 @@ impl RbacStore for FakeRbacStore {
         ))
     }
 
-    async fn assign_role(&self, user_id: Uuid, role_slug: &str) -> Result<(), UseCaseError> {
+    async fn assign_role(
+        &self,
+        user_id: Uuid,
+        role_slug: &str,
+        _audit_actor: Option<uuid::Uuid>,
+    ) -> Result<(), UseCaseError> {
         if !self.roles.lock().unwrap().contains_key(role_slug) {
             return Err(UseCaseError::NotFound(format!("角色 {role_slug}")));
         }
@@ -675,7 +705,12 @@ impl RbacStore for FakeRbacStore {
         Ok(())
     }
 
-    async fn remove_role(&self, user_id: Uuid, role_slug: &str) -> Result<(), UseCaseError> {
+    async fn remove_role(
+        &self,
+        user_id: Uuid,
+        role_slug: &str,
+        _audit_actor: Option<uuid::Uuid>,
+    ) -> Result<(), UseCaseError> {
         if role_slug == "owner" && self.owners() <= 1 {
             return Err(UseCaseError::LastOwnerProtected);
         }

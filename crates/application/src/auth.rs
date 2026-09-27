@@ -338,7 +338,7 @@ impl OAuthManagementInteractor {
         for config in providers {
             validate_provider_config(config)?;
         }
-        self.configs.save(providers).await
+        self.configs.save(providers, actor.audit_actor_id()).await
     }
 
     /// 显式绑定外部身份（需 `oauth.manage`；操作者需核对稳定外部 ID）。
@@ -358,7 +358,13 @@ impl OAuthManagementInteractor {
         let provider_key = provider_identity_key(&config);
         let target = self.users.actor_for_username(username).await?;
         self.accounts
-            .bind(target.user_id.0, &provider_key, external_id, email)
+            .bind(
+                target.user_id.0,
+                &provider_key,
+                external_id,
+                email,
+                actor.audit_actor_id(),
+            )
             .await
     }
 
@@ -378,7 +384,12 @@ impl OAuthManagementInteractor {
         let provider_key = provider_identity_key(&config);
         let target = self.users.actor_for_username(username).await?;
         self.accounts
-            .unbind(target.user_id.0, &provider_key, external_id)
+            .unbind(
+                target.user_id.0,
+                &provider_key,
+                external_id,
+                actor.audit_actor_id(),
+            )
             .await?;
         // 登录方式发生变化：旧 Cookie 立即失效。
         self.sessions.revoke_all_for_user(target.user_id.0).await

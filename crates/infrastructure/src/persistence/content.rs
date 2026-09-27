@@ -67,9 +67,17 @@ pub async fn rebuild_content_html(
                 .rows_affected();
                 if changed == 1 {
                     sync_media_refs(&mut tx, kind, id, &media_ids).await?;
-                    rebuilt += 1;
+                    audit_content(
+                        &mut tx,
+                        None,
+                        &format!("{}.html.rebuild", kind.as_str()),
+                        kind.as_str(),
+                        id,
+                        serde_json::json!({"version": version, "render_version": CONTENT_RENDER_VERSION}),
+                    ).await?;
                 }
                 tx.commit().await.map_err(map_sqlx_error)?;
+                rebuilt += changed as usize;
             }
         }
     }

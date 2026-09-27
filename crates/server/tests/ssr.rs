@@ -613,7 +613,10 @@ async fn category_page_lists_public_posts_and_hides_drafts() {
     let cat_snapshot = cat.snapshot();
     stack
         .categories
-        .insert(&domain::content::Category::reconstitute(cat_snapshot.clone()).unwrap())
+        .insert(
+            &domain::content::Category::reconstitute(cat_snapshot.clone()).unwrap(),
+            None,
+        )
         .await
         .unwrap();
 
@@ -756,7 +759,10 @@ async fn paper_theme_functions_use_only_public_data() {
     .unwrap()
     .snapshot();
     s.categories
-        .insert(&domain::content::Category::reconstitute(category.clone()).unwrap())
+        .insert(
+            &domain::content::Category::reconstitute(category.clone()).unwrap(),
+            None,
+        )
         .await
         .unwrap();
     for (slug, title, publish) in [

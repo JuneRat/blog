@@ -171,15 +171,18 @@ async fn fresh_stack() -> Stack {
 
     let configs = Arc::new(PostgresOAuthConfigStore::new(pool.clone()));
     configs
-        .save(&[ProviderConfig {
-            id: "idp".into(),
-            name: Some("示例 IdP".into()),
-            kind: ProviderKind::Oidc,
-            issuer: Some("https://idp.example".into()),
-            client_id: "client".into(),
-            secret_ref: "IDP_SECRET".into(),
-            scopes: vec![],
-        }])
+        .save(
+            &[ProviderConfig {
+                id: "idp".into(),
+                name: Some("示例 IdP".into()),
+                kind: ProviderKind::Oidc,
+                issuer: Some("https://idp.example".into()),
+                client_id: "client".into(),
+                secret_ref: "IDP_SECRET".into(),
+                scopes: vec![],
+            }],
+            None,
+        )
         .await
         .unwrap();
 
@@ -188,7 +191,7 @@ async fn fresh_stack() -> Stack {
     for (username, uid) in &ids {
         let external = format!("sub-{username}");
         accounts
-            .bind(*uid, "https://idp.example", &external, None)
+            .bind(*uid, "https://idp.example", &external, None, None)
             .await
             .unwrap();
     }
@@ -3542,6 +3545,7 @@ async fn native_comments_guest_moderation_and_http_boundaries() {
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let endpoint = "/api/v1/posts/comments-http/comments";
+    make_comment_post_due(&stack.pool, post_id).await;
     let payload=serde_json::json!({"nickname":"<script>guest</script>","body":"<img src=x onerror=alert(1)>\nText"}).to_string();
     // Anonymous writes require the configured origin (not arbitrary Host matching).
     for origin in [None, Some("http://evil.test")] {
@@ -3722,7 +3726,17 @@ async fn published_comment_endpoint(stack: &Stack, cookie: &str, csrf: &str) -> 
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
+    make_comment_post_due(&stack.pool, post_id).await;
     "/api/v1/posts/comment-regression/comments".into()
+}
+
+async fn make_comment_post_due(pool: &PgPool, id: Uuid) {
+    // 评论测试使用已到期文章，不依赖宿主机/容器的毫秒级时钟同步。
+    sqlx::query("UPDATE posts SET published_at = now() - interval '1 second' WHERE id=$1")
+        .bind(id)
+        .execute(pool)
+        .await
+        .unwrap();
 }
 
 fn comment_submit_request(

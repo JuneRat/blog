@@ -93,7 +93,11 @@ pub enum CategoryDeleteOutcome {
 #[async_trait]
 pub trait CategoryRepository: Send + Sync {
     /// 创建接收已校验的聚合；快照仅用于读取、重建与返回结果。
-    async fn insert(&self, aggregate: &domain::content::Category) -> Result<(), UseCaseError>;
+    async fn insert(
+        &self,
+        aggregate: &domain::content::Category,
+        audit_actor: Option<uuid::Uuid>,
+    ) -> Result<(), UseCaseError>;
     async fn find_by_slug(
         &self,
         slug: &str,
@@ -112,6 +116,7 @@ pub trait CategoryRepository: Send + Sync {
         description: Option<&str>,
         parent_id: Option<Uuid>,
         expected_version: i64,
+        audit_actor: Option<uuid::Uuid>,
     ) -> Result<Option<domain::content::CategorySnapshot>, UseCaseError>;
 
     /// 条件删除：树锁内先检查文章引用与子分类，再按版本条件删除。
@@ -119,6 +124,7 @@ pub trait CategoryRepository: Send + Sync {
         &self,
         id: Uuid,
         expected_version: i64,
+        audit_actor: Option<uuid::Uuid>,
     ) -> Result<CategoryDeleteOutcome, UseCaseError>;
 
     /// 文章设置分类前的存在性校验。

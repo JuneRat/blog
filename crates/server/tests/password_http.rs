@@ -141,19 +141,22 @@ async fn fresh_stack_with(throttle_config: ThrottleConfig) -> Stack {
     // OAuth 侧装配保持可用（本文件不触发），避免测试栈与生产结构偏离。
     let configs: Arc<dyn OAuthConfigStore> = Arc::new(PostgresOAuthConfigStore::new(pool.clone()));
     configs
-        .save(&[ProviderConfig {
-            id: "idp".into(),
-            name: Some("示例 IdP".into()),
-            kind: ProviderKind::Oidc,
-            issuer: Some("https://idp.example".into()),
-            client_id: "client".into(),
-            secret_ref: "IDP_SECRET".into(),
-            scopes: vec![],
-        }])
+        .save(
+            &[ProviderConfig {
+                id: "idp".into(),
+                name: Some("示例 IdP".into()),
+                kind: ProviderKind::Oidc,
+                issuer: Some("https://idp.example".into()),
+                client_id: "client".into(),
+                secret_ref: "IDP_SECRET".into(),
+                scopes: vec![],
+            }],
+            None,
+        )
         .await
         .unwrap();
     accounts
-        .bind(member.id, "https://idp.example", "sub-sun", None)
+        .bind(member.id, "https://idp.example", "sub-sun", None, None)
         .await
         .unwrap();
 

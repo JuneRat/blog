@@ -174,7 +174,10 @@ impl PasswordInteractor {
         domain::identity::validate_password(new_password, &target.username)
             .map_err(|e| UseCaseError::Invalid(e.to_string()))?;
         let hash = self.deps.hasher.hash(new_password).await?;
-        self.deps.users.set_password_hash(target.id, &hash).await?;
+        self.deps
+            .users
+            .set_password_hash(target.id, &hash, actor.audit_actor_id())
+            .await?;
         // 凭据变更即撤销全部既有会话：被盗会话不能靠旧 cookie 存活。
         self.deps.sessions.revoke_all_for_user(target.id).await?;
         Ok(())
@@ -194,7 +197,7 @@ impl PasswordInteractor {
         match self
             .deps
             .users
-            .clear_password_hash_guarded(target.id)
+            .clear_password_hash_guarded(target.id, actor.audit_actor_id())
             .await?
         {
             ClearPasswordOutcome::Cleared => {
@@ -286,7 +289,7 @@ impl PasswordInteractor {
         let revision = self
             .deps
             .users
-            .compare_and_set_password_hash(user_id, expected_current, &hash)
+            .compare_and_set_password_hash(user_id, expected_current, &hash, Some(user_id))
             .await?
             .ok_or(UseCaseError::VersionConflict)?;
         self.deps.sessions.revoke_all_for_user(user_id).await?;
@@ -351,6 +354,7 @@ impl PasswordInteractor {
                 credential.user_id,
                 Some(&credential.password_hash),
                 &upgraded,
+                Some(credential.user_id),
             )
             .await
         {

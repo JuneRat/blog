@@ -214,7 +214,10 @@ async fn seed_category(stack: &Stack, slug: &str) -> uuid::Uuid {
     let snapshot = category.snapshot();
     stack
         .categories
-        .insert(&domain::content::Category::reconstitute(snapshot.clone()).unwrap())
+        .insert(
+            &domain::content::Category::reconstitute(snapshot.clone()).unwrap(),
+            None,
+        )
         .await
         .unwrap();
     snapshot.id
@@ -521,6 +524,7 @@ async fn site_settings_change_is_reflected_in_feed_and_html() {
             },
             0,
             time::OffsetDateTime::now_utc(),
+            None,
         )
         .await
         .unwrap();

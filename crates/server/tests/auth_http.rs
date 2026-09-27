@@ -115,22 +115,25 @@ async fn fresh_stack_with(secure_cookies: bool) -> Stack {
 
     let configs = Arc::new(PostgresOAuthConfigStore::new(pool.clone()));
     configs
-        .save(&[ProviderConfig {
-            id: "idp".into(),
-            name: Some("示例 IdP".into()),
-            kind: ProviderKind::Oidc,
-            issuer: Some("https://idp.example".into()),
-            client_id: "client".into(),
-            secret_ref: "IDP_SECRET".into(),
-            scopes: vec![],
-        }])
+        .save(
+            &[ProviderConfig {
+                id: "idp".into(),
+                name: Some("示例 IdP".into()),
+                kind: ProviderKind::Oidc,
+                issuer: Some("https://idp.example".into()),
+                client_id: "client".into(),
+                secret_ref: "IDP_SECRET".into(),
+                scopes: vec![],
+            }],
+            None,
+        )
         .await
         .unwrap();
 
     let accounts: Arc<dyn OAuthAccountStore> =
         Arc::new(PostgresOAuthAccountStore::new(pool.clone()));
     accounts
-        .bind(member.id, "https://idp.example", "sub-http-42", None)
+        .bind(member.id, "https://idp.example", "sub-http-42", None, None)
         .await
         .unwrap();
 

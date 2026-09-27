@@ -16,6 +16,30 @@ pub struct AuditEntry<'a> {
     pub metadata: serde_json::Value,
 }
 
+/// Repository writes without an HTTP address still record the real actor (or
+/// None for a controlled CLI/system task), never the target user as a fallback.
+pub(crate) async fn record_change(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor_id: Option<Uuid>,
+    action: &str,
+    target_type: &str,
+    target_id: &str,
+    metadata: serde_json::Value,
+) -> Result<(), UseCaseError> {
+    append_audit_log(
+        transaction,
+        AuditEntry {
+            actor_id,
+            ip_address: None,
+            action,
+            target_type,
+            target_id,
+            metadata,
+        },
+    )
+    .await
+}
+
 pub async fn append_audit_log(
     transaction: &mut Transaction<'_, Postgres>,
     entry: AuditEntry<'_>,

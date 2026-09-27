@@ -584,13 +584,13 @@ async fn rbac_permissions_union_and_version_bump() {
         .unwrap();
 
     // 未知角色拒绝。
-    let err = rbac.assign_role(uid, "ghost").await.unwrap_err();
+    let err = rbac.assign_role(uid, "ghost", None).await.unwrap_err();
     assert!(matches!(err, application::error::UseCaseError::NotFound(_)));
 
-    rbac.assign_role(uid, "author").await.unwrap();
-    rbac.assign_role(uid, "editor").await.unwrap();
+    rbac.assign_role(uid, "author", None).await.unwrap();
+    rbac.assign_role(uid, "editor", None).await.unwrap();
     // 重复分配幂等，不重复递增版本。
-    rbac.assign_role(uid, "author").await.unwrap();
+    rbac.assign_role(uid, "author", None).await.unwrap();
 
     let (version_after,): (i64,) = sqlx::query_as("SELECT version FROM users WHERE id = $1")
         .bind(uid)
@@ -630,18 +630,18 @@ async fn rbac_last_owner_protection() {
     seed_binding(&pool, u1).await;
     seed_binding(&pool, u2).await;
 
-    rbac.assign_role(u1, "owner").await.unwrap();
+    rbac.assign_role(u1, "owner", None).await.unwrap();
 
     // 唯一 Owner：移除被拒。
-    let err = rbac.remove_role(u1, "owner").await.unwrap_err();
+    let err = rbac.remove_role(u1, "owner", None).await.unwrap_err();
     assert!(
         matches!(err, application::error::UseCaseError::LastOwnerProtected),
         "最后 Owner 不能被移除：{err:?}"
     );
 
     // 第二个 Owner 后，允许移除第一个。
-    rbac.assign_role(u2, "owner").await.unwrap();
-    rbac.remove_role(u1, "owner").await.unwrap();
+    rbac.assign_role(u2, "owner", None).await.unwrap();
+    rbac.remove_role(u1, "owner", None).await.unwrap();
 
     let owners: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM user_roles ur \
@@ -656,13 +656,13 @@ async fn rbac_last_owner_protection() {
 
     // 软删除用户不计入有效 Owner：u1 重新持有 owner，u2 被软删除后
     // u1 成为唯一可登录 Owner，不可再被移除。
-    rbac.assign_role(u1, "owner").await.unwrap();
+    rbac.assign_role(u1, "owner", None).await.unwrap();
     sqlx::query("UPDATE users SET deleted_at = now() WHERE id = $1")
         .bind(u2)
         .execute(&pool)
         .await
         .unwrap();
-    let err = rbac.remove_role(u1, "owner").await.unwrap_err();
+    let err = rbac.remove_role(u1, "owner", None).await.unwrap_err();
     assert!(
         matches!(err, application::error::UseCaseError::LastOwnerProtected),
         "软删除的 Owner 不计入有效数量"
@@ -683,13 +683,13 @@ async fn owner_without_login_method_does_not_satisfy_last_owner_guard() {
 
     let bound = seed_user(&pool, "bound").await;
     let unbound = seed_user(&pool, "unbound").await;
-    rbac.assign_role(bound, "owner").await.unwrap();
-    rbac.assign_role(unbound, "owner").await.unwrap();
+    rbac.assign_role(bound, "owner", None).await.unwrap();
+    rbac.assign_role(unbound, "owner", None).await.unwrap();
     // 只有 bound 有有效登录方式；unbound 是「登不进去的 Owner」。
     seed_binding(&pool, bound).await;
 
     // 移除唯一可登录的 Owner 会留下无法登录的 Owner → 拒绝（docs §3）。
-    let err = rbac.remove_role(bound, "owner").await.unwrap_err();
+    let err = rbac.remove_role(bound, "owner", None).await.unwrap_err();
     assert!(
         matches!(err, application::error::UseCaseError::LastOwnerProtected),
         "无登录方式的 Owner 不构成有效 Owner：{err:?}"
@@ -697,7 +697,7 @@ async fn owner_without_login_method_does_not_satisfy_last_owner_guard() {
 
     // 给 unbound 绑定登录方式后，才允许移除 bound。
     seed_binding(&pool, unbound).await;
-    assert!(rbac.remove_role(bound, "owner").await.is_ok());
+    assert!(rbac.remove_role(bound, "owner", None).await.is_ok());
 }
 
 #[tokio::test]
@@ -714,14 +714,14 @@ async fn owner_without_login_method_can_be_cleaned_up() {
 
     let bound = seed_user(&pool, "bound").await;
     let unbound = seed_user(&pool, "unbound").await;
-    rbac.assign_role(bound, "owner").await.unwrap();
-    rbac.assign_role(unbound, "owner").await.unwrap();
+    rbac.assign_role(bound, "owner", None).await.unwrap();
+    rbac.assign_role(unbound, "owner", None).await.unwrap();
     seed_binding(&pool, bound).await;
 
     // 移除登不进去的 Owner 不会减少可用 Owner，允许清理。
-    assert!(rbac.remove_role(unbound, "owner").await.is_ok());
+    assert!(rbac.remove_role(unbound, "owner", None).await.is_ok());
     // bound 仍是最后可登录 Owner，受保护。
-    let err = rbac.remove_role(bound, "owner").await.unwrap_err();
+    let err = rbac.remove_role(bound, "owner", None).await.unwrap_err();
     assert!(matches!(
         err,
         application::error::UseCaseError::LastOwnerProtected
@@ -745,11 +745,11 @@ async fn password_only_last_owner_is_protected() {
         .unwrap();
 
     let alice = seed_user(&pool, "alice").await;
-    rbac.assign_role(alice, "owner").await.unwrap();
+    rbac.assign_role(alice, "owner", None).await.unwrap();
     // 关键：只有本地密码，没有任何 oauth 绑定。
     seed_password(&pool, alice).await;
 
-    let err = rbac.remove_role(alice, "owner").await.unwrap_err();
+    let err = rbac.remove_role(alice, "owner", None).await.unwrap_err();
     assert!(
         matches!(err, application::error::UseCaseError::LastOwnerProtected),
         "密码型最后 Owner 不能被移除：{err:?}"
@@ -757,11 +757,11 @@ async fn password_only_last_owner_is_protected() {
 
     // 第二个同样只用密码的 Owner 出现后，才允许移除第一个。
     let bob = seed_user(&pool, "bob").await;
-    rbac.assign_role(bob, "owner").await.unwrap();
+    rbac.assign_role(bob, "owner", None).await.unwrap();
     seed_password(&pool, bob).await;
-    assert!(rbac.remove_role(alice, "owner").await.is_ok());
+    assert!(rbac.remove_role(alice, "owner", None).await.is_ok());
     assert!(
-        rbac.remove_role(bob, "owner").await.is_err(),
+        rbac.remove_role(bob, "owner", None).await.is_err(),
         "bob 成了最后 Owner"
     );
 }
@@ -781,8 +781,8 @@ async fn deleted_password_only_owner_can_be_cleaned_up() {
 
     let alice = seed_user(&pool, "alice").await;
     let bob = seed_user(&pool, "bob").await;
-    rbac.assign_role(alice, "owner").await.unwrap();
-    rbac.assign_role(bob, "owner").await.unwrap();
+    rbac.assign_role(alice, "owner", None).await.unwrap();
+    rbac.assign_role(bob, "owner", None).await.unwrap();
     seed_password(&pool, alice).await;
     seed_password(&pool, bob).await;
 
@@ -792,10 +792,10 @@ async fn deleted_password_only_owner_can_be_cleaned_up() {
         .execute(&pool)
         .await
         .unwrap();
-    assert!(rbac.remove_role(bob, "owner").await.is_ok());
+    assert!(rbac.remove_role(bob, "owner", None).await.is_ok());
 
     // alice 现在是唯一可登录 Owner，受保护。
-    let err = rbac.remove_role(alice, "owner").await.unwrap_err();
+    let err = rbac.remove_role(alice, "owner", None).await.unwrap_err();
     assert!(matches!(
         err,
         application::error::UseCaseError::LastOwnerProtected
@@ -816,14 +816,14 @@ async fn removing_role_the_user_does_not_hold_is_noop() {
 
     let owner = seed_user(&pool, "owner").await;
     let plain = seed_user(&pool, "plain").await;
-    rbac.assign_role(owner, "owner").await.unwrap();
+    rbac.assign_role(owner, "owner", None).await.unwrap();
     seed_binding(&pool, owner).await;
 
     // plain 本来就不是 owner：移除不应因全局 Owner 数而误报 Forbidden。
-    assert!(rbac.remove_role(plain, "owner").await.is_ok());
-    assert!(rbac.remove_role(plain, "author").await.is_ok());
+    assert!(rbac.remove_role(plain, "owner", None).await.is_ok());
+    assert!(rbac.remove_role(plain, "author", None).await.is_ok());
     // 真正的最后 Owner 仍受保护。
-    let err = rbac.remove_role(owner, "owner").await.unwrap_err();
+    let err = rbac.remove_role(owner, "owner", None).await.unwrap_err();
     assert!(matches!(
         err,
         application::error::UseCaseError::LastOwnerProtected
@@ -844,13 +844,16 @@ async fn concurrent_last_owner_removal_keeps_at_least_one_loginable_owner() {
 
     let u1 = seed_user(&pool, "owner1").await;
     let u2 = seed_user(&pool, "owner2").await;
-    rbac.assign_role(u1, "owner").await.unwrap();
-    rbac.assign_role(u2, "owner").await.unwrap();
+    rbac.assign_role(u1, "owner", None).await.unwrap();
+    rbac.assign_role(u2, "owner", None).await.unwrap();
     seed_binding(&pool, u1).await;
     seed_binding(&pool, u2).await;
 
     // 两个并发移除：排他锁 + 锁内复核后应恰好一个成功，至少保留一个可登录 Owner。
-    let (a, b) = tokio::join!(rbac.remove_role(u1, "owner"), rbac.remove_role(u2, "owner"));
+    let (a, b) = tokio::join!(
+        rbac.remove_role(u1, "owner", None),
+        rbac.remove_role(u2, "owner", None)
+    );
     let succeeded = [a.is_ok(), b.is_ok()].into_iter().filter(|ok| *ok).count();
     assert_eq!(succeeded, 1, "并发移除只能成功一个：{a:?} / {b:?}");
 
@@ -1029,7 +1032,11 @@ async fn password_credentials_are_stored_and_scoped_to_active_users() {
         .await
         .unwrap();
     users
-        .set_password_hash(user_id, "$argon2id$v=19$m=19456,t=2,p=1$c2FsdA$aGFzaA")
+        .set_password_hash(
+            user_id,
+            "$argon2id$v=19$m=19456,t=2,p=1$c2FsdA$aGFzaA",
+            None,
+        )
         .await
         .unwrap();
 
@@ -1051,7 +1058,12 @@ async fn password_credentials_are_stored_and_scoped_to_active_users() {
     let current = credential.password_hash.clone();
     assert!(
         users
-            .compare_and_set_password_hash(user_id, Some("$argon2id$stale"), "$argon2id$upgraded")
+            .compare_and_set_password_hash(
+                user_id,
+                Some("$argon2id$stale"),
+                "$argon2id$upgraded",
+                None
+            )
             .await
             .unwrap()
             .is_none(),
@@ -1063,7 +1075,7 @@ async fn password_credentials_are_stored_and_scoped_to_active_users() {
     );
     assert_eq!(
         users
-            .compare_and_set_password_hash(user_id, Some(&current), "$argon2id$upgraded")
+            .compare_and_set_password_hash(user_id, Some(&current), "$argon2id$upgraded", None)
             .await
             .unwrap(),
         Some(after + 1),
@@ -1077,7 +1089,7 @@ async fn password_credentials_are_stored_and_scoped_to_active_users() {
     // `expected = None` 表示「当前必须为空」：已有密码时不得写入（OAuth 用户设初始密码）。
     assert!(
         users
-            .compare_and_set_password_hash(user_id, None, "$argon2id$initial")
+            .compare_and_set_password_hash(user_id, None, "$argon2id$initial", None)
             .await
             .unwrap()
             .is_none(),
@@ -1109,7 +1121,7 @@ async fn password_credentials_are_stored_and_scoped_to_active_users() {
         .execute(&pool)
         .await
         .unwrap();
-    users.clear_password_hash(user_id).await.unwrap();
+    users.clear_password_hash(user_id, None).await.unwrap();
     assert!(users.password_hash_of(user_id).await.unwrap().is_none());
     assert!(
         users
@@ -1122,11 +1134,14 @@ async fn password_credentials_are_stored_and_scoped_to_active_users() {
     // 对不存在的用户写入/清除都返回 NotFound，而不是静默成功。
     let missing = uuid::Uuid::now_v7();
     assert!(matches!(
-        users.set_password_hash(missing, "x").await.unwrap_err(),
+        users
+            .set_password_hash(missing, "x", None)
+            .await
+            .unwrap_err(),
         UseCaseError::NotFound(_)
     ));
     assert!(matches!(
-        users.clear_password_hash(missing).await.unwrap_err(),
+        users.clear_password_hash(missing, None).await.unwrap_err(),
         UseCaseError::NotFound(_)
     ));
 }
@@ -1141,14 +1156,20 @@ async fn guarded_password_clear_requires_another_login_method() {
     let user_id = seed_user(&pool, "solo").await;
     // 未启用密码。
     assert_eq!(
-        users.clear_password_hash_guarded(user_id).await.unwrap(),
+        users
+            .clear_password_hash_guarded(user_id, None)
+            .await
+            .unwrap(),
         ClearPasswordOutcome::NoPassword
     );
 
     // 有密码但没有外部身份：拒绝清除。
     seed_password(&pool, user_id).await;
     assert_eq!(
-        users.clear_password_hash_guarded(user_id).await.unwrap(),
+        users
+            .clear_password_hash_guarded(user_id, None)
+            .await
+            .unwrap(),
         ClearPasswordOutcome::LastLoginMethod
     );
     assert!(
@@ -1159,7 +1180,10 @@ async fn guarded_password_clear_requires_another_login_method() {
     // 补一个外部身份后才可以清除。
     seed_binding(&pool, user_id).await;
     assert_eq!(
-        users.clear_password_hash_guarded(user_id).await.unwrap(),
+        users
+            .clear_password_hash_guarded(user_id, None)
+            .await
+            .unwrap(),
         ClearPasswordOutcome::Cleared
     );
     assert!(users.password_hash_of(user_id).await.unwrap().is_none());
@@ -1168,7 +1192,7 @@ async fn guarded_password_clear_requires_another_login_method() {
     let missing = uuid::Uuid::now_v7();
     assert!(matches!(
         users
-            .clear_password_hash_guarded(missing)
+            .clear_password_hash_guarded(missing, None)
             .await
             .unwrap_err(),
         UseCaseError::NotFound(_)
@@ -1193,8 +1217,8 @@ async fn clear_password_and_unbind_cannot_both_remove_the_last_login_method() {
     // 两个连接、两笔事务，真的并发。
     let external_id = format!("sub-{user_id}");
     let (clear_result, unbind_result) = tokio::join!(
-        users.clear_password_hash_guarded(user_id),
-        accounts.unbind(user_id, "https://idp.example", &external_id),
+        users.clear_password_hash_guarded(user_id, None),
+        accounts.unbind(user_id, "https://idp.example", &external_id, None),
     );
 
     let cleared = matches!(clear_result, Ok(ClearPasswordOutcome::Cleared));
@@ -1275,11 +1299,11 @@ async fn password_clear_and_unbind_both_block_on_the_identity_lock() {
     // 两个操作都必须阻塞在锁上，而不是各自完成。
     let clear_blocked = tokio::time::timeout(
         std::time::Duration::from_millis(300),
-        users.clear_password_hash_guarded(user_id),
+        users.clear_password_hash_guarded(user_id, None),
     );
     let unbind_blocked = tokio::time::timeout(
         std::time::Duration::from_millis(300),
-        accounts.unbind(user_id, "https://idp.example", &external_id),
+        accounts.unbind(user_id, "https://idp.example", &external_id, None),
     );
     let (clear_outcome, unbind_outcome) = tokio::join!(clear_blocked, unbind_blocked);
     assert!(
@@ -1295,7 +1319,10 @@ async fn password_clear_and_unbind_both_block_on_the_identity_lock() {
     let _ = release_tx.send(());
     holder.await.unwrap();
     let cleared = matches!(
-        users.clear_password_hash_guarded(user_id).await.unwrap(),
+        users
+            .clear_password_hash_guarded(user_id, None)
+            .await
+            .unwrap(),
         ClearPasswordOutcome::Cleared | ClearPasswordOutcome::LastLoginMethod
     );
     assert!(cleared, "释放锁后应能给出确定结论");
@@ -1322,7 +1349,7 @@ async fn duplicate_username_and_email_map_to_structured_conflicts() {
         .unwrap()
         .snapshot();
     users
-        .insert(&User::reconstitute(first.clone()).unwrap())
+        .insert(&User::reconstitute(first.clone()).unwrap(), None)
         .await
         .unwrap();
 
@@ -1331,7 +1358,7 @@ async fn duplicate_username_and_email_map_to_structured_conflicts() {
         .unwrap()
         .snapshot();
     match users
-        .insert(&User::reconstitute(same_name.clone()).unwrap())
+        .insert(&User::reconstitute(same_name.clone()).unwrap(), None)
         .await
         .unwrap_err()
     {
@@ -1344,7 +1371,7 @@ async fn duplicate_username_and_email_map_to_structured_conflicts() {
         .unwrap()
         .snapshot();
     match users
-        .insert(&User::reconstitute(same_email.clone()).unwrap())
+        .insert(&User::reconstitute(same_email.clone()).unwrap(), None)
         .await
         .unwrap_err()
     {
@@ -1378,8 +1405,10 @@ async fn admin_listing_reports_login_methods_and_roles_in_bulk() {
         .execute(&pool)
         .await
         .unwrap();
-    rbac.assign_role(bound, "owner").await.unwrap();
-    rbac.assign_role(password_only, "editor").await.unwrap();
+    rbac.assign_role(bound, "owner", None).await.unwrap();
+    rbac.assign_role(password_only, "editor", None)
+        .await
+        .unwrap();
 
     let users = PostgresUserRepository::new(pool.clone());
     let rows = users.list_admin(50, 0).await.unwrap();
@@ -1707,6 +1736,11 @@ async fn tag_directory_listing_counts_only_public_posts() {
 async fn public_tag_page_lists_only_public_posts_and_paginates() {
     let _g = SERIAL.lock().await;
     let pool = fresh_database().await;
+    // 已发布样本使用数据库过去时间，避免宿主机/容器时钟偏差影响公开查询。
+    let published_at: OffsetDateTime = sqlx::query_scalar("SELECT now() - interval '1 second'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     let author = seed_user(&pool, "author").await;
     let posts = PostgresPostRepository::new(
         pool.clone(),
@@ -1720,7 +1754,7 @@ async fn public_tag_page_lists_only_public_posts_and_paginates() {
     for i in 1..=3 {
         let mut public = draft_snapshot(author, &format!("tag-page-{i}"));
         let mut post = domain::content::Post::reconstitute(public.clone()).unwrap();
-        post.publish(OffsetDateTime::now_utc()).unwrap();
+        post.publish(published_at).unwrap();
         public = post.snapshot();
         posts
             .insert_post(
@@ -1807,7 +1841,7 @@ async fn seed_category(
     )
     .unwrap();
     let snapshot = category.snapshot();
-    repo.insert(&category).await.unwrap();
+    repo.insert(&category, None).await.unwrap();
     snapshot
 }
 
@@ -1821,14 +1855,14 @@ async fn category_move_rejects_cycles_even_indirect() {
 
     // 直接自父。
     let err = repo
-        .update(a.id, "A", None, Some(a.id), a.version)
+        .update(a.id, "A", None, Some(a.id), a.version, None)
         .await
         .unwrap_err();
     assert!(matches!(err, UseCaseError::Invalid(_)), "得到 {err:?}");
 
     // 一级环：A 的父设为子 B。
     let err = repo
-        .update(a.id, "A", None, Some(b.id), a.version)
+        .update(a.id, "A", None, Some(b.id), a.version, None)
         .await
         .unwrap_err();
     assert!(err.to_string().contains("环"), "得到 {err:?}");
@@ -1836,20 +1870,20 @@ async fn category_move_rejects_cycles_even_indirect() {
     // 二级环：A→C→B→A。
     let c = seed_category(&pool, "C", "c", Some(b.id)).await;
     let err = repo
-        .update(a.id, "A", None, Some(c.id), a.version)
+        .update(a.id, "A", None, Some(c.id), a.version, None)
         .await
         .unwrap_err();
     assert!(err.to_string().contains("环"), "得到 {err:?}");
 
     // 合法移动（叶子互换父）不受影响；父设为根也合法。
     let moved = repo
-        .update(c.id, "C", None, Some(a.id), c.version)
+        .update(c.id, "C", None, Some(a.id), c.version, None)
         .await
         .unwrap()
         .unwrap();
     assert_eq!(moved.parent_id, Some(a.id));
     let rooted = repo
-        .update(c.id, "C", None, None, moved.version)
+        .update(c.id, "C", None, None, moved.version, None)
         .await
         .unwrap()
         .unwrap();
@@ -1865,13 +1899,13 @@ async fn category_move_rejects_missing_parent_and_checks_version() {
 
     let ghost = uuid::Uuid::now_v7();
     let err = repo
-        .update(a.id, "A", None, Some(ghost), a.version)
+        .update(a.id, "A", None, Some(ghost), a.version, None)
         .await
         .unwrap_err();
     assert!(err.to_string().contains("父分类不存在"), "得到 {err:?}");
 
     assert!(
-        repo.update(a.id, "新名", None, None, a.version + 5)
+        repo.update(a.id, "新名", None, None, a.version + 5, None)
             .await
             .unwrap()
             .is_none(),
@@ -1893,7 +1927,7 @@ async fn category_delete_protects_posts_and_children() {
     let child = seed_category(&pool, "子", "child", Some(parent.id)).await;
 
     // 子分类存在：父分类删除被拒。
-    match repo.delete(parent.id, parent.version).await.unwrap() {
+    match repo.delete(parent.id, parent.version, None).await.unwrap() {
         application::ports::CategoryDeleteOutcome::Referenced {
             posts: 0,
             children: 1,
@@ -1912,7 +1946,7 @@ async fn category_delete_protects_posts_and_children() {
         .execute(&pool)
         .await
         .unwrap();
-    match repo.delete(child.id, child.version).await.unwrap() {
+    match repo.delete(child.id, child.version, None).await.unwrap() {
         application::ports::CategoryDeleteOutcome::Referenced {
             posts: 1,
             children: 0,
@@ -1931,14 +1965,19 @@ async fn category_delete_protects_posts_and_children() {
         .execute(&pool)
         .await
         .unwrap();
-    repo.delete(child.id, child.version).await.unwrap();
-    repo.delete(parent.id, parent.version).await.unwrap();
+    repo.delete(child.id, child.version, None).await.unwrap();
+    repo.delete(parent.id, parent.version, None).await.unwrap();
 }
 
 #[tokio::test]
 async fn post_category_saved_in_same_transaction_and_public_page_filters() {
     let _g = SERIAL.lock().await;
     let pool = fresh_database().await;
+    // 已发布样本使用数据库过去时间，避免宿主机/容器时钟偏差影响公开查询。
+    let published_at: OffsetDateTime = sqlx::query_scalar("SELECT now() - interval '1 second'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     let author = seed_user(&pool, "author").await;
     let posts = PostgresPostRepository::new(
         pool.clone(),
@@ -1985,7 +2024,7 @@ async fn post_category_saved_in_same_transaction_and_public_page_filters() {
     let mut published = edit.clone();
     {
         let mut post = domain::content::Post::reconstitute(published.clone()).unwrap();
-        post.publish(OffsetDateTime::now_utc()).unwrap();
+        post.publish(published_at).unwrap();
         published = post.snapshot();
     }
     posts
@@ -2404,7 +2443,8 @@ async fn settings_site_upsert_and_version_cas() {
             .save_site(
                 &site_value("数据库标题", "数据库描述"),
                 0,
-                OffsetDateTime::now_utc()
+                OffsetDateTime::now_utc(),
+                None,
             )
             .await
             .unwrap(),
@@ -2423,7 +2463,12 @@ async fn settings_site_upsert_and_version_cas() {
     // 行已存在再用 0 当前提：冲突，不覆盖。
     assert_eq!(
         store
-            .save_site(&site_value("抢写", "抢写"), 0, OffsetDateTime::now_utc())
+            .save_site(
+                &site_value("抢写", "抢写"),
+                0,
+                OffsetDateTime::now_utc(),
+                None
+            )
             .await
             .unwrap(),
         SaveOutcome::StaleConflict
@@ -2435,7 +2480,8 @@ async fn settings_site_upsert_and_version_cas() {
             .save_site(
                 &site_value("新标题", "新描述"),
                 1,
-                OffsetDateTime::now_utc()
+                OffsetDateTime::now_utc(),
+                None,
             )
             .await
             .unwrap(),
@@ -2466,7 +2512,12 @@ async fn settings_site_upsert_and_version_cas() {
     // 旧版本前提再次写入：冲突，版本停在 2。
     assert_eq!(
         store
-            .save_site(&site_value("过期", "过期"), 1, OffsetDateTime::now_utc())
+            .save_site(
+                &site_value("过期", "过期"),
+                1,
+                OffsetDateTime::now_utc(),
+                None
+            )
             .await
             .unwrap(),
         SaveOutcome::StaleConflict
@@ -2510,6 +2561,7 @@ async fn settings_row_survives_new_pool_and_keeps_oauth_group_isolated() {
             &site_value("持久标题", "持久描述"),
             0,
             OffsetDateTime::now_utc(),
+            None,
         )
         .await
         .unwrap();
@@ -2525,15 +2577,18 @@ async fn settings_row_survives_new_pool_and_keeps_oauth_group_isolated() {
     use application::ports::OAuthConfigStore;
     let oauth = infrastructure::PostgresOAuthConfigStore::new(pool2.clone());
     oauth
-        .save(&[application::ports::ProviderConfig {
-            id: "idp".into(),
-            name: None,
-            kind: application::ports::ProviderKind::Oidc,
-            issuer: Some("https://idp.example".into()),
-            client_id: "client".into(),
-            secret_ref: "IDP_SECRET".into(),
-            scopes: vec![],
-        }])
+        .save(
+            &[application::ports::ProviderConfig {
+                id: "idp".into(),
+                name: None,
+                kind: application::ports::ProviderKind::Oidc,
+                issuer: Some("https://idp.example".into()),
+                client_id: "client".into(),
+                secret_ref: "IDP_SECRET".into(),
+                scopes: vec![],
+            }],
+            None,
+        )
         .await
         .unwrap();
     second
@@ -2541,6 +2596,7 @@ async fn settings_row_survives_new_pool_and_keeps_oauth_group_isolated() {
             &site_value("再改一次", "描述"),
             1,
             OffsetDateTime::now_utc(),
+            None,
         )
         .await
         .unwrap();
@@ -2566,15 +2622,23 @@ async fn settings_concurrent_saves_on_two_connections_exactly_one_wins() {
 
     let a = infrastructure::PostgresSettingsStore::new(pool);
     let b = infrastructure::PostgresSettingsStore::new(pool2);
-    a.save_site(&site_value("初版", "描述"), 0, OffsetDateTime::now_utc())
-        .await
-        .unwrap();
+    a.save_site(
+        &site_value("初版", "描述"),
+        0,
+        OffsetDateTime::now_utc(),
+        None,
+    )
+    .await
+    .unwrap();
 
     let (ra, rb) = {
         let left = site_value("连接甲", "描述");
         let right = site_value("连接乙", "描述");
         let now = OffsetDateTime::now_utc();
-        tokio::join!(a.save_site(&left, 1, now), b.save_site(&right, 1, now),)
+        tokio::join!(
+            a.save_site(&left, 1, now, None),
+            b.save_site(&right, 1, now, None),
+        )
     };
     let outcomes = [ra.unwrap(), rb.unwrap()];
     assert_eq!(

@@ -12,6 +12,7 @@ use async_trait::async_trait;
 use sqlx::PgPool;
 use time::OffsetDateTime;
 
+use crate::audit::record_change;
 use crate::persistence::{media_ids_for, sync_media_refs};
 
 /// site 配置存 settings（key='site'，value 为 JSONB 对象，含 schema_version）。
@@ -49,6 +50,7 @@ impl SettingsStore for PostgresSettingsStore {
         value: &SiteSettingsValue,
         expected_version: i64,
         now: OffsetDateTime,
+        audit_actor: Option<uuid::Uuid>,
     ) -> Result<SaveOutcome, UseCaseError> {
         let stored = serde_json::json!({
             "schema_version": 1,
@@ -88,6 +90,15 @@ impl SettingsStore for PostgresSettingsStore {
             &media_ids_for(&[], value.logo_media_id),
         )
         .await?;
+        record_change(
+            &mut tx,
+            audit_actor,
+            "settings.site",
+            "settings",
+            "site",
+            serde_json::json!({"version":version}),
+        )
+        .await?;
         tx.commit().await.map_err(map_repo_error)?;
         Ok(SaveOutcome::Saved {
             new_version: version,
@@ -115,8 +126,10 @@ impl ThemeSettingsStore for PostgresSettingsStore {
         slug: &str,
         expected_version: i64,
         now: OffsetDateTime,
+        audit_actor: Option<uuid::Uuid>,
     ) -> Result<SaveOutcome, UseCaseError> {
         let value = serde_json::json!({ "schema_version": 1, "slug": slug });
+        let mut tx = self.pool.begin().await.map_err(map_repo_error)?;
         let new_version: Option<i64> = sqlx::query_scalar(
             r#"
             INSERT INTO settings (key, value, version, updated_at)
@@ -132,9 +145,21 @@ impl ThemeSettingsStore for PostgresSettingsStore {
         .bind(value)
         .bind(now)
         .bind(expected_version)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *tx)
         .await
         .map_err(|e| UseCaseError::Repository(e.to_string()))?;
+        if let Some(version) = new_version {
+            record_change(
+                &mut tx,
+                audit_actor,
+                "settings.theme",
+                "settings",
+                "theme",
+                serde_json::json!({"version":version,"slug":slug}),
+            )
+            .await?;
+        }
+        tx.commit().await.map_err(map_repo_error)?;
         Ok(match new_version {
             Some(new_version) => SaveOutcome::Saved { new_version },
             None => SaveOutcome::StaleConflict,

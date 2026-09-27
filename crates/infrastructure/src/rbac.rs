@@ -4,6 +4,7 @@
 //! 排他 pg_advisory_xact_lock(2048001, 1) 内完成变更与 Owner 检查；
 //! 角色分配/移除递增 users.version。
 
+use crate::audit::record_change;
 use async_trait::async_trait;
 use sqlx::{Executor, PgPool, Row};
 use uuid::Uuid;
@@ -113,18 +114,36 @@ impl RbacStore for PostgresRbacStore {
         &self,
         entries: &[PermissionDescriptor],
     ) -> Result<(), UseCaseError> {
+        let mut tx = self.pool.begin().await.map_err(Self::map_err)?;
+        crate::persistence::acquire_identity_lock(&mut *tx)
+            .await
+            .map_err(Self::map_err)?;
+        let mut changed = 0u64;
         for entry in entries {
-            sqlx::query(
+            changed += sqlx::query(
                 "INSERT INTO permissions (code, name) VALUES ($1, $2) \
-                 ON CONFLICT (code) DO UPDATE SET name = EXCLUDED.name",
+                 ON CONFLICT (code) DO UPDATE SET name = EXCLUDED.name \
+                 WHERE permissions.name IS DISTINCT FROM EXCLUDED.name",
             )
             .bind(entry.key)
             .bind(entry.name)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await
-            .map_err(Self::map_err)?;
+            .map_err(Self::map_err)?
+            .rows_affected();
         }
-        Ok(())
+        if changed > 0 {
+            record_change(
+                &mut tx,
+                None,
+                "permissions.sync",
+                "system",
+                "permissions",
+                serde_json::json!({"changed":changed}),
+            )
+            .await?;
+        }
+        tx.commit().await.map_err(Self::map_err)
     }
 
     async fn sync_builtin_roles(&self, defs: &[BuiltinRoleDef]) -> Result<(), UseCaseError> {
@@ -165,6 +184,18 @@ impl RbacStore for PostgresRbacStore {
                 .execute(&mut *tx)
                 .await
                 .map_err(Self::map_err)?;
+                record_change(
+                    &mut tx,
+                    None,
+                    "role.create",
+                    "role",
+                    &role_id.to_string(),
+                    serde_json::json!({
+                        "code": def.slug, "version": 1,
+                        "permission_count": def.permissions.len(),
+                    }),
+                )
+                .await?;
                 tx.commit().await.map_err(Self::map_err)?;
                 continue;
             };
@@ -226,6 +257,23 @@ impl RbacStore for PostgresRbacStore {
             .await
             .map_err(Self::map_err)?;
 
+            let version: i64 = sqlx::query_scalar("SELECT version FROM roles WHERE id=$1")
+                .bind(role_id)
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(Self::map_err)?;
+            record_change(
+                &mut tx,
+                None,
+                "role.sync",
+                "role",
+                &role_id.to_string(),
+                serde_json::json!({
+                    "code": def.slug, "version": version,
+                    "permission_count": def.permissions.len(),
+                }),
+            )
+            .await?;
             tx.commit().await.map_err(Self::map_err)?;
         }
         Ok(())
@@ -264,7 +312,12 @@ impl RbacStore for PostgresRbacStore {
         Ok(PermissionSet::from_keys(keys.into_iter().map(|k| k.0)))
     }
 
-    async fn assign_role(&self, user_id: Uuid, role_slug: &str) -> Result<(), UseCaseError> {
+    async fn assign_role(
+        &self,
+        user_id: Uuid,
+        role_slug: &str,
+        audit_actor: Option<uuid::Uuid>,
+    ) -> Result<(), UseCaseError> {
         let mut tx = self.pool.begin().await.map_err(Self::map_err)?;
         crate::persistence::acquire_identity_lock(&mut *tx)
             .await
@@ -290,11 +343,30 @@ impl RbacStore for PostgresRbacStore {
                 .execute(&mut *tx)
                 .await
                 .map_err(Self::map_err)?;
+            let version: i64 = sqlx::query_scalar("SELECT version FROM users WHERE id=$1")
+                .bind(user_id)
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(Self::map_err)?;
+            record_change(
+                &mut tx,
+                audit_actor,
+                "user.role.assign",
+                "user",
+                &user_id.to_string(),
+                serde_json::json!({"role_id":role_id,"role":role_slug,"version":version}),
+            )
+            .await?;
         }
         tx.commit().await.map_err(Self::map_err)
     }
 
-    async fn remove_role(&self, user_id: Uuid, role_slug: &str) -> Result<(), UseCaseError> {
+    async fn remove_role(
+        &self,
+        user_id: Uuid,
+        role_slug: &str,
+        audit_actor: Option<uuid::Uuid>,
+    ) -> Result<(), UseCaseError> {
         let mut tx = self.pool.begin().await.map_err(Self::map_err)?;
         crate::persistence::acquire_identity_lock(&mut *tx)
             .await
@@ -332,6 +404,20 @@ impl RbacStore for PostgresRbacStore {
                 .execute(&mut *tx)
                 .await
                 .map_err(Self::map_err)?;
+            let version: i64 = sqlx::query_scalar("SELECT version FROM users WHERE id=$1")
+                .bind(user_id)
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(Self::map_err)?;
+            record_change(
+                &mut tx,
+                audit_actor,
+                "user.role.remove",
+                "user",
+                &user_id.to_string(),
+                serde_json::json!({"role_id":role_id,"role":role_slug,"version":version}),
+            )
+            .await?;
         }
         tx.commit().await.map_err(Self::map_err)
     }
