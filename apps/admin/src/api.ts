@@ -239,12 +239,18 @@ export const api = {
   /**
    * 自助设置/清除头像（本人即可，无需额外权限）。
    * `null` = 清除；成功后返回最新资料，调用方应刷新 `/me` 让头部同步。
-   * 不递增 users.version，因此不会让当前会话失效。
+   * 递增资料 version，保持 auth_version 和当前登录态。
    */
   setOwnAvatar: (avatarMediaId: string | null): Promise<Profile> =>
     request<Profile>("/api/admin/v1/me/avatar", {
       method: "PUT",
       body: JSON.stringify({ avatar_media_id: avatarMediaId }),
+    }),
+
+  updateOwnProfile: (input: { display_name: string | null; bio: string | null; expected_version: number }): Promise<Profile> =>
+    request<Profile>("/api/admin/v1/me/profile", {
+      method: "PUT",
+      body: JSON.stringify(input),
     }),
 
   /** 自助改密：成功后服务端轮换会话并回新 csrf_token（调用方负责更新内存 token）。 */
@@ -376,6 +382,12 @@ export const api = {
       body: JSON.stringify(input),
     }),
 
+  changeUserStatus: (id: string, status: AdminUser["status"], expectedVersion: number): Promise<{ id: string; status: AdminUser["status"]; version: number }> =>
+    request(`/api/admin/v1/users/${encodeURIComponent(id)}/status`, {
+      method: "PUT",
+      body: JSON.stringify({ status, expected_version: expectedVersion }),
+    }),
+
   /** 角色目录：内置 slug 与权限数量；需 `role.manage` 或 `user.manage`。 */
   listRoles: (): Promise<RoleSummary[]> => request<RoleSummary[]>("/api/admin/v1/roles"),
 
@@ -415,7 +427,7 @@ export const api = {
 
   /**
    * 分配/移除角色（需 `role.manage`；Owner 还需 `ownership.manage`）。
-   * 会递增目标用户的 `users.version`，其旧会话立即失效；重复分配是幂等的。
+   * 递增目标用户的资料 version，保持登录；权限在下次请求生效。重复分配是幂等的。
    * 最后一个可登录 Owner 的移除被拒：403 `last_owner`。
    */
   assignRole: (username: string, role: string): Promise<unknown> =>

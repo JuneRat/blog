@@ -30,6 +30,7 @@ pub struct AdminUserRow {
     pub email: Option<String>,
     pub display_name: Option<String>,
     pub status: domain::identity::UserStatus,
+    pub version: i64,
     pub deleted: bool,
     /// `users.password_hash IS NOT NULL`。
     pub password_enabled: bool,
@@ -64,6 +65,19 @@ pub trait UserRepository: Send + Sync {
         expected_version: i64,
         now: OffsetDateTime,
         audit: crate::audit::AuditContext,
+    ) -> Result<UserSnapshot, UseCaseError>;
+
+    /// 身份排他锁内复核操作者当前权限、目标版本和最后可登录 Owner。
+    /// 需 user.manage；目标持有 owner 时另需 ownership.manage。
+    /// 实际变更同事务递增 version/auth_version、撤销会话并记录审计；
+    /// 相同状态且版本匹配时不写入，软删除账号不能通过此入口恢复。
+    async fn change_status(
+        &self,
+        user_id: Uuid,
+        status: domain::identity::UserStatus,
+        expected_version: i64,
+        now: OffsetDateTime,
+        actor: &crate::identity::Actor,
     ) -> Result<UserSnapshot, UseCaseError>;
 
     /// 同事务递增认证修订号并清理会话，用于明确的全部会话撤销。

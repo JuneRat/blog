@@ -3,6 +3,7 @@ import {
   Button,
   Form,
   Input,
+  Popconfirm,
   Select,
   Space,
   Table,
@@ -42,7 +43,9 @@ function messageOf(error: unknown): string {
       case "email_taken":
         return "邮箱已被其他账号使用，请换一个或留空。";
       case "last_owner":
-        return "这是最后一个可登录的 Owner，不能移除其 Owner 角色；请先给另一个账号授予 Owner 并绑定登录方式。";
+        return "这是最后一个可登录的 Owner，不能停用或移除其 Owner 角色；请先确保另一个 Owner 可以登录。";
+      case "version_conflict":
+        return "账号已在其他位置更新，请核对最新列表后重试。";
       case "forbidden":
         return withRequestId(
           "没有权限执行该操作：可能缺少 ownership.manage，或超出了你的委派上限（不能授予自己不具备的权限）。",
@@ -65,10 +68,9 @@ interface CreateUserDraft {
 
 const EMPTY_CREATE: CreateUserDraft = { username: "", email: "", displayName: "" };
 
-/** 登录方式文案：停用 > 无登录方式 > 密码/外部身份的组合。 */
+/** 登录方式独立于启用状态展示；停用并不删除密码或外部身份。 */
 function loginLabel(user: AdminUser): string {
-  if (user.deleted) return "已停用";
-  if (!user.can_login) return "无（无法登录）";
+  if (!user.password_enabled && user.external_identities === 0) return "无（无法登录）";
   if (user.password_enabled && user.external_identities > 0) return "密码 + 外部身份";
   if (user.password_enabled) return "本地密码";
   return "外部身份";
@@ -165,15 +167,39 @@ export function UserListScreen() {
           ? `已为 ${user.username} 分配角色 ${role}。`
           : `已移除 ${user.username} 的角色 ${role}。`,
       );
-      // 目标是自己时角色变更已递增 users.version，本人会话立即失效；
-      // 主动刷新 `/me` 让界面进入登录态，而不是继续显示已失效的会话。
+      // 角色变更保持登录；目标是自己时重新读取权限与资料版本。
       if (user.id === me?.user_id) {
         await refresh();
-        return;
       }
       await load();
     } catch (e) {
       setError(messageOf(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function changeStatus(user: AdminUser): Promise<void> {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    const status = user.status === "active" ? "disabled" : "active";
+    try {
+      await api.changeUserStatus(user.id, status, user.version);
+      setNotice(status === "disabled"
+        ? `已停用 ${user.username}，其登录会话已撤销。`
+        : `已启用 ${user.username}，该账号需要重新登录。`);
+      if (user.id === me?.user_id) {
+        await refresh();
+      } else {
+        await load();
+      }
+    } catch (e) {
+      setError(messageOf(e));
+      if (e instanceof ApiError && (e.code === "version_conflict" || e.code === "last_owner")) {
+        await load();
+      }
     } finally {
       setBusy(false);
     }
@@ -227,7 +253,7 @@ export function UserListScreen() {
                   <Button
                     type="link"
                     size="small"
-                    disabled={busy || lastOwner}
+                    disabled={busy || lastOwner || user.deleted || user.status === "disabled"}
                     title={
                       lastOwner
                         ? "这是最后一个可登录的 Owner，不能移除其 Owner 角色"
@@ -246,6 +272,15 @@ export function UserListScreen() {
       ),
     },
     {
+      title: "状态",
+      key: "status",
+      render: (_value, user) => user.deleted ? <Tag>已删除</Tag> : (
+        <Tag color={user.status === "active" ? "green" : "default"}>
+          {user.status === "active" ? "已启用" : "已停用"}
+        </Tag>
+      ),
+    },
+    {
       title: "登录方式",
       key: "login",
       render: (_value, user) => (
@@ -253,11 +288,45 @@ export function UserListScreen() {
       ),
     },
   ];
+  if (canManageUsers) {
+    columns.push({
+      title: "账号操作",
+      key: "statusAction",
+      render: (_value, user) => {
+        const disabling = user.status === "active";
+        const protectedOwner = user.roles.includes("owner") && !canOwnership;
+        const disabled = busy || user.deleted || protectedOwner || (disabling && user.is_last_loginable_owner);
+        return (
+          <Popconfirm
+            title={disabling ? `停用 ${user.username}？` : `启用 ${user.username}？`}
+            description={disabling
+              ? user.id === me?.user_id ? "你将退出登录，需要其他管理员重新启用此账号。" : "该账号将无法登录，现有登录会话会被撤销。"
+              : "该账号保留原有角色和登录方式，需要重新登录。"}
+            okText={disabling ? "确认停用" : "确认启用"}
+            cancelText="取消"
+            okButtonProps={{ danger: disabling }}
+            disabled={disabled}
+            onConfirm={() => changeStatus(user)}
+          >
+            <Button danger={disabling} disabled={disabled}
+              aria-label={`${disabling ? "停用" : "启用"} ${user.username}`}
+              title={user.is_last_loginable_owner ? "不能停用最后一个可登录的 Owner"
+                : protectedOwner ? "操作 Owner 需要所有权管理权限" : undefined}>
+              {disabling ? "停用" : "启用"}
+            </Button>
+          </Popconfirm>
+        );
+      },
+    });
+  }
   if (canManageRoles) {
     columns.push({
       title: "分配角色",
       key: "assign",
       render: (_value, user) => {
+        if (user.deleted || user.status === "disabled") {
+          return <Typography.Text type="secondary">账号未启用</Typography.Text>;
+        }
         // 角色目录读取失败不能退化成「空目录」：否则一次网络故障会被误读为
         // 「没有可分配的角色」，静默阻断分配。两种状态给出不同文案。
         if (rolesError !== null) {
@@ -376,6 +445,7 @@ export function UserListScreen() {
         dataSource={users.data ?? []}
         columns={columns}
         pagination={false}
+        scroll={{ x: 1000 }}
         locale={{
           emptyText: errorText !== null ? "账号列表加载失败。" : "还没有账号。",
         }}

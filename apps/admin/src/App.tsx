@@ -44,6 +44,9 @@ const MediaLibraryScreen = lazy(() =>
 const UserListScreen = lazy(() =>
   import("./screens/UserListScreen").then((m) => ({ default: m.UserListScreen })),
 );
+const ProfileScreen = lazy(() =>
+  import("./screens/ProfileScreen").then((m) => ({ default: m.ProfileScreen })),
+);
 const RoleListScreen = lazy(() =>
   import("./screens/RoleListScreen").then((m) => ({ default: m.RoleListScreen })),
 );
@@ -142,6 +145,8 @@ function AdminRoutes() {
           <SeriesListScreen />
         ) : route.name === "userList" ? (
           <UserListScreen />
+        ) : route.name === "profile" ? (
+          <ProfileScreen />
         ) : route.name === "roleList" ? (
           <RoleListScreen />
         ) : route.name === "settings" ? (

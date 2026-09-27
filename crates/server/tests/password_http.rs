@@ -900,3 +900,224 @@ async fn reauthentication_is_rate_limited() {
         "超过预算的重新认证必须被限流"
     );
 }
+
+/// 为账号管理测试建立独立操作者；目标 sun 仍通过真实密码登录。
+async fn status_operator(stack: &Stack, username: &str, role: &str) -> (String, serde_json::Value) {
+    use application::ports::UserRepository;
+    let repo = PostgresUserRepository::new(stack.pool.clone());
+    let user =
+        domain::identity::User::new(username, None, None, time::OffsetDateTime::now_utc()).unwrap();
+    let id = user.id().0;
+    repo.insert(&user, None.into()).await.unwrap();
+    repo.set_password_hash(id, "$operator-test-password", None.into())
+        .await
+        .unwrap();
+    stack
+        .roles
+        .assign_to_username(&Actor::bootstrap_cli(), username, role)
+        .await
+        .unwrap();
+    let version = repo.find_by_id(id).await.unwrap().unwrap().auth_version;
+    let cookie = PostgresSessionStore::with_defaults(stack.pool.clone())
+        .create(id, version)
+        .await
+        .unwrap();
+    let (status, me) = me(stack, &cookie).await;
+    assert_eq!(status, StatusCode::OK);
+    (format!("blog_session={cookie}"), me)
+}
+
+#[tokio::test]
+async fn disabling_blocks_password_login_and_enabling_requires_a_new_session() {
+    let _g = SERIAL.lock().await;
+    let stack = fresh_stack().await;
+    let (cookie, operator) = status_operator(&stack, "owner", "owner").await;
+    let csrf = operator["csrf_token"].as_str().unwrap();
+    let headers = [("cookie", cookie.as_str()), ("x-csrf-token", csrf)];
+    let (_, original_headers, _) = login(&stack, PASSWORD).await;
+    let old_cookie = session_cookie(&original_headers).unwrap();
+    let (_, before) = me(&stack, &old_cookie).await;
+    let path = format!("/api/admin/v1/users/{}/status", stack.user_id);
+    let (status, result_headers, disabled) = request_with_client(
+        &stack.router,
+        "PUT",
+        &path,
+        &headers,
+        Some(serde_json::json!({"status":"disabled","expected_version":before["version"]})),
+        Some("198.51.100.25:1234".parse().unwrap()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{disabled}");
+    assert_eq!(disabled["status"], "disabled");
+    assert_eq!(
+        response_header(&result_headers, "cache-control"),
+        Some("no-store")
+    );
+    assert_eq!(me(&stack, &old_cookie).await.0, StatusCode::UNAUTHORIZED);
+    let (status, _, rejected_login) = login(&stack, PASSWORD).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(rejected_login["code"], "invalid_credentials");
+    let (status, _, list) =
+        request(&stack.router, "GET", "/api/admin/v1/users", &headers, None).await;
+    assert_eq!(status, StatusCode::OK);
+    let target = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|u| u["id"] == stack.user_id.to_string())
+        .unwrap();
+    assert_eq!(target["status"], "disabled");
+    assert_eq!(target["version"], disabled["version"]);
+    assert_eq!(target["password_enabled"], true);
+    assert_eq!(target["can_login"], false);
+    let (status, _, enabled) = request(
+        &stack.router,
+        "PUT",
+        &path,
+        &headers,
+        Some(serde_json::json!({"status":"active","expected_version":disabled["version"]})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{enabled}");
+    assert_eq!(enabled["status"], "active");
+    assert_eq!(me(&stack, &old_cookie).await.0, StatusCode::UNAUTHORIZED);
+    let (status, new_headers, _) = login(&stack, PASSWORD).await;
+    assert_eq!(status, StatusCode::OK);
+    let new_cookie = session_cookie(&new_headers).unwrap();
+    assert_ne!(old_cookie, new_cookie);
+    assert_eq!(me(&stack, &new_cookie).await.0, StatusCode::OK);
+    let audit: (String, String, serde_json::Value) = sqlx::query_as(
+        "SELECT actor_id::text,host(ip_address),metadata FROM audit_logs WHERE action='user.status.update' AND metadata->>'to'='disabled'"
+    ).fetch_one(&stack.pool).await.unwrap();
+    assert_eq!(audit.0, operator["user_id"].as_str().unwrap());
+    assert_eq!(audit.1, "198.51.100.25");
+    assert_eq!(audit.2["from"], "active");
+}
+
+#[tokio::test]
+async fn status_endpoint_enforces_csrf_permissions_owner_guard_and_versions() {
+    let _g = SERIAL.lock().await;
+    let stack = fresh_stack().await;
+    let (cookie, owner) = status_operator(&stack, "owner", "owner").await;
+    let path = format!(
+        "/api/admin/v1/users/{}/status",
+        owner["user_id"].as_str().unwrap()
+    );
+    let body = serde_json::json!({"status":"disabled","expected_version":owner["version"]});
+    assert_eq!(
+        request(&stack.router, "PUT", &path, &[], Some(body.clone()))
+            .await
+            .0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        request(
+            &stack.router,
+            "PUT",
+            &path,
+            &[("cookie", &cookie)],
+            Some(body.clone())
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    let headers = [
+        ("cookie", cookie.as_str()),
+        ("x-csrf-token", owner["csrf_token"].as_str().unwrap()),
+    ];
+    let (status, _, response) =
+        request(&stack.router, "PUT", &path, &headers, Some(body.clone())).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(response["code"], "last_owner");
+    let mut stale = body.clone();
+    stale["expected_version"] = serde_json::json!(owner["version"].as_i64().unwrap() - 1);
+    let (status, _, response) = request(&stack.router, "PUT", &path, &headers, Some(stale)).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(response["code"], "version_conflict");
+    let mut invalid = body.clone();
+    invalid["expected_version"] = serde_json::json!(0);
+    assert_eq!(
+        request(&stack.router, "PUT", &path, &headers, Some(invalid))
+            .await
+            .0,
+        StatusCode::BAD_REQUEST
+    );
+    for invalid in [
+        serde_json::json!({"status":"deleted","expected_version":owner["version"]}),
+        serde_json::json!({"status":"disabled"}),
+        serde_json::json!({"status":"disabled","expected_version":owner["version"],"actor_id":owner["user_id"]}),
+    ] {
+        assert_eq!(
+            request(&stack.router, "PUT", &path, &headers, Some(invalid))
+                .await
+                .0,
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+    }
+    let mut cross_origin = headers.to_vec();
+    cross_origin.extend([
+        ("host", "blog.example"),
+        ("origin", "https://elsewhere.example"),
+    ]);
+    assert_eq!(
+        request(
+            &stack.router,
+            "PUT",
+            &path,
+            &cross_origin,
+            Some(body.clone())
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    let (_, login_headers, _) = login(&stack, PASSWORD).await;
+    let author_cookie = session_cookie(&login_headers).unwrap();
+    let (_, author) = me(&stack, &author_cookie).await;
+    let author_cookie = format!("blog_session={author_cookie}");
+    let (status, _, response) = request(
+        &stack.router,
+        "PUT",
+        &path,
+        &[
+            ("cookie", &author_cookie),
+            ("x-csrf-token", author["csrf_token"].as_str().unwrap()),
+        ],
+        Some(body.clone()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(response["code"], "forbidden");
+    let (admin_cookie, admin) = status_operator(&stack, "administrator", "admin").await;
+    assert_eq!(
+        request(
+            &stack.router,
+            "PUT",
+            &path,
+            &[
+                ("cookie", &admin_cookie),
+                ("x-csrf-token", admin["csrf_token"].as_str().unwrap())
+            ],
+            Some(body.clone()),
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN,
+        "Administrator 不能停用 Owner"
+    );
+    // 有另一位可登录 Owner 后允许本人停用；下一次请求必须重新认证。
+    status_operator(&stack, "other-owner", "owner").await;
+    assert_eq!(
+        request(&stack.router, "PUT", &path, &headers, Some(body))
+            .await
+            .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        request(&stack.router, "GET", "/api/admin/v1/me", &headers, None)
+            .await
+            .0,
+        StatusCode::UNAUTHORIZED
+    );
+}

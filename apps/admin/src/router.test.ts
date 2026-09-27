@@ -28,6 +28,7 @@ describe("parseRoute", () => {
 
     expect(parseRoute("/admin/tags")).toEqual({ name: "tagList" });
     expect(parseRoute("/admin/users")).toEqual({ name: "userList" });
+    expect(parseRoute("/admin/profile")).toEqual({ name: "profile" });
     expect(parseRoute("/admin/roles")).toEqual({ name: "roleList" });
     expect(parseRoute("/admin/settings")).toEqual({ name: "settings" });
     expect(parseRoute("/admin/audit-logs")).toEqual({ name: "auditLogs" });
@@ -46,6 +47,7 @@ describe("parseRoute", () => {
     // 标签/用户/角色/设置是固定单段：多余段不静默忽略。
     expect(parseRoute("/admin/tags/rust")).toEqual({ name: "invalid" });
     expect(parseRoute("/admin/users/author")).toEqual({ name: "invalid" });
+    expect(parseRoute("/admin/profile/author")).toEqual({ name: "invalid" });
     expect(parseRoute("/admin/roles/owner")).toEqual({ name: "invalid" });
     expect(parseRoute("/admin/settings/site")).toEqual({ name: "invalid" });
     expect(parseRoute("/admin/audit-logs/edit")).toEqual({ name: "invalid" });

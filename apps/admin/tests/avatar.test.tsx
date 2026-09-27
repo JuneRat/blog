@@ -57,6 +57,8 @@ function profile(avatarMediaId: string | null) {
     user_id: "u1",
     username: "author",
     display_name: "作者",
+    bio: null,
+    version: 3,
     avatar_media_id: avatarMediaId,
     avatar_url: avatarMediaId === null ? null : `/media/${avatarMediaId}`,
   };
@@ -67,6 +69,8 @@ function me(avatarMediaId: string | null) {
     user_id: "u1",
     username: "author",
     display_name: "作者",
+    bio: null,
+    version: 3,
     avatar_media_id: avatarMediaId,
     avatar_url: avatarMediaId === null ? null : `/media/${avatarMediaId}`,
     permissions: ["media.read", "media.upload"],

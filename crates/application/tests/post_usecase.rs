@@ -236,6 +236,17 @@ impl FakeUserRepo {
 
 #[async_trait::async_trait]
 impl UserRepository for FakeUserRepo {
+    async fn change_status(
+        &self,
+        _user_id: uuid::Uuid,
+        _status: domain::identity::UserStatus,
+        _expected_version: i64,
+        _now: time::OffsetDateTime,
+        _actor: &application::identity::Actor,
+    ) -> Result<UserSnapshot, UseCaseError> {
+        unimplemented!("此用例不修改账号状态")
+    }
+
     async fn save_profile(
         &self,
         user: &domain::identity::User,
@@ -334,6 +345,7 @@ impl UserRepository for FakeUserRepo {
                 email: u.email,
                 display_name: u.display_name,
                 status: u.status,
+                version: u.version,
                 deleted: u.deleted_at.is_some(),
                 password_enabled: false,
                 external_identities: 0,

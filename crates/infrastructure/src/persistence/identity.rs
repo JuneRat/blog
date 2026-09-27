@@ -15,7 +15,7 @@ const IDENTITY_LOCK: (i32, i32) = (2048001, 1);
 
 /// 取得身份/授权变更的统一排他锁。
 ///
-/// 角色分配/移除、外部身份绑定解绑、密码清除共用同一把锁：这些操作的
+/// 账号启停、角色分配/移除、外部身份绑定解绑、密码清除共用同一把锁：这些操作的
 /// 「检查 + 写入」必须在锁内完成，否则跨表不变量（例如「至少保留一种登录方式」）
 /// 会被并发写穿——两条路径各自看到「对方还在」，结果一起把它清空。
 pub(crate) async fn acquire_identity_lock(
@@ -187,6 +187,91 @@ impl UserRepository for PostgresUserRepository {
         tx.commit().await.map_err(map_sqlx_error)
     }
 
+    async fn change_status(
+        &self,
+        user_id: Uuid,
+        status: UserStatus,
+        expected_version: i64,
+        now: OffsetDateTime,
+        actor: &application::identity::Actor,
+    ) -> Result<UserSnapshot, UseCaseError> {
+        use crate::rbac::PostgresRbacStore;
+
+        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        acquire_identity_lock(&mut *tx)
+            .await
+            .map_err(map_sqlx_error)?;
+        let permissions = if actor.channel == application::identity::ActorChannel::ControlledCli
+            && actor.user_id.0.is_nil()
+        {
+            actor.permissions().clone()
+        } else {
+            PostgresRbacStore::permissions_for(&mut *tx, actor.user_id.0).await?
+        };
+        if !permissions.has("user.manage") {
+            return Err(UseCaseError::Forbidden);
+        }
+        // 只保护状态和版本，不锁外键身份。会话创建可能先淘汰旧行，再取得用户
+        // KEY SHARE；使用 FOR UPDATE 会与下面的会话删除形成反向等待。
+        let row = sqlx::query(&format!(
+            "SELECT {USER_COLUMNS} FROM users WHERE id=$1 AND deleted_at IS NULL FOR NO KEY UPDATE"
+        ))
+        .bind(user_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(map_sqlx_error)?
+        .ok_or_else(|| UseCaseError::NotFound("用户".into()))?;
+        let before = user_from_row(&row)?;
+        let is_owner: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM user_roles ur JOIN roles r ON r.id=ur.role_id \
+             WHERE ur.user_id=$1 AND r.code='owner')",
+        )
+        .bind(user_id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(map_sqlx_error)?;
+        if is_owner && !permissions.has("ownership.manage") {
+            return Err(UseCaseError::Forbidden);
+        }
+        if before.version != expected_version {
+            return Err(UseCaseError::VersionConflict);
+        }
+        if before.status == status {
+            tx.commit().await.map_err(map_sqlx_error)?;
+            return Ok(before);
+        }
+        if status == UserStatus::Disabled
+            && is_owner
+            && PostgresRbacStore::user_has_login_method(&mut *tx, user_id).await?
+            && PostgresRbacStore::active_owner_count(&mut *tx).await? <= 1
+        {
+            return Err(UseCaseError::LastOwnerProtected);
+        }
+        let row = sqlx::query(&format!(
+            "UPDATE users SET status=$2, version=version+1, auth_version=auth_version+1, updated_at=$3 \
+             WHERE id=$1 RETURNING {USER_COLUMNS}"
+        )).bind(user_id).bind(status.as_str()).bind(now)
+            .fetch_one(&mut *tx).await.map_err(map_sqlx_error)?;
+        let after = user_from_row(&row)?;
+        sqlx::query("DELETE FROM sessions WHERE user_id=$1")
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(map_sqlx_error)?;
+        record_change(
+            &mut tx,
+            actor.audit_context(),
+            "user.status.update",
+            "user",
+            &user_id.to_string(),
+            serde_json::json!({"from":before.status.as_str(),"to":status.as_str(),
+                "version":after.version,"auth_version":after.auth_version}),
+        )
+        .await?;
+        tx.commit().await.map_err(map_sqlx_error)?;
+        Ok(after)
+    }
+
     async fn set_avatar(
         &self,
         user_id: Uuid,
@@ -233,7 +318,7 @@ impl UserRepository for PostgresUserRepository {
         // 否则界面会提示「可登录」而后端拒绝，两处定义漂移。
         let rows = sqlx::query(
             "SELECT u.id, u.username, u.email, u.display_name, \
-                    u.status, (u.deleted_at IS NOT NULL) AS deleted, \
+                    u.status, u.version, (u.deleted_at IS NOT NULL) AS deleted, \
                     (u.password_hash IS NOT NULL) AS password_enabled, \
                     (SELECT count(*) FROM oauth_accounts oa WHERE oa.user_id = u.id) \
                         AS external_identities \
@@ -255,6 +340,7 @@ impl UserRepository for PostgresUserRepository {
                     email: row.try_get("email").map_err(map_row_error)?,
                     display_name: row.try_get("display_name").map_err(map_row_error)?,
                     status: user_status(row.try_get("status").map_err(map_row_error)?)?,
+                    version: row.try_get("version").map_err(map_row_error)?,
                     deleted: row.try_get("deleted").map_err(map_row_error)?,
                     password_enabled: row.try_get("password_enabled").map_err(map_row_error)?,
                     external_identities: row

@@ -63,7 +63,7 @@ pub enum UseCaseError {
     ///
     /// 与「没有权限」区分开：调用者可能确实持有 `ownership.manage`，只是这次操作
     /// 会让站点失去唯一能登录的 Owner。前端必须能解释原因，而不是显示“无权操作”。
-    #[error("不能移除最后一个可登录的 Owner")]
+    #[error("不能停用或移除最后一个可登录的 Owner")]
     LastOwnerProtected,
 
     /// 删除仍被引用或仍含子分类的分类被拒绝（引用保护）。

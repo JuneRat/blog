@@ -1,4 +1,4 @@
-//! 用户与角色管理 API：账号列表/创建、角色列表、角色分配与移除。
+//! 用户与角色管理 API：本人资料、账号列表/创建/启停、角色列表与分配。
 //!
 //! 本层只做传输映射，**不重复实现权限判断**：授权边界（`user.manage` /
 //! `role.manage` / `ownership.manage`）、委派上限与最后 Owner 保护都由
@@ -46,6 +46,7 @@ pub fn identity_router(state: AdminState) -> Router {
     Router::new()
         .route("/api/admin/v1/me/profile", put(update_profile))
         .route("/api/admin/v1/users", get(list_users).post(create_user))
+        .route("/api/admin/v1/users/{user_id}/status", put(change_status))
         .route(
             "/api/admin/v1/users/{username}/roles/{role}",
             put(assign_role).delete(remove_role),
@@ -97,6 +98,41 @@ async fn list_users(
     {
         Ok(users) => (StatusCode::OK, Json(users)).into_response(),
         Err(e) => admin_error(e, &request_id),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum AccountStatus {
+    Active,
+    Disabled,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ChangeStatusBody {
+    status: AccountStatus,
+    expected_version: i64,
+}
+
+async fn change_status(
+    AdminAuth { actor }: AdminAuth,
+    request_id: RequestId,
+    State(state): State<AdminState>,
+    Path(user_id): Path<uuid::Uuid>,
+    Json(body): Json<ChangeStatusBody>,
+) -> Response {
+    let status = match body.status {
+        AccountStatus::Active => application::identity::UserStatus::Active,
+        AccountStatus::Disabled => application::identity::UserStatus::Disabled,
+    };
+    match state
+        .users
+        .change_status(&actor, user_id, status, body.expected_version)
+        .await
+    {
+        Ok(result) => Json(result).into_response(),
+        Err(error) => admin_error(error, &request_id),
     }
 }
 

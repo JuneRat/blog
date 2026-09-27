@@ -26,6 +26,7 @@ export type Route =
   | { name: "pageTrash" }
   | { name: "seriesList" }
   | { name: "userList" }
+  | { name: "profile" }
   | { name: "roleList" }
   | { name: "settings" }
   | { name: "auditLogs" }
@@ -85,6 +86,9 @@ export function parseRoute(pathname: string): Route {
   if (segments[0] === "users") {
     return segments.length === 1 ? { name: "userList" } : { name: "invalid" };
   }
+  if (segments[0] === "profile") {
+    return segments.length === 1 ? { name: "profile" } : { name: "invalid" };
+  }
   if (segments[0] === "roles") {
     return segments.length === 1 ? { name: "roleList" } : { name: "invalid" };
   }
@@ -123,6 +127,7 @@ export const paths = {
   categories: `${BASE}/categories`,
   series: `${BASE}/series`,
   users: `${BASE}/users`,
+  profile: `${BASE}/profile`,
   roles: `${BASE}/roles`,
   settings: `${BASE}/settings`,
   auditLogs: `${BASE}/audit-logs`,

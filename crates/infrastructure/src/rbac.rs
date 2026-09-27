@@ -49,8 +49,7 @@ impl PostgresRbacStore {
     /// 「有效登录方式」= 至少一条 oauth_accounts **或** 已启用本地密码
     /// （`users.password_hash IS NOT NULL`）。两者是对等登录方式，缺一不可，
     /// 否则只用密码的 Owner 会被判成「登不进去」而被移除，站点直接失去 Owner。
-    async fn active_owner_count(
-        &self,
+    pub(crate) async fn active_owner_count(
         executor: impl Executor<'_, Database = sqlx::Postgres>,
     ) -> Result<i64, UseCaseError> {
         let (count,): (i64,) = sqlx::query_as(
@@ -89,7 +88,7 @@ impl PostgresRbacStore {
     /// 返回 false 会让 `remove_role` 跳过最后 Owner 保护——对，这是有意的：
     /// 「登不进去的 Owner」不构成有效 Owner，可以被清理。因此这个谓词必须
     /// 与 `active_owner_count` 用同一套定义，否则两处判定会互相矛盾。
-    async fn user_has_login_method(
+    pub(crate) async fn user_has_login_method(
         executor: impl Executor<'_, Database = sqlx::Postgres>,
         user_id: Uuid,
     ) -> Result<bool, UseCaseError> {
@@ -105,6 +104,27 @@ impl PostgresRbacStore {
         .await
         .map_err(Self::map_err)?;
         Ok(row.is_some())
+    }
+
+    /// 支持在调用方身份事务中复核权限，避免持锁时另取连接。
+    pub(crate) async fn permissions_for(
+        executor: impl Executor<'_, Database = sqlx::Postgres>,
+        user_id: Uuid,
+    ) -> Result<PermissionSet, UseCaseError> {
+        let keys: Vec<String> = sqlx::query_scalar(
+            "SELECT DISTINCT p.code \
+             FROM users u \
+             JOIN user_roles ur ON ur.user_id = u.id \
+             JOIN roles r ON r.id = ur.role_id \
+             JOIN role_permissions rp ON rp.role_id = r.id \
+             JOIN permissions p ON p.code = rp.permission_code \
+             WHERE u.id = $1 AND u.status = 'active' AND u.deleted_at IS NULL",
+        )
+        .bind(user_id)
+        .fetch_all(executor)
+        .await
+        .map_err(Self::map_err)?;
+        Ok(PermissionSet::from_keys(keys))
     }
 }
 
@@ -280,20 +300,7 @@ impl RbacStore for PostgresRbacStore {
     }
 
     async fn permissions_of_user(&self, user_id: Uuid) -> Result<PermissionSet, UseCaseError> {
-        let keys: Vec<(String,)> = sqlx::query_as(
-            "SELECT DISTINCT p.code \
-             FROM users u \
-             JOIN user_roles ur ON ur.user_id = u.id \
-             JOIN roles r ON r.id = ur.role_id \
-             JOIN role_permissions rp ON rp.role_id = r.id \
-             JOIN permissions p ON p.code = rp.permission_code \
-             WHERE u.id = $1 AND u.status = 'active' AND u.deleted_at IS NULL",
-        )
-        .bind(user_id)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(Self::map_err)?;
-        Ok(PermissionSet::from_keys(keys.into_iter().map(|k| k.0)))
+        Self::permissions_for(&self.pool, user_id).await
     }
 
     async fn permissions_of_role(&self, role_slug: &str) -> Result<PermissionSet, UseCaseError> {
@@ -384,7 +391,7 @@ impl RbacStore for PostgresRbacStore {
         if holds_role && role_slug == OWNER_ROLE_SLUG {
             let target_has_login = Self::user_has_login_method(&mut *tx, user_id).await?;
             if target_has_login {
-                let owners = self.active_owner_count(&mut *tx).await?;
+                let owners = Self::active_owner_count(&mut *tx).await?;
                 if owners <= 1 {
                     return Err(UseCaseError::LastOwnerProtected);
                 }
@@ -477,6 +484,6 @@ impl RbacStore for PostgresRbacStore {
 
     async fn loginable_owner_count(&self) -> Result<i64, UseCaseError> {
         // 复用 `remove_role` 保护使用的同一私有查询与谓词，避免两处定义漂移。
-        self.active_owner_count(&self.pool).await
+        Self::active_owner_count(&self.pool).await
     }
 }

@@ -57,6 +57,8 @@
 
 资料 PUT 为整值替换：`display_name`、`bio` 省略或 `null` 表示清空，简介按纯文本存储。版本过期返回 409；未知字段拒绝。只增 `users.version`，不修改 `auth_version`，并同事务追加脱敏审计。改密递增认证版本并轮换会话；角色变更保持 Cookie 有效，权限在下一次请求生效。
 
+后台 `/admin/profile` 提供本人展示名和简介表单。冲突时保留本地输入并暂停保存，用户明确重新加载后才采用新版本，不自动覆盖其他位置的修改。
+
 ## 文章与回收站
 
 以下所有路径均相对于 `/api/admin/v1`。读写权限按文章作者区分 own / any；创建文章的作者取当前会话用户。
@@ -137,11 +139,14 @@ Page 没有作者，使用站点级 `page.*` 权限。
 |---|---|
 | `GET /users?limit=…&offset=…` | 分页查询，返回用户数组；`user.manage` 或 `role.manage` |
 | `POST /users` | 创建用户：`username`，可带 `email`、`display_name`；`user.manage` |
+| `PUT /users/{id}/status` | UUID 定位；`status: "active" / "disabled"`、必填正整数 `expected_version`；需 `user.manage`，目标持有 Owner 时另需 `ownership.manage` |
 | `GET /roles` | 角色列表，`user.manage` 或 `role.manage` |
 | `PUT /users/{username}/roles/{role}` | 分配角色，成功 204 |
 | `DELETE /users/{username}/roles/{role}` | 移除角色，成功 204 |
 
 用户查询默认取 50 条，最多 200 条，负 offset 收敛为 0。角色变更需要 `role.manage`，授予范围不能超出操作者权限，Owner 变更额外需要 `ownership.manage`，最后 Owner 保护仍生效。用户与角色请求体上限为 4 KiB。当前 API 不提供自定义角色编辑、OAuth 提供商配置或管理员强制重置密码；后两者使用受控 CLI。
+
+用户列表包含 `status` 和编辑 `version`；状态与登录方式分开显示，停用不删除密码、外部身份、角色或文章。状态 PUT 成功返回 `{ "id": "UUID", "status": "disabled", "version": 4 }`。实际启用或停用同事务递增 `version/auth_version`、删除全部持久会话、追加 `user.status.update` 审计；启用后必须重新登录。相同状态且版本匹配时不写入、不撤销会话、不重复审计；旧版本仍返回 409 `version_conflict`。最后可登录 Owner 不能停用，返回 403 `last_owner`；软删除账号不能在此恢复，返回 404。未知状态或字段拒绝。后台 `/admin/users` 提供确认操作；允许停用本人，但仍执行最后 Owner 保护，成功后本人会话失效。
 
 ## 设置
 

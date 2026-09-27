@@ -11,23 +11,19 @@ export interface ProviderSummary {
 }
 
 /** GET /api/admin/v1/me（含本人资料，供头部头像与自助设置使用）。 */
-export interface Me {
-  user_id: string;
-  username: string;
-  display_name: string | null;
-  avatar_media_id: string | null;
-  /** 头像站内地址（`/media/{id}`；null = 无头像）。 */
-  avatar_url: string | null;
+export interface Me extends Profile {
   permissions: string[];
   csrf_token: string;
   channel: "session";
 }
 
-/** PUT /api/admin/v1/me/avatar 的响应（与 `Me` 的资料字段同源）。 */
+/** 本人资料、头像写入响应；与 `Me` 的资料字段同源。 */
 export interface Profile {
   user_id: string;
   username: string;
   display_name: string | null;
+  bio: string | null;
+  version: number;
   avatar_media_id: string | null;
   avatar_url: string | null;
 }
@@ -87,8 +83,10 @@ export interface AdminUser {
   username: string;
   email: string | null;
   display_name: string | null;
+  status: "active" | "disabled";
+  version: number;
   deleted: boolean;
-  /** 至少一种登录方式（本地密码或外部身份）；Owner 保护看这个谓词。 */
+  /** 已启用、未删除且至少一种登录方式；Owner 保护看这个谓词。 */
   can_login: boolean;
   /**
    * 全局判定：该账号是最后一个可登录的 Owner，移除其 Owner 角色会被后端拒绝。

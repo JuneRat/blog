@@ -10,6 +10,7 @@ use uuid::Uuid;
 
 use crate::error::UseCaseError;
 use crate::ports::{Clock, RbacStore, RoleDto, UserRepository};
+pub use domain::identity::UserStatus;
 use domain::identity::{PermissionSet, User, UserId, UserSnapshot};
 
 /// 受信权限描述符（resource.action）。仅随用例落地注册；
@@ -450,6 +451,8 @@ pub struct AdminUserDto {
     pub username: String,
     pub email: Option<String>,
     pub display_name: Option<String>,
+    pub status: &'static str,
+    pub version: i64,
     pub deleted: bool,
     pub can_login: bool,
     pub is_last_loginable_owner: bool,
@@ -462,6 +465,13 @@ pub struct CreateUserCmd {
     pub username: String,
     pub email: Option<String>,
     pub display_name: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct UserStatusView {
+    pub id: Uuid,
+    pub status: &'static str,
+    pub version: i64,
 }
 
 pub struct UserInteractor {
@@ -564,6 +574,33 @@ impl UserInteractor {
             .await
     }
 
+    pub async fn change_status(
+        &self,
+        actor: &Actor,
+        user_id: Uuid,
+        status: UserStatus,
+        expected_version: i64,
+    ) -> Result<UserStatusView, UseCaseError> {
+        actor.ensure_write_channel()?;
+        if !actor.has_permission("user.manage") {
+            return Err(UseCaseError::Forbidden);
+        }
+        if expected_version < 1 {
+            return Err(UseCaseError::Invalid(
+                "expected_version 必须为正整数".into(),
+            ));
+        }
+        let snapshot = self
+            .users
+            .change_status(user_id, status, expected_version, self.clock.now(), actor)
+            .await?;
+        Ok(UserStatusView {
+            id: snapshot.id,
+            status: snapshot.status.as_str(),
+            version: snapshot.version,
+        })
+    }
+
     /// 自助设置/清除头像：只允许改本人，不需要额外权限。
     ///
     /// 新头像必须存在且未软删除；同一用户可以保留已软删除的当前头像。
@@ -644,6 +681,8 @@ impl UserInteractor {
                     username: row.username,
                     email: row.email,
                     display_name: row.display_name,
+                    status: row.status.as_str(),
+                    version: row.version,
                     deleted: row.deleted,
                     can_login,
                     is_last_loginable_owner,

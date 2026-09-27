@@ -1,4 +1,4 @@
-import { Alert, Avatar, Breadcrumb, Button, Flex, Layout, Menu, Modal, Typography } from "antd";
+import { Alert, Avatar, Breadcrumb, Button, Flex, Layout, Menu, Modal, Typography, theme } from "antd";
 import type { MenuProps } from "antd";
 import type { ReactNode } from "react";
 import { useState } from "react";
@@ -72,6 +72,7 @@ const TITLES: Record<Route["name"], string> = {
   seriesList: "系列",
   pageTrash: "页面回收站",
   userList: "用户与角色",
+  profile: "个人资料",
   roleList: "角色目录",
   settings: "站点设置",
   auditLogs: "审计日志",
@@ -111,11 +112,13 @@ function selectedKey(route: Route): string {
     case "auditLogs":
       return paths.auditLogs;
     case "invalid":
+    case "profile":
       return "";
   }
 }
 
 export function AdminLayout({ children }: { children: ReactNode }) {
+  const { token } = theme.useToken();
   const route = useRoute();
   // 测试里 mock 的 auth 只给 status/me，缺少的字段用可选调用兜住，
   // 免得外壳把整屏带崩（真实 AuthProvider 一定提供这些方法）。
@@ -181,6 +184,7 @@ export function AdminLayout({ children }: { children: ReactNode }) {
       <Layout>
         <Header
           style={{
+            background: token.colorBgContainer,
             paddingInline: 24,
             display: "flex",
             alignItems: "center",
@@ -202,6 +206,7 @@ export function AdminLayout({ children }: { children: ReactNode }) {
               </Flex>
             </Button>
             <Button onClick={() => setPasswordOpen(true)}>修改密码</Button>
+            <Button onClick={() => goTo(paths.profile)}>个人资料</Button>
             <Button onClick={() => confirmLeave(() => void logout?.(), "放弃修改并退出")}>
               退出登录
             </Button>
