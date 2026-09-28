@@ -1,6 +1,34 @@
 use super::*;
 
 #[test]
+fn legacy_site_time_zone_defaults_to_utc_validates_iana_and_honors_env() {
+    assert_eq!(config("", &[]).site(None).unwrap().site.time_zone, "UTC");
+    let toml = "[server]\ntime_zone='Asia/Shanghai'";
+    assert_eq!(
+        config(toml, &[]).site(None).unwrap().site.time_zone,
+        "Asia/Shanghai"
+    );
+    assert_eq!(
+        config(toml, &[("BLOG_TIME_ZONE", "Europe/London")])
+            .site(None)
+            .unwrap()
+            .site
+            .time_zone,
+        "Europe/London"
+    );
+    for bad in ["", "Asia/Unknown", "+08:00"] {
+        let bad = config(toml, &[("BLOG_TIME_ZONE", bad)]);
+        assert!(
+            bad.check(ConfigScope::Serve)
+                .unwrap_err()
+                .contains("server.time_zone")
+        );
+        assert!(bad.check(ConfigScope::Resources).is_ok());
+    }
+    assert!(config("[server]\ntime_zone=8", &[]).site(None).is_err());
+}
+
+#[test]
 fn database_pool_policy_is_typed_bounded_and_scoped() {
     let default = config("", &[]).database_pool().unwrap();
     assert_eq!(

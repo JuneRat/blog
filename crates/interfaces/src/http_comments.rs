@@ -128,7 +128,19 @@ async fn public_list(
     id: RequestId,
 ) -> Response {
     match s.comments.public_list(&slug, q.root_id, q.page).await {
-        Ok(v) => Json(v).into_response(),
+        Ok(v) => {
+            #[derive(Serialize)]
+            struct PublicPage {
+                #[serde(flatten)]
+                page: application::comments::PublicCommentPage,
+                time_zone: String,
+            }
+            let time_zone = match s.admin.settings.public_time_zone().await {
+                Ok(zone) => zone,
+                Err(error) => return admin_error(error, &id),
+            };
+            Json(PublicPage { page: v, time_zone }).into_response()
+        }
         Err(e) => admin_error(e, &id),
     }
 }

@@ -93,6 +93,7 @@ impl SecureRandom for TestRandom {
 
 fn site_fallback() -> SiteInfo {
     SiteInfo {
+        time_zone: "UTC".into(),
         title: FALLBACK_TITLE.into(),
         description: FALLBACK_DESCRIPTION.into(),
         logo_url: None,
@@ -296,7 +297,8 @@ async fn build(pool: PgPool) -> Stack {
             site_fallback(),
             common::media_guard(pool.clone()),
         )
-        .with_themes(theme_store.clone(), registry.clone()),
+        .with_themes(theme_store.clone(), registry.clone())
+        .with_time_zones(Arc::new(infrastructure::IanaTimeZones)),
     );
 
     // 公开站点：真实主题 + settings 解析（数据库 site 行 > 装配回退值）。
@@ -323,7 +325,8 @@ async fn build(pool: PgPool) -> Stack {
             site_fallback(),
             test_base_url(),
         )
-        .with_themes(theme_store, registry),
+        .with_themes(theme_store, registry)
+        .with_time_zones(Arc::new(infrastructure::IanaTimeZones)),
     );
 
     let auth_state = AuthState {
@@ -864,6 +867,133 @@ async fn unconfigured_site_reads_fallback_and_public_uses_it() {
     let html = public_home(&stack.router).await;
     assert!(html.contains(FALLBACK_TITLE));
     assert!(html.contains(FALLBACK_DESCRIPTION));
+}
+
+#[tokio::test]
+async fn site_time_zone_changes_live_and_preserves_absolute_timestamps() {
+    let _g = SERIAL.lock().await;
+    let stack = fresh_stack().await;
+    let (cookie, csrf) = login_as(&stack, "admin").await;
+    let (author_cookie, _) = login_as(&stack, "author").await;
+    let (_, initial, _) = get(&stack.router, "/api/admin/v1/settings/site", Some(&cookie)).await;
+    assert_eq!(initial["time_zone"], "UTC");
+    assert!(
+        initial["time_zones"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("Asia/Shanghai"))
+    );
+    let published = time::macros::datetime!(2020-09-28 17:30 UTC);
+    let scheduled = time::macros::datetime!(2099-09-28 17:30 UTC);
+    for (slug, status, at) in [
+        ("zoned", "published", published),
+        ("future-zoned", "scheduled", scheduled),
+    ] {
+        sqlx::query("INSERT INTO posts (id,author_id,slug,title,content,content_html,content_render_version,status,published_at,updated_at) SELECT $1,id,$2,'时区测试','正文','<p>正文</p>',1,$3,$4,$4 FROM users WHERE username='author'")
+            .bind(Uuid::now_v7()).bind(slug).bind(status).bind(at)
+            .execute(&stack.pool).await.unwrap();
+    }
+    for (version, zone, display) in [
+        (
+            0,
+            "Asia/Shanghai",
+            "2020-09-29 01:30 +08:00 (Asia/Shanghai)",
+        ),
+        (
+            1,
+            "America/New_York",
+            "2020-09-28 13:30 -04:00 (America/New_York)",
+        ),
+    ] {
+        let input = json!({"title":"时区测试","description":"","time_zone":zone,"expected_version":version});
+        let (status, saved) = put(
+            &stack.router,
+            "/api/admin/v1/settings/site",
+            &cookie,
+            &csrf,
+            input.clone(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{saved}");
+        assert_eq!(saved["time_zone"], zone);
+        assert_eq!(saved["version"], version + 1);
+        // Same router/session: an author can obtain the display zone without settings.manage.
+        let (status, me, _) = get(&stack.router, "/api/admin/v1/me", Some(&author_cookie)).await;
+        assert_eq!(status, StatusCode::OK, "{me}");
+        assert_eq!(me["time_zone"], zone);
+        for path in ["/", "/posts/zoned"] {
+            let (status, html) = public_text(&stack.router, path).await;
+            assert_eq!(status, StatusCode::OK, "{html}");
+            assert!(html.contains(&display.replace('/', "&#x2f;")), "{html}");
+        }
+        let (status, _) = put(
+            &stack.router,
+            "/api/admin/v1/settings/site",
+            &cookie,
+            &csrf,
+            input.clone(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        let mut same = input;
+        same["expected_version"] = json!(version + 1);
+        let (status, saved) = put(
+            &stack.router,
+            "/api/admin/v1/settings/site",
+            &cookie,
+            &csrf,
+            same,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(saved["version"], version + 1, "相同值保存不增版");
+    }
+    // Older clients editing the title must not reset the saved zone.
+    let (status, saved) = put(
+        &stack.router,
+        "/api/admin/v1/settings/site",
+        &cookie,
+        &csrf,
+        json!({"title":"旧客户端修改","description":"","expected_version":2}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(saved["time_zone"], "America/New_York");
+    for invalid in ["", "Asia/Unknown", "+08:00"] {
+        let (status, _) = put(
+            &stack.router,
+            "/api/admin/v1/settings/site",
+            &cookie,
+            &csrf,
+            json!({"title":"不能保存","description":"","time_zone":invalid,"expected_version":3}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+    let stored: Vec<(String, time::OffsetDateTime)> =
+        sqlx::query_as("SELECT slug,published_at FROM posts ORDER BY slug")
+            .fetch_all(&stack.pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        stored,
+        vec![
+            ("future-zoned".into(), scheduled),
+            ("zoned".into(), published)
+        ]
+    );
+    let value: serde_json::Value =
+        sqlx::query_scalar("SELECT value FROM settings WHERE key='site'")
+            .fetch_one(&stack.pool)
+            .await
+            .unwrap();
+    assert_eq!(value["time_zone"], "America/New_York");
+    let audits: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM audit_logs WHERE action='settings.site'")
+            .fetch_one(&stack.pool)
+            .await
+            .unwrap();
+    assert_eq!(audits, 3);
 }
 
 #[tokio::test]

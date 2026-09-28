@@ -300,6 +300,7 @@ mod tests {
 
     fn site() -> SiteInfo {
         SiteInfo {
+            time_zone: "UTC".into(),
             title: "站点名".into(),
             description: "站点描述".into(),
             logo_url: None,

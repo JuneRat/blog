@@ -14,7 +14,7 @@ use interfaces::cli::ConfigScope;
 use schema::FIELDS;
 use std::{collections::BTreeMap, net::IpAddr, path::PathBuf};
 
-pub const DEFAULT_PATH: &str = "data/config.toml";
+pub const DEFAULT_PATH: &str = "config.toml";
 
 pub struct DatabaseConfig {
     pub url: String,
@@ -226,6 +226,11 @@ impl DeploymentConfig {
         }
     }
 
+    pub fn legacy_site_time_zone(&self) -> Result<infrastructure::SiteTimeZone, String> {
+        infrastructure::SiteTimeZone::parse(&self.string("server.time_zone")?)
+            .map_err(|error| format!("server.time_zone / BLOG_TIME_ZONE {error}"))
+    }
+
     pub fn metrics_bind(&self) -> Result<Option<std::net::SocketAddr>, String> {
         self.optional_string("metrics.bind")?
             .map(|value| {
@@ -283,7 +288,10 @@ impl DeploymentConfig {
             public_base_url,
             bind,
             trusted_proxies,
-            site: SiteInfo::default(),
+            site: SiteInfo {
+                time_zone: self.legacy_site_time_zone()?.name().into(),
+                ..SiteInfo::default()
+            },
             theme_dir: self.path_value("paths.theme_dir")?,
             admin_dist: self.path_value("paths.admin_dist")?,
             media_dir: self.media_dir()?,
@@ -292,6 +300,7 @@ impl DeploymentConfig {
 
     pub fn bootstrap_site(&self) -> Result<SiteSettingsValue, String> {
         validate_initial_site(SiteSettingsValue {
+            time_zone: None,
             title: self.optional_string("bootstrap.title")?,
             description: self.optional_string("bootstrap.description")?,
             logo_media_id: None,

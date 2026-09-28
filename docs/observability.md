@@ -19,9 +19,17 @@ Compose 镜像健康检查使用 `/readyz`；安装完成前显示 unhealthy 是
 
 原生启动默认文本，设置 `BLOG_LOG_FORMAT=json` 或 TOML `[logging] format="json"` 后使用逐行 JSON；Compose 默认 JSON，可在已有 `.env` 中覆盖为 `text`。`RUST_LOG` / `logging.filter` 继续控制过滤级别。
 
-请求完成日志的 `fields` 含 `request_id`、`method`、`path`、`route`、`status`、`elapsed_ms`，认证成功后另有 `actor_id`；info 请求 `span` 启用时也保留关联上下文。响应头 `x-request-id`、管理错误体和日志中的编号保持一致，即使 `RUST_LOG=warn` 过滤了 info span，5xx 完成记录和管理内部错误仍携带编号。请求完成日志不包含查询参数、Cookie、授权头或请求正文；路径和已验证用户编号仍属于受控日志数据。5xx 记 warn，其余完成记录记 info；请求指标始终全量统计，不受日志过滤影响。
+服务和 CLI 的文本和 JSON 日志时间都读取环境变量 `TZ`，未设置时为 UTC，与后台站点时区独立；例如上海时间输出 `2026-09-28T21:26:12.044+08:00`，统一保留毫秒和显式偏移。初始化日志前会校验时区，错误配置不会先连接数据库。修改 `TZ` 需重启进程，空值或未知 IANA 名称会被拒绝。Docker Compose 在 `.env` 中设置 `TZ=Asia/Shanghai` 即可；原生启动可用 `TZ=Asia/Shanghai cargo run`。
 
-JSON 运行日志进入 stderr，CLI 的机器可读结果仍写 stdout。安装码和启动地址是必须可见的运维提示，即使 `RUST_LOG=warn` 也会显示；JSON 模式下它们同样是 stderr JSON。配置或日志初始化本身失败时，尚未建立日志器，错误仍是 stderr 文本。
+文本模式省略 Rust 模块路径，请求完成记录在处理器 span 结束后输出，关联字段仅出现一次。例如：
+
+```text
+2026-09-28T21:26:12.044+08:00  INFO 请求完成 method=GET path=/ status=200 elapsed_ms=16 request_id=01a0e831-c93b-7532-9632-24c1257652d3 route=/
+```
+
+请求完成日志的 `fields` 含 `request_id`、`method`、`path`、`route`、`status`、`elapsed_ms`，认证成功后另有 `actor_id`。完成记录不重复输出请求 span；处理器内部的日志仍保留 span 上下文。响应头 `x-request-id`、管理错误体和日志中的编号保持一致，即使 `RUST_LOG=warn` 过滤了 info span，5xx 完成记录和管理内部错误仍携带编号。请求完成日志不包含查询参数、Cookie、授权头或请求正文；路径和已验证用户编号仍属于受控日志数据。5xx 记 warn，其余完成记录记 info；请求指标始终全量统计，不受日志过滤影响。
+
+文本和 JSON 运行日志均进入 stderr，CLI 的机器可读结果仍写 stdout。安装码和启动地址是必须可见的运维提示，即使 `RUST_LOG=warn` 也会显示；两种模式下它们均使用相同时间格式写入 stderr。配置或日志初始化本身失败时，尚未建立日志器，错误仍是 stderr 文本。
 
 Docker `local` driver 管理轮转，每个容器最多配置 5 个 10 MB 日志文件。安装码也在日志内，访问权限与现有部署日志保持一致。原生启动的日志保存与轮转由进程管理器负责。
 

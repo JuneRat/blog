@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { TimeZoneContext } from "../src/timeZone";
 import { App } from "../src/App";
 import { ApiError, auditApi } from "../src/api";
 import type { AuditRecord } from "../src/types";
@@ -75,4 +76,15 @@ it("rejects inverted dates, replaces actor ID with the unassociated filter, and 
   await screen.findByText(/权限已撤销/);
   expect(screen.queryByText("账号已不存在")).toBeNull();
   expect(screen.getByRole("button", { name: "下一页" }).hasAttribute("disabled")).toBe(true);
+});
+
+it("displays audit timestamps and sends filter bounds in the configured site zone", async () => {
+  render(<TimeZoneContext.Provider value="Asia/Shanghai"><App /></TimeZoneContext.Provider>);
+  await screen.findByText("2026-09-27 18:00:00 +08:00 (Asia/Shanghai)");
+  fireEvent.change(screen.getByLabelText("开始时间（含）"), { target: { value: "2026-09-28T00:00" } });
+  fireEvent.change(screen.getByLabelText("结束时间（不含）"), { target: { value: "2026-09-29T00:00" } });
+  fireEvent.click(screen.getByRole("button", { name: /筛\s*选/ }));
+  await waitFor(() => expect(auditApi.list).toHaveBeenLastCalledWith({
+    from: "2026-09-27T16:00:00.000Z", until: "2026-09-28T16:00:00.000Z",
+  }, undefined));
 });

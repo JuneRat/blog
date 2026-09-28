@@ -1,3 +1,4 @@
+import { formatDateTime, useTimeZone } from "../timeZone";
 import { invalidateAfterWrite } from "../queryEffects";
 import { statusLabel } from "../components/ContentLifecycleControls";
 import { Alert, App as AntdApp, Button, Flex, Space, Table, Typography } from "antd";
@@ -19,6 +20,7 @@ import type { PostSummary } from "../types";
  * 自己的内容与「新建草稿」动作；错误与冲突沿用内联 `Alert`，不用 message 吐司。
  */
 export function PostListScreen() {
+  const timeZone = useTimeZone();
   const { me } = useAuth();
   const { modal } = AntdApp.useApp();
   /**
@@ -82,7 +84,7 @@ export function PostListScreen() {
     {
       title: "更新时间",
       dataIndex: "updated_at",
-      render: (updatedAt: string) => <Typography.Text type="secondary">{updatedAt}</Typography.Text>,
+      render: (updatedAt: string) => <Typography.Text type="secondary">{formatDateTime(updatedAt, timeZone)}</Typography.Text>,
     },
   ];
   // 操作列始终存在：「编辑」是整行点击的键盘可达等价路径（行点击对键盘用户不可用）。

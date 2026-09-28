@@ -41,6 +41,11 @@ fn success(output: Output) -> String {
 #[test]
 fn json_logging_keeps_cli_stdout_machine_readable() {
     let dir = common::media_dir("config-json-logging");
+    // Resource diagnostics must not become dependent on serve-only timezone validation.
+    write_private(
+        &dir.join("config.toml"),
+        "[server]\ntime_zone='Unknown/Zone'\n",
+    );
     let output = command(&dir, &["config", "show", "--for", "resources"])
         .env("BLOG_LOG_FORMAT", "json")
         .output()
@@ -97,13 +102,24 @@ fn check_and_show_are_read_only_scoped_and_do_not_leak_credentials() {
 }
 
 #[test]
-fn config_flag_overrides_environment_and_no_dotenv_is_loaded() {
+fn config_defaults_to_working_directory_and_explicit_selection_takes_precedence() {
     let dir = common::media_dir("config-selection");
     write_private(
         &dir.join("config.toml"),
         "[server]\nbind='127.0.0.1:1234'\n",
     );
     std::fs::write(dir.join(".env"), "BLOG_BIND=127.0.0.1:9999\n").unwrap();
+    let default = success(
+        Command::new(env!("CARGO_BIN_EXE_blog"))
+            .env_clear()
+            .current_dir(&dir)
+            .args(["config", "show", "--sources"])
+            .output()
+            .unwrap(),
+    );
+    assert!(default.contains("127.0.0.1:1234"));
+    assert!(default.contains("toml:config.toml"));
+    assert!(!default.contains("127.0.0.1:9999"));
     let result = success(
         command(&dir, &["config", "show", "--sources"])
             .current_dir(&dir)
@@ -142,5 +158,33 @@ fn database_commands_require_an_explicit_connection() {
             .unwrap(),
     );
     assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn log_time_zone_uses_tz_independently_of_site_fallback() {
+    let dir = common::media_dir("config-log-tz");
+    write_private(
+        &dir.join("config.toml"),
+        "[server]\ntime_zone='Asia/Shanghai'\n",
+    );
+    // These CLI diagnostics don't connect to a DB. TZ is validated at logger initialization.
+    for zone in [None, Some("Asia/Shanghai"), Some("America/New_York")] {
+        let mut cmd = command(&dir, &["config", "show", "--for", "resources"]);
+        if let Some(zone) = zone {
+            cmd.env("TZ", zone);
+        }
+        let value: Value = serde_json::from_str(&success(cmd.output().unwrap())).unwrap();
+        assert!(value["fields"].is_array());
+    }
+    for zone in ["", "Asia/Unknown", "+08:00"] {
+        let output = command(&dir, &["config", "show", "--for", "resources"])
+            .env("TZ", zone)
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("TZ"));
+        assert!(output.stdout.is_empty());
+    }
     std::fs::remove_dir_all(dir).unwrap();
 }

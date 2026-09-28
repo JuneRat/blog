@@ -266,6 +266,7 @@ async fn fresh_stack() -> Stack {
             )),
             Arc::new(SystemClock),
             application::site_info::SiteInfo {
+                time_zone: "UTC".into(),
                 title: "测试站点".into(),
                 description: "集成测试".into(),
                 logo_url: None,

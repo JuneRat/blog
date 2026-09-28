@@ -4,16 +4,14 @@
 mod assembly;
 mod config;
 mod installation;
+mod logging;
 mod observability;
 mod recovery;
 mod website;
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
+use std::sync::Arc;
 
-static JSON_LOGS: AtomicBool = AtomicBool::new(false);
+pub use logging::notice;
 
 use infrastructure::RenderingRuntime;
 use interfaces::cli::{Command, parse_args};
@@ -28,54 +26,14 @@ async fn main() {
             std::process::exit(1);
         }
     };
-    let log_filter = match config.log_filter() {
-        Ok(filter) => filter,
-        Err(error) => {
-            eprintln!("错误：{error}");
-            std::process::exit(1);
-        }
-    };
-    let json = match config.log_json() {
-        Ok(json) => json,
-        Err(error) => {
-            eprintln!("错误：{error}");
-            std::process::exit(1);
-        }
-    };
-    JSON_LOGS.store(json, Ordering::Relaxed);
-    let subscriber = tracing_subscriber::fmt()
-        .with_writer(std::io::stderr)
-        .with_ansi(false)
-        .with_env_filter(log_filter);
-    if json {
-        subscriber
-            .json()
-            .with_current_span(true)
-            .with_span_list(false)
-            .init();
-    } else {
-        subscriber.init();
-    }
-    if let Err(error) = run(cli.command, config).await {
-        tracing::error!(%error, "命令执行失败");
+    let command = cli.command.unwrap_or_default();
+    if let Err(error) = logging::init(&config) {
+        eprintln!("错误：{error}");
         std::process::exit(1);
     }
-}
-
-// Installation codes and listening addresses must remain visible even with
-// RUST_LOG=warn. In JSON mode these finite operator notices are JSON on stderr;
-// command result stdout remains owned by the CLI contract.
-pub fn notice(message: std::fmt::Arguments<'_>) {
-    if JSON_LOGS.load(Ordering::Relaxed) {
-        eprintln!(
-            "{}",
-            serde_json::json!({
-                "timestamp": time::OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc3339).unwrap_or_default(),
-                "level":"INFO", "target":"blog", "fields":{"message": message.to_string()}
-            })
-        );
-    } else {
-        println!("{message}");
+    if let Err(error) = run(command, config).await {
+        tracing::error!(%error, "命令执行失败");
+        std::process::exit(1);
     }
 }
 

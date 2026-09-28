@@ -107,6 +107,7 @@ async fn stack() -> Stack {
         theme,
         settings.clone(),
         SiteInfo {
+            time_zone: "UTC".into(),
             title: "测试站点".into(),
             description: "集成测试".into(),
             logo_url: None,
@@ -593,6 +594,7 @@ async fn site_settings_change_is_reflected_in_feed_and_html() {
     s.settings
         .save_site(
             &SiteSettingsValue {
+                time_zone: None,
                 title: Some("改名站点".into()),
                 description: Some("改名描述".into()),
                 logo_media_id: None,

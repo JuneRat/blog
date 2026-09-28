@@ -1,3 +1,4 @@
+import { formatDateTime, useTimeZone } from "./timeZone";
 import { Alert, Button, Select, Space, Typography } from "antd";
 import { useEffect, useRef, useState } from "react";
 import { candidateRevision, draftIdentity, draftKey, draftScope, handledKey, readCandidates, readHandled, snapshot, type DraftCandidate, type DraftIdentity } from "./draftStorage";
@@ -13,6 +14,7 @@ export function useLocalDraft<T>({ owner, kind, id, ready, disabled, dirty, valu
   value: T; template: T; baselineVersion: number | null; onRestore: (value: T, version: number | null) => void;
   identity?: DraftIdentity;
 }) {
+  const timeZone = useTimeZone();
   const storageScope = owner ? draftScope(owner, kind, id) : "";
   const key = owner ? draftKey(storageScope, identity) : "";
   const [state, setState] = useState<DraftState<T>>({ visit: -1, key: "", candidates: [], selected: null, reviewing: false, savedAt: null, error: null });
@@ -131,7 +133,7 @@ export function useLocalDraft<T>({ owner, kind, id, ready, disabled, dirty, valu
       {current?.error && <Alert type="warning" showIcon title={current.error} action={<Button disabled={disabled} onClick={discardCurrent}>删除本机副本</Button>} />}
       {current?.reviewing && selected ? <Alert type="info" showIcon title="发现本机未保存的编辑" description={<Space orientation="vertical" style={{ width: "100%" }}>
         <Select aria-label="选择本机恢复副本" disabled={disabled} value={selected.key} style={{ width: "100%", minWidth: 0 }}
-          options={current.candidates.map(candidate => ({ value: candidate.key, label: `${originLabel[candidate.origin]} · ${new Date(candidate.snapshot.savedAt).toLocaleString()} · ${candidate.snapshot.baselineVersion === null ? "新草稿" : `v${candidate.snapshot.baselineVersion}`}` }))}
+          options={current.candidates.map(candidate => ({ value: candidate.key, label: `${originLabel[candidate.origin]} · ${formatDateTime(candidate.snapshot.savedAt, timeZone)} · ${candidate.snapshot.baselineVersion === null ? "新草稿" : `v${candidate.snapshot.baselineVersion}`}` }))}
           onChange={selected => setState(previous => ({ ...previous, selected }))} />
         {blocksEditing && <Typography.Text>请先恢复或丢弃当前窗口已有副本，再开始编辑。</Typography.Text>}
         <Typography.Text>找到 {current.candidates.length} 份副本。恢复只填入编辑器，不会发送到服务器。其它窗口的源副本会保留。</Typography.Text>
@@ -160,7 +162,7 @@ export function useLocalDraft<T>({ owner, kind, id, ready, disabled, dirty, valu
           }}>{selected.key === key ? "丢弃本机副本" : "忽略此恢复副本"}</Button>
         </Space>
       </Space>} /> : <Space wrap>
-        <Typography.Text type="secondary">{current?.savedAt ? `本机恢复副本：${new Date(current.savedAt).toLocaleTimeString()}。` : "未保存输入会保存在本浏览器。"}各窗口分别保留，关闭或退出后可在本机恢复。</Typography.Text>
+        <Typography.Text type="secondary">{current?.savedAt ? `本机恢复副本：${formatDateTime(current.savedAt, timeZone)}。` : "未保存输入会保存在本浏览器。"}各窗口分别保留，关闭或退出后可在本机恢复。</Typography.Text>
         {current?.savedAt && <Button size="small" disabled={disabled} onClick={discardCurrent}>删除本机副本</Button>}
         <Button size="small" disabled={disabled} onClick={refreshCandidates}>查找其它恢复副本</Button>
       </Space>}

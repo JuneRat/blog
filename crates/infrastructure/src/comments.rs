@@ -114,7 +114,7 @@ fn public_comment(r: PgRow) -> PublicComment {
         is_author: !placeholder && r.get::<bool, _>("is_author"),
         placeholder,
         deleted: status == "trash",
-        created_at: application::public_site::format_datetime(r.get("created_at")),
+        created_at: application::public_site::api_datetime(r.get("created_at")),
     }
 }
 fn comment(r: PgRow) -> Result<CommentDto, UseCaseError> {
@@ -134,7 +134,7 @@ fn comment(r: PgRow) -> Result<CommentDto, UseCaseError> {
         is_author: r.get("is_author"),
         status: status(&r)?,
         version: r.get("version"),
-        created_at: application::public_site::format_datetime(r.get("created_at")),
+        created_at: application::public_site::api_datetime(r.get("created_at")),
     })
 }
 #[async_trait]

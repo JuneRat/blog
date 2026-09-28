@@ -102,7 +102,7 @@ pub async fn request_context(mut req: Request, next: Next) -> Response {
         route = %route,
     );
     let started = std::time::Instant::now();
-    let mut response = next.run(req).instrument(span.clone()).await;
+    let mut response = next.run(req).instrument(span).await;
 
     let status = response.status();
     if let Some(measurement) = measurement {
@@ -110,26 +110,26 @@ pub async fn request_context(mut req: Request, next: Next) -> Response {
     }
     let elapsed_ms = started.elapsed().as_millis() as u64;
     let actor_id = request_id.actor_id();
-    // Repeat correlation fields on the event: an info span is disabled when
-    // RUST_LOG=warn, but its 5xx completion must still carry the request ID.
-    span.in_scope(|| match (status.is_server_error(), actor_id.as_deref()) {
+    // Completion is emitted outside the handler span, with its own correlation
+    // fields: no duplicated span/event fields, including when info spans are filtered.
+    match (status.is_server_error(), actor_id.as_deref()) {
         (true, Some(actor)) => tracing::warn!(
-            request_id = %id, method = %method, path = %path, route = %route,
-            status = status.as_u16(), elapsed_ms, actor_id = %actor, "请求完成"
+            method = %method, path = %path, status = status.as_u16(), elapsed_ms,
+            request_id = %id, route = %route, actor_id = %actor, "请求完成"
         ),
         (true, None) => tracing::warn!(
-            request_id = %id, method = %method, path = %path, route = %route,
-            status = status.as_u16(), elapsed_ms, "请求完成"
+            method = %method, path = %path, status = status.as_u16(), elapsed_ms,
+            request_id = %id, route = %route, "请求完成"
         ),
         (false, Some(actor)) => tracing::info!(
-            request_id = %id, method = %method, path = %path, route = %route,
-            status = status.as_u16(), elapsed_ms, actor_id = %actor, "请求完成"
+            method = %method, path = %path, status = status.as_u16(), elapsed_ms,
+            request_id = %id, route = %route, actor_id = %actor, "请求完成"
         ),
         (false, None) => tracing::info!(
-            request_id = %id, method = %method, path = %path, route = %route,
-            status = status.as_u16(), elapsed_ms, "请求完成"
+            method = %method, path = %path, status = status.as_u16(), elapsed_ms,
+            request_id = %id, route = %route, "请求完成"
         ),
-    });
+    }
 
     // 无论成败（含提取器提前拒绝）都回写编号：客户端据此报障。
     if let Ok(value) = HeaderValue::from_str(&id) {

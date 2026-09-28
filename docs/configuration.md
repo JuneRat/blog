@@ -4,18 +4,19 @@
 
 ## 加载与优先级
 
-配置文件位置：`--config` > `BLOG_CONFIG_FILE` > `data/config.toml`。字段优先级：**命令行参数 > 进程环境变量 > TOML > 内置默认值**。例如 `serve --addr` 覆盖 `BLOG_BIND` 和 `server.bind`。程序不自动读取 `.env`，需要 shell、开发工具或容器注入；修改父进程环境不会更新已启动服务。
+配置文件位置：`--config` > `BLOG_CONFIG_FILE` > `config.toml`。字段优先级：**命令行参数 > 进程环境变量 > TOML > 内置默认值**。例如 `serve --addr` 覆盖 `BLOG_BIND` 和 `server.bind`。程序不自动读取 `.env`，需要 shell、开发工具或容器注入；修改父进程环境不会更新已启动服务。
 
 完整模板见 [config.example.toml](../config.example.toml)，变量参考见 [.env.example](../.env.example)。所有来源的相对资源路径都以**进程工作目录**为基准；生产环境建议使用绝对路径并固定工作目录。
 
 ```bash
 # 为新部署创建配置。
-install -d -m 700 data
-install -m 600 config.example.toml data/config.toml
-cargo run -p server -- config check
-cargo run -p server -- config show --sources
-cargo run -p server -- serve
+install -m 600 config.example.toml config.toml
+cargo run -- config check
+cargo run -- config show --sources
+cargo run
 ```
+
+本地默认把配置放在项目根目录，`data/` 仅存放媒体等运行数据。已有部署升级时，将原 `data/config.toml` 移到根目录；若安装尚未完成，同目录的 `config.install-state.json` 也要一起移动。也可继续通过 `--config` 或 `BLOG_CONFIG_FILE` 显式指定旧位置。Docker Compose 保持独立配置卷内的 `/var/lib/blog/config/config.toml`。
 
 TOML 和安装记录须为普通文件，Unix 权限不得开放给组或其他用户（建议 `600`），不能使用符号链接。解析器拒绝未知字段、不支持的 `config_version`、空连接串和非法类型。布尔环境变量接受大小写不敏感的 `true`/`false`、`1`/`0`；拼错或空值报错。错误信息不打印包含凭据的 TOML 源码。
 
@@ -30,6 +31,7 @@ TOML 可以先只配置路径、代理或 `[bootstrap]`：没有数据库连接�
 | `database.url` | `DATABASE_URL` | PostgreSQL 业务连接；推荐用环境注入凭据 |
 | `database.migrations_dir` | `BLOG_MIGRATIONS_DIR` | `migrations/postgres` |
 | `maintenance.database_url` | `BLOG_MAINTENANCE_DATABASE_URL` | 维护任务独立连接，无兜底；不应把维护凭据注入 HTTP 服务 |
+| `server.time_zone` | `BLOG_TIME_ZONE` | `UTC`；兼容旧配置，仅在数据库未保存站点时区时作为回退值（新部署请使用后台设置） |
 | `server.bind` | `BLOG_BIND` | `127.0.0.1:8080`；支持 IPv4/IPv6 的 IP:端口 |
 | `server.public_base_url` | `BLOG_PUBLIC_BASE_URL` | `http://127.0.0.1:8080`；公开链接、OAuth 回调与来源校验 |
 | `server.trusted_proxies` | `BLOG_TRUSTED_PROXIES` | 空数组；登录/改密限流、评论与业务审计可信代理 |
@@ -37,6 +39,7 @@ TOML 可以先只配置路径、代理或 `[bootstrap]`：没有数据库连接�
 | `paths.theme_dir` | `BLOG_THEME_DIR` | `themes/default`；扫描同级目录建立主题注册表 |
 | `paths.admin_dist` | `BLOG_ADMIN_DIST` | `apps/admin/dist`；安装要求存在 index.html |
 | `paths.media_dir` | `BLOG_MEDIA_DIR` | `data/media` |
+| 无（环境变量） | `TZ` | `UTC`；服务与 CLI 日志时区，与后台站点时区独立 |
 | `logging.filter` | `RUST_LOG` | `info,sqlx=warn`；非法过滤表达式报错 |
 | `logging.format` | `BLOG_LOG_FORMAT` | 原生默认 `text`，可选 `json`；Compose 默认 `json` |
 | `metrics.bind` | `BLOG_METRICS_BIND` | 原生默认不监听；例如 `127.0.0.1:9090`，只对 serve 生效 |
@@ -45,6 +48,18 @@ TOML 可以先只配置路径、代理或 `[bootstrap]`：没有数据库连接�
 迁移目录须同时包含匹配的 SQL 文件与 `schema.json`；自定义路径应成套复制整个目录。路径按进程工作目录解析，生产部署可用绝对路径；Compose 镜像已设置为 `/opt/blog/migrations/postgres`。迁移文件不可改写，新增结构见[迁移演进](schema-migrations.md)。
 
 `BLOG_PG_PORT` 仅用于开发数据库脚本；`BLOG_TEST_ADMIN_URL` 仅用于集成测试，默认 `postgres://blog:blog@127.0.0.1:5432/postgres`。它们不是应用部署字段。修改数据库端口时需同步调整连接串。
+
+## 时区
+
+站点时区在后台「站点设置」选择并保存，存入数据库 `settings.site.time_zone`，默认 UTC。支持 IANA 名称（例如 `Asia/Shanghai`、`Europe/London`）；空值、未知名称和 `+08:00` 这样的固定偏移会被拒绝。保存沿用 `settings.manage` 权限和版本冲突检查，无需重启或修改 `config_version`。
+
+公开文章、页面、评论、主题数据函数，以及后台列表、审计日志、恢复副本时间都按站点时区显示。预约发布时间和审计筛选输入也按此时区解释，控件标明时区，不依赖浏览器或宿主机设置。夏令时切换导致的不存在/重复时间必须重新选择，不静默调整。保存后当前后台窗口立即更新，其它已打开的后台窗口重新加载后采用新值。
+
+数据库继续保存绝对时刻，API 使用带偏移的 RFC 3339；修改站点时区只改变显示和后续输入的解释，不改变已预约的时刻。CLI 结果、备份名称及 RSS/sitemap 继续使用 UTC。`/me` 和匿名评论列表返回当前站点 `time_zone`。Rust 二进制内置 IANA 规则，无需给容器额外安装 tzdata；前端使用浏览器的 IANA 规则。
+
+进程日志（服务和 CLI）独立读取环境变量 `TZ`，未设置时为 UTC，支持相同的 IANA 名称；时间保留毫秒及显式偏移。Compose 可在现有 `.env` 中设置 `TZ=Asia/Shanghai` 后运行 `docker compose up -d blog`，恢复工具会保留该值。原生启动不自动读取 `.env`，使用 `TZ=Asia/Shanghai cargo run`，或在终端/进程管理器中导出 `TZ`。修改 `TZ` 需重启进程，后台站点设置不会改变日志时区。
+
+兼容过渡：已有 `server.time_zone` / `BLOG_TIME_ZONE` 仍作为数据库缺少时区字段时的回退值，保留升级前的显示。后台第一次保存时将所选时区写入数据库，之后以数据库为准，可删除旧配置。旧 API 客户端省略 `time_zone` 时保留已保存的值。该字段是现有 JSON 设置的向后兼容扩展，无需拆分或重写初始迁移；随数据库备份恢复。
 
 ## 连接池、查询超时与数据库 TLS
 
@@ -96,10 +111,10 @@ Logo 只来自数据库。后台整组保存时省略或传 null 的 `logo_media
 ## 检查与命令边界
 
 ```bash
-cargo run -p server -- config check --for serve
-cargo run -p server -- config show --sources --for database
-cargo run -p server -- config check --for maintenance
-cargo run -p server -- config show --for resources
+cargo run -- config check --for serve
+cargo run -- config show --sources --for database
+cargo run -- config check --for maintenance
+cargo run -- config show --for resources
 ```
 
 `check` 只校验字段和语义，不连接数据库、不检查资源是否完整、不写文件；不代表数据库可连接或主题可加载。`show` 输出 JSON，所有数据库连接均为 `[redacted]`，`--sources` 标出 env/TOML/default/推导来源及生效时机。范围支持 `serve`（默认）、`database`、`maintenance`、`media`、`resources`、`all`；`all` 同时要求独立维护连接。

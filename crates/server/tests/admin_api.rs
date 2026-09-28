@@ -253,6 +253,7 @@ async fn fresh_stack() -> Stack {
         )),
         clock.clone(),
         application::site_info::SiteInfo {
+            time_zone: "UTC".into(),
             title: "测试站点".into(),
             description: "集成测试".into(),
             logo_url: None,
@@ -3627,6 +3628,12 @@ async fn management_rejects_slug_addresses_without_changing_content() {
 async fn native_comments_guest_moderation_and_http_boundaries() {
     let _g = SERIAL.lock().await;
     let stack = fresh_stack().await;
+    sqlx::query(
+        "INSERT INTO settings (key, value) VALUES ('site', '{\"time_zone\":\"Asia/Shanghai\"}')",
+    )
+    .execute(&stack.pool)
+    .await
+    .unwrap();
     let (cookie, csrf) = login_as(&stack.router, &stack.idp, "author").await;
     let (status, body) = api(
         &stack.router,
@@ -3700,6 +3707,13 @@ async fn native_comments_guest_moderation_and_http_boundaries() {
     )
     .await;
     let data: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert!(
+        time::OffsetDateTime::parse(
+            data["items"][0]["created_at"].as_str().unwrap(),
+            &time::format_description::well_known::Rfc3339
+        )
+        .is_ok()
+    );
     let cid = data["items"][0]["id"].as_str().unwrap();
     assert_eq!(data["items"][0]["nickname"], "<script>guest</script>");
     let uri = format!("/api/admin/v1/comments/{cid}");
@@ -3744,9 +3758,12 @@ async fn native_comments_guest_moderation_and_http_boundaries() {
         StatusCode::CONFLICT
     );
     let (_, body) = api(&stack.router, "GET", endpoint, None, None, None).await;
+    let public: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(public["total"], 1);
+    assert_eq!(public["time_zone"], "Asia/Shanghai");
     assert_eq!(
-        serde_json::from_str::<serde_json::Value>(&body).unwrap()["total"],
-        1
+        public["items"][0]["created_at"],
+        data["items"][0]["created_at"]
     );
     // A cookie-bearing public submission must also pass session CSRF.
     let response = stack

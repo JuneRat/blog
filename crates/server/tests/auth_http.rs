@@ -234,6 +234,7 @@ async fn fresh_stack_with(secure_cookies: bool) -> Stack {
             )),
             std::sync::Arc::new(infrastructure::SystemClock),
             application::site_info::SiteInfo {
+                time_zone: "Asia/Shanghai".into(),
                 title: "测试站点".into(),
                 description: "测试描述".into(),
                 logo_url: None,
@@ -413,6 +414,10 @@ async fn full_login_me_logout_round_trip() {
     .await;
     assert_eq!(status, StatusCode::OK, "会话认证通过：{body}");
     assert!(body.contains("post.create"), "author 权限并入：{body}");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&body).unwrap()["time_zone"],
+        "Asia/Shanghai"
+    );
     let csrf = body
         .split("\"csrf_token\":\"")
         .nth(1)

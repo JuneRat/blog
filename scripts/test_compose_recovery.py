@@ -19,6 +19,27 @@ class ArchiveTests(unittest.TestCase):
         self.assertEqual(tool.container_environment(["DATABASE_URL", "EMPTY=", "TOKEN=a=b"]),
                          {"EMPTY": "", "TOKEN": "a=b"})
 
+    def test_prepare_preserves_log_zone_and_legacy_site_fallback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            deployment, target = root / "deployment", root / "target"
+            deployment.mkdir()
+            target.mkdir()
+            (deployment / "environment.json").write_text(json.dumps({
+                "BLOG_TIME_ZONE": "Asia/Shanghai", "TZ": "Europe/London", "PATH": "/source/bin",
+            }))
+            with patch.object(tool, "unpack") as unpack, patch.object(tool, "host_owned"), \
+                    patch.object(tool, "Path", side_effect=lambda value: target if value == "/target" else Path(value)):
+                unpack.return_value.__enter__.return_value = (
+                    root, {"secret_refs": [], "backup_id": "test"}, deployment,
+                    {"image_id": "blog:test", "ops_image": "blog-ops:test"},
+                )
+                tool.prepare("backup.tar.gz")
+            env = (target / ".env").read_text()
+            self.assertIn('BLOG_TIME_ZONE="Asia/Shanghai"', env)
+            self.assertIn('TZ="Europe/London"', env)
+            self.assertNotIn("PATH=", env)
+
     def test_rejects_unsafe_tar_before_writing_any_member(self):
         for name, kind in (("backup/../escape", tarfile.REGTYPE),
                            ("/escape", tarfile.REGTYPE),

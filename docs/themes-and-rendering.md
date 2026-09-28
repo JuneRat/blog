@@ -152,3 +152,5 @@ sitemap 的 50,000 条限制是整个文件的预算：首页、文章、Page、
 ## 文章评论组件
 
 内置 default / paper 的文章模板通过 `data-comments-slug="{{ post.slug }}"` 挂载原生评论，加载 `/assets/comments.js` 与 `/assets/comments.css`。这些共享资源由 Rust 提供；昵称、错误和占位使用 DOM `textContent`，正文仅将服务端受限渲染的 `content_html` 放入 HTML 节点，不使用源文回退。公开列表和提交开关由同源 API 实时检查文章可见性。行为、分页及接口见[评论](comments.md)。
+
+模板中的 `published_at`、`updated_at` 是按数据库站点设置 `site.time_zone` 格式化的展示文本，包含时区标记；`get_posts` / `get_post` 与页面主体使用该次渲染的同一时区快照；后台保存后，下次请求即生效。主题直接展示即可，不应按固定 UTC 格式解析这些文本。

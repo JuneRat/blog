@@ -7,8 +7,9 @@ use time::OffsetDateTime;
 
 use crate::error::UseCaseError;
 use crate::ports::{
-    PublishedCategoryQuery, PublishedPageQuery, PublishedPostQuery, PublishedSeriesQuery,
-    PublishedTagQuery, SettingsStore, ThemeRenderer, ThemeSettingsStore,
+    DateTimeFormatter, PublishedCategoryQuery, PublishedPageQuery, PublishedPostQuery,
+    PublishedSeriesQuery, PublishedTagQuery, SettingsStore, ThemeRenderer, ThemeSettingsStore,
+    TimeZoneProvider,
 };
 use crate::seo::{self, PublicBaseUrl, SeoMeta};
 use crate::site_info::{SiteInfo, effective_site};
@@ -16,11 +17,43 @@ use crate::syndication::{self, FeedChannel, FeedItem, SitemapEntry};
 use crate::themes::ThemeRegistry;
 use domain::content::is_reserved_root_slug;
 
-/// 模板展示用的时间格式（应用层渲染契约的一部分）。
-/// CLI 输出复用同一格式，保证各端一致。
+/// 无站点上下文时的默认 UTC 展示格式（CLI 与测试夹具）。
+/// HTTP 装配通过 DateTimeFormatter 注入站点时区。
 pub fn format_datetime(t: OffsetDateTime) -> String {
     let fmt = time::macros::format_description!("[year]-[month]-[day] [hour]:[minute] UTC");
-    t.format(fmt).unwrap_or_else(|_| t.to_string())
+    t.to_offset(time::UtcOffset::UTC)
+        .format(fmt)
+        .unwrap_or_else(|_| t.to_string())
+}
+
+/// 默认展示策略，供未装配站点时区的工具和测试使用。
+pub struct UtcDateTimeFormatter;
+impl DateTimeFormatter for UtcDateTimeFormatter {
+    fn format(&self, at: OffsetDateTime) -> String {
+        format_datetime(at)
+    }
+}
+
+/// 未装配 IANA 适配器的工具与测试只支持 UTC。
+pub struct UtcTimeZones;
+impl TimeZoneProvider for UtcTimeZones {
+    fn resolve(&self, name: &str) -> Result<Arc<dyn DateTimeFormatter>, UseCaseError> {
+        if name == "UTC" {
+            Ok(Arc::new(UtcDateTimeFormatter))
+        } else {
+            Err(UseCaseError::Invalid("时区适配器未装配".into()))
+        }
+    }
+    fn names(&self) -> Vec<String> {
+        vec!["UTC".into()]
+    }
+}
+
+/// API 时间使用可解析的绝对时刻；展示时区由调用端应用。
+pub fn api_datetime(at: OffsetDateTime) -> String {
+    at.to_offset(time::UtcOffset::UTC)
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_else(|_| at.to_string())
 }
 
 /// 列表页模板数据契约。
@@ -38,12 +71,21 @@ pub struct PostCard {
 
 impl From<crate::ports::PublicPostSummary> for PostCard {
     fn from(post: crate::ports::PublicPostSummary) -> Self {
+        Self::in_time_zone(post, &UtcDateTimeFormatter)
+    }
+}
+
+impl PostCard {
+    pub fn in_time_zone(
+        post: crate::ports::PublicPostSummary,
+        dates: &dyn DateTimeFormatter,
+    ) -> Self {
         Self {
             url: seo::post_path(&post.slug),
             title: post.title,
             slug: post.slug,
             excerpt: post.excerpt,
-            published_at: post.published_at.map(format_datetime),
+            published_at: post.published_at.map(|at| dates.format(at)),
             author_display: post.author_display,
             author_avatar_url: post.author_avatar_media_id.map(crate::media::media_url),
         }
@@ -156,6 +198,7 @@ pub const CATEGORY_PAGE_SIZE: i64 = 20;
 pub const SERIES_PAGE_SIZE: i64 = 20;
 
 pub struct PublicSiteInteractor {
+    time_zones: Arc<dyn TimeZoneProvider>,
     posts: Arc<dyn PublishedPostQuery>,
     pages: Arc<dyn PublishedPageQuery>,
     tags: Arc<dyn PublishedTagQuery>,
@@ -185,6 +228,7 @@ impl PublicSiteInteractor {
         base_url: PublicBaseUrl,
     ) -> Self {
         Self {
+            time_zones: Arc::new(UtcTimeZones),
             posts,
             pages,
             tags,
@@ -196,6 +240,11 @@ impl PublicSiteInteractor {
             fallback,
             base_url,
         }
+    }
+
+    pub fn with_time_zones(mut self, time_zones: Arc<dyn TimeZoneProvider>) -> Self {
+        self.time_zones = time_zones;
+        self
     }
 
     pub fn with_themes(
@@ -235,14 +284,15 @@ impl PublicSiteInteractor {
     }
 
     pub async fn render_index(&self, limit: i64) -> Result<String, UseCaseError> {
+        let site = self.site_info().await;
+        let dates = self.time_zones.resolve(&site.time_zone)?;
         let summaries: Vec<PostCard> = self
             .posts
             .list_public(limit, 0)
             .await?
             .into_iter()
-            .map(PostCard::from)
+            .map(|post| PostCard::in_time_zone(post, dates.as_ref()))
             .collect();
-        let site = self.site_info().await;
         let seo = SeoMeta::home(&site, &self.base_url);
         self.active_theme()
             .await?
@@ -252,6 +302,8 @@ impl PublicSiteInteractor {
 
     /// 渲染公开文章详情；不满足公开条件一律 NotFound（知道 slug 不等于有权读取）。
     pub async fn render_post(&self, slug: &str) -> Result<String, UseCaseError> {
+        let site = self.site_info().await;
+        let dates = self.time_zones.resolve(&site.time_zone)?;
         let detail = self
             .posts
             .find_public_by_slug(slug)
@@ -262,8 +314,8 @@ impl PublicSiteInteractor {
             title: detail.title.clone(),
             slug: detail.slug.clone(),
             excerpt: detail.excerpt.clone(),
-            published_at: detail.published_at.map(format_datetime),
-            updated_at: format_datetime(detail.updated_at),
+            published_at: detail.published_at.map(|at| dates.format(at)),
+            updated_at: dates.format(detail.updated_at),
             author_display: detail.author_display.clone(),
             author_avatar_url: detail.author_avatar_media_id.map(crate::media::media_url),
             content_html: detail.content_html,
@@ -290,7 +342,6 @@ impl PublicSiteInteractor {
                 })
                 .collect(),
         };
-        let site = self.site_info().await;
         let seo = SeoMeta::post(
             &site,
             &self.base_url,
@@ -309,6 +360,8 @@ impl PublicSiteInteractor {
     /// 保留路径在这里再次拒绝：即使历史数据或迁移绕过了创建/发布校验，
     /// 也不能让页面顶掉 `/admin`、`/api` 等系统入口。
     pub async fn render_page(&self, slug: &str) -> Result<String, UseCaseError> {
+        let site = self.site_info().await;
+        let dates = self.time_zones.resolve(&site.time_zone)?;
         if is_reserved_root_slug(slug) {
             return Err(UseCaseError::NotFound(format!("页面 {slug}")));
         }
@@ -320,11 +373,10 @@ impl PublicSiteInteractor {
         let view = PageView {
             title: detail.title.clone(),
             slug: detail.slug.clone(),
-            published_at: detail.published_at.map(format_datetime),
-            updated_at: format_datetime(detail.updated_at),
+            published_at: detail.published_at.map(|at| dates.format(at)),
+            updated_at: dates.format(detail.updated_at),
             content_html: detail.content_html,
         };
-        let site = self.site_info().await;
         let seo = SeoMeta::page(&site, &self.base_url, &view.title, &view.slug);
         self.active_theme()
             .await?
@@ -338,6 +390,8 @@ impl PublicSiteInteractor {
     /// 草稿/私密/回收站文章即使挂着该标签也不出现。页码越界渲染空页
     /// （不报错——分页导航按总数链接，越界通常是并发撤文，属正常状态）。
     pub async fn render_tag(&self, slug: &str, page: i64) -> Result<String, UseCaseError> {
+        let site = self.site_info().await;
+        let dates = self.time_zones.resolve(&site.time_zone)?;
         let tag = self
             .tags
             .find_public_by_slug(slug)
@@ -354,9 +408,11 @@ impl PublicSiteInteractor {
             tag_name: tag.name,
             page,
             total_pages,
-            posts: posts.into_iter().map(PostCard::from).collect(),
+            posts: posts
+                .into_iter()
+                .map(|post| PostCard::in_time_zone(post, dates.as_ref()))
+                .collect(),
         };
-        let site = self.site_info().await;
         let seo = SeoMeta::tag(
             &site,
             &self.base_url,
@@ -373,6 +429,8 @@ impl PublicSiteInteractor {
     /// 渲染公开分类页 /categories/{slug}?page=N（直接归属，不含子树）。
     /// 语义与标签页一致：未知 slug 404；只列公开已发布文章；越界页为空页。
     pub async fn render_category(&self, slug: &str, page: i64) -> Result<String, UseCaseError> {
+        let site = self.site_info().await;
+        let dates = self.time_zones.resolve(&site.time_zone)?;
         let category = self
             .categories
             .find_public_by_slug(slug)
@@ -389,9 +447,11 @@ impl PublicSiteInteractor {
             category_name: category.name,
             page,
             total_pages,
-            posts: posts.into_iter().map(PostCard::from).collect(),
+            posts: posts
+                .into_iter()
+                .map(|post| PostCard::in_time_zone(post, dates.as_ref()))
+                .collect(),
         };
-        let site = self.site_info().await;
         let seo = SeoMeta::category(
             &site,
             &self.base_url,
@@ -408,6 +468,8 @@ impl PublicSiteInteractor {
     /// 渲染公开系列页 /series/{slug}?page=N：按 position、post_id 稳定排序。
     /// 过滤非公开内容；展示的阅读序号按公开成员连续编号，与排序权重分开。
     pub async fn render_series(&self, slug: &str, page: i64) -> Result<String, UseCaseError> {
+        let site = self.site_info().await;
+        let dates = self.time_zones.resolve(&site.time_zone)?;
         let series = self
             .series
             .find_public_by_slug(slug)
@@ -430,11 +492,10 @@ impl PublicSiteInteractor {
                 .enumerate()
                 .map(|(i, s)| SeriesPostCard {
                     index: offset + i as i64 + 1,
-                    card: PostCard::from(s),
+                    card: PostCard::in_time_zone(s, dates.as_ref()),
                 })
                 .collect(),
         };
-        let site = self.site_info().await;
         let seo = SeoMeta::series(
             &site,
             &self.base_url,

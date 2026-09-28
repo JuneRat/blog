@@ -8,6 +8,18 @@ use crate::public_site::{CategoryView, PageView, PostCard, PostView, SeriesView,
 use crate::seo::SeoMeta;
 use crate::site_info::SiteInfo;
 
+/// 将绝对时刻转换为站点时区的展示文本；不改变存储、排序和到期判断。
+/// IANA 时区规则由适配器提供，应用层不依赖时区数据库。
+pub trait DateTimeFormatter: Send + Sync {
+    fn format(&self, at: time::OffsetDateTime) -> String;
+}
+
+/// IANA 名称校验与展示策略解析；数据库时区规则由适配器提供。
+pub trait TimeZoneProvider: Send + Sync {
+    fn resolve(&self, name: &str) -> Result<std::sync::Arc<dyn DateTimeFormatter>, UseCaseError>;
+    fn names(&self) -> Vec<String>;
+}
+
 /// 同次渲染的清洗后 HTML 与正文图片引用，必须一起持久化。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RenderedContent {

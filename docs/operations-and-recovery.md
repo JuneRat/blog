@@ -147,7 +147,7 @@ python3 -B scripts/recovery.py verify /secure/backups/blog-2026-09-27
 | 清单 | 格式 2，包含结构、媒体清单、所有表计数、内容状态/回收站计数、文件大小与 SHA-256；COMPLETE 保存清单摘要 |
 | 秘密 | 只保存 OAuth secret_ref 名称，要求恢复环境提供非空值；不复制秘密，也不能证明值正确 |
 
-首次安装生成的 TOML（默认 `data/config.toml`）含部署凭据，属于部署秘密，不在工具的自动备份范围内，应通过受控秘密存储单独保存。临时日志 `config.install-state.json` 在安装完成后自动清理；未完成安装时同样须保护其凭据，完成后的备份恢复无需携带日志。`settings.installation` 随数据库备份恢复。恢复部署可显式用 `DATABASE_URL` 覆盖新库地址；不要对恢复库重跑安装向导，详见[首次安装](installation.md)。
+首次安装生成的 TOML（默认 `config.toml`）含部署凭据，属于部署秘密，不在工具的自动备份范围内，应通过受控秘密存储单独保存。临时日志 `config.install-state.json` 在安装完成后自动清理；未完成安装时同样须保护其凭据，完成后的备份恢复无需携带日志。`settings.installation` 随数据库备份恢复。恢复部署可显式用 `DATABASE_URL` 覆盖新库地址；不要对恢复库重跑安装向导，详见[首次安装](installation.md)。
 
 整个媒体目录中的未注册文件也会保存，不判定为垃圾。附加目录可用 --resource name=目录，media 为保留名称。拒绝符号链接、路径越界及非普通文件。任何注册原件缺失或损坏都会阻止完成备份。
 

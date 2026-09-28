@@ -2623,6 +2623,7 @@ async fn post_series_edit_participates_in_series_version_protocol() {
 
 fn site_value(title: &str, description: &str) -> application::ports::SiteSettingsValue {
     application::ports::SiteSettingsValue {
+        time_zone: None,
         title: Some(title.into()),
         description: Some(description.into()),
         logo_media_id: None,
@@ -2704,10 +2705,16 @@ async fn settings_site_upsert_and_version_cas() {
     .fetch_all(&pool)
     .await
     .unwrap();
-    // site 分组的写入形态固定：schema_version + 标题/描述 + logo 占位（null = 无 logo）。
+    // site 分组包含时区；null 兼容尚未选择站点时区的历史设置。
     assert_eq!(
         keys,
-        vec!["description", "logo_media_id", "schema_version", "title"]
+        vec![
+            "description",
+            "logo_media_id",
+            "schema_version",
+            "time_zone",
+            "title"
+        ]
     );
 
     // 旧版本前提再次写入：冲突，版本停在 2。

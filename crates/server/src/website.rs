@@ -33,6 +33,7 @@ pub async fn build_router(
     runtime: Arc<RenderingRuntime>,
     telemetry: &interfaces::observability::Telemetry,
 ) -> Result<axum::Router, String> {
+    let time_zones = Arc::new(infrastructure::IanaTimeZones);
     let public_posts = Arc::new(PostgresPublishedPostQuery::new(pool.clone()));
     let public_pages = Arc::new(PostgresPublishedPageQuery::new(pool.clone()));
     let public_tags = Arc::new(PostgresPublishedTagQuery::new(pool.clone()));
@@ -59,7 +60,8 @@ pub async fn build_router(
             config.site.clone(),
             media_guard.clone(),
         )
-        .with_themes(settings_store.clone(), installed.registry.clone()),
+        .with_themes(settings_store.clone(), installed.registry.clone())
+        .with_time_zones(time_zones.clone()),
     );
     let public_site = Arc::new(
         PublicSiteInteractor::new(
@@ -73,7 +75,8 @@ pub async fn build_router(
             config.site.clone(),
             config.public_base_url.clone(),
         )
-        .with_themes(settings_store, installed.registry),
+        .with_themes(settings_store, installed.registry)
+        .with_time_zones(time_zones),
     );
 
     let users = assembly::users(pool);

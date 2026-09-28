@@ -270,10 +270,15 @@ impl MiniJinjaThemeRenderer {
         &self,
         template: &str,
         context: T,
+        time_zone: &str,
     ) -> Result<String, UseCaseError> {
         let mut env = self.env.clone();
-        let scope =
-            crate::theme_functions::RenderScope::new(self.data.clone(), self.assets.clone())?;
+        let dates = Arc::new(crate::SiteTimeZone::parse(time_zone).map_err(UseCaseError::Invalid)?);
+        let data = self
+            .data
+            .as_ref()
+            .map(|data| Arc::new(data.as_ref().clone().with_time_zone(dates)));
+        let scope = crate::theme_functions::RenderScope::new(data, self.assets.clone())?;
         crate::theme_functions::register(&mut env, scope);
         let html = env
             .get_template(template)
@@ -336,7 +341,7 @@ impl MiniJinjaThemeRenderer {
         posts: &[PostCard],
     ) -> Result<String, UseCaseError> {
         let ctx = IndexContext { site, seo, posts };
-        self.render("index.html", ctx)
+        self.render("index.html", ctx, &site.time_zone)
     }
 
     pub(crate) fn render_post(
@@ -346,7 +351,7 @@ impl MiniJinjaThemeRenderer {
         post: &PostView,
     ) -> Result<String, UseCaseError> {
         let ctx = PostContext { site, seo, post };
-        self.render("post.html", ctx)
+        self.render("post.html", ctx, &site.time_zone)
     }
 
     pub(crate) fn render_page(
@@ -356,7 +361,7 @@ impl MiniJinjaThemeRenderer {
         page: &PageView,
     ) -> Result<String, UseCaseError> {
         let ctx = PageContext { site, seo, page };
-        self.render("page.html", ctx)
+        self.render("page.html", ctx, &site.time_zone)
     }
 
     pub(crate) fn render_tag(
@@ -366,7 +371,7 @@ impl MiniJinjaThemeRenderer {
         tag: &TagView,
     ) -> Result<String, UseCaseError> {
         let ctx = TagContext { site, seo, tag };
-        self.render("tag.html", ctx)
+        self.render("tag.html", ctx, &site.time_zone)
     }
 
     pub(crate) fn render_category(
@@ -380,7 +385,7 @@ impl MiniJinjaThemeRenderer {
             seo,
             category,
         };
-        self.render("category.html", ctx)
+        self.render("category.html", ctx, &site.time_zone)
     }
 
     pub(crate) fn render_series(
@@ -390,7 +395,7 @@ impl MiniJinjaThemeRenderer {
         series: &SeriesView,
     ) -> Result<String, UseCaseError> {
         let ctx = SeriesContext { site, seo, series };
-        self.render("series.html", ctx)
+        self.render("series.html", ctx, &site.time_zone)
     }
 }
 
@@ -460,6 +465,7 @@ mod tests {
     async fn auxiliary_templates_escape_html_regardless_of_extension() {
         let runtime = super::RenderingRuntime::default();
         let site = application::site_info::SiteInfo {
+            time_zone: "UTC".into(),
             title: "Site".into(),
             description: String::new(),
             logo_url: None,

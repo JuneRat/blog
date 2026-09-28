@@ -21,6 +21,8 @@ ammonia.workspace = true
 # 字符串查找能正确处理的东西，而这里判断错会直接变成破图或幽灵占用。
 html5ever = "0.40"
 time.workspace = true
+# Bundle IANA rules so containers do not depend on host tzdata or TZ.
+jiff = { version = "0.2", default-features = false, features = ["std", "tzdb-bundle-always"] }
 uuid.workspace = true
 serde.workspace = true
 serde_json.workspace = true

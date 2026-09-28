@@ -107,6 +107,7 @@ fn content_actor() -> Actor {
 
 fn fallback() -> SiteInfo {
     SiteInfo {
+        time_zone: "UTC".into(),
         title: "默认标题".into(),
         description: "默认描述".into(),
         logo_url: None,
@@ -115,6 +116,7 @@ fn fallback() -> SiteInfo {
 
 fn stored(title: Option<&str>, description: Option<&str>) -> SiteSettingsValue {
     SiteSettingsValue {
+        time_zone: None,
         title: title.map(str::to_string),
         description: description.map(str::to_string),
         logo_media_id: None,
@@ -123,6 +125,7 @@ fn stored(title: Option<&str>, description: Option<&str>) -> SiteSettingsValue {
 
 fn cmd(title: &str, description: &str, expected_version: Option<i64>) -> SaveSiteSettingsCmd {
     SaveSiteSettingsCmd {
+        time_zone: None,
         title: title.into(),
         description: description.into(),
         logo_media_id: None,
@@ -152,6 +155,8 @@ async fn read_falls_back_to_assembly_when_not_configured() {
     assert_eq!(
         view,
         SiteSettingsView {
+            time_zone: "UTC".into(),
+            time_zones: vec!["UTC".into()],
             title: "默认标题".into(),
             description: "默认描述".into(),
             logo_media_id: None,
@@ -372,6 +377,7 @@ async fn new_interactor_over_same_store_keeps_configuration() {
 
 fn logo_cmd(logo: uuid::Uuid, expected_version: Option<i64>) -> SaveSiteSettingsCmd {
     SaveSiteSettingsCmd {
+        time_zone: None,
         title: "站点标题".into(),
         description: "站点描述".into(),
         logo_media_id: Some(logo),
@@ -425,4 +431,42 @@ async fn site_logo_rejects_trashed_image_as_a_new_reference() {
         Err(UseCaseError::Invalid(_))
     ));
     assert_eq!(settings.site_view(&admin_actor()).await.unwrap().version, 0);
+}
+
+#[tokio::test]
+async fn legacy_time_zone_is_only_used_until_the_database_takes_over() {
+    let store = Arc::new(FakeSettingsStore::new());
+    store.seed(stored(Some("旧标题"), Some("")), 1);
+    let mut legacy = fallback();
+    legacy.time_zone = "Asia/Shanghai".into();
+    let settings = SettingsInteractor::new(
+        store.clone(),
+        Arc::new(FixedClock),
+        legacy,
+        Arc::new(common::FakeMediaGuard::new()),
+    );
+    assert_eq!(settings.public_time_zone().await.unwrap(), "Asia/Shanghai");
+    let retained = settings
+        .save_site(&admin_actor(), cmd("旧客户端标题", "", Some(1)))
+        .await
+        .unwrap();
+    assert_eq!(retained.time_zone, "Asia/Shanghai");
+    assert!(
+        store
+            .find_site()
+            .await
+            .unwrap()
+            .unwrap()
+            .value
+            .time_zone
+            .is_none()
+    );
+    let mut updated = cmd("旧客户端标题", "", Some(2));
+    updated.time_zone = Some("UTC".into());
+    settings.save_site(&admin_actor(), updated).await.unwrap();
+    assert_eq!(settings.public_time_zone().await.unwrap(), "UTC");
+    assert_eq!(
+        settings.site_view(&admin_actor()).await.unwrap().time_zone,
+        "UTC"
+    );
 }

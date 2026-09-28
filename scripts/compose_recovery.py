@@ -246,6 +246,7 @@ def prepare(path):
         values = {key: value for key, value in values.items()
                   if key in manifest["secret_refs"] or key in (
                       "BLOG_PUBLIC_BASE_URL", "BLOG_TRUSTED_PROXIES", "BLOG_SECURE_COOKIES",
+                      "BLOG_TIME_ZONE", "TZ",
                       "BLOG_LOG_FORMAT", "RUST_LOG", "IDP_SECRET", "GH_SECRET",
                       "BLOG_DB_MAX_CONNECTIONS",
                       "BLOG_DB_MIN_CONNECTIONS",

@@ -1,3 +1,4 @@
+import { formatDateTime, useTimeZone } from "../timeZone";
 import { statusLabel } from "../components/ContentLifecycleControls";
 import { Alert, Button, Flex, Table, Typography } from "antd";
 import type { TableProps } from "antd";
@@ -16,6 +17,7 @@ import type { PageSummary } from "../types";
  * 「新建页面」动作；失败提示沿用内联 `Alert`。
  */
 export function PageListScreen() {
+  const timeZone = useTimeZone();
   const { me } = useAuth();
   /** 只读列表：失败按管理屏口径加「没有权限：」前缀（本屏没有写操作）。 */
   const { query: pages, filter, setFilter, setPage } = useContentList("pages", api.listPages);
@@ -51,7 +53,7 @@ export function PageListScreen() {
     {
       title: "更新时间",
       dataIndex: "updated_at",
-      render: (updatedAt: string) => <Typography.Text type="secondary">{updatedAt}</Typography.Text>,
+      render: (updatedAt: string) => <Typography.Text type="secondary">{formatDateTime(updatedAt, timeZone)}</Typography.Text>,
     },
   ];
 

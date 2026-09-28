@@ -11,6 +11,7 @@ import type { ReactNode } from "react";
 import { ApiError, api, loginUrl, setCsrfToken, setUnauthorizedHandler } from "./api";
 import { messageOf } from "./apiError";
 import type { Me, ProviderSummary } from "./types";
+import { TimeZoneContext } from "./timeZone";
 
 type Status = "loading" | "anonymous" | "authenticated";
 
@@ -22,6 +23,7 @@ interface AuthValue {
   /** 最近一次退出失败的提示；失败时会话仍然有效，不能假装已退出。 */
   logoutError: string | null;
   refresh: () => Promise<void>;
+  updateTimeZone: (timeZone: string) => void;
   logout: () => Promise<void>;
   goToLogin: () => Promise<void>;
 }
@@ -62,6 +64,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
       throw error;
     }
+  }, []);
+
+  const updateTimeZone = useCallback((timeZone: string) => {
+    setMe((current) => current === null ? null : { ...current, time_zone: timeZone });
   }, []);
 
   const goToLogin = useCallback(async () => {
@@ -138,13 +144,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       providersLoaded,
       logoutError,
       refresh,
+      updateTimeZone,
       logout,
       goToLogin,
     }),
-    [status, me, providers, providersLoaded, logoutError, refresh, logout, goToLogin],
+    [status, me, providers, providersLoaded, logoutError, refresh, updateTimeZone, logout, goToLogin],
   );
 
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+  return <AuthContext.Provider value={value}>
+    <TimeZoneContext.Provider value={me?.time_zone ?? "UTC"}>{children}</TimeZoneContext.Provider>
+  </AuthContext.Provider>;
 }
 
 export function useAuth(): AuthValue {

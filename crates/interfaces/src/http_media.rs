@@ -52,11 +52,9 @@ impl From<&MediaDto> for MediaJson {
             byte_size: dto.byte_size,
             width: dto.width,
             height: dto.height,
-            deleted_at: dto
-                .deleted_at
-                .map(application::public_site::format_datetime),
+            deleted_at: dto.deleted_at.map(application::public_site::api_datetime),
             version: dto.version,
-            created_at: application::public_site::format_datetime(dto.created_at),
+            created_at: application::public_site::api_datetime(dto.created_at),
             owner_id: dto.owner_id,
             owner_display: dto.owner_display.clone(),
             url: dto.url.clone(),

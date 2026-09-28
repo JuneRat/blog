@@ -1,3 +1,4 @@
+import { formatDateTime, inputToInstant, invalidLocalTime, useTimeZone } from "../timeZone";
 import { useState } from "react";
 import { Alert, Button, Checkbox, Descriptions, Flex, Form, Input, Modal, Select, Table, Typography } from "antd";
 import type { TableProps } from "antd";
@@ -13,15 +14,13 @@ const targetNames: Record<string, string> = {
   role: "角色", system: "系统", settings: "设置", tag: "标签", category: "分类", series: "系列",
 };
 
-function when(value: string): string {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
-}
 function actorName(item: AuditRecord): string {
   return item.actor_display ?? (item.actor_id ? "账号已不存在" : "无关联账号");
 }
 
 export function AuditLogScreen() {
+  const timeZone = useTimeZone();
+  const when = (value: string) => formatDateTime(value, timeZone);
   const { me } = useAuth();
   const allowed = me?.permissions.includes("audit.read") ?? false;
   const [form] = Form.useForm<AuditFilter>();
@@ -51,9 +50,9 @@ export function AuditLogScreen() {
     if (values.without_actor) { next.without_actor = true; delete next.actor_id; }
     for (const key of ["from", "until"] as const) {
       if (values[key]) {
-        const date = new Date(values[key]);
-        if (Number.isNaN(date.getTime())) { setInputError("请选择有效的时间。"); return; }
-        next[key] = date.toISOString();
+        const instant = inputToInstant(values[key], timeZone);
+        if (!instant) { setInputError(invalidLocalTime); return; }
+        next[key] = instant;
       }
     }
     if (next.from && next.until && next.from >= next.until) {
@@ -78,7 +77,7 @@ export function AuditLogScreen() {
   if (!allowed) return <><Typography.Title level={3}>审计日志</Typography.Title><Alert type="warning" showIcon title="当前账号没有查看审计日志的权限。" /></>;
   return <>
     <Typography.Title level={3}>审计日志</Typography.Title>
-    <Typography.Paragraph type="secondary">查看已成功提交的变更。记录按时间从新到旧排列，超过保留期的记录会定期清理。</Typography.Paragraph>
+    <Typography.Paragraph type="secondary">查看已成功提交的变更。记录按时间从新到旧排列，超过保留期的记录会定期清理。显示与筛选时区：{timeZone}。</Typography.Paragraph>
     <Form form={form} layout="vertical" onFinish={apply}>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: "0 16px" }}>
         <Form.Item name="action" label="动作"><Input placeholder="例如 post.update" maxLength={128} allowClear /></Form.Item>

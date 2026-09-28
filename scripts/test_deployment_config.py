@@ -49,7 +49,7 @@ class DeploymentConfigTests(unittest.TestCase):
                     self.assertEqual(resource_paths(blog_bin="/test/blog")["media_dir"], "custom/media")
                     run.assert_called_once()
                     self.assertEqual(run.call_args.kwargs["env"]["BLOG_MEDIA_DIR"], "custom/media")
-                    self.assertEqual(run.call_args.args[0][1:3], ["--config", "data/config.toml"])
+                    self.assertEqual(run.call_args.args[0][1:3], ["--config", "config.toml"])
 
     def test_cli_paths_override_environment_before_rust_validation(self):
         with tempfile.TemporaryDirectory() as root, patch.dict(os.environ, {"BLOG_MEDIA_DIR": "env/media"}, clear=True):

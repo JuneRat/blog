@@ -314,3 +314,14 @@ it('previews with the server renderer and preserves optional private email', asy
   await waitFor(()=>expect(form.textContent).toContain('已提交，等待审核'));
   expect(JSON.parse(fetcher.mock.calls[3][1].body).email).toBe('private@example.com');
 });
+
+it('formats comment timestamps in the server site zone for anonymous readers', async()=>{
+  fetcher.mockResolvedValueOnce(response({},401)).mockResolvedValueOnce(response({enabled:false,total:1,time_zone:'Asia/Shanghai',items:[{
+    id:'root',nickname:'Guest',content_html:'Hello',created_at:'2026-09-28T17:30:00Z',is_author:false,
+  }]}));
+  window.eval(script);
+  await waitFor(()=>expect(document.querySelector('time')?.textContent).toContain('2026/9/29'));
+  expect(document.querySelector('time')?.textContent).toContain('01:30:00');
+  expect(document.querySelector('time')?.textContent).toContain('(Asia/Shanghai)');
+  expect(document.querySelector('time')?.dateTime).toBe('2026-09-28T17:30:00Z');
+});

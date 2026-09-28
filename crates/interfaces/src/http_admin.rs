@@ -1237,6 +1237,8 @@ async fn reorder_series(
 
 #[derive(serde::Serialize)]
 struct SiteSettingsJson {
+    time_zone: String,
+    time_zones: Vec<String>,
     title: String,
     description: String,
     /// 站点 logo 的媒体资产 id（None = 无 logo）。
@@ -1251,6 +1253,8 @@ struct SiteSettingsJson {
 impl From<&SiteSettingsView> for SiteSettingsJson {
     fn from(view: &SiteSettingsView) -> Self {
         Self {
+            time_zone: view.time_zone.clone(),
+            time_zones: view.time_zones.clone(),
             title: view.title.clone(),
             description: view.description.clone(),
             logo_media_id: view.logo_media_id,
@@ -1266,6 +1270,7 @@ impl From<&SiteSettingsView> for SiteSettingsJson {
 
 #[derive(Deserialize, Default)]
 pub struct SaveSiteSettingsBody {
+    pub time_zone: Option<String>,
     #[serde(default)]
     pub title: String,
     #[serde(default)]
@@ -1357,6 +1362,7 @@ async fn put_site_settings(
         .save_site(
             &actor,
             SaveSiteSettingsCmd {
+                time_zone: body.time_zone,
                 title: body.title,
                 description: body.description,
                 logo_media_id: body.logo_media_id,

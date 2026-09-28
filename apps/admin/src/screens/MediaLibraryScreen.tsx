@@ -1,3 +1,4 @@
+import { formatDateTime, useTimeZone } from "../timeZone";
 import { invalidateAfterWrite } from "../queryEffects";
 import {
   Alert,
@@ -73,6 +74,7 @@ function referenceStatus(reference: MediaReference): string {
 
 /** 媒体库与回收站共享稳定公开链接；使用位置仍按来源内容权限过滤。 */
 export function MediaLibraryScreen() {
+  const timeZone = useTimeZone();
   const { me } = useAuth();
   const { modal } = AntdApp.useApp();
   const queryClient = useQueryClient();
@@ -366,7 +368,7 @@ export function MediaLibraryScreen() {
                     <Button type="link" style={{ padding: 0, width: "fit-content", height: "auto" }} onClick={() => setUsageId(asset.id)}>
                       {asset.reference_count === 0 ? "查看使用位置" : `被 ${asset.reference_count} 处引用`}
                     </Button>
-                    <Typography.Text type="secondary">{asset.created_at}</Typography.Text>
+                    <Typography.Text type="secondary">{formatDateTime(asset.created_at, timeZone)}</Typography.Text>
                   </Flex>
                 </Card>
               </Col>

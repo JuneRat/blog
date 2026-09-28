@@ -249,6 +249,7 @@ async fn fresh_stack_with(throttle_config: ThrottleConfig) -> Stack {
             )),
             Arc::new(SystemClock),
             application::site_info::SiteInfo {
+                time_zone: "UTC".into(),
                 title: "测试站点".into(),
                 description: "测试描述".into(),
                 logo_url: None,

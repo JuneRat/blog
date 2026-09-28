@@ -12,6 +12,7 @@ export interface ProviderSummary {
 
 /** GET /api/admin/v1/me（含本人资料，供头部头像与自助设置使用）。 */
 export interface Me extends Profile {
+  time_zone: string;
   permissions: string[];
   csrf_token: string;
   channel: "session";
@@ -170,6 +171,8 @@ export type SiteSettingsSource = "database" | "fallback";
 
 /** GET/PUT /api/admin/v1/settings/site（读/写都需 settings.manage）。 */
 export interface SiteSettings {
+  time_zone: string;
+  time_zones: string[];
   title: string;
   description: string;
   /** 站点 logo 的媒体资产 id（null = 无 logo）。 */

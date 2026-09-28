@@ -55,6 +55,7 @@ impl SettingsStore for PostgresSettingsStore {
     ) -> Result<SaveOutcome, UseCaseError> {
         let stored = serde_json::json!({
             "schema_version": 1,
+            "time_zone": value.time_zone,
             "title": value.title,
             "description": value.description,
             "logo_media_id": value.logo_media_id,

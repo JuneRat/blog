@@ -71,3 +71,5 @@ IP 以可空 inet 保存主机地址，审核不覆盖提交 IP。默认保留 1
 评论使用独立的 `COMMENT_RENDER_VERSION`，显式 `blog rebuild-html` 命令重建版本不匹配的 HTML；启动和结构迁移不触发重建。更新同时核对源文和编辑版本，不改变业务版本或修改时间，不写 media_refs。公开渲染不回退到未清洗源文。规则升级步骤见[运维](operations-and-recovery.md#html-显式重建)。
 
 验证入口包括领域聚合测试（创建、关系、审核状态矩阵、快照重建与过期无变化请求）、基础设施评论集成测试（真实 PostgreSQL 关系、权限、分页、CAS、事务回滚、提交与开关/父审核竞争及重建竞争）、评论渲染单元测试、server 的评论 HTTP 测试，以及公开组件、审核界面和文章编辑器 Vitest。恢复工具核验评论根关系、媒体引用和新迁移校验和，见[备份恢复](operations-and-recovery.md)。
+
+公开评论列表响应包含 `time_zone`（站点 IANA 时区）。评论 `created_at` 为 RFC 3339 绝对时刻，默认评论组件按该时区显示；后台评论列表使用 `/me.time_zone`。

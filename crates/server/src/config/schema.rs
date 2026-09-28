@@ -192,6 +192,14 @@ pub(super) const FIELDS: &[Field] = &[
         Some("127.0.0.1:8080"),
         false
     ),
+    // Compatibility fallback for site rows written before time_zone became an admin setting.
+    field!(
+        "server.time_zone",
+        Some("BLOG_TIME_ZONE"),
+        String,
+        Some("UTC"),
+        false
+    ),
     field!(
         "server.public_base_url",
         Some("BLOG_PUBLIC_BASE_URL"),

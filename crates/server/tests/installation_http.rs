@@ -536,6 +536,7 @@ async fn committed_installation_with_a_remaining_journal_is_verified_then_cleane
         &installation_id,
         &owner,
         &application::ports::SiteSettingsValue {
+            time_zone: None,
             title: None,
             description: None,
             logo_media_id: None,
@@ -767,6 +768,7 @@ async fn competing_bootstraps_commit_exactly_one_owner_and_marker() {
     .await
     .unwrap();
     let site = application::ports::SiteSettingsValue {
+        time_zone: None,
         title: None,
         description: None,
         logo_media_id: None,

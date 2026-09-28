@@ -22,10 +22,12 @@ Compose 备份使用 `sh scripts/compose-backup.sh backup`，首次从源码部�
 
 # 构建后台并启动站点
 (cd apps/admin && pnpm install --frozen-lockfile && pnpm build)
-cargo run -p server -- serve --addr 127.0.0.1:8080
+cargo run
 ```
 
-未设置 `DATABASE_URL`、也没有本地安装配置时，首次访问会跳转到安装页。填入终端显示的安装码、PostgreSQL 空库地址、站点地址和管理员账号。程序初始化结构与权限，原子创建首个 Owner，然后直接进入登录页。部署配置保存在 `data/config.toml`，下一次启动自动读取；临时恢复日志 `data/config.install-state.json` 在安装完成后自动清理，完成标记保存在数据库。配置和临时日志权限均为 600，容器部署需持久挂载配置目录。详见[首次安装](docs/installation.md)。
+不指定子命令时默认启动 `serve`，默认监听 `127.0.0.1:8080`。已有配置会按 `BLOG_BIND`、TOML 的 `server.bind` 覆盖地址；例如使用 3000 端口可运行 `BLOG_BIND=127.0.0.1:3000 cargo run`，也可继续显式传入 `serve --addr`。
+
+未设置 `DATABASE_URL`、也没有本地安装配置时，首次访问会跳转到安装页。填入终端显示的安装码、PostgreSQL 空库地址、站点地址和管理员账号。程序初始化结构与权限，原子创建首个 Owner，然后直接进入登录页。部署配置保存在 `config.toml`，下一次启动自动读取；临时恢复日志 `config.install-state.json` 在安装完成后自动清理，完成标记保存在数据库。配置和临时日志权限均为 600，容器部署需持久挂载配置目录。详见[首次安装](docs/installation.md)。
 
 站点入口为[公开站点](http://127.0.0.1:8080/)和[管理后台](http://127.0.0.1:8080/admin/)。已验证身份、媒体、内容发布与回收站、多系列、预约发布和评论；保留期维护、独立数据库权限和含媒体的隔离恢复已有验证，操作见[备份与恢复](docs/operations-and-recovery.md)。
 

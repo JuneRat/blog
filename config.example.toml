@@ -1,4 +1,5 @@
-# 复制到 data/config.toml 并 chmod 600。相对路径以进程工作目录为基准。
+# 新部署可用 install -m 600 config.example.toml config.toml 创建私有配置。
+# 相对路径以进程工作目录为基准，运行数据保存在 data/。
 # 优先级：CLI > 环境变量 > TOML > 默认值；不会自动加载 .env。
 config_version = 1
 
@@ -20,6 +21,7 @@ migrations_dir = "migrations/postgres"
 
 [server]
 bind = "127.0.0.1:8080"
+# 站点时区在后台「站点设置」中保存；日志时区使用环境变量 TZ（默认 UTC）。
 # 首次安装可在向导填写；生产环境使用真实 HTTPS 域名。
 # public_base_url = "https://blog.example.com"
 trusted_proxies = []

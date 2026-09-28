@@ -523,6 +523,8 @@ export interface UpdateSeriesInput {
 }
 
 export interface SaveSiteSettingsInput {
+  /** 缺省时保留已保存的时区，兼容旧客户端。 */
+  time_zone?: string;
   title: string;
   description: string;
   /** 站点 logo 媒体 id；PUT 是整组替换，缺省/null = 清除 logo。 */

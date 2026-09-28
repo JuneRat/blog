@@ -1,8 +1,8 @@
 //! 站点设置用例：site/theme 分组的读取视图与条件保存。
 //!
 //! 权限约定（docs/identity-and-admin.md §2）：
-//! - 读取与写入都要求 `settings.manage`：站点设置界面只服务于持有者，
-//!   与标签目录不同，Author 编辑文章不需要读站点配置，不开放目录读取；
+//! - 管理视图读取与写入都要求 `settings.manage`：站点设置界面只服务于持有者，
+//!   `/me` 与公开评论只通过窄方法 public_time_zone 读取显示时区；
 //! - 本用例覆盖 site/theme 分组：oauth 分组的写入仍走 `oauth.manage`
 //!   （受控 CLI / OAuth 用例），不受 settings.manage 覆盖；未知分组一律 404。
 //!
@@ -18,7 +18,9 @@ use std::sync::Arc;
 
 use crate::error::UseCaseError;
 use crate::identity::Actor;
-use crate::ports::{Clock, SaveOutcome, SettingsStore, SiteSettingsValue, ThemeSettingsStore};
+use crate::ports::{
+    Clock, SaveOutcome, SettingsStore, SiteSettingsValue, ThemeSettingsStore, TimeZoneProvider,
+};
 use crate::site_info::{SiteInfo, effective_site};
 use crate::themes::{ThemeOption, ThemeRegistry};
 use crate::version::checked_version;
@@ -37,6 +39,8 @@ pub enum SiteSettingsSource {
 /// site 分组的管理视图：生效值 + 来源 + 并发版本。
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct SiteSettingsView {
+    pub time_zone: String,
+    pub time_zones: Vec<String>,
     pub title: String,
     pub description: String,
     /// 站点 logo 的媒体资产 id（None = 无 logo）。
@@ -49,6 +53,8 @@ pub struct SiteSettingsView {
 }
 
 pub struct SaveSiteSettingsCmd {
+    /// 旧客户端缺省时保留现有时区，避免标题编辑意外重置预约时区。
+    pub time_zone: Option<String>,
     pub title: String,
     pub description: String,
     /// 站点 logo 的媒体资产 id；None = 无 logo（PUT 是整组替换）。
@@ -57,6 +63,7 @@ pub struct SaveSiteSettingsCmd {
 }
 
 pub struct SettingsInteractor {
+    time_zones: Arc<dyn TimeZoneProvider>,
     store: Arc<dyn SettingsStore>,
     clock: Arc<dyn Clock>,
     /// 装配回退值：内置默认值（server 装配层构造，进程内不变）。
@@ -88,12 +95,26 @@ impl SettingsInteractor {
         media_guard: Arc<dyn crate::ports::MediaRefGuard>,
     ) -> Self {
         Self {
+            time_zones: Arc::new(crate::public_site::UtcTimeZones),
             store,
             clock,
             fallback,
             themes: None,
             media_guard,
         }
+    }
+
+    pub fn with_time_zones(mut self, time_zones: Arc<dyn TimeZoneProvider>) -> Self {
+        self.time_zones = time_zones;
+        self
+    }
+
+    /// 公开展示信息，不需要 settings.manage；存储失败必须上报，避免错误预约。
+    pub async fn public_time_zone(&self) -> Result<String, UseCaseError> {
+        Ok(match self.store.find_site().await? {
+            Some(record) => effective_site(&record.value, &self.fallback).time_zone,
+            None => self.fallback.time_zone.clone(),
+        })
     }
 
     pub fn with_themes(
@@ -220,13 +241,24 @@ impl SettingsInteractor {
             SiteSettings::new(cmd.title, cmd.description, cmd.logo_media_id)
                 .map_err(|e| UseCaseError::Invalid(e.to_string()))?
                 .into_parts();
+        let current = self.store.find_site().await?;
+        let time_zone = match cmd.time_zone {
+            Some(name) => {
+                let name = name.trim().to_owned();
+                self.time_zones.resolve(&name)?;
+                Some(name)
+            }
+            None => current
+                .as_ref()
+                .and_then(|record| record.value.time_zone.clone()),
+        };
         let value = SiteSettingsValue {
+            time_zone,
             title: Some(title),
             description: Some(description),
             logo_media_id,
         };
 
-        let current = self.store.find_site().await?;
         let current_version = current.as_ref().map_or(0, |record| record.version);
         let expected = checked_version(current_version, cmd.expected_version)?;
 
@@ -236,6 +268,7 @@ impl SettingsInteractor {
             && record.value.title == value.title
             && record.value.description == value.description
             && record.value.logo_media_id == value.logo_media_id
+            && record.value.time_zone == value.time_zone
         {
             return Ok(self.view_of(record.value.clone(), record.version));
         }
@@ -264,6 +297,8 @@ impl SettingsInteractor {
         match self.store.find_site().await? {
             Some(record) => Ok(self.view_of(record.value, record.version)),
             None => Ok(SiteSettingsView {
+                time_zone: self.fallback.time_zone.clone(),
+                time_zones: self.time_zones.names(),
                 title: self.fallback.title.clone(),
                 description: self.fallback.description.clone(),
                 logo_media_id: None,
@@ -277,6 +312,8 @@ impl SettingsInteractor {
     fn view_of(&self, value: SiteSettingsValue, version: i64) -> SiteSettingsView {
         let info = effective_site(&value, &self.fallback);
         SiteSettingsView {
+            time_zone: info.time_zone,
+            time_zones: self.time_zones.names(),
             title: info.title,
             description: info.description,
             logo_media_id: value.logo_media_id,

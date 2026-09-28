@@ -324,6 +324,10 @@ async fn me(
         Ok(profile) => profile,
         Err(e) => return admin_error(e, &request_id),
     };
+    let time_zone = match state.settings.public_time_zone().await {
+        Ok(zone) => zone,
+        Err(error) => return admin_error(error, &request_id),
+    };
     let body = json!({
         "user_id": actor.user_id.0,
         "username": profile.username,
@@ -335,6 +339,7 @@ async fn me(
         "permissions": actor.permissions().keys().collect::<Vec<_>>(),
         "csrf_token": record.csrf_token,
         "channel": "session",
+        "time_zone": time_zone,
     });
     (StatusCode::OK, Json(body)).into_response()
 }

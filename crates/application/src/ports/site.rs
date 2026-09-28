@@ -14,6 +14,8 @@ use crate::error::UseCaseError;
 /// 写入路径（`SettingsInteractor::save_site`）只产生完整对象。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SiteSettingsValue {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_zone: Option<String>,
     #[serde(default)]
     pub title: Option<String>,
     #[serde(default)]

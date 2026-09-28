@@ -155,6 +155,7 @@ impl SettingsStore for Settings {
         Ok(Some(SiteSettingsRecord {
             version: 1,
             value: SiteSettingsValue {
+                time_zone: None,
                 title: Some("  DB & title  ".into()),
                 description: Some("".into()),
                 logo_media_id: None,
@@ -236,6 +237,7 @@ fn site(sources: Arc<Sources>, settings_fail: bool) -> PublicSiteInteractor {
             fail: settings_fail,
         }),
         SiteInfo {
+            time_zone: "UTC".into(),
             title: "fallback".into(),
             description: "fallback description".into(),
             logo_url: None,

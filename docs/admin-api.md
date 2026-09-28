@@ -59,7 +59,7 @@ POST 必须带启动终端显示的 `X-Install-Token`，并执行与其他写入
 | `GET /auth/callback/{provider}` | OAuth 回调 |
 | `POST /auth/login/password` | `{ "username": "sun", "password": "…" }`，成功设置会话 cookie |
 | `POST /auth/logout` | 会话、CSRF 与来源校验通过后退出 |
-| `GET /api/admin/v1/me` | 当前用户、有效权限、CSRF token、`bio` 和资料编辑 `version` |
+| `GET /api/admin/v1/me` | 当前用户、有效权限、CSRF token、`bio`、资料编辑 `version` 和站点 `time_zone` |
 | `PUT /api/admin/v1/me/profile` | 本人 `display_name`、`bio` 及必填 `expected_version`；返回资料与新版本，保持登录 |
 | `POST /api/admin/v1/me/password` | `new_password`；已启用密码时还需 `current_password` |
 | `PUT /api/admin/v1/me/avatar` | `{ "avatar_media_id": "UUID" }`；`null` 清除 |
@@ -108,7 +108,7 @@ POST 必须带启动终端显示的 `X-Install-Token`，并执行与其他写入
 
 `visibility` 为 `public` 或 `private`。状态由动作端点变更，不通过编辑请求直接赋值。`content` 始终是 Markdown；`content_html` 由服务端派生并持久化，不是客户端可设置的字段，也不是管理详情的正文格式。
 
-Post/Page 的 schedule 请求为 `{ "published_at": "2026-10-01T10:00:00+08:00", "expected_version": 3 }`。时间必须为带时区的 RFC 3339 且晚于当前时间，只接受草稿或已预约状态；已发布或已归档内容须先退回草稿。内容 DTO 的 published_at 和 updated_at 同样使用 RFC 3339，后台输入按本地时间转换后提交。预约即锁定 slug，取消预约不解锁。
+Post/Page 的 schedule 请求为 `{ "published_at": "2026-10-01T10:00:00+08:00", "expected_version": 3 }`。时间必须为带时区的 RFC 3339 且晚于当前时间，只接受草稿或已预约状态；已发布或已归档内容须先退回草稿。内容 DTO 的 published_at 和 updated_at 同样使用 RFC 3339，后台输入按 `/me.time_zone` 指定的站点时区转换后提交。预约即锁定 slug，取消预约不解锁。
 
 ## 独立页面
 
@@ -171,14 +171,16 @@ Page 没有作者，使用站点级 `page.*` 权限。
 
 | 方法与路径 | 行为 / 载荷 |
 |---|---|
-| `GET /settings/site` | 标题、描述、logo、生效来源和版本 |
-| `PUT /settings/site` | `title`、`description`、`logo_media_id`、`expected_version` |
+| `GET /settings/site` | 标题、描述、logo、`time_zone`、可选 IANA 名称 `time_zones`、生效来源和版本 |
+| `PUT /settings/site` | `title`、`description`、`logo_media_id`、`time_zone`、`expected_version` |
 | `GET /settings/theme` | 所选 slug、生效 slug、来源、版本与可用主题 |
 | `PUT /settings/theme` | `slug`、`expected_version` |
 | `GET /settings/retention` | 评论 IP 与审计的保留天数及两组版本 |
 | `PUT /settings/retention` | 必填 `comment_ip_days`、`comment_version`、`audit_days`、`audit_version` |
 
-`site` 是整组替换，省略或传 `null` 的 logo 会被清除；新 logo 要求图片存在且未移入回收站，原有引用可继续保留。未配置的设置版本为 0。保留期默认各 180 天，范围 1–36,500 整数天；更新只合并两项字段并保留其他 JSON 设置，两组版本任一过期返回 409。未知字段拒绝，相同值不增版。评论全站开关与 IP 保留期共享 comments 分组版本。清理由独立维护命令执行，HTTP 不提供立即清理接口。`/settings/oauth` 等未知分组返回 404。生效优先级见[配置参考](configuration.md)。
+`time_zone` 是 IANA 名称（例如 `Asia/Shanghai`），保存后无需重启，`/me` 和公开评论列表读取当前值。未知时区返回 400；旧客户端省略或传 `null` 时保留已保存的时区。时区变更沿用 site 行的版本检查和审计。
+
+`site` 其它字段是整组替换，省略或传 `null` 的 logo 会被清除；新 logo 要求图片存在且未移入回收站，原有引用可继续保留。未配置的设置版本为 0。保留期默认各 180 天，范围 1–36,500 整数天；更新只合并两项字段并保留其他 JSON 设置，两组版本任一过期返回 409。未知字段拒绝，相同值不增版。评论全站开关与 IP 保留期共享 comments 分组版本。清理由独立维护命令执行，HTTP 不提供立即清理接口。`/settings/oauth` 等未知分组返回 404。生效优先级见[配置参考](configuration.md)。
 
 ## 媒体
 
@@ -234,3 +236,5 @@ Page 没有作者，使用站点级 `page.*` 权限。
 上表覆盖管理接口和密码认证的应用错误。OAuth 登录启动与回调仍使用纯文本错误；非法 JSON、UUID 路径解析、请求体超限和未注册路由等也可能由 Axum 直接拒绝，当前并未全部规范为上述 JSON 形态，客户端需处理非 JSON 错误响应。
 
 完成日志记录方法、路径、状态、耗时和已验证的 actor，不记录 query、Cookie、token 或正文。应用错误复用请求上下文编号，媒体上传的错误体与 x-request-id 响应头保持一致。这是请求追踪能力，不能替代角色变更、身份绑定等动作级审计；审计交付范围见[路线图](product-roadmap.md)。
+
+时间展示：文章、页面、媒体和评论的时间字段均为带偏移的 RFC 3339 字符串；后台按照 `/me.time_zone` 显示，不解析展示文本。媒体和评论时间不再返回旧的 `YYYY-MM-DD HH:mm UTC` 格式。

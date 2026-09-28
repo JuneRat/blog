@@ -57,6 +57,11 @@ async fn stack() -> Stack {
 }
 
 async fn stack_with_theme(theme_dir: &str) -> Stack {
+    stack_with_zone(theme_dir, "UTC").await
+}
+
+async fn stack_with_zone(theme_dir: &str, time_zone: &str) -> Stack {
+    let dates = Arc::new(infrastructure::SiteTimeZone::parse(time_zone).unwrap());
     let pool = common::fresh_database("blog_server_test").await;
 
     let clock = Arc::new(SystemClock);
@@ -105,11 +110,14 @@ async fn stack_with_theme(theme_dir: &str) -> Stack {
     let theme = rendering.theme_renderer(
         MiniJinjaThemeRenderer::load(std::path::Path::new(theme_dir))
             .expect("模板加载失败")
-            .with_data(Arc::new(application::theme_data::ThemeData::new(
-                public_query.clone(),
-                public_tag_query.clone(),
-                public_category_query.clone(),
-            ))),
+            .with_data(Arc::new(
+                application::theme_data::ThemeData::new(
+                    public_query.clone(),
+                    public_tag_query.clone(),
+                    public_category_query.clone(),
+                )
+                .with_time_zone(dates.clone()),
+            )),
     );
     let series_repo: Arc<dyn application::ports::SeriesRepository> = Arc::new(
         infrastructure::PostgresSeriesRepository::new(common::database(pool.clone())),
@@ -127,24 +135,28 @@ async fn stack_with_theme(theme_dir: &str) -> Stack {
     ));
     let pages = Arc::new(PageInteractor::new(page_repo, clock));
     let fallback = SiteInfo {
+        time_zone: time_zone.into(),
         title: "测试站点".into(),
         description: "集成测试".into(),
         logo_url: None,
     };
-    let public_site = Arc::new(PublicSiteInteractor::new(
-        public_query,
-        public_page_query,
-        public_tag_query,
-        public_category_query,
-        public_series_query,
-        theme,
-        // 公开渲染的站点信息经 settings 解析：site 行未配置时回退装配值。
-        Arc::new(infrastructure::PostgresSettingsStore::new(
-            common::database(pool.clone()),
-        )),
-        fallback,
-        application::seo::PublicBaseUrl::parse("https://blog.test").unwrap(),
-    ));
+    let public_site = Arc::new(
+        PublicSiteInteractor::new(
+            public_query,
+            public_page_query,
+            public_tag_query,
+            public_category_query,
+            public_series_query,
+            theme,
+            // 公开渲染的站点信息经 settings 解析：site 行未配置时回退装配值。
+            Arc::new(infrastructure::PostgresSettingsStore::new(
+                common::database(pool.clone()),
+            )),
+            fallback,
+            application::seo::PublicBaseUrl::parse("https://blog.test").unwrap(),
+        )
+        .with_time_zones(Arc::new(infrastructure::IanaTimeZones)),
+    );
 
     for username in ["author", "editor"] {
         let display_name = if username == "author" {
@@ -1109,4 +1121,114 @@ async fn site_logo_and_author_avatar_are_rendered_on_public_pages() {
         index.contains(&format!("src=\"/media/{avatar}\"")),
         "首页列表必须渲染作者头像：{index}"
     );
+}
+
+#[tokio::test]
+async fn site_zone_formats_both_themes_and_theme_functions_without_changing_feed_instants() {
+    let _g = SERIAL.lock().await;
+    let at = time::macros::datetime!(2020-09-28 17:30 UTC);
+    let display = "2020-09-29 01:30 +08:00 (Asia/Shanghai)";
+    let function_theme = common::media_dir("theme-zone-snapshot");
+    for directory in ["templates", "assets"] {
+        std::fs::create_dir_all(function_theme.join(directory)).unwrap();
+        for entry in std::fs::read_dir(format!("../../themes/default/{directory}")).unwrap() {
+            let entry = entry.unwrap();
+            std::fs::copy(
+                entry.path(),
+                function_theme.join(directory).join(entry.file_name()),
+            )
+            .unwrap();
+        }
+    }
+    std::fs::copy(
+        "../../themes/default/theme.json",
+        function_theme.join("theme.json"),
+    )
+    .unwrap();
+    std::fs::write(function_theme.join("templates/index.html"),
+        "{{ posts[0].published_at }}|{{ get_posts(limit=1).items[0].published_at }}|{{ get_post(slug='zoned-post').published_at }}").unwrap();
+    for theme in [
+        "../../themes/default",
+        "../../themes/paper",
+        function_theme.to_str().unwrap(),
+    ] {
+        let s = stack_with_zone(theme, "Asia/Shanghai").await;
+        let post = s
+            .posts
+            .create(&s.author, cmd("zoned-post", "跨日文章"))
+            .await
+            .unwrap();
+        s.posts.publish(&s.author, post.id, None).await.unwrap();
+        sqlx::query("UPDATE posts SET published_at=$1, updated_at=$1 WHERE id=$2")
+            .bind(at)
+            .bind(post.id)
+            .execute(&s.pool)
+            .await
+            .unwrap();
+        let page = s
+            .pages
+            .create(&s.editor, page_cmd("zoned-page", "跨日页面"))
+            .await
+            .unwrap();
+        s.pages.publish(&s.editor, page.id, None).await.unwrap();
+        sqlx::query("UPDATE pages SET published_at=$1, updated_at=$1 WHERE id=$2")
+            .bind(at)
+            .bind(page.id)
+            .execute(&s.pool)
+            .await
+            .unwrap();
+        for path in ["/", "/posts/zoned-post", "/zoned-page"] {
+            let (status, body) = get(&s.router, path).await;
+            assert_eq!(status, StatusCode::OK, "{path}");
+            assert!(
+                body.contains(&display.replace('/', "&#x2f;")),
+                "{theme} {path}: {body}"
+            );
+        }
+        if theme == function_theme.to_str().unwrap() {
+            let (_, body) = get(&s.router, "/").await;
+            assert_eq!(body, vec![display.replace('/', "&#x2f;"); 3].join("|"));
+        }
+        let data = application::theme_data::ThemeData::new(
+            Arc::new(PostgresPublishedPostQuery::new(common::database(
+                s.pool.clone(),
+            ))),
+            Arc::new(PostgresPublishedTagQuery::new(common::database(
+                s.pool.clone(),
+            ))),
+            Arc::new(PostgresPublishedCategoryQuery::new(common::database(
+                s.pool.clone(),
+            ))),
+        )
+        .with_time_zone(Arc::new(
+            infrastructure::SiteTimeZone::parse("Asia/Shanghai").unwrap(),
+        ));
+        let listed = data.get_posts(10, None, None).await.unwrap();
+        assert_eq!(listed.items[0].published_at.as_deref(), Some(display));
+        let detail = data.get_post("zoned-post").await.unwrap().unwrap();
+        assert_eq!(detail.summary.published_at.as_deref(), Some(display));
+        assert_eq!(detail.updated_at, display);
+        // The same registered renderer must use the new DB zone for both page data and functions.
+        sqlx::query("INSERT INTO settings (key,value) VALUES ('site','{\"time_zone\":\"UTC\"}') ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value")
+            .execute(&s.pool).await.unwrap();
+        let (status, html) = get(&s.router, "/").await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(html.contains("2020-09-28 17:30 UTC"), "{html}");
+        assert!(!html.contains("+08:00"), "{html}");
+        if theme == function_theme.to_str().unwrap() {
+            assert_eq!(html, ["2020-09-28 17:30 UTC"; 3].join("|"));
+        }
+        let (status, feed) = get(&s.router, "/feed.xml").await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(feed.contains("28 Sep 2020 17:30:00 +0000"), "{feed}");
+        let stored: time::OffsetDateTime =
+            sqlx::query_scalar("SELECT published_at FROM posts WHERE id=$1")
+                .bind(post.id)
+                .fetch_one(&s.pool)
+                .await
+                .unwrap();
+        assert_eq!(stored, at);
+        s.pool.close().await;
+    }
+    std::fs::remove_dir_all(function_theme).unwrap();
 }

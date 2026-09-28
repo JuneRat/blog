@@ -15,8 +15,10 @@
 ```bash
 ./scripts/dev-db.sh
 (cd apps/admin && pnpm install --frozen-lockfile && pnpm build)
-cargo run -p server -- serve
+cargo run
 ```
+
+`cargo run`（或 `cargo r`）不带子命令时默认启动 `serve`，地址读取 `BLOG_BIND`、TOML 的 `server.bind`，缺省为 `127.0.0.1:8080`。临时使用其他端口可运行 `BLOG_BIND=127.0.0.1:3000 cargo run`；`cargo run -- serve --addr 127.0.0.1:3000` 仍有效。迁移、用户和其他维护操作继续显式指定子命令。
 
 首次安装时不要预先执行 `migrate` 或注入 `DATABASE_URL`；在[安装向导](installation.md)填写空库地址即可自动初始化。已有 CLI 初始化的数据库则显式设置 `DATABASE_URL` 后启动；下方保留这条受控维护路径。
 

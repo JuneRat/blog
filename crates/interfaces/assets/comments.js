@@ -170,7 +170,12 @@
         const badge = node('span', '作者'); badge.className = 'comment-author-badge';
         badge.setAttribute('aria-label', '文章作者'); identity.append(badge);
       }
-      article.append(identity, node('time', item.created_at));
+      const date = new Date(item.created_at);
+      const time = node('time', Number.isNaN(date.getTime()) ? item.created_at : `${date.toLocaleString('zh-CN', {
+        timeZone: data.time_zone || 'UTC', hour12: false, timeZoneName: 'shortOffset',
+      })} (${data.time_zone || 'UTC'})`);
+      time.dateTime = item.created_at;
+      article.append(identity, time);
       const text = node('div'); text.className = 'comment-body';
       if (item.placeholder) text.textContent = item.deleted ? '该评论已删除' : '该评论暂不可用';
       else text.innerHTML = item.content_html;

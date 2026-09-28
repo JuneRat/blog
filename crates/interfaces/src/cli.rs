@@ -18,13 +18,18 @@ use application::public_site::format_datetime;
 use clap::{Parser, Subcommand};
 
 #[derive(Debug, Parser)]
-#[command(name = "blog", version, about = "博客受控 CLI 与公开 SSR 服务入口")]
+#[command(
+    name = "blog",
+    version,
+    about = "博客受控 CLI 与公开 SSR 服务入口",
+    after_help = "不指定子命令时默认启动 serve，监听地址读取 BLOG_BIND 或部署配置。"
+)]
 pub struct Cli {
-    /// 部署配置文件（优先于 BLOG_CONFIG_FILE，默认 data/config.toml）
+    /// 部署配置文件（优先于 BLOG_CONFIG_FILE，默认 config.toml）
     #[arg(long, global = true)]
     pub config: Option<PathBuf>,
     #[command(subcommand)]
-    pub command: Command,
+    pub command: Option<Command>,
 }
 
 /// 供装配入口使用的参数解析（server 不直接依赖 clap）。
@@ -103,6 +108,12 @@ pub enum Command {
         #[arg(long)]
         addr: Option<String>,
     },
+}
+
+impl Default for Command {
+    fn default() -> Self {
+        Self::Serve { addr: None }
+    }
 }
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
@@ -1066,12 +1077,49 @@ mod tests {
     use super::*;
 
     #[test]
+    fn omitted_command_starts_serve_with_configured_address() {
+        for args in [vec!["blog"], vec!["blog", "--config", "local.toml"]] {
+            let cli = Cli::try_parse_from(&args).unwrap();
+            assert_eq!(
+                cli.config,
+                (args.len() > 1).then(|| PathBuf::from("local.toml"))
+            );
+            assert!(matches!(
+                cli.command.unwrap_or_default(),
+                Command::Serve { addr: None }
+            ));
+        }
+    }
+
+    #[test]
+    fn explicit_commands_and_address_keep_their_meaning() {
+        let cli = Cli::try_parse_from(["blog", "serve", "--addr", "127.0.0.1:3000"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::Serve { addr: Some(addr) }) if addr == "127.0.0.1:3000"
+        ));
+        let cli = Cli::try_parse_from(["blog", "migrate"]).unwrap();
+        assert!(matches!(cli.command, Some(Command::Migrate)));
+    }
+
+    #[test]
+    fn help_and_invalid_commands_do_not_fall_back_to_serve() {
+        assert_eq!(
+            Cli::try_parse_from(["blog", "--help"]).unwrap_err().kind(),
+            clap::error::ErrorKind::DisplayHelp
+        );
+        for args in [vec!["blog", "serv"], vec!["blog", "user"]] {
+            assert!(Cli::try_parse_from(args).is_err());
+        }
+    }
+
+    #[test]
     fn existing_post_commands_require_uuid_identity() {
         let id = uuid::Uuid::now_v7();
         for name in ["edit", "publish", "withdraw", "show"] {
             let cli = Cli::try_parse_from(["blog", "post", name, "--id", &id.to_string()])
                 .expect("UUID command should parse");
-            let Command::Post { action } = cli.command else {
+            let Some(Command::Post { action }) = cli.command else {
                 panic!("expected post command");
             };
             let parsed_id = match action {
@@ -1095,9 +1143,9 @@ mod tests {
         .unwrap();
         assert!(matches!(
             cli.command,
-            Command::Post {
+            Some(Command::Post {
                 action: PostAction::Create { slug: Some(slug), .. },
-            } if slug == "hello"
+            }) if slug == "hello"
         ));
     }
 }

@@ -9,6 +9,7 @@ use crate::ports::SiteSettingsValue;
 /// 解析见 [`effective_site`]。
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SiteInfo {
+    pub time_zone: String,
     pub title: String,
     pub description: String,
     /// 站点 logo 的站内地址（None = 无 logo）。站点配置公开，因此有 logo 即公开来源。
@@ -18,6 +19,7 @@ pub struct SiteInfo {
 impl Default for SiteInfo {
     fn default() -> Self {
         Self {
+            time_zone: "UTC".into(),
             title: "Sun's Blog".into(),
             description: "一个 Rust 博客".into(),
             logo_url: None,
@@ -39,6 +41,7 @@ pub fn initial_site_settings(
     .map_err(|e| crate::UseCaseError::Invalid(e.to_string()))?
     .into_parts();
     Ok(SiteSettingsValue {
+        time_zone: value.time_zone,
         title: value.title.map(|_| title),
         description: value.description.map(|_| description),
         logo_media_id: None,
@@ -50,6 +53,7 @@ pub fn initial_site_settings(
 /// - 标题：缺失或 trim 后为空 → 回退（空标题对任何页面都不可用）；
 /// - 描述：缺失 → 回退；已保存的空串是**合法选择**（管理员清空描述），
 ///   不回退，否则「清空描述」永远不生效。
+/// - 时区：缺失时使用装配回退值，兼容历史设置；新值由设置用例校验。
 pub fn effective_site(value: &SiteSettingsValue, fallback: &SiteInfo) -> SiteInfo {
     let title = value
         .title
@@ -65,6 +69,10 @@ pub fn effective_site(value: &SiteSettingsValue, fallback: &SiteInfo) -> SiteInf
         .unwrap_or_else(|| fallback.description.clone());
     // logo 只来自已保存的媒体 ID，不使用装配回退值；媒体引用有效性由保存路径校验。
     SiteInfo {
+        time_zone: value
+            .time_zone
+            .clone()
+            .unwrap_or_else(|| fallback.time_zone.clone()),
         title,
         description,
         logo_url: value.logo_media_id.map(crate::media::media_url),
@@ -77,6 +85,7 @@ mod tests {
 
     fn fallback() -> SiteInfo {
         SiteInfo {
+            time_zone: "UTC".into(),
             title: "默认标题".into(),
             description: "默认描述".into(),
             logo_url: None,
@@ -85,6 +94,7 @@ mod tests {
 
     fn stored(title: Option<&str>, description: Option<&str>) -> SiteSettingsValue {
         SiteSettingsValue {
+            time_zone: None,
             title: title.map(str::to_string),
             description: description.map(str::to_string),
             logo_media_id: None,
@@ -95,6 +105,7 @@ mod tests {
     fn logo_media_id_becomes_a_public_url() {
         let logo = uuid::Uuid::now_v7();
         let value = SiteSettingsValue {
+            time_zone: None,
             title: Some("t".into()),
             description: Some("d".into()),
             logo_media_id: Some(logo),

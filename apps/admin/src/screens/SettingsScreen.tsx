@@ -18,13 +18,14 @@ const TITLE_MAX = 200;
 const DESCRIPTION_MAX = 500;
 
 interface Draft {
+  timeZone: string;
   title: string;
   description: string;
   /** 站点 logo 媒体 id（null = 无 logo）。 */
   logoMediaId: string | null;
 }
 
-const EMPTY_DRAFT: Draft = { title: "", description: "", logoMediaId: null };
+const EMPTY_DRAFT: Draft = { timeZone: "UTC", title: "", description: "", logoMediaId: null };
 
 /**
  * 站点设置屏（site 分组：标题与描述）。
@@ -50,7 +51,7 @@ const EMPTY_DRAFT: Draft = { title: "", description: "", logoMediaId: null };
 export function SettingsScreen() {
   const [retentionDirty, setRetentionDirty] = useState(false);
   const { modal } = AntdApp.useApp();
-  const { me } = useAuth();
+  const { me, updateTimeZone } = useAuth();
   const canReadMedia = me?.permissions.includes("media.read") ?? false;
   const canUploadMedia = me?.permissions.includes("media.upload") ?? false;
   const queryClient = useQueryClient();
@@ -94,6 +95,7 @@ export function SettingsScreen() {
     (view: SiteSettings) => {
       setSettings(view);
       writeDraft({
+        timeZone: view.time_zone,
         title: view.title,
         description: view.description,
         logoMediaId: view.logo_media_id,
@@ -105,7 +107,8 @@ export function SettingsScreen() {
   /** 表单镜像与服务器值的差异：用于离开确认（见 src/unsaved.tsx）。 */
   const dirty =
     settings !== null &&
-    (draft.title !== settings.title ||
+    (draft.timeZone !== settings.time_zone ||
+      draft.title !== settings.title ||
       draft.description !== settings.description ||
       draft.logoMediaId !== settings.logo_media_id);
   useUnsavedGuard(dirty || retentionDirty, "站点设置有未保存的修改，离开会丢失。");
@@ -145,6 +148,7 @@ export function SettingsScreen() {
       setBusy(true);
       try {
         const saved = await settingsApi.save({
+          time_zone: submitted.timeZone,
           title,
           description,
           // PUT 是整组替换：logo 始终显式提交（null = 确实要清除）。
@@ -156,6 +160,7 @@ export function SettingsScreen() {
         // 界面却提示「已保存」。保留时明确提示尚有未提交内容。
         const current = readDraft();
         const merged: Draft = {
+          timeZone: current.timeZone === submitted.timeZone ? saved.time_zone : current.timeZone,
           title: current.title === submitted.title ? saved.title : current.title,
           description:
             current.description === submitted.description
@@ -167,10 +172,12 @@ export function SettingsScreen() {
               : current.logoMediaId,
         };
         const pendingEdits =
+          merged.timeZone !== saved.time_zone ||
           merged.title !== saved.title ||
           merged.description !== saved.description ||
           merged.logoMediaId !== saved.logo_media_id;
         setSettings(saved);
+        updateTimeZone(saved.time_zone);
         writeDraft(merged);
         setConflict(null);
         // 服务器已按新版本落库：让查询在后台失效重取，离开再回来时不会把旧缓存
@@ -181,7 +188,7 @@ export function SettingsScreen() {
           pendingEdits
             ? `已保存（v${saved.version}）；保存期间的新输入尚未提交，请再次保存。`
             : saved.source === "database"
-              ? `已保存（v${saved.version}）。公开页面即刻使用新标题与描述。`
+              ? `已保存（v${saved.version}）。站点设置已生效。`
               : "已保存。",
         );
       } catch (e) {
@@ -203,7 +210,7 @@ export function SettingsScreen() {
         setBusy(false);
       }
     },
-    [readDraft, writeDraft, queryClient],
+    [readDraft, writeDraft, queryClient, updateTimeZone],
   );
 
   /** 「仍然覆盖」：二次确认后按服务器最新版本重新提交，本地输入原样保留在表单里。 */
@@ -286,6 +293,16 @@ export function SettingsScreen() {
                 placeholder="一句话介绍这个站点（可留空）"
                 aria-invalid={descriptionCount > DESCRIPTION_MAX}
                 rows={3}
+              />
+            </Form.Item>
+            <Form.Item
+              label="站点时区"
+              name="timeZone"
+              extra="公开页面、后台时间显示和预约输入使用此时区，保存后生效。"
+            >
+              <Select
+                showSearch={{ optionFilterProp: "label" }}
+                options={settings.time_zones.map((zone) => ({ value: zone, label: zone }))}
               />
             </Form.Item>
             {/*

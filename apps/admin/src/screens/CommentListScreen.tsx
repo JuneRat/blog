@@ -1,3 +1,4 @@
+import { formatDateTime, useTimeZone } from "../timeZone";
 import { useState } from 'react';
 import { Alert, App, Button, Card, Modal, Pagination, Select, Space, Tag, Typography } from 'antd';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -11,6 +12,7 @@ import { queryKeys } from '../queryClient';
 import { invalidateAfterWrite } from '../queryEffects';
 const labels: Record<string, string> = { pending: '待审核', approved: '已通过', trash: '回收站', spam: '垃圾评论' };
 export function CommentListScreen() {
+  const timeZone = useTimeZone();
   const { me } = useAuth();
   const { message } = App.useApp();
   const client = useQueryClient();
@@ -50,7 +52,7 @@ export function CommentListScreen() {
     {query.data?.items.length === 0 && <Typography.Text type="secondary">当前筛选下没有评论。</Typography.Text>}
     {query.data?.items.map(item => <Card key={item.id} title={<Space wrap><span>{item.nickname}</span>{item.is_author && <Tag>作者</Tag>}<Tag>{labels[item.status]}</Tag>{item.parent_id && <Tag>回复</Tag>}</Space>}>
       <Button type="link" onClick={()=>navigate(paths.editPost(item.post_id))}>{item.post_title || item.post_slug}</Button>
-      <Typography.Paragraph type="secondary">{item.created_at}</Typography.Paragraph>
+      <Typography.Paragraph type="secondary">{formatDateTime(item.created_at, timeZone)}</Typography.Paragraph>
       {item.parent_id && <Typography.Paragraph type="secondary">回复 {item.parent_nickname || '该评论'}</Typography.Paragraph>}
       <div style={{overflowWrap:'anywhere'}} dangerouslySetInnerHTML={{__html:item.content_html}} />
       {(item.author_email || item.ip_address) && <Typography.Paragraph type="secondary">{item.author_email && `邮箱：${item.author_email} `}{item.ip_address && `IP：${item.ip_address}`}</Typography.Paragraph>}

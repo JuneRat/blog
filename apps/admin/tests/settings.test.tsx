@@ -6,8 +6,11 @@ import { ApiError, mediaApi, settingsApi, themeSettingsApi, retentionApi } from 
 import { paths } from "../src/router";
 import type { SiteSettings } from "../src/types";
 
+const updateTimeZone = vi.hoisted(() => vi.fn());
+
 vi.mock("../src/auth", () => ({
   useAuth: () => ({
+    updateTimeZone,
     status: "authenticated",
     me: { permissions: ["settings.manage", "media.read", "media.upload"] },
   }),
@@ -25,6 +28,8 @@ vi.mock("../src/api", async (importOriginal) => {
 });
 
 const fallbackView: SiteSettings = {
+  time_zone: "UTC",
+  time_zones: ["UTC", "Asia/Shanghai", "America/New_York"],
   title: "默认站点",
   description: "回退描述",
   logo_media_id: null,
@@ -59,6 +64,31 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("站点设置屏", () => {
+  it("保存时区后立即更新后台显示，并保留等待期间的新选择", async () => {
+    let resolveSave!: (view: SiteSettings) => void;
+    vi.mocked(settingsApi.save).mockImplementation(() => new Promise((resolve) => { resolveSave = resolve; }));
+    render(<App />);
+    const zone = await screen.findByLabelText("站点时区");
+    fireEvent.mouseDown(zone);
+    fireEvent.click(await screen.findByTitle("Asia/Shanghai"));
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(settingsApi.save).toHaveBeenCalledWith({
+      title: fallbackView.title, description: fallbackView.description, logo_media_id: null,
+      time_zone: "Asia/Shanghai", expected_version: 0,
+    }));
+    fireEvent.mouseDown(zone);
+    fireEvent.click(await screen.findByTitle("America/New_York"));
+    await act(async () => resolveSave({ ...fallbackView, time_zone: "Asia/Shanghai", source: "database", version: 1 }));
+    await screen.findByText(/保存期间的新输入尚未提交/);
+    expect(updateTimeZone).toHaveBeenCalledWith("Asia/Shanghai");
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(settingsApi.save).toHaveBeenLastCalledWith(expect.objectContaining({
+      time_zone: "America/New_York", expected_version: 1,
+    })));
+    await act(async () => resolveSave({ ...fallbackView, time_zone: "America/New_York", source: "database", version: 2 }));
+    await screen.findByText(/已保存（v2）/);
+    expect(updateTimeZone).toHaveBeenLastCalledWith("America/New_York");
+  });
   it("保留期保存携带两组版本，冲突保留输入并阻止重复提交", async () => {
     vi.mocked(retentionApi.save).mockRejectedValue(new ApiError(409, "版本冲突", "version_conflict"));
     render(<App />);
@@ -113,6 +143,7 @@ describe("站点设置屏", () => {
 
   it("保存携带当前版本并展示数据库来源提示", async () => {
     vi.mocked(settingsApi.save).mockResolvedValue({
+      ...fallbackView,
       title: "数据库站点",
       description: "新描述",
       source: "database",
@@ -128,6 +159,7 @@ describe("站点设置屏", () => {
 
     await waitFor(() =>
       expect(settingsApi.save).toHaveBeenCalledWith({
+        time_zone: "UTC",
         title: "数据库站点",
         description: "新描述",
         logo_media_id: null,
@@ -154,6 +186,7 @@ describe("站点设置屏", () => {
         new ApiError(409, "版本冲突：内容已被并发修改", "version_conflict", "req-1"),
       )
       .mockResolvedValueOnce({
+        ...fallbackView,
         title: "我的标题",
         description: "描述",
         source: "database",
@@ -162,12 +195,14 @@ describe("站点设置屏", () => {
     // 冲突后的重载返回服务器最新视图（v2，标题已被别处修改）。
     vi.mocked(settingsApi.get)
       .mockResolvedValueOnce({
+        ...fallbackView,
         title: "第一版",
         description: "描述",
         source: "database",
         version: 1,
       })
       .mockResolvedValueOnce({
+        ...fallbackView,
         title: "别处的修改",
         description: "描述",
         source: "database",
@@ -176,6 +211,7 @@ describe("站点设置屏", () => {
       // 保存成功会让站点设置查询失效并在后台重取（这里补上兜底返回值，
       // 避免那次后台读取拿到 undefined）。
       .mockResolvedValue({
+        ...fallbackView,
         title: "我的标题",
         description: "描述",
         source: "database",
@@ -199,6 +235,8 @@ describe("站点设置屏", () => {
     fireEvent.click(await screen.findByRole("button", { name: "确定" }));
     await waitFor(() =>
       expect(settingsApi.save).toHaveBeenLastCalledWith({
+        time_zone: "UTC",
+        logo_media_id: null,
         title: "我的标题",
         description: "描述",
         expected_version: 2,
@@ -214,6 +252,7 @@ describe("站点设置屏", () => {
     vi.mocked(settingsApi.get)
       .mockResolvedValueOnce({ ...fallbackView, source: "database", version: 1 })
       .mockResolvedValueOnce({
+        ...fallbackView,
         title: "服务器标题",
         description: "服务器描述",
         source: "database",
@@ -266,6 +305,7 @@ describe("站点设置屏", () => {
     fireEvent.change(title, { target: { value: "等待期间的新输入" } });
     await act(async () => {
       resolveSave({
+        ...fallbackView,
         title: "提交时的标题",
         description: "回退描述",
         source: "database",
@@ -283,6 +323,7 @@ describe("站点设置屏", () => {
 
   it("未被继续编辑的字段仍采用服务端规范化值（trim）", async () => {
     vi.mocked(settingsApi.save).mockResolvedValue({
+      ...fallbackView,
       title: "去空白标题",
       description: "描述",
       source: "database",
@@ -301,6 +342,7 @@ describe("站点设置屏", () => {
 
   it("长度按 Unicode 码点计：200 个 emoji 通过，201 个被拦下", async () => {
     vi.mocked(settingsApi.save).mockResolvedValue({
+      ...fallbackView,
       title: "😀".repeat(200),
       description: "回退描述",
       source: "database",

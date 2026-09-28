@@ -197,6 +197,7 @@ pub(crate) async fn validate(
         ));
         let theme = runtime.theme_renderer(renderer.clone().with_data(data));
         let site = SiteInfo {
+            time_zone: "UTC".into(),
             title: "主题校验 <站点>".into(),
             description: "示例描述 & 内容".into(),
             logo_url: optional.then(|| "/media/00000000-0000-0000-0000-000000000001".into()),

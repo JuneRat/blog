@@ -4,8 +4,9 @@ use std::sync::Arc;
 use serde::Serialize;
 
 use crate::error::UseCaseError;
+use crate::ports::DateTimeFormatter;
 use crate::ports::{PublishedCategoryQuery, PublishedPostQuery, PublishedTagQuery};
-use crate::public_site::format_datetime;
+use crate::public_site::UtcDateTimeFormatter;
 use domain::content::Slug;
 
 /// All public article lists share one display contract.
@@ -30,7 +31,9 @@ pub struct ThemeList<T: Serialize> {
     pub items: Vec<T>,
 }
 
+#[derive(Clone)]
 pub struct ThemeData {
+    dates: Arc<dyn DateTimeFormatter>,
     posts: Arc<dyn PublishedPostQuery>,
     tags: Arc<dyn PublishedTagQuery>,
     categories: Arc<dyn PublishedCategoryQuery>,
@@ -43,10 +46,16 @@ impl ThemeData {
         categories: Arc<dyn PublishedCategoryQuery>,
     ) -> Self {
         Self {
+            dates: Arc::new(UtcDateTimeFormatter),
             posts,
             tags,
             categories,
         }
+    }
+
+    pub fn with_time_zone(mut self, dates: Arc<dyn DateTimeFormatter>) -> Self {
+        self.dates = dates;
+        self
     }
 
     /// Up to 50 published, public, non-deleted summaries. A tag and category cannot be combined.
@@ -80,7 +89,10 @@ impl ThemeData {
             self.posts.list_public(limit, 0).await?
         };
         Ok(ThemeList {
-            items: rows.into_iter().map(ThemePostSummary::from).collect(),
+            items: rows
+                .into_iter()
+                .map(|post| ThemePostSummary::in_time_zone(post, self.dates.as_ref()))
+                .collect(),
         })
     }
 
@@ -88,13 +100,13 @@ impl ThemeData {
         Slug::new(slug).map_err(|e| UseCaseError::Invalid(e.to_string()))?;
         let result = self.posts.find_public_by_slug(slug).await?;
         Ok(result.map(|p| ThemePostDetail {
-            updated_at: format_datetime(p.updated_at),
+            updated_at: self.dates.format(p.updated_at),
             summary: ThemePostSummary {
                 url: crate::seo::post_path(&p.slug),
                 title: p.title,
                 slug: p.slug,
                 excerpt: p.excerpt,
-                published_at: p.published_at.map(format_datetime),
+                published_at: p.published_at.map(|at| self.dates.format(at)),
                 author_display: p.author_display,
                 author_avatar_url: p.author_avatar_media_id.map(crate::media::media_url),
             },

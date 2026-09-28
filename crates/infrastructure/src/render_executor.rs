@@ -751,6 +751,7 @@ mod tests {
             MiniJinjaThemeRenderer::load(std::path::Path::new("../../themes/default")).unwrap(),
         );
         let site = SiteInfo {
+            time_zone: "UTC".into(),
             title: "测试站点".into(),
             description: "渲染执行器测试".into(),
             logo_url: None,

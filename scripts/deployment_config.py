@@ -15,7 +15,7 @@ from recovery_inventory import RecoveryError
 def resource_paths(config=None, blog_bin=None, overrides=None):
     overrides = {key: value for key, value in (overrides or {}).items() if value is not None}
     selected = config or os.environ.get("BLOG_CONFIG_FILE")
-    path = Path(selected or "data/config.toml")
+    path = Path(selected or "config.toml")
     if selected and not path.exists() and not path.is_symlink():
         raise RecoveryError("deployment TOML does not exist")
     binary = blog_bin or shutil.which("blog") or str(Path(__file__).resolve().parents[1] / "target/debug/blog")

@@ -51,10 +51,12 @@ services:
       - BLOG_DB_CONNECT_RETRIES
       - BLOG_DB_CONNECT_RETRY_BACKOFF_MS
       - BLOG_PUBLIC_BASE_URL
+      - BLOG_TIME_ZONE
       - BLOG_TRUSTED_PROXIES
       - BLOG_SECURE_COOKIES
       - BLOG_RECOVERY_MODE
       - RUST_LOG
+      - TZ=${TZ:-UTC}
       - BLOG_LOG_FORMAT=${BLOG_LOG_FORMAT:-json}
       - BLOG_METRICS_BIND=0.0.0.0:9090
       - BLOG_THEME_DIR=${BLOG_THEME_DIR:-/opt/blog/themes/default}
@@ -88,6 +90,7 @@ services:
     environment:
       - BLOG_MAINTENANCE_DATABASE_URL
       - BLOG_RECOVERY_MODE
+      - TZ=${TZ:-UTC}
       - BLOG_LOG_FORMAT=${BLOG_LOG_FORMAT:-json}
       - BLOG_DB_MAX_CONNECTIONS=2
       - BLOG_DB_STATEMENT_TIMEOUT_MS=60000
