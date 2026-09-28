@@ -1,7 +1,7 @@
 //! 受控 CLI 入站适配器：M1 的唯一写通道（不得暴露为公开管理 HTTP）。
 //!
 //! 参数解析与输入/输出映射在本层完成；业务规则全部下沉应用层。
-//! `migrate` 与 `rebuild-html` 是基础设施维护，由 server 装配层拦截执行。
+//! `migrate` 由 server 处理；HTML 维护由本层调用应用用例并呈现结果。
 
 use std::io::Read;
 use std::path::PathBuf;
@@ -48,7 +48,16 @@ pub enum Command {
     Migrate,
 
     /// 显式重建旧渲染版本的文章、页面与评论 HTML；不改变编辑版本或业务时间
-    RebuildHtml,
+    RebuildHtml {
+        #[arg(long, default_value_t = 100, value_parser = clap::value_parser!(i64).range(1..=1000))]
+        batch_size: i64,
+        /// 三类内容共用的单次批次数上限
+        #[arg(long, default_value_t = 100, value_parser = clap::value_parser!(u32).range(1..=1000))]
+        max_batches: u32,
+        /// 只读校验结构并统计待重建数量，不迁移、不渲染、不写入
+        #[arg(long)]
+        dry_run: bool,
+    },
 
     /// 用户管理（受控操作，不开放自助注册）
     User {
@@ -918,6 +927,29 @@ pub async fn run_publish_due(
     let total = publisher.run().await.map_err(|e| e.to_string())?;
     println!("已发布 {total} 条到期内容。");
     Ok(())
+}
+
+pub async fn run_html_rebuild(
+    rebuilder: &application::html_rebuild::HtmlRebuildInteractor,
+    options: application::html_rebuild::RebuildOptions,
+) -> Result<(), String> {
+    match rebuilder.run(options).await {
+        Ok(report) => {
+            println!(
+                "{}",
+                serde_json::to_string(&report).map_err(|e| e.to_string())?
+            );
+            Ok(())
+        }
+        Err(error) => {
+            // 部分完成结果仍输出 JSON；stderr 与退出码同时明确标记失败。
+            println!(
+                "{}",
+                serde_json::to_string(&error.0).map_err(|e| e.to_string())?
+            );
+            Err(error.to_string())
+        }
+    }
 }
 
 #[cfg(test)]

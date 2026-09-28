@@ -10,7 +10,7 @@
 
 SQLx 为初始迁移包事务，因此该文件没有额外的 BEGIN/COMMIT。重复执行已成功应用的新基线不重复建表。DDL 不创建账号；权限目录和内置角色由应用可信注册表在身份命令或启动时同步。`migrate` 命令本身不创建 Owner。
 
-所有普通命令共用 `migrate_schema` 执行或校验结构，`migrate` CLI 也只处理结构。文章、页面和评论的旧版本 HTML 由 `rebuild-html` 显式重建，不作为启动副作用。空库没有派生记录，身份维护命令不依赖主题和内容渲染。
+所有普通命令共用 `migrate_schema` 执行或校验结构，`migrate` CLI 也只处理结构。文章、页面和评论的旧版本 HTML 由 `rebuild-html` 显式分批重建，不作为启动副作用；`rebuild-html --dry-run` 使用只读 `verify_schema`，不会建表或执行迁移。空库没有派生记录，身份维护命令不依赖主题和内容渲染。
 
 ## 2. 表与通用约定
 

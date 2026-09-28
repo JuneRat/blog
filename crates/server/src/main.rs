@@ -15,6 +15,7 @@ use interfaces::cli::{Command, parse_args};
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| "info,sqlx=warn".into()),
@@ -65,7 +66,7 @@ async fn run(command: Command) -> Result<(), String> {
     if matches!(command, Command::PublishDue) && (isolated || recovery_mode) {
         return Err("恢复隔离期间禁止预约发布任务".into());
     }
-    if matches!(command, Command::RebuildHtml) && (isolated || recovery_mode) {
+    if matches!(command, Command::RebuildHtml { .. }) && (isolated || recovery_mode) {
         return Err("恢复隔离期间禁止 HTML 重建".into());
     }
     if matches!(command, Command::Serve { .. }) && isolated && !recovery_mode {
@@ -91,6 +92,26 @@ async fn run(command: Command) -> Result<(), String> {
     } else {
         None
     };
+    if let Command::RebuildHtml {
+        batch_size,
+        max_batches,
+        dry_run,
+    } = command
+    {
+        let options = application::html_rebuild::RebuildOptions {
+            batch_size,
+            max_batches,
+            dry_run,
+        };
+        options.validate().map_err(|error| error.to_string())?;
+        if dry_run {
+            infrastructure::verify_schema(&pool, &database.migrations_dir).await
+        } else {
+            infrastructure::migrate_schema(&pool, &database.migrations_dir).await
+        }
+        .map_err(|error| format!("校验或准备迁移失败：{error}"))?;
+        return interfaces::cli::run_html_rebuild(&assembly::html_rebuilder(&pool), options).await;
+    }
     // Keep automatic schema initialization for schema owners; restricted runtime
     // roles verify the applied migrations. Derived HTML is rebuilt only by the
     // explicit maintenance command, never as a startup or migration side effect.
@@ -101,17 +122,6 @@ async fn run(command: Command) -> Result<(), String> {
         println!("迁移完成。");
         return Ok(());
     }
-    if matches!(command, Command::RebuildHtml) {
-        let renderer = RenderingRuntime::default();
-        let content = infrastructure::rebuild_content_html(&pool, &renderer)
-            .await
-            .map_err(|error| format!("文章/页面 HTML 重建失败：{error}"))?;
-        let comments = infrastructure::comments::rebuild_comment_html(&pool, &renderer)
-            .await
-            .map_err(|error| format!("评论 HTML 重建失败：{error}"))?;
-        println!("HTML 重建完成：文章/页面 {content} 条，评论 {comments} 条。");
-        return Ok(());
-    }
     let roles = assembly::roles(&pool);
     roles
         .sync_registry()
@@ -120,7 +130,7 @@ async fn run(command: Command) -> Result<(), String> {
     match command {
         Command::Maintenance { .. } => unreachable!("maintenance returned above"),
         Command::Migrate => unreachable!("migration returned above"),
-        Command::RebuildHtml => unreachable!("HTML rebuild returned above"),
+        Command::RebuildHtml { .. } => unreachable!("HTML rebuild returned above"),
         Command::PublishDue => interfaces::cli::run_publish_due(&assembly::publisher(&pool)).await,
         Command::User { action } => {
             interfaces::cli::run_user(assembly::user_commands(&pool), action).await

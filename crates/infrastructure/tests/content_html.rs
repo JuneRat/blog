@@ -2,6 +2,9 @@
 use std::sync::Arc;
 
 use application::error::UseCaseError;
+use application::html_rebuild::{
+    HtmlKind, HtmlRebuildInteractor, HtmlRebuildStore, RebuildOptions,
+};
 use application::ports::{
     ContentRenderer, PageCommitOutcome, PageRepository, PostCommitOutcome, PostRepository,
     PublishedPageQuery, PublishedPostQuery, RenderedContent,
@@ -10,7 +13,8 @@ use async_trait::async_trait;
 use domain::content::{Page, PagePatch};
 use domain::content::{Post, PostPatch, Slug, Visibility};
 use domain::identity::UserId;
-use infrastructure::persistence::{CONTENT_RENDER_VERSION, rebuild_content_html};
+use infrastructure::PostgresHtmlRebuildStore;
+use infrastructure::persistence::CONTENT_RENDER_VERSION;
 use infrastructure::{
     PostgresPageRepository, PostgresPostRepository, PostgresPublishedPageQuery,
     PostgresPublishedPostQuery, RenderingRuntime, SanitizingMarkdownRenderer,
@@ -239,22 +243,26 @@ async fn schema_migration_leaves_html_for_explicit_rebuild_without_editing_busin
         assert_eq!(html, "");
         assert_eq!(render_version, 2);
     }
-    assert_eq!(
-        rebuild_content_html(&pool, &RenderingRuntime::default())
-            .await
-            .unwrap(),
-        2
-    );
+    let runtime = Arc::new(RenderingRuntime::default());
+    let rebuilder = HtmlRebuildInteractor::new(Arc::new(PostgresHtmlRebuildStore::new(
+        pool.clone(),
+        runtime.clone(),
+        runtime,
+    )));
+    let result = rebuilder.run(RebuildOptions::default()).await.unwrap();
+    assert_eq!((result.rebuilt.posts, result.rebuilt.pages), (1, 1));
     assert_eq!(
         stored(&pool, "posts", record.snapshot.id).await,
         before_post
     );
     assert_eq!(stored(&pool, "pages", page_record.id).await, before_page);
-    assert_eq!(
-        rebuild_content_html(&pool, &RenderingRuntime::default())
+    assert!(
+        rebuilder
+            .run(RebuildOptions::default())
             .await
-            .unwrap(),
-        0
+            .unwrap()
+            .rebuilt
+            .is_empty()
     );
 }
 
@@ -295,8 +303,15 @@ async fn rebuild_cannot_overwrite_a_concurrent_editor_commit() {
         resume: resume.clone(),
     };
     let rebuilding_pool = pool.clone();
-    let rebuild =
-        tokio::spawn(async move { rebuild_content_html(&rebuilding_pool, &renderer).await });
+    let rebuild = tokio::spawn(async move {
+        PostgresHtmlRebuildStore::new(
+            rebuilding_pool,
+            Arc::new(renderer),
+            Arc::new(RenderingRuntime::default()),
+        )
+        .rebuild_batch(HtmlKind::Post, None, 100)
+        .await
+    });
     entered.notified().await;
     let mut post = Post::reconstitute(record.snapshot).unwrap();
     post.edit(PostPatch {
@@ -309,7 +324,11 @@ async fn rebuild_cannot_overwrite_a_concurrent_editor_commit() {
         .unwrap();
     let committed = stored(&pool, "posts", id).await;
     resume.notify_one();
-    assert_eq!(rebuild.await.unwrap().unwrap(), 0);
+    let progress = rebuild.await.unwrap().unwrap();
+    assert_eq!(
+        (progress.rebuilt, progress.skipped, progress.cursor),
+        (0, 1, Some(id))
+    );
     assert_eq!(stored(&pool, "posts", id).await, committed);
     assert_eq!(committed.1, "<p>新 <strong>正文</strong></p>\n");
     assert_eq!(committed.3, 2);

@@ -444,20 +444,18 @@ async fn html_rebuild_audits_roll_back_derived_content_and_references() {
         .bind(page).bind(&source).execute(&pool).await.unwrap();
     sqlx::query("INSERT INTO comments(id,post_id,author_name,content,content_html,content_render_version) VALUES($1,$2,'Reader','**Private comment source**','stale',2)")
         .bind(comment).bind(post).execute(&pool).await.unwrap();
-    let renderer = infrastructure::RenderingRuntime::default();
+    use application::html_rebuild::{HtmlKind, HtmlRebuildStore};
+    let renderer = std::sync::Arc::new(infrastructure::RenderingRuntime::default());
+    let store =
+        infrastructure::PostgresHtmlRebuildStore::new(pool.clone(), renderer.clone(), renderer);
     let snapshot = "SELECT jsonb_build_array((SELECT to_jsonb(p) FROM posts p),(SELECT to_jsonb(p) FROM pages p),(SELECT to_jsonb(c) FROM comments c))";
     let before: Value = sqlx::query_scalar(snapshot).fetch_one(&pool).await.unwrap();
     block_audit(&pool).await;
-    assert!(
-        infrastructure::rebuild_content_html(&pool, &renderer)
-            .await
-            .is_err()
-    );
-    assert!(
-        infrastructure::comments::rebuild_comment_html(&pool, &renderer)
-            .await
-            .is_err()
-    );
+    for kind in [HtmlKind::Post, HtmlKind::Page, HtmlKind::Comment] {
+        let error = store.rebuild_batch(kind, None, 100).await.unwrap_err();
+        assert_eq!(error.progress.rebuilt, 0);
+        assert!(error.id.is_some());
+    }
     let after: Value = sqlx::query_scalar(snapshot).fetch_one(&pool).await.unwrap();
     assert_eq!(before, after);
     let refs: i64 = sqlx::query_scalar("SELECT count(*) FROM media_refs")
@@ -470,15 +468,12 @@ async fn html_rebuild_audits_roll_back_derived_content_and_references() {
     );
     assert_eq!(count(&pool).await, 0);
     unblock_audit(&pool).await;
-    assert_eq!(
-        infrastructure::rebuild_content_html(&pool, &renderer)
-            .await
-            .unwrap(),
-        2
-    );
-    infrastructure::comments::rebuild_comment_html(&pool, &renderer)
-        .await
-        .unwrap();
+    for kind in [HtmlKind::Post, HtmlKind::Page, HtmlKind::Comment] {
+        assert_eq!(
+            store.rebuild_batch(kind, None, 100).await.unwrap().rebuilt,
+            1
+        );
+    }
     let after: Value = sqlx::query_scalar(snapshot).fetch_one(&pool).await.unwrap();
     for (before, after) in before
         .as_array()
@@ -520,15 +515,12 @@ async fn html_rebuild_audits_roll_back_derived_content_and_references() {
         .await
         .unwrap();
     assert_eq!(refs, 2);
-    assert_eq!(
-        infrastructure::rebuild_content_html(&pool, &renderer)
-            .await
-            .unwrap(),
-        0
-    );
-    infrastructure::comments::rebuild_comment_html(&pool, &renderer)
-        .await
-        .unwrap();
+    for kind in [HtmlKind::Post, HtmlKind::Page, HtmlKind::Comment] {
+        assert_eq!(
+            store.rebuild_batch(kind, None, 100).await.unwrap().rebuilt,
+            0
+        );
+    }
     assert_eq!(
         count(&pool).await,
         3,

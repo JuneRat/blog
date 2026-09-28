@@ -22,68 +22,6 @@ use crate::audit::{AuditEntry, append_audit_log};
 /// 渲染或清洗规则变更时递增；显式 rebuild-html 命令重建不匹配的派生内容。
 pub const CONTENT_RENDER_VERSION: i32 = 1;
 
-/// 重建持久化派生内容。分批读取、事务外渲染，CAS 防止覆盖同时保存的新正文。
-/// HTML 与媒体引用一起更新，不制造编辑版本或改变业务更新时间。
-pub async fn rebuild_content_html(
-    pool: &PgPool,
-    renderer: &dyn ContentRenderer,
-) -> Result<usize, UseCaseError> {
-    let mut rebuilt = 0;
-    for (table, kind, cover) in [
-        ("posts", MediaContentKind::Post, "cover_media_id"),
-        ("pages", MediaContentKind::Page, "NULL::uuid"),
-    ] {
-        loop {
-            let rows: Vec<(Uuid, String, i64, Option<Uuid>)> = sqlx::query_as(&format!(
-                "SELECT id, content, version, {cover} FROM {table} \
-                 WHERE content_render_version <> $1 ORDER BY id LIMIT 100"
-            ))
-            .bind(CONTENT_RENDER_VERSION)
-            .fetch_all(pool)
-            .await
-            .map_err(map_sqlx_error)?;
-            if rows.is_empty() {
-                break;
-            }
-            for (id, source, version, cover_media_id) in rows {
-                let rendered = renderer.render_content(&source).await?;
-                application::rendering_budget::validate_html(&rendered.content_html)
-                    .map_err(|e| UseCaseError::Invalid(e.to_string()))?;
-                let media_ids = media_ids_for(&rendered.media_ids, cover_media_id);
-                let mut tx = pool.begin().await.map_err(map_sqlx_error)?;
-                let changed = sqlx::query(&format!(
-                    "UPDATE {table} SET content_html = $2, content_render_version = $3 \
-                     WHERE id = $1 AND version = $4 AND content = $5 \
-                     AND content_render_version <> $3"
-                ))
-                .bind(id)
-                .bind(&rendered.content_html)
-                .bind(CONTENT_RENDER_VERSION)
-                .bind(version)
-                .bind(&source)
-                .execute(&mut *tx)
-                .await
-                .map_err(map_sqlx_error)?
-                .rows_affected();
-                if changed == 1 {
-                    sync_media_refs(&mut tx, kind, id, &media_ids).await?;
-                    audit_content(
-                        &mut tx,
-                        application::audit::AuditContext::system(),
-                        &format!("{}.html.rebuild", kind.as_str()),
-                        kind.as_str(),
-                        id,
-                        serde_json::json!({"version": version, "render_version": CONTENT_RENDER_VERSION}),
-                    ).await?;
-                }
-                tx.commit().await.map_err(map_sqlx_error)?;
-                rebuilt += changed as usize;
-            }
-        }
-    }
-    Ok(rebuilt)
-}
-
 // ---------------------------------------------------------------------------
 // 文章仓储
 // ---------------------------------------------------------------------------

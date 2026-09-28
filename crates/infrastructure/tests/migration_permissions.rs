@@ -28,7 +28,7 @@ async fn read_only_verification_waits_for_schema_owner_and_releases_lock_on_mism
     owner.lock().await.unwrap();
     let worker_pool = restricted.clone();
     let mut job = tokio::spawn(async move {
-        infrastructure::migrate_schema(&worker_pool, "../../migrations/postgres").await
+        infrastructure::verify_schema(&worker_pool, "../../migrations/postgres").await
     });
     assert!(
         tokio::time::timeout(std::time::Duration::from_millis(150), &mut job)

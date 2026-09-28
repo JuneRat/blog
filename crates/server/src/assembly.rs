@@ -32,6 +32,13 @@ pub fn retention_maintenance(pool: &PgPool) -> application::retention::Retention
     ))
 }
 
+pub fn html_rebuilder(pool: &PgPool) -> application::html_rebuild::HtmlRebuildInteractor {
+    let runtime = Arc::new(infrastructure::RenderingRuntime::default());
+    application::html_rebuild::HtmlRebuildInteractor::new(Arc::new(
+        infrastructure::PostgresHtmlRebuildStore::new(pool.clone(), runtime.clone(), runtime),
+    ))
+}
+
 pub fn users(pool: &PgPool) -> Arc<UserInteractor> {
     let store = Arc::new(PostgresUserRepository::new(pool.clone()));
     Arc::new(UserInteractor::new(

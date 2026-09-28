@@ -2,13 +2,14 @@ mod common;
 use application::{
     comments::*,
     error::UseCaseError,
+    html_rebuild::{HtmlKind, HtmlRebuildStore},
     identity::{Actor, ActorChannel},
     ports::CommentRenderer,
 };
 use domain::identity::{PermissionSet, UserId};
 use infrastructure::{
-    COMMENT_RENDER_VERSION, RenderingRuntime,
-    comments::{PostgresCommentRepository, rebuild_comment_html},
+    COMMENT_RENDER_VERSION, PostgresHtmlRebuildStore, RenderingRuntime,
+    comments::PostgresCommentRepository,
 };
 use sqlx::{PgPool, Row};
 use std::sync::{
@@ -622,10 +623,14 @@ async fn rebuild_updates_only_derived_fields_and_does_not_clobber_a_newer_source
         .execute(&pool)
         .await
         .unwrap();
+    let runtime = Arc::new(RenderingRuntime::default());
+    let store = PostgresHtmlRebuildStore::new(pool.clone(), runtime.clone(), runtime);
     assert_eq!(
-        rebuild_comment_html(&pool, &RenderingRuntime::default())
+        store
+            .rebuild_batch(HtmlKind::Comment, None, 100)
             .await
-            .unwrap(),
+            .unwrap()
+            .rebuilt,
         1
     );
     let row = sqlx::query(
@@ -647,17 +652,24 @@ async fn rebuild_updates_only_derived_fields_and_does_not_clobber_a_newer_source
         .execute(&pool)
         .await
         .unwrap();
-    let rebuilt = rebuild_comment_html(
-        &pool,
-        &RacingRenderer {
+    let racing = PostgresHtmlRebuildStore::new(
+        pool.clone(),
+        Arc::new(RenderingRuntime::default()),
+        Arc::new(RacingRenderer {
             pool: pool.clone(),
             id: root.id,
             changed: AtomicBool::new(false),
-        },
-    )
-    .await
-    .unwrap();
-    assert_eq!(rebuilt, 0, "并发编辑使重建失效时不计入成功数");
+        }),
+    );
+    let result = racing
+        .rebuild_batch(HtmlKind::Comment, None, 100)
+        .await
+        .unwrap();
+    assert_eq!(
+        (result.rebuilt, result.skipped),
+        (0, 1),
+        "并发编辑使重建失效时不计入成功数"
+    );
     let latest = service
         .list(&admin, None, None, 1)
         .await

@@ -24,11 +24,11 @@ pub use oauth::{
 pub use password::Argon2PasswordHasher;
 pub use persistence::{
     CONTENT_RENDER_VERSION, PgHealthCheck, PostgresAdminContentQuery, PostgresCategoryRepository,
-    PostgresMediaRepository, PostgresPageRepository, PostgresPostRepository,
-    PostgresPublishedCategoryQuery, PostgresPublishedPageQuery, PostgresPublishedPostQuery,
-    PostgresPublishedSeriesQuery, PostgresPublishedTagQuery, PostgresScheduledPublicationStore,
-    PostgresSeriesRepository, PostgresTagRepository, PostgresUserRepository, SystemClock, connect,
-    migrate_schema, rebuild_content_html,
+    PostgresHtmlRebuildStore, PostgresMediaRepository, PostgresPageRepository,
+    PostgresPostRepository, PostgresPublishedCategoryQuery, PostgresPublishedPageQuery,
+    PostgresPublishedPostQuery, PostgresPublishedSeriesQuery, PostgresPublishedTagQuery,
+    PostgresScheduledPublicationStore, PostgresSeriesRepository, PostgresTagRepository,
+    PostgresUserRepository, SystemClock, connect, migrate_schema, verify_schema,
 };
 pub use rbac::PostgresRbacStore;
 pub use rendering::{

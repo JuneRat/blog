@@ -263,7 +263,7 @@ async fn maintenance_does_not_require_a_working_website() {
 
     let failed = cli(&database_url, &["rebuild-html"], None, invalid_url);
     assert!(!failed.status.success());
-    assert!(String::from_utf8_lossy(&failed.stderr).contains("文章/页面 HTML 重建失败"));
+    assert!(String::from_utf8_lossy(&failed.stderr).contains("HTML 重建失败：post"));
 
     // 真正启动监听并访问公开页：坏掉的历史源文不会阻止启动或触发即时重建。
     let project = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -328,10 +328,15 @@ async fn maintenance_does_not_require_a_working_website() {
         .execute(&pool)
         .await
         .unwrap();
-    assert!(
-        assert_success(cli(&database_url, &["rebuild-html"], None, invalid_url))
-            .contains("文章/页面 1 条，评论 0 条")
-    );
+    let result: serde_json::Value = serde_json::from_str(&assert_success(cli(
+        &database_url,
+        &["rebuild-html"],
+        None,
+        invalid_url,
+    )))
+    .unwrap();
+    assert_eq!(result["rebuilt"]["posts"], 1);
+    assert_eq!(result["has_more"], false);
     let invalid_site = cli(
         &database_url,
         &["serve", "--addr", "127.0.0.1:0"],
@@ -396,10 +401,47 @@ async fn explicit_html_rebuild_updates_all_three_sources_and_is_repeatable() {
         assert_eq!(row.1, 2);
         before.push((row.2, row.3));
     }
-    assert!(
-        assert_success(cli(&url, &["rebuild-html"], None, "unused"))
-            .contains("文章/页面 2 条，评论 1 条")
+    // 即使连接拥有建表权限，也必须能在 PostgreSQL 强制只读模式下预检。
+    let read_only_url = format!("{url}?options=-c%20default_transaction_read_only%3Don");
+    let output = cli_command(&read_only_url, &["rebuild-html", "--dry-run"], "unused")
+        .env("RUST_LOG", "sqlx=debug")
+        .output()
+        .unwrap();
+    assert!(!output.stderr.is_empty(), "数据库调试日志应进入 stderr");
+    let preview: serde_json::Value = serde_json::from_str(&assert_success(output)).unwrap();
+    assert_eq!(
+        preview["pending"],
+        serde_json::json!({"posts":1,"pages":1,"comments":1})
     );
+    assert_eq!(
+        preview["rebuilt"],
+        serde_json::json!({"posts":0,"pages":0,"comments":0})
+    );
+    assert_eq!(preview["batches"], 0);
+    assert_eq!(preview["dry_run"], true);
+    assert_eq!(preview["has_more"], true);
+    let audits: i64 = sqlx::query_scalar("SELECT count(*) FROM audit_logs")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(audits, 0);
+
+    // 三类来源共用 max-batches；每次至多处理一种，下一次从剩余旧版本继续。
+    for (i, kind) in ["posts", "pages", "comments"].into_iter().enumerate() {
+        let result: serde_json::Value = serde_json::from_str(&assert_success(cli(
+            &url,
+            &["rebuild-html", "--batch-size", "2", "--max-batches", "1"],
+            None,
+            "unused",
+        )))
+        .unwrap();
+        let mut expected = serde_json::json!({"posts":0,"pages":0,"comments":0});
+        expected[kind] = 1.into();
+        assert_eq!(result["rebuilt"], expected);
+        assert_eq!(result["batches"], 1);
+        assert_eq!(result["has_more"], i < 2);
+        assert!(result["failure"].is_null());
+    }
     for (i, table) in ["posts", "pages", "comments"].into_iter().enumerate() {
         let row: (String, i32, i64, time::OffsetDateTime) = sqlx::query_as(&format!(
             "SELECT content_html,content_render_version,version,updated_at FROM {table}"
@@ -418,10 +460,18 @@ async fn explicit_html_rebuild_updates_all_three_sources_and_is_repeatable() {
         );
         assert_eq!((row.2, row.3), before[i]);
     }
-    assert!(
-        assert_success(cli(&url, &["rebuild-html"], None, "unused"))
-            .contains("文章/页面 0 条，评论 0 条")
+    let result: serde_json::Value = serde_json::from_str(&assert_success(cli(
+        &url,
+        &["rebuild-html"],
+        None,
+        "unused",
+    )))
+    .unwrap();
+    assert_eq!(
+        result["rebuilt"],
+        serde_json::json!({"posts":0,"pages":0,"comments":0})
     );
+    assert_eq!(result["batches"], 0);
     let audit_count: i64 =
         sqlx::query_scalar("SELECT count(*) FROM audit_logs WHERE action LIKE '%.html.rebuild'")
             .fetch_one(&pool)
@@ -433,6 +483,98 @@ async fn explicit_html_rebuild_updates_all_three_sources_and_is_repeatable() {
         .await
         .unwrap();
     assert_eq!(roles, 0, "结构迁移和 HTML 维护不应初始化角色");
+    pool.close().await;
+}
+
+#[tokio::test]
+async fn html_preflight_and_invalid_arguments_never_initialize_an_empty_schema() {
+    let database = "blog_html_preflight_empty_test";
+    let pool = common::fresh_database(database).await;
+    let url = common::test_db_url(&common::admin_url(), database);
+    sqlx::raw_sql("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let output = cli(&url, &["rebuild-html", "--dry-run"], None, "unused");
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("迁移记录不存在"));
+    for args in [
+        ["rebuild-html", "--batch-size", "0"],
+        ["rebuild-html", "--batch-size", "1001"],
+        ["rebuild-html", "--max-batches", "0"],
+        ["rebuild-html", "--max-batches", "1001"],
+    ] {
+        assert!(!cli(&url, &args, None, "unused").status.success());
+    }
+    let count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM information_schema.tables WHERE table_schema='public'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(count, 0, "不得执行迁移或创建 SQLx 历史表");
+    pool.close().await;
+}
+
+#[tokio::test]
+async fn html_batch_failure_reports_its_record_and_committed_progress_then_resumes() {
+    let database = "blog_html_partial_failure_test";
+    let pool = common::fresh_database(database).await;
+    let url = common::test_db_url(&common::admin_url(), database);
+    sqlx::query("INSERT INTO users(id,username) VALUES(gen_random_uuid(),'partial-author')")
+        .execute(&pool)
+        .await
+        .unwrap();
+    for n in 1..=3 {
+        let source = if n == 2 {
+            format!("![missing](/media/{})", uuid::Uuid::now_v7())
+        } else {
+            "**valid**".into()
+        };
+        sqlx::query("INSERT INTO posts(id,author_id,slug,content,content_html,content_render_version) SELECT $1,id,$2,$3,'stale',2 FROM users")
+            .bind(uuid::Uuid::from_u128(n)).bind(format!("partial-{n}")).bind(source).execute(&pool).await.unwrap();
+    }
+    let output = cli(&url, &["rebuild-html", "--batch-size", "3"], None, "unused");
+    assert!(!output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["rebuilt"]["posts"], 1);
+    assert_eq!(report["batches"], 1);
+    assert_eq!(report["failure"]["kind"], "post");
+    assert_eq!(
+        report["failure"]["id"],
+        uuid::Uuid::from_u128(2).to_string()
+    );
+    assert!(report["pending"].is_null());
+    assert_eq!(report["has_more"], true);
+    let versions: Vec<i32> =
+        sqlx::query_scalar("SELECT content_render_version FROM posts ORDER BY id")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(versions, [infrastructure::CONTENT_RENDER_VERSION, 2, 2]);
+    sqlx::query("UPDATE posts SET content='**repaired**' WHERE id=$1")
+        .bind(uuid::Uuid::from_u128(2))
+        .execute(&pool)
+        .await
+        .unwrap();
+    for remaining in [1, 0] {
+        let report: serde_json::Value = serde_json::from_str(&assert_success(cli(
+            &url,
+            &["rebuild-html", "--batch-size", "1", "--max-batches", "1"],
+            None,
+            "unused",
+        )))
+        .unwrap();
+        assert_eq!(report["rebuilt"]["posts"], 1);
+        assert_eq!(report["pending"]["posts"], remaining);
+        assert_eq!(report["has_more"], remaining > 0);
+    }
+    let audits: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM audit_logs WHERE action='post.html.rebuild'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(audits, 3);
     pool.close().await;
 }
 

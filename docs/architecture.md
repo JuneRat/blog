@@ -88,7 +88,7 @@ Post/Page 管理 API 及 Post CLI 通过稳定 UUID 定位资源，公开 URL �
 | 命令 | 迁移范围 | 装配范围 |
 |---|---|---|
 | `migrate` | 结构迁移，完成后退出 | 数据库 |
-| `rebuild-html` | 结构迁移或校验后显式重建旧渲染版本 HTML | 数据库与正文/评论渲染运行时 |
+| `rebuild-html` | 执行时准备结构；`--dry-run` 仅读校验迁移 | HTML 维护用例、批次端口与正文/评论渲染运行时 |
 | `user`、`role`、`oauth` | 结构迁移 | 对应身份用例；不读取网站 URL 或主题 |
 | `media` | 结构迁移 | 媒体仓储与文件存储 |
 | `post` | 结构迁移 | 用户、内容用例及本次写入的正文渲染 |
@@ -98,7 +98,7 @@ Post/Page 管理 API 及 Post CLI 通过稳定 UUID 定位资源，公开 URL �
 
 除 `migrate`、`rebuild-html` 与独立的 `maintenance` 外，其余命令在执行前同步权限注册表。只有 `serve` 读取网站配置并加载主题；主题目录损坏或公开 URL 无效不会阻止账号、密码、OAuth 或 HTML 维护。配置项见[配置参考](configuration.md)。
 
-结构迁移与 HTML 重建没有组合入口：普通启动和业务命令仅调用 `migrate_schema`，不会扫描全库旧渲染版本。`rebuild-html` 与结构迁移同属基础设施维护，由接口层解析命令、`server` 分派，基础设施持有渲染、CAS、引用同步与审计事务。历史内容重建失败只影响显式维护进程；规则升级需要在部署流程安排重建，见 [ADR-0017](adr/0017-explicit-html-rebuild.md) 和[运维步骤](operations-and-recovery.md#html-显式重建)。
+结构迁移与 HTML 重建没有组合入口：普通启动和业务命令仅调用 `migrate_schema`，不会扫描全库旧渲染版本。`rebuild-html` 由接口层解析参数、映射 JSON 与退出码；[应用维护用例](../crates/application/src/html_rebuild.rs)定义批次端口，负责参数校验、跨来源预算、游标推进和部分完成结果；`server` 只装配依赖及处理结构、恢复隔离。基础设施负责有界查询、渲染、CAS、引用同步与审计事务。只读预检使用 `verify_schema`，不进入 SQLx 迁移执行路径。历史内容重建失败只影响显式维护进程；规则升级需要在部署流程安排重建，见 [ADR-0017](adr/0017-explicit-html-rebuild.md)、[ADR-0018](adr/0018-bounded-html-maintenance.md) 和[运维步骤](operations-and-recovery.md#html-显式重建)。
 
 服务装配共享一个 `RenderingRuntime`，供 Post/Page 仓储及所有主题使用。接口层组合 HTTP 路由；监听 socket、连接信息和退出信号由 `server` 持有。默认主题必须加载成功，其他无效主题被跳过；详见主题文档。
 

@@ -6,17 +6,18 @@
 mod connection;
 mod content;
 mod content_queries;
+mod html_rebuild;
 pub use content_queries::PostgresAdminContentQuery;
+pub use html_rebuild::PostgresHtmlRebuildStore;
 mod identity;
 mod media;
 mod sql;
 mod taxonomy;
 
-pub use connection::{PgHealthCheck, SystemClock, connect, migrate_schema};
+pub use connection::{PgHealthCheck, SystemClock, connect, migrate_schema, verify_schema};
 pub use content::{
     CONTENT_RENDER_VERSION, PostgresPageRepository, PostgresPostRepository,
     PostgresPublishedPageQuery, PostgresPublishedPostQuery, PostgresScheduledPublicationStore,
-    rebuild_content_html,
 };
 pub use identity::PostgresUserRepository;
 pub use media::PostgresMediaRepository;
