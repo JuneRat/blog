@@ -1099,7 +1099,7 @@ async fn find_returns_current_state_for_cli() {
     let created = f.posts.create(&f.author, draft_cmd("shown")).await.unwrap();
     let shown = f.posts.find(&f.author, created.id).await.unwrap();
     assert_eq!(shown.id, created.id);
-    // deleted_at 过滤行为由 infrastructure 集成测试覆盖（M1 未开放删除用例）。
+    // deleted_at 过滤行为由 infrastructure 集成测试覆盖。
 }
 
 #[tokio::test]

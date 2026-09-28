@@ -70,6 +70,7 @@ class PostgresRecoveryTests(unittest.TestCase):
 
     def env(self, database=None, role=None, **extra):
         env = dict(os.environ, DATABASE_URL=self.url(database or self.source, role),
+                   BLOG_CONFIG_FILE=str(self.root / "config.toml"),
                    BLOG_MIGRATIONS_DIR=str(PROJECT / "migrations/postgres"),
                    BLOG_THEME_DIR=str(PROJECT / "themes/default"),
                    BLOG_MEDIA_DIR=str(self.media_dir), BLOG_RECOVERY_MODE="0",

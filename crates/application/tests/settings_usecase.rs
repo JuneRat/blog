@@ -107,8 +107,8 @@ fn content_actor() -> Actor {
 
 fn fallback() -> SiteInfo {
     SiteInfo {
-        title: "环境变量标题".into(),
-        description: "环境变量描述".into(),
+        title: "默认标题".into(),
+        description: "默认描述".into(),
         logo_url: None,
     }
 }
@@ -152,8 +152,8 @@ async fn read_falls_back_to_assembly_when_not_configured() {
     assert_eq!(
         view,
         SiteSettingsView {
-            title: "环境变量标题".into(),
-            description: "环境变量描述".into(),
+            title: "默认标题".into(),
+            description: "默认描述".into(),
             logo_media_id: None,
             logo_url: None,
             source: SiteSettingsSource::Fallback,
@@ -192,7 +192,7 @@ async fn partial_row_falls_back_per_field() {
     let settings = interactor(Arc::new(store));
     let view = settings.site_view(&admin_actor()).await.unwrap();
     assert_eq!(view.title, "数据库标题");
-    assert_eq!(view.description, "环境变量描述");
+    assert_eq!(view.description, "默认描述");
     assert_eq!(view.source, SiteSettingsSource::Database);
     assert_eq!(view.version, 3);
 }
@@ -276,11 +276,11 @@ async fn identical_save_is_idempotent_without_version_bump() {
 #[tokio::test]
 async fn saving_fallback_values_still_persists_row() {
     // 保存动作的意图是「让数据库接管」：即使值恰好等于装配回退值，
-    // 行不存在时也必须落库，此后环境变量调整不再影响站点。
+    // 行不存在时也必须落库，此后内置默认值调整不再影响站点。
     let store = Arc::new(FakeSettingsStore::new());
     let settings = interactor(store.clone());
     let view = settings
-        .save_site(&admin_actor(), cmd("环境变量标题", "环境变量描述", Some(0)))
+        .save_site(&admin_actor(), cmd("默认标题", "默认描述", Some(0)))
         .await
         .unwrap();
     assert_eq!(view.source, SiteSettingsSource::Database);

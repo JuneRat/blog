@@ -44,7 +44,7 @@
 | [扩展与数据能力](extensions-and-data.md) | 尚未交付的扩展接口、格式和设计约束 |
 | [ADR](adr/README.md) | 决策背景、理由、后果与替代关系 |
 
-当前数据库迁移位于 [migrations/postgres](../migrations/postgres/)，[postgres-core.sql](sql/postgres-core.sql) 汇总当前结构。根目录 [blog_schema.sql](../blog_schema.sql) 的结构已纳入新的 `0001_initial_schema.sql`，三份 DDL 保持一致；仅用于空库，不与旧迁移链叠加。身份与会话已适配，其他模块进度见路线图。原型验证位于 [spikes/template-bridge](../spikes/template-bridge/README.md)，不属于主程序的功能入口。
+当前数据库迁移位于 [migrations/postgres](../migrations/postgres/)，[postgres-core.sql](sql/postgres-core.sql) 汇总当前结构。根目录 [blog_schema.sql](../blog_schema.sql) 的结构已纳入新的 `0001_initial_schema.sql`，三份 DDL 保持一致；仅用于空库，不与旧迁移链叠加。身份与会话已适配，其他模块进度见路线图。桥接实验结论保存在[归档报告](template-bridge-experiment.md)，独立实验代码已移除。
 
 ## 维护约定
 

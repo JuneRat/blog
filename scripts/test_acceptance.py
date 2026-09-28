@@ -48,7 +48,7 @@ class AcceptanceSafetyTests(unittest.TestCase):
 
     def test_inherited_site_and_postgres_configuration_cannot_escape_test_environment(self):
         with patch.dict(os.environ, {"PATH": "/safe/bin", "DATABASE_URL": "production",
-                                    "BLOG_CONFIG_FILE": "original-config.json", "BLOG_RECOVERY_MODE": "1",
+                                    "BLOG_CONFIG_FILE": "original-config.toml", "BLOG_RECOVERY_MODE": "1",
                                     "BLOG_PUBLIC_BASE_URL": "https://production.test", "PGSERVICE": "production",
                                     "PGHOST": "production.test", "PGOPTIONS": "unsafe"}):
             env = self.suite.env()
@@ -58,7 +58,7 @@ class AcceptanceSafetyTests(unittest.TestCase):
         self.assertNotIn("PGOPTIONS", env)
         self.assertNotIn("BLOG_PUBLIC_BASE_URL", env)
         self.assertEqual(env["BLOG_RECOVERY_MODE"], "0")
-        self.assertEqual(env["BLOG_CONFIG_FILE"], str(self.root / "config.json"))
+        self.assertEqual(env["BLOG_CONFIG_FILE"], str(self.root / "config.toml"))
         self.assertEqual(env["PATH"], "/safe/bin")
 
     def test_database_collision_never_creates_or_drops_any_database(self):

@@ -25,7 +25,7 @@ vi.mock("../src/api", async (importOriginal) => {
 });
 
 const fallbackView: SiteSettings = {
-  title: "环境变量站点",
+  title: "默认站点",
   description: "回退描述",
   logo_media_id: null,
   logo_url: null,
@@ -102,12 +102,12 @@ describe("站点设置屏", () => {
     fireEvent.click(screen.getByRole("button", { name: "切换主题" }));
     await waitFor(() => expect(themeSettingsApi.save).toHaveBeenCalledWith("default", 3));
   });
-  it("加载生效值并标注来源为环境变量/默认值", async () => {
+  it("加载生效值并标注来源为内置默认值", async () => {
     render(<App />);
     const title = (await screen.findByLabelText("站点标题")) as HTMLInputElement;
-    expect(title.value).toBe("环境变量站点");
+    expect(title.value).toBe("默认站点");
     expect(
-      screen.getByText(/环境变量\/默认值（数据库尚未配置；保存后由数据库接管）/),
+      screen.getByText(/内置默认值（数据库尚未配置；保存后由数据库接管）/),
     ).toBeTruthy();
   });
 

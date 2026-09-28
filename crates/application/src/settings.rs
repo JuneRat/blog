@@ -7,7 +7,7 @@
 //!   （受控 CLI / OAuth 用例），不受 settings.manage 覆盖；未知分组一律 404。
 //!
 //! 生效优先级（docs/database-design.md §6）：数据库 site 行 > 装配回退值
-//! （环境变量 `BLOG_SITE_TITLE`/`BLOG_SITE_DESCRIPTION` 或内置默认值）。
+//! （内置默认值）。
 //! 行内**缺字段**（历史/手工写入）时按字段回退；公开渲染在存储读取失败时
 //! 整体回退到装配值，配置问题不拖垮公开页面。
 //!
@@ -30,7 +30,7 @@ use domain::settings::SiteSettings;
 pub enum SiteSettingsSource {
     /// 来自 settings.site 行。
     Database,
-    /// 行未配置：环境变量或内置默认值。
+    /// 行未配置：内置默认值。
     Fallback,
 }
 
@@ -59,7 +59,7 @@ pub struct SaveSiteSettingsCmd {
 pub struct SettingsInteractor {
     store: Arc<dyn SettingsStore>,
     clock: Arc<dyn Clock>,
-    /// 装配回退值：环境变量/内置默认值（server 装配层构造，进程内不变）。
+    /// 装配回退值：内置默认值（server 装配层构造，进程内不变）。
     fallback: SiteInfo,
     themes: Option<(Arc<dyn ThemeSettingsStore>, Arc<ThemeRegistry>)>,
     /// 站点 logo 附着的可用性校验（`ensure_attachable`）。
@@ -206,7 +206,7 @@ impl SettingsInteractor {
     ///
     /// 与已存储内容完全一致的保存幂等返回，不写库、不递增版本；
     /// 行不存在时（版本 0）总是插入，即使值恰好等于装配回退值——
-    /// 保存动作的意图就是「让数据库接管该配置」，之后环境变量不再生效。
+    /// 保存动作的意图就是「让数据库接管该配置」，之后直接使用保存值。
     pub async fn save_site(
         &self,
         actor: &Actor,

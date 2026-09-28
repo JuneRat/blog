@@ -44,7 +44,7 @@ HTML 上限的 Post/Page 校验模板，拒绝重复输出正文等明显超预�
 `CommentNickname`，账号身份携带用户 ID。账号昵称在事务内读取当前展示名，
 去除控制字符、trim、截取 64 字，空值回退用户名，再经过同一昵称构造器。
 审核使用 `ModerationAction::SetStatus(CommentStatus)` 或
-`DeletePermanently`；HTTP 的既有 `status` / `delete` 请求形状保持兼容。
+`DeletePermanently`；HTTP 接口通过 `status` / `delete` 请求映射到这些操作。
 
 分类防环、媒体引用保护、评论父子关系、作用域、幂等请求和 CAS 检查继续
 留在仓储事务内。

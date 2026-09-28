@@ -36,7 +36,7 @@ fn command(dir: &Path) -> Command {
         .env_remove("BLOG_SECURE_COOKIES")
         .env_remove("BLOG_RECOVERY_MODE")
         .env_remove("BLOG_TRUSTED_PROXIES")
-        .env("BLOG_CONFIG_FILE", dir.join("config.json"))
+        .env("BLOG_CONFIG_FILE", dir.join("config.toml"))
         .env("BLOG_MIGRATIONS_DIR", project.join("migrations/postgres"))
         .env("BLOG_THEME_DIR", project.join("themes/default"))
         .env("BLOG_ADMIN_DIST", dir.join("admin"))
@@ -280,14 +280,14 @@ async fn empty_database_installs_once_logs_in_and_restarts_from_saved_config() {
     assert_eq!(row, (1, 1, "active".into()));
     let audits: (i64, Option<String>) = sqlx::query_as("SELECT count(*),min(host(ip_address)) FROM audit_logs WHERE action='installation.complete' AND actor_id IS NULL").fetch_one(&pool).await.unwrap();
     assert_eq!(audits, (1, Some("127.0.0.1".into())));
-    let config = std::fs::read_to_string(dir.join("config.json")).unwrap();
+    let config = std::fs::read_to_string(dir.join("config.toml")).unwrap();
     assert!(!config.contains(PASSWORD));
     assert!(!config.contains(&server.token));
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         assert_eq!(
-            std::fs::metadata(dir.join("config.json"))
+            std::fs::metadata(dir.join("config.toml"))
                 .unwrap()
                 .permissions()
                 .mode()
@@ -386,7 +386,7 @@ async fn authorization_and_input_failures_never_save_configuration_or_mutate_dat
     assert_eq!(bad.status(), StatusCode::BAD_REQUEST);
     let error = bad.text().await.unwrap();
     assert!(!error.contains("private-password"));
-    assert!(!dir.join("config.json").exists());
+    assert!(!dir.join("config.toml").exists());
     let count: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM information_schema.tables WHERE table_schema='public'",
     )
@@ -409,7 +409,7 @@ async fn interrupted_install_resumes_without_overwriting_saved_database_and_roll
     let response = submit(&server, input(&url)).await;
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     assert!(response.text().await.unwrap().contains("主题"));
-    assert!(dir.join("config.json").exists());
+    assert!(dir.join("config.toml").exists());
     let users: i64 = sqlx::query_scalar("SELECT count(*) FROM users")
         .fetch_one(&pool)
         .await
@@ -477,7 +477,7 @@ async fn existing_and_recovery_databases_are_refused_without_cleaning_them() {
     let response = submit(&server, input(&url)).await;
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     assert!(response.text().await.unwrap().contains("恢复隔离"));
-    assert!(!dir.join("config.json").exists());
+    assert!(!dir.join("config.toml").exists());
     drop(server);
     pool.close().await;
     std::fs::remove_dir_all(dir).unwrap();
@@ -492,10 +492,70 @@ async fn broken_config_or_explicit_database_never_falls_back_to_an_open_installe
         .unwrap();
     assert!(!output.status.success());
     assert!(!String::from_utf8_lossy(&output.stdout).contains("安装码"));
-    std::fs::write(dir.join("config.json"), "broken").unwrap();
+    std::fs::write(dir.join("config.toml"), "broken").unwrap();
     let output = command(&dir).output().unwrap();
     assert!(!output.status.success());
     assert!(!String::from_utf8_lossy(&output.stdout).contains("安装码"));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn toml_bootstrap_is_saved_once_and_runtime_edits_survive_restart() {
+    let (pool, url) = empty_database("blog_install_bootstrap_test").await;
+    let dir = common::media_dir("installation-bootstrap");
+    let path = dir.join("config.toml");
+    std::fs::write(&path, "# Operator comment\n[bootstrap]\ntitle='Initial title'\ndescription='Initial description'\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let server = start(&dir, false).await;
+    let response = submit(&server, input(&url)).await;
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "{}",
+        response.text().await.unwrap()
+    );
+    let initial: Value = sqlx::query_scalar("SELECT value FROM settings WHERE key='site'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(initial["title"], "Initial title");
+    assert_eq!(initial["description"], "Initial description");
+    let config = std::fs::read_to_string(&path).unwrap();
+    assert!(config.contains("# Operator comment"));
+    assert!(!config.contains("installation_id"));
+    let saved: Value = serde_json::from_str(
+        &std::fs::read_to_string(dir.join("config.install-state.json")).unwrap(),
+    )
+    .unwrap();
+    assert!(!saved.to_string().contains(PASSWORD));
+    assert!(!saved.to_string().contains(&server.token));
+    // Model a saved runtime setting, then change deployment bootstrap values.
+    sqlx::query("UPDATE settings SET value=jsonb_build_object('title','Admin title','description',''), version=version+1 WHERE key='site'").execute(&pool).await.unwrap();
+    drop(server);
+    std::fs::write(&path, config.replace("Initial title", "Changed bootstrap")).unwrap();
+    let restarted = start(&dir, false).await;
+    assert!(restarted.token.is_empty());
+    let page = client()
+        .get(format!("{}/", restarted.url))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(page.contains("Admin title"));
+    assert!(!page.contains("Changed bootstrap"));
+    let current: Value = sqlx::query_scalar("SELECT value FROM settings WHERE key='site'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(current["description"], "");
+    drop(restarted);
+    pool.close().await;
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -519,12 +579,17 @@ async fn competing_bootstraps_commit_exactly_one_owner_and_marker() {
     )
     .await
     .unwrap();
+    let site = application::ports::SiteSettingsValue {
+        title: None,
+        description: None,
+        logo_media_id: None,
+    };
     let first_id = "a".repeat(64);
     let second_id = "b".repeat(64);
     let audit = application::audit::AuditContext::system();
     let (a, b) = tokio::join!(
-        infrastructure::installation::initialize(&pool, &first_id, &first, audit),
-        infrastructure::installation::initialize(&pool, &second_id, &second, audit),
+        infrastructure::installation::initialize(&pool, &first_id, &first, &site, audit),
+        infrastructure::installation::initialize(&pool, &second_id, &second, &site, audit),
     );
     assert_ne!(a.is_ok(), b.is_ok());
     let row: (i64,i64,i64) = sqlx::query_as("SELECT (SELECT count(*) FROM users),(SELECT count(*) FROM user_roles),(SELECT count(*) FROM audit_logs WHERE action='installation.complete')").fetch_one(&pool).await.unwrap();
@@ -543,7 +608,7 @@ async fn a_concurrently_created_config_is_never_overwritten_and_prevents_databas
     let (pool, url) = empty_database("blog_install_config_race_test").await;
     let dir = common::media_dir("installation-config-race");
     let server = start(&dir, false).await;
-    let path = dir.join("config.json");
+    let path = dir.join("config.toml");
     std::fs::write(&path, "another process owns this path").unwrap();
     let response = submit(&server, input(&url)).await;
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);

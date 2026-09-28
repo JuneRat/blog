@@ -7,7 +7,7 @@ ADR 记录问题、选择、理由和代价。每篇页首说明决策状态与�
 | ADR | 状态 | 演进关系 |
 |---|---|---|
 | [0001 五个 crate 的模块化单体](0001-workspace-boundaries.md) | 已采纳 | 分层原则由 [0015](0015-rendered-content-runtime-and-module-boundaries.md) 补充装配、模块和依赖检查 |
-| [0002 MiniJinja 与受控数据函数](0002-template-data-functions.md) | 已采纳 | 桥接可行结论见[原型报告](../../spikes/template-bridge/README.md)，执行边界由 [0015](0015-rendered-content-runtime-and-module-boundaries.md) 细化 |
+| [0002 MiniJinja 与受控数据函数](0002-template-data-functions.md) | 已采纳 | 桥接可行结论见[原型报告](../template-bridge-experiment.md)，执行边界由 [0015](0015-rendered-content-runtime-and-module-boundaries.md) 细化 |
 | [0003 产品与外部接入基线](0003-product-baseline.md) | 已采纳 | [0008](0008-thirteen-table-blog-core.md) 细化存储与开通方式；功能分期见[路线图](../product-roadmap.md) |
 | [0004 公开内容 generation](0004-public-cache-generation.md) | 提议 | 页面缓存启用前仍需单独验证，桥接原型不替代其验收 |
 | [0005 跨资源备份与隔离恢复](0005-consistent-backup-and-recovery.md) | 提议 | 工具部分落地，完整恢复与生产验收见[运维文档](../operations-and-recovery.md) |

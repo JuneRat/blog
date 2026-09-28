@@ -19,6 +19,7 @@ import subprocess
 import sys
 import uuid
 from urllib.parse import unquote, urlsplit
+from deployment_config import resource_paths
 
 from recovery_inventory import (
     RecoveryError, SCHEMA_ID, SCHEMA_TABLES, ISOLATION_PREFIX, digest, safe_file,
@@ -365,8 +366,10 @@ def main():
     sub = parser.add_subparsers(dest="action", required=True)
     b = sub.add_parser("backup")
     b.add_argument("--output", required=True)
-    b.add_argument("--theme-dir", default=os.environ.get("BLOG_THEME_DIR", "themes/default"))
-    b.add_argument("--media-dir", default=os.environ.get("BLOG_MEDIA_DIR", "data/media"))
+    b.add_argument("--theme-dir")
+    b.add_argument("--media-dir")
+    b.add_argument("--config", help="deployment TOML for resource paths; database credentials still use DATABASE_URL")
+    b.add_argument("--blog-bin", help="blog executable used to resolve TOML configuration")
     b.add_argument("--resource", action="append", default=[], help="additional directory as name=path")
     b.add_argument("--maintenance-confirmed", action="store_true")
     v = sub.add_parser("verify")
@@ -384,6 +387,10 @@ def main():
     args = parser.parse_args()
     try:
         if args.action == "backup":
+            paths = resource_paths(args.config, args.blog_bin,
+                                   {"media_dir": args.media_dir, "theme_dir": args.theme_dir})
+            args.media_dir = paths["media_dir"]
+            args.theme_dir = paths["theme_dir"]
             backup(args)
         elif args.action == "verify":
             manifest = verify(args.backup)

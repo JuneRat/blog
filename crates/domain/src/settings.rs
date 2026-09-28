@@ -3,7 +3,7 @@
 //! 规则来源 docs/database-design.md §6：
 //! - settings 按 key 分组存 JSONB，结构由应用按分组校验；
 //! - 本模块只负责 site 分组可写字段的不变量（trim、非空、长度上限），
-//!   不解释存储布局——读取侧的「数据库 > 环境变量 > 默认值」回退在应用层
+//!   不解释存储布局——读取侧的「数据库 > 内置默认值」回退在应用层
 //!   （application::settings），与写校验分离。
 //!
 //! 长度按字符计（与 tags.name 一致），不受字节宽度影响；
@@ -30,7 +30,7 @@ pub enum SettingsError {
 /// site 分组的规范值：字段都已 trim，长度受限，标题非空。
 ///
 /// 这是**写入契约**：保存路径只接受完整对象（标题、描述与 logo 同时落库），
-/// 避免「只写了一半」造成环境变量与数据库各出一半的混合状态。
+/// 避免「只写了一半」造成默认值与数据库各出一半的混合状态。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SiteSettings {
     title: String,

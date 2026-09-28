@@ -165,7 +165,7 @@ export interface SeriesMemberRow {
   position: number;
 }
 
-/** 当前生效值的来源：database（settings.site 行）或 fallback（环境变量/默认值）。 */
+/** 当前生效值的来源：database（settings.site 行）或 fallback（内置默认值）。 */
 export type SiteSettingsSource = "database" | "fallback";
 
 /** GET/PUT /api/admin/v1/settings/site（读/写都需 settings.manage）。 */

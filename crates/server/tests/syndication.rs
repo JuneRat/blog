@@ -31,7 +31,7 @@ use infrastructure::{
     PostgresRbacStore, PostgresSeriesRepository, PostgresSettingsStore, PostgresTagRepository,
     PostgresUserRepository, RenderingRuntime, SystemClock,
 };
-use interfaces::http::public_router_minimal;
+use interfaces::http::{PublicSiteState, public_router};
 use sqlx::PgPool;
 use tower::ServiceExt;
 
@@ -141,7 +141,10 @@ async fn stack() -> Stack {
     let pages = Arc::new(PageInteractor::new(page_repo, clock));
 
     Stack {
-        router: public_router_minimal(public_site),
+        router: public_router(PublicSiteState {
+            site: public_site,
+            health: None,
+        }),
         posts,
         pages,
         tags: tag_repo,

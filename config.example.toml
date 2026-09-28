@@ -1,0 +1,37 @@
+# 复制到 data/config.toml 并 chmod 600。相对路径以进程工作目录为基准。
+# 优先级：CLI > 环境变量 > TOML > 默认值；不会自动加载 .env。
+config_version = 1
+
+[database]
+# 推荐通过 DATABASE_URL 注入。留空（不设置 url）时 serve 进入安装向导。
+# url = "postgres://blog:change-me@127.0.0.1:5432/blog"
+migrations_dir = "migrations/postgres"
+
+[server]
+bind = "127.0.0.1:8080"
+# 首次安装可在向导填写；生产环境使用真实 HTTPS 域名。
+# public_base_url = "https://blog.example.com"
+trusted_proxies = []
+# 缺省根据公开 URL 是否使用 HTTPS 推导；环境布尔值接受 true/false、1/0。
+# secure_cookies = true
+
+[paths]
+theme_dir = "themes/default"
+admin_dist = "apps/admin/dist"
+media_dir = "data/media"
+
+[logging]
+filter = "info,sqlx=warn"
+
+[recovery]
+enabled = false
+
+# 独立维护任务使用 BLOG_MAINTENANCE_DATABASE_URL，或单独维护配置中的下列字段。
+# HTTP 服务不需要此凭据，维护连接不回退到 database.url。
+# [maintenance]
+# database_url = "postgres://blog_maintenance:change-me@127.0.0.1:5432/blog"
+
+# 仅首次安装写入数据库；之后通过后台修改，重启不会重新应用。
+[bootstrap]
+# title = "我的博客"
+# description = ""

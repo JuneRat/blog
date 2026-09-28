@@ -6,14 +6,6 @@ pub async fn is_isolated(pool: &sqlx::PgPool) -> Result<bool, String> {
     Ok(comment.is_some_and(|s| s.starts_with("blog:recovery-isolated:")))
 }
 
-pub fn mode() -> Result<bool, String> {
-    match std::env::var("BLOG_RECOVERY_MODE").as_deref() {
-        Err(_) | Ok("") | Ok("0") | Ok("false") => Ok(false),
-        Ok("1") | Ok("true") => Ok(true),
-        _ => Err("BLOG_RECOVERY_MODE 只能是 0/1 或 false/true".into()),
-    }
-}
-
 pub fn check_bind(bind: &str) -> Result<(), String> {
     let address: std::net::SocketAddr = bind
         .parse()

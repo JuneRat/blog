@@ -5,7 +5,7 @@ use crate::ports::SiteSettingsValue;
 /// 站点基础信息：一次渲染的生效值。
 ///
 /// 生效优先级（M3 起由 settings 驱动）：数据库 site 行 > 装配回退值
-/// （环境变量 `BLOG_SITE_TITLE`/`BLOG_SITE_DESCRIPTION` 或内置默认值）。
+/// （内置默认值；部署配置中的 bootstrap 仅用于初始化数据库）。
 /// 解析见 [`effective_site`]。
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SiteInfo {
@@ -13,6 +13,36 @@ pub struct SiteInfo {
     pub description: String,
     /// 站点 logo 的站内地址（None = 无 logo）。站点配置公开，因此有 logo 即公开来源。
     pub logo_url: Option<String>,
+}
+
+impl Default for SiteInfo {
+    fn default() -> Self {
+        Self {
+            title: "Sun's Blog".into(),
+            description: "一个 Rust 博客".into(),
+            logo_url: None,
+        }
+    }
+}
+
+/// Validate a partial installation input using the same domain rules as
+/// admin settings. Missing fields remain missing, including an absent description.
+pub fn initial_site_settings(
+    value: SiteSettingsValue,
+) -> Result<SiteSettingsValue, crate::UseCaseError> {
+    let defaults = SiteInfo::default();
+    let (title, description, _) = domain::settings::SiteSettings::new(
+        value.title.clone().unwrap_or(defaults.title),
+        value.description.clone().unwrap_or(defaults.description),
+        None,
+    )
+    .map_err(|e| crate::UseCaseError::Invalid(e.to_string()))?
+    .into_parts();
+    Ok(SiteSettingsValue {
+        title: value.title.map(|_| title),
+        description: value.description.map(|_| description),
+        logo_media_id: None,
+    })
 }
 
 /// 行值 + 装配回退值 → 生效值（字段级回退）。
@@ -47,8 +77,8 @@ mod tests {
 
     fn fallback() -> SiteInfo {
         SiteInfo {
-            title: "环境变量标题".into(),
-            description: "环境变量描述".into(),
+            title: "默认标题".into(),
+            description: "默认描述".into(),
             logo_url: None,
         }
     }
@@ -92,7 +122,7 @@ mod tests {
     fn missing_or_blank_title_falls_back() {
         for title in [None, Some(""), Some("   ")] {
             let info = effective_site(&stored(title, Some("d")), &fallback());
-            assert_eq!(info.title, "环境变量标题", "title={title:?} 应回退");
+            assert_eq!(info.title, "默认标题", "title={title:?} 应回退");
             assert_eq!(info.description, "d");
         }
     }

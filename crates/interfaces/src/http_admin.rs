@@ -1243,7 +1243,7 @@ struct SiteSettingsJson {
     logo_media_id: Option<Uuid>,
     /// 站点 logo 的站内地址（None = 无 logo）。
     logo_url: Option<String>,
-    /// "database"（settings.site 行）或 "fallback"（环境变量/默认值，version=0）。
+    /// "database"（settings.site 行）或 "fallback"（内置默认值，version=0）。
     source: &'static str,
     version: i64,
 }

@@ -14,32 +14,46 @@ use interfaces::cli::{Command, parse_args};
 
 #[tokio::main]
 async fn main() {
+    let cli = parse_args();
+    let config = match config::DeploymentConfig::load(cli.config) {
+        Ok(config) => config,
+        Err(error) => {
+            eprintln!("错误：{error}");
+            std::process::exit(1);
+        }
+    };
+    let log_filter = match config.log_filter() {
+        Ok(filter) => filter,
+        Err(error) => {
+            eprintln!("错误：{error}");
+            std::process::exit(1);
+        }
+    };
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info,sqlx=warn".into()),
-        )
+        .with_env_filter(log_filter)
         .init();
-    if let Err(error) = run(parse_args().command).await {
+    if let Err(error) = run(cli.command, config).await {
         eprintln!("错误：{error}");
         std::process::exit(1);
     }
 }
 
-async fn run(command: Command) -> Result<(), String> {
+async fn run(command: Command, mut config: config::DeploymentConfig) -> Result<(), String> {
+    if let Command::Config { action } = command {
+        return config::run_command(&config, action);
+    }
     if let Command::Maintenance {
         batch_size,
         max_batches,
         dry_run,
     } = command
     {
-        let url = std::env::var("BLOG_MAINTENANCE_DATABASE_URL")
-            .map_err(|_| "请设置独立维护连接 BLOG_MAINTENANCE_DATABASE_URL")?;
+        let url = config.maintenance_url()?;
         let pool = infrastructure::connect(&url)
             .await
             .map_err(|e| e.to_string())?;
-        if recovery::mode()? || recovery::is_isolated(&pool).await? {
+        if config.recovery_mode()? || recovery::is_isolated(&pool).await? {
             return Err("恢复隔离期间禁止保留期清理".into());
         }
         return interfaces::cli::run_maintenance(
@@ -50,18 +64,30 @@ async fn run(command: Command) -> Result<(), String> {
         )
         .await;
     }
-    let saved = config::read_saved(&config::config_path())?;
-    if let Command::Serve { addr } = &command
-        && std::env::var_os("DATABASE_URL").is_none()
-        && saved.is_none()
-    {
-        return installation::serve(addr.clone(), None).await;
+    let journal = if matches!(command, Command::Serve { .. }) {
+        config::InstallJournal::read(&config.path)?
+    } else {
+        None
+    };
+    if let Some(journal) = &journal {
+        config = journal.recover_config(&config)?;
     }
-    let database = config::DatabaseConfig::from_env(saved.as_ref());
+    if let Command::Serve { addr } = &command
+        && config.configured_database_url()?.is_none()
+    {
+        if journal.is_some() {
+            return Err("安装记录存在但数据库地址缺失，请修复 TOML 配置".into());
+        }
+        return installation::serve(config, addr.clone(), None).await;
+    }
+    let database = config.database()?;
+    if matches!(command, Command::Media { .. }) {
+        config.media_dir()?;
+    }
     let pool = infrastructure::connect(&database.url)
         .await
         .map_err(|error| format!("连接 PostgreSQL 失败：{error}"))?;
-    let recovery_mode = recovery::mode()?;
+    let recovery_mode = config.recovery_mode()?;
     let isolated = recovery::is_isolated(&pool).await?;
     if matches!(command, Command::PublishDue) && (isolated || recovery_mode) {
         return Err("恢复隔离期间禁止预约发布任务".into());
@@ -73,18 +99,23 @@ async fn run(command: Command) -> Result<(), String> {
         return Err("恢复数据库尚未解除隔离；核验请设置 BLOG_RECOVERY_MODE=1，完成后用 recovery.py release 解除".into());
     }
     if let Command::Serve { addr } = &command
-        && std::env::var_os("DATABASE_URL").is_none()
-        && let Some(saved) = saved.as_ref()
+        && let Some(saved) = journal.as_ref()
         && !infrastructure::installation::is_complete(&pool, &saved.installation_id)
             .await
             .map_err(|e| e.to_string())?
     {
+        if database.url != saved.pending_database_url()? {
+            return Err(
+                "未完成安装的数据库目标已改变，拒绝续装；请恢复原连接或为独立部署使用新的配置路径"
+                    .into(),
+            );
+        }
         pool.close().await;
-        return installation::serve(addr.clone(), Some(saved.clone())).await;
+        return installation::serve(config, addr.clone(), Some(saved.clone())).await;
     }
     // Validate the recovery listener before any migration or permission writes.
     let site_config = if let Command::Serve { addr } = &command {
-        let site = config::SiteConfig::from_env(addr.clone(), saved.as_ref())?;
+        let site = config.site(addr.clone())?;
         if recovery_mode {
             recovery::check_bind(&site.bind)?;
         }
@@ -128,6 +159,7 @@ async fn run(command: Command) -> Result<(), String> {
         .await
         .map_err(|error| format!("同步权限目录失败：{error}"))?;
     match command {
+        Command::Config { .. } => unreachable!("config command returned above"),
         Command::Maintenance { .. } => unreachable!("maintenance returned above"),
         Command::Migrate => unreachable!("migration returned above"),
         Command::RebuildHtml { .. } => unreachable!("HTML rebuild returned above"),
@@ -147,7 +179,7 @@ async fn run(command: Command) -> Result<(), String> {
             .await
         }
         Command::Media { action } => {
-            interfaces::cli::run_media(&assembly::media(&pool, config::media_dir()), action).await
+            interfaces::cli::run_media(&assembly::media(&pool, config.media_dir()?), action).await
         }
         Command::Serve { .. } => {
             let site = site_config.expect("serve configuration was validated above");

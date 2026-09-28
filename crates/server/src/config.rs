@@ -1,26 +1,24 @@
-//! Configuration is read by the command that owns it.
+//! Deployment configuration belongs to the composition root. Merge sources once,
+//! then validate only the fields owned by the selected command.
+mod commands;
+mod files;
+mod schema;
+#[cfg(test)]
+mod tests;
 
-use std::io::Write;
-use std::path::{Path, PathBuf};
+pub use commands::run_command;
+pub use files::InstallJournal;
 
-use application::seo::PublicBaseUrl;
-use application::site_info::SiteInfo;
+use application::{ports::SiteSettingsValue, seo::PublicBaseUrl, site_info::SiteInfo};
+use interfaces::cli::ConfigScope;
+use schema::FIELDS;
+use std::{collections::BTreeMap, net::IpAddr, path::PathBuf};
+
+pub const DEFAULT_PATH: &str = "data/config.toml";
 
 pub struct DatabaseConfig {
     pub url: String,
     pub migrations_dir: PathBuf,
-}
-
-impl DatabaseConfig {
-    pub fn from_env(saved: Option<&SavedConfig>) -> Self {
-        Self {
-            url: std::env::var("DATABASE_URL")
-                .ok()
-                .or_else(|| saved.map(|c| c.database_url.clone()))
-                .unwrap_or_else(|| "postgres://blog:blog@127.0.0.1:5432/blog".into()),
-            migrations_dir: env_path("BLOG_MIGRATIONS_DIR", "migrations/postgres"),
-        }
-    }
 }
 
 pub struct SiteConfig {
@@ -31,203 +29,311 @@ pub struct SiteConfig {
     pub public_base_url: PublicBaseUrl,
     pub secure_cookies: bool,
     pub bind: String,
-    pub trusted_proxies: Vec<std::net::IpAddr>,
+    pub trusted_proxies: Vec<IpAddr>,
 }
 
-impl SiteConfig {
-    /// Only `serve` reads website configuration. A broken URL or theme must not
-    /// prevent an operator from repairing accounts, roles or OAuth bindings.
-    pub fn from_env(addr: Option<String>, saved: Option<&SavedConfig>) -> Result<Self, String> {
-        let raw_url = std::env::var("BLOG_PUBLIC_BASE_URL")
-            .ok()
-            .or_else(|| saved.map(|c| c.public_base_url.clone()))
-            .unwrap_or_else(|| "http://127.0.0.1:8080".into());
-        let public_base_url = PublicBaseUrl::parse(&raw_url)
-            .map_err(|error| format!("BLOG_PUBLIC_BASE_URL 无效：{error}"))?;
-        let secure_cookies = match std::env::var("BLOG_SECURE_COOKIES") {
-            Ok(value) => value == "1" || value.eq_ignore_ascii_case("true"),
-            Err(_) => public_base_url.as_str().starts_with("https://"),
-        };
-        let trusted_proxies = std::env::var("BLOG_TRUSTED_PROXIES")
-            .unwrap_or_default()
-            .split(',')
-            .map(str::trim)
-            .filter(|v| !v.is_empty())
-            .map(|v| {
-                v.parse()
-                    .map_err(|_| format!("BLOG_TRUSTED_PROXIES 包含无效 IP：{v}"))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+#[derive(Clone)]
+pub struct DeploymentConfig {
+    pub path: PathBuf,
+    original: Option<String>,
+    values: toml::Table,
+    env: BTreeMap<String, String>,
+}
+
+impl DeploymentConfig {
+    pub fn load(path: Option<PathBuf>) -> Result<Self, String> {
+        let mut env = BTreeMap::new();
+        for name in FIELDS
+            .iter()
+            .filter_map(|f| f.env)
+            .chain(["BLOG_CONFIG_FILE"])
+        {
+            match std::env::var(name) {
+                Ok(value) => {
+                    env.insert(name.to_owned(), value);
+                }
+                Err(std::env::VarError::NotPresent) => {}
+                Err(_) => return Err(format!("{name} 必须是有效 UTF-8")),
+            }
+        }
+        let path = path
+            .or_else(|| env.get("BLOG_CONFIG_FILE").map(PathBuf::from))
+            .unwrap_or_else(|| PathBuf::from(DEFAULT_PATH));
+        if path.as_os_str().is_empty() {
+            return Err("配置文件路径不能为空".into());
+        }
+        let original = files::read_private(&path)?;
+        Self::parse(path, original, env)
+    }
+
+    fn parse(
+        path: PathBuf,
+        original: Option<String>,
+        env: BTreeMap<String, String>,
+    ) -> Result<Self, String> {
+        let values = original
+            .as_deref()
+            .unwrap_or("")
+            .parse::<toml::Table>()
+            .map_err(|e| {
+                let line = e.span().map(|span| {
+                    original.as_deref().unwrap_or("")[..span.start]
+                        .bytes()
+                        .filter(|b| *b == b'\n')
+                        .count()
+                        + 1
+                });
+                // TOML diagnostics include source snippets, which may contain credentials.
+                format!(
+                    "TOML 语法无效{}",
+                    line.map(|n| format!("（第 {n} 行）")).unwrap_or_default()
+                )
+            })?;
+        schema::check_keys(&values)?;
         Ok(Self {
-            trusted_proxies,
-            theme_dir: env_path("BLOG_THEME_DIR", "themes/default"),
-            site: SiteInfo {
-                title: std::env::var("BLOG_SITE_TITLE").unwrap_or_else(|_| "Sun's Blog".into()),
-                description: std::env::var("BLOG_SITE_DESCRIPTION")
-                    .unwrap_or_else(|_| "一个 Rust 博客".into()),
-                logo_url: None,
-            },
-            admin_dist: env_path("BLOG_ADMIN_DIST", "apps/admin/dist"),
-            media_dir: media_dir(),
-            public_base_url,
-            secure_cookies,
-            bind: bind_address(addr),
+            path,
+            original,
+            values,
+            env,
         })
     }
-}
 
-pub fn bind_address(addr: Option<String>) -> String {
-    addr.or_else(|| std::env::var("BLOG_BIND").ok())
-        .unwrap_or_else(|| "127.0.0.1:8080".into())
-}
-
-pub fn config_path() -> PathBuf {
-    env_path("BLOG_CONFIG_FILE", "data/config.json")
-}
-
-/// Immutable installation journal. The matching database marker determines
-/// completion, so a crash between the file write and DB commit is resumable.
-/// Passwords and the ephemeral installation token are never written here.
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SavedConfig {
-    pub database_url: String,
-    pub public_base_url: String,
-    pub installation_id: String,
-}
-
-pub fn read_saved(path: &Path) -> Result<Option<SavedConfig>, String> {
-    let metadata = match std::fs::symlink_metadata(path) {
-        Ok(meta) => meta,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(_) => return Err("无法读取安装配置文件，请检查 BLOG_CONFIG_FILE 和访问权限".into()),
-    };
-    if !metadata.is_file() || metadata.len() > 16 * 1024 {
-        return Err("安装配置必须是小于 16 KiB 的普通文件，不能是符号链接".into());
+    pub fn reload(&self) -> Result<Self, String> {
+        Self::parse(
+            self.path.clone(),
+            files::read_private(&self.path)?,
+            self.env.clone(),
+        )
     }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if metadata.permissions().mode() & 0o077 != 0 {
-            return Err("安装配置含数据库凭据，请将文件权限设为 600".into());
-        }
-    }
-    let bytes = std::fs::read(path).map_err(|_| "读取安装配置失败")?;
-    let saved: SavedConfig =
-        serde_json::from_slice(&bytes).map_err(|_| "安装配置格式无效，请检查 BLOG_CONFIG_FILE")?;
-    application::installation::validate_database_url(&saved.database_url)
-        .map_err(|e| e.to_string())?;
-    // Website URL validation stays in serve, keeping maintenance CLI available.
-    if saved.installation_id.len() != 64
-        || !saved.installation_id.bytes().all(|b| b.is_ascii_hexdigit())
-    {
-        return Err("安装配置中的 installation_id 无效".into());
-    }
-    Ok(Some(saved))
-}
 
-pub fn save_new(path: &Path, saved: &SavedConfig) -> Result<(), String> {
-    use application::ports::SecureRandom;
-    let parent = path
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."));
-    let mut builder = std::fs::DirBuilder::new();
-    builder.recursive(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt;
-        builder.mode(0o700);
-    }
-    builder
-        .create(parent)
-        .map_err(|_| "无法创建配置目录，请检查 BLOG_CONFIG_FILE 的写入权限")?;
-    let suffix = infrastructure::SystemSecureRandom
-        .token_hex()
-        .map_err(|_| "无法生成配置临时文件名")?;
-    let temporary = parent.join(format!(".blog-config-{suffix}.tmp"));
-    let result = (|| {
-        let mut options = std::fs::OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
+    fn value(&self, key: &str) -> Result<(Option<toml::Value>, String), String> {
+        let field = FIELDS
+            .iter()
+            .find(|f| f.key == key)
+            .expect("registered field");
+        if let Some(name) = field.env
+            && let Some(value) = self.env.get(name)
         {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
+            return Ok((Some(field.parse_env(value)?), format!("env:{name}")));
         }
-        let mut file = options.open(&temporary)?;
-        let bytes = serde_json::to_vec_pretty(saved)?;
-        if bytes.len() > 16 * 1024 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "configuration too large",
-            ));
+        let (section, name) = key.split_once('.').expect("sectioned field");
+        if let Some(value) = self.values.get(section).and_then(|s| s.get(name)) {
+            if !field.kind.accepts(value) {
+                return Err(format!("{key} 类型无效，应为 {}", field.kind.label()));
+            }
+            return Ok((Some(value.clone()), format!("toml:{}", self.path.display())));
         }
-        file.write_all(&bytes)?;
-        file.sync_all()?;
-        // Hard-link publication is atomic and never overwrites a concurrent
-        // installation's config (rename would silently replace it on Unix).
-        std::fs::hard_link(&temporary, path)?;
-        #[cfg(unix)]
-        std::fs::File::open(parent)?.sync_all()?;
-        Ok::<_, std::io::Error>(())
-    })();
-    let _ = std::fs::remove_file(&temporary);
-    result.map_err(|_| {
-        "无法安全保存安装配置；请检查目录权限、已有文件及磁盘空间，然后重启继续".into()
-    })
-}
+        Ok((
+            field
+                .default
+                .map(|value| field.parse_env(value))
+                .transpose()?,
+            "default".into(),
+        ))
+    }
 
-pub fn media_dir() -> PathBuf {
-    env_path("BLOG_MEDIA_DIR", "data/media")
-}
+    fn optional_string(&self, key: &str) -> Result<Option<String>, String> {
+        let (value, _) = self.value(key)?;
+        let value = value.map(|v| v.as_str().expect("string field").to_owned());
+        if key != "bootstrap.description" && value.as_ref().is_some_and(|v| v.trim().is_empty()) {
+            return Err(format!("{key} 不能为空"));
+        }
+        Ok(value)
+    }
 
-fn env_path(name: &str, fallback: &str) -> PathBuf {
-    std::env::var(name)
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from(fallback))
-}
+    fn string(&self, key: &str) -> Result<String, String> {
+        self.optional_string(key)?
+            .ok_or_else(|| format!("缺少 {key}"))
+    }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+    fn boolean(&self, key: &str) -> Result<Option<bool>, String> {
+        Ok(self
+            .value(key)?
+            .0
+            .map(|v| v.as_bool().expect("boolean field")))
+    }
 
-    #[test]
-    fn publication_is_private_complete_and_never_overwrites_existing_config() {
-        let dir = std::env::temp_dir().join(format!("blog-config-test-{}", uuid::Uuid::now_v7()));
-        let path = dir.join("config.json");
-        let mut saved = SavedConfig {
-            database_url: "postgres://user:secret@localhost/blog".into(),
-            public_base_url: "https://example.com".into(),
-            installation_id: "a".repeat(64),
+    fn path_value(&self, key: &str) -> Result<PathBuf, String> {
+        // All relative resource paths resolve from the process working directory,
+        // regardless of whether they come from TOML, env or defaults.
+        Ok(PathBuf::from(self.string(key)?))
+    }
+
+    pub fn configured_database_url(&self) -> Result<Option<String>, String> {
+        let url = self.optional_string("database.url")?;
+        if let Some(url) = &url {
+            application::installation::validate_database_url(url).map_err(|_| {
+                "database.url / DATABASE_URL 必须是包含库名的 PostgreSQL 地址".to_owned()
+            })?;
+        }
+        Ok(url)
+    }
+
+    pub fn database(&self) -> Result<DatabaseConfig, String> {
+        Ok(DatabaseConfig {
+            url: self
+                .configured_database_url()?
+                .ok_or("请配置 database.url 或 DATABASE_URL")?,
+            migrations_dir: self.path_value("database.migrations_dir")?,
+        })
+    }
+
+    pub fn maintenance_url(&self) -> Result<String, String> {
+        let url = self.optional_string("maintenance.database_url")?.ok_or(
+            "请设置独立维护连接 BLOG_MAINTENANCE_DATABASE_URL 或 maintenance.database_url",
+        )?;
+        application::installation::validate_database_url(&url).map_err(|_| {
+            "maintenance.database_url / BLOG_MAINTENANCE_DATABASE_URL 无效".to_owned()
+        })?;
+        Ok(url)
+    }
+
+    pub fn recovery_mode(&self) -> Result<bool, String> {
+        Ok(self.boolean("recovery.enabled")?.unwrap_or(false))
+    }
+
+    pub fn log_filter(&self) -> Result<tracing_subscriber::EnvFilter, String> {
+        tracing_subscriber::EnvFilter::try_new(self.string("logging.filter")?)
+            .map_err(|_| "logging.filter / RUST_LOG 无效".into())
+    }
+
+    pub fn media_dir(&self) -> Result<PathBuf, String> {
+        self.path_value("paths.media_dir")
+    }
+
+    pub fn configured_public_url(&self) -> Result<Option<String>, String> {
+        let (value, source) = self.value("server.public_base_url")?;
+        Ok((source != "default").then(|| value.unwrap().as_str().unwrap().to_owned()))
+    }
+
+    pub fn site(&self, addr: Option<String>) -> Result<SiteConfig, String> {
+        let public_base_url = PublicBaseUrl::parse(&self.string("server.public_base_url")?)
+            .map_err(|_| "server.public_base_url / BLOG_PUBLIC_BASE_URL 无效，须为不含路径前缀的 http/https 地址".to_owned())?;
+        let bind = match addr {
+            Some(addr) => addr,
+            None => self.string("server.bind")?,
         };
-        save_new(&path, &saved).unwrap();
-        saved.database_url = "postgres://other:secret@localhost/other".into();
-        assert!(save_new(&path, &saved).is_err());
-        assert_eq!(
-            read_saved(&path).unwrap().unwrap().database_url,
-            "postgres://user:secret@localhost/blog"
-        );
-        assert_eq!(
-            std::fs::read_dir(&dir).unwrap().count(),
-            1,
-            "temporary credentials must be removed"
-        );
-        std::fs::remove_dir_all(dir).unwrap();
+        bind.parse::<std::net::SocketAddr>()
+            .map_err(|_| "server.bind / BLOG_BIND / --addr 必须是 IP:端口")?;
+        if self.recovery_mode()? {
+            crate::recovery::check_bind(&bind)?;
+        }
+        let trusted_proxies = self
+            .value("server.trusted_proxies")?
+            .0
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| {
+                value.as_str().unwrap().parse::<IpAddr>().map_err(|_| {
+                    "server.trusted_proxies / BLOG_TRUSTED_PROXIES 必须是精确 IP 列表".to_owned()
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(SiteConfig {
+            secure_cookies: self
+                .boolean("server.secure_cookies")?
+                .unwrap_or_else(|| public_base_url.as_str().starts_with("https://")),
+            public_base_url,
+            bind,
+            trusted_proxies,
+            site: SiteInfo::default(),
+            theme_dir: self.path_value("paths.theme_dir")?,
+            admin_dist: self.path_value("paths.admin_dist")?,
+            media_dir: self.media_dir()?,
+        })
     }
 
-    #[cfg(unix)]
-    #[test]
-    fn symlinks_and_readable_by_others_configs_are_rejected() {
-        use std::os::unix::fs::{PermissionsExt, symlink};
-        let dir = std::env::temp_dir().join(format!("blog-config-links-{}", uuid::Uuid::now_v7()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let link = dir.join("config.json");
-        symlink(dir.join("missing.json"), &link).unwrap();
-        assert!(read_saved(&link).is_err());
-        std::fs::remove_file(&link).unwrap();
-        std::fs::write(&link, "{}").unwrap();
-        std::fs::set_permissions(&link, std::fs::Permissions::from_mode(0o644)).unwrap();
-        assert!(read_saved(&link).err().unwrap().contains("600"));
-        std::fs::remove_dir_all(dir).unwrap();
+    pub fn bootstrap_site(&self) -> Result<SiteSettingsValue, String> {
+        validate_initial_site(SiteSettingsValue {
+            title: self.optional_string("bootstrap.title")?,
+            description: self.optional_string("bootstrap.description")?,
+            logo_media_id: None,
+        })
     }
+
+    pub fn check(&self, scope: ConfigScope) -> Result<(), String> {
+        self.log_filter()?;
+        self.recovery_mode()?;
+        match scope {
+            ConfigScope::Serve => {
+                self.configured_database_url()?;
+                self.site(None)?;
+                self.bootstrap_site()?;
+                self.path_value("database.migrations_dir")?;
+            }
+            ConfigScope::Database => {
+                self.database()?;
+            }
+            ConfigScope::Maintenance => {
+                self.maintenance_url()?;
+            }
+            ConfigScope::Media => {
+                self.database()?;
+                self.media_dir()?;
+            }
+            ConfigScope::Resources => {
+                self.media_dir()?;
+                self.path_value("paths.theme_dir")?;
+                self.path_value("paths.admin_dist")?;
+            }
+            ConfigScope::All => {
+                self.check(ConfigScope::Serve)?;
+                self.maintenance_url()?;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn show(&self, scope: ConfigScope, sources: bool) -> Result<serde_json::Value, String> {
+        self.check(scope)?;
+        let mut fields = Vec::new();
+        for field in FIELDS.iter().filter(|field| field.in_scope(scope)) {
+            let (value, mut source) = self.value(field.key)?;
+            let mut value = value
+                .map(|v| serde_json::to_value(v).expect("TOML value serializes"))
+                .unwrap_or(serde_json::Value::Null);
+            if field.key == "server.secure_cookies" && value.is_null() {
+                value = self.site(None)?.secure_cookies.into();
+                source = "derived:server.public_base_url".into();
+            }
+            if field.secret && !value.is_null() {
+                value = "[redacted]".into();
+            }
+            let mut entry = serde_json::json!({"key": field.key, "value": value,
+                "effect": if field.key.starts_with("bootstrap.") { "installation-only" } else { "restart-or-next-command" }});
+            if sources {
+                entry["source"] = source.into();
+            }
+            fields.push(entry);
+        }
+        Ok(serde_json::json!({"config_file":self.path, "fields":fields}))
+    }
+
+    fn installation_config(
+        &self,
+        database_url: &str,
+        public_base_url: &str,
+    ) -> Result<String, String> {
+        let source = match &self.original {
+            Some(source) => source.clone(),
+            None => toml::to_string_pretty(&self.values).map_err(|_| "无法编码 TOML 配置")?,
+        };
+        let mut document = source
+            .parse::<toml_edit::DocumentMut>()
+            .map_err(|_| "无法编辑 TOML 配置")?;
+        document["config_version"] = toml_edit::value(1);
+        for (section, key, value) in [
+            ("database", "url", database_url),
+            ("server", "public_base_url", public_base_url),
+        ] {
+            document[section][key] = toml_edit::value(value);
+        }
+        Ok(document.to_string())
+    }
+}
+
+fn validate_initial_site(value: SiteSettingsValue) -> Result<SiteSettingsValue, String> {
+    application::site_info::initial_site_settings(value).map_err(|e| e.to_string())
 }

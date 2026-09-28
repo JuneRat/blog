@@ -21,7 +21,7 @@ echo "==> admin SPA: tsc --noEmit + vitest"
 (cd apps/admin && pnpm typecheck && pnpm test)
 
 echo "==> recovery, media cleanup and acceptance tool tests"
-PYTHONPATH=scripts python3 -B -m unittest scripts/test_recovery.py scripts/test_media_cleanup.py scripts/test_acceptance.py
+PYTHONPATH=scripts python3 -B -m unittest scripts/test_recovery.py scripts/test_media_cleanup.py scripts/test_acceptance.py scripts/test_deployment_config.py
 if [[ "${BLOG_RECOVERY_TEST:-}" == "1" || "${BLOG_ACCEPTANCE_TEST:-}" == "1" ]]; then
   cargo build -p server --bin blog
 fi

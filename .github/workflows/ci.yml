@@ -55,7 +55,7 @@ jobs:
         run: cargo test --workspace
 
       - name: Recovery, media cleanup and acceptance tool tests
-        run: PYTHONPATH=scripts python3 -B -m unittest scripts/test_recovery.py scripts/test_media_cleanup.py scripts/test_acceptance.py
+        run: PYTHONPATH=scripts python3 -B -m unittest scripts/test_recovery.py scripts/test_media_cleanup.py scripts/test_acceptance.py scripts/test_deployment_config.py
 
       - name: Isolated recovery, database roles and media purge drill
         env:

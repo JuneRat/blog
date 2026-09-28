@@ -14,6 +14,7 @@ import sys
 import uuid
 
 from recovery import PgTools
+from deployment_config import resource_paths
 from recovery_inventory import RecoveryError, ISOLATION_PREFIX, digest, safe_file
 
 FORMAT = 1
@@ -201,7 +202,9 @@ def main():
     sub = parser.add_subparsers(dest="action", required=True)
     plan = sub.add_parser("plan")
     plan.add_argument("--id", action="append", required=True, help="repeat for each selected media UUID")
-    plan.add_argument("--media-dir", default=os.environ.get("BLOG_MEDIA_DIR", "data/media"))
+    plan.add_argument("--media-dir")
+    plan.add_argument("--config", help="deployment TOML for resource paths")
+    plan.add_argument("--blog-bin", help="blog executable used to resolve TOML configuration")
     plan.add_argument("--output", required=True, help="new JSON plan file")
     apply = sub.add_parser("apply")
     apply.add_argument("plan")
@@ -211,6 +214,9 @@ def main():
         command.add_argument("--docker-container")
     args = parser.parse_args()
     try:
+        if args.action == "plan":
+            paths = resource_paths(args.config, args.blog_bin, {"media_dir": args.media_dir})
+            args.media_dir = paths["media_dir"]
         pg = PgTools(os.environ.get("DATABASE_URL", ""), args.docker_container)
         result = create_plan(args, pg) if args.action == "plan" else apply_plan(args, pg)
         print(json.dumps(result, ensure_ascii=False))

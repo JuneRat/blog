@@ -23,7 +23,7 @@ use infrastructure::{
     PostgresPublishedPostQuery, PostgresPublishedTagQuery, PostgresRbacStore,
     PostgresTagRepository, PostgresUserRepository, RenderingRuntime, SystemClock,
 };
-use interfaces::http::public_router_minimal;
+use interfaces::http::{PublicSiteState, public_router};
 use sqlx::PgPool;
 use tower::ServiceExt;
 
@@ -163,7 +163,10 @@ async fn stack_with_theme(theme_dir: &str) -> Stack {
     let author = actor_for(&users, "author").await;
     let editor = actor_for(&users, "editor").await;
 
-    let router = public_router_minimal(public_site);
+    let router = public_router(PublicSiteState {
+        site: public_site,
+        health: None,
+    });
     Stack {
         router,
         posts,

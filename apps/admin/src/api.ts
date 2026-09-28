@@ -530,7 +530,7 @@ export interface SaveSiteSettingsInput {
 
 /** 站点设置的 site 分组：读/写都需 `settings.manage`。 */
 export const settingsApi = {
-  /** 生效值 + 来源 + 版本；未配置时返回环境变量/默认值（version=0）。 */
+  /** 生效值 + 来源 + 版本；未配置时返回内置默认值（version=0）。 */
   get: (): Promise<SiteSettings> => request<SiteSettings>("/api/admin/v1/settings/site"),
 
   /** 全量替换。expected_version 过期是 409 version_conflict；非法值 400。 */

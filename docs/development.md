@@ -204,11 +204,7 @@ PYTHONPATH=scripts python3 -B -m unittest scripts/test_recovery.py
 
 基础设施和服务端集成测试通过 `BLOG_TEST_ADMIN_URL` 连接本地管理库，为各测试套件删除并重建独立的测试数据库。该连接必须指向可创建数据库的本地测试实例；不要把业务数据放入测试库，也不要同时启动同一套集成测试的多个副本。具体库名由测试代码维护，测试过程不使用开发库 `blog` 保存业务样本。
 
-模板桥接原型不属于工作区测试，可在需要改动该原型时运行：
-
-```bash
-(cd spikes/template-bridge && cargo test)
-```
+模板桥接已由正式渲染运行时实现，测试统一使用工作区入口；历史测量见[实验记录](template-bridge-experiment.md)。
 
 ## 常见问题
 
@@ -217,7 +213,7 @@ PYTHONPATH=scripts python3 -B -m unittest scripts/test_recovery.py
 | `/admin` 返回 404 | 是否执行前端构建，`BLOG_ADMIN_DIST` 是否指向产物目录 |
 | 登录后仍回登录页 | 主机名是否一致，HTTP 环境是否误启用 Secure cookie |
 | 写请求失败 | 查看响应 `code` 与 `x-request-id`；检查当前 CSRF token、权限和版本 |
-| 修改环境中的站点标题不生效 | 数据库 `settings.site` 优先于环境回退值 |
+| 需要修改站点标题或描述 | 在后台修改 `settings.site`；TOML 的 bootstrap 仅用于首次安装 |
 | 发布后内容仍不可见 | 是否为 `published`、`public`、未删除且发布时间已到；预约任务是否正常运行 |
 | CLI 提示配置或文件缺失 | 确认当前工作目录；相对路径从进程工作目录解析 |
 

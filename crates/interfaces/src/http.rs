@@ -1,6 +1,5 @@
-//! 公开站点 SSR 路由：只读，匿名可访问。
+//! 完整站点路由装配、公开 SSR 路由及静态资源挂载。
 //! 草稿/private/回收站文章在应用层查询即被过滤，路由层不再重复判断。
-//! M1 不提供任何写 HTTP；管理接口随 M2 与认证/CSRF 一起交付。
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -65,7 +64,7 @@ pub fn app_router(state: AppState, assets: HttpAssets, config: HttpConfig) -> Ro
     let media_read = crate::http_media::MediaReadState {
         media: state.admin.media.clone(),
     };
-    let app = mount_theme_assets(public_router(state.public, None), assets.themes)
+    let app = mount_theme_assets(public_router(state.public), assets.themes)
         .merge(crate::http_auth::auth_router(state.auth))
         .merge(crate::http_auth::admin_router(state.admin.clone()))
         .merge(crate::http_admin::posts_router(state.admin.clone()))
@@ -87,14 +86,14 @@ pub fn app_router(state: AppState, assets: HttpAssets, config: HttpConfig) -> Ro
         )))
 }
 
-/// 构建公开路由；assets_dir 提供时挂载 /assets/ 静态资源（主题 assets 目录）。
+/// 构建公开路由；主题资源由 mount_theme_assets 按版本挂载启动快照。
 ///
 /// 根路径 `/{slug}` 是 Page 的公开地址（如 /about）。固定路由优先、Page 最后匹配：
 /// matchit 让静态段（/healthz、/feed.xml、/sitemap.xml、/robots.txt、/posts、/tags、
 /// /admin、/assets）胜过参数段，保留路径在领域校验与应用层 `render_page` 各拒绝
 /// 一次，Page 不可能顶掉系统入口。
-pub fn public_router(state: PublicSiteState, assets_dir: Option<PathBuf>) -> Router {
-    let mut router = Router::new()
+pub fn public_router(state: PublicSiteState) -> Router {
+    Router::new()
         .route("/", get(index))
         .route("/posts/{slug}", get(post_detail))
         .route("/tags/{slug}", get(tag_detail))
@@ -110,11 +109,7 @@ pub fn public_router(state: PublicSiteState, assets_dir: Option<PathBuf>) -> Rou
         )
         .route("/{slug}", get(page_detail))
         .fallback(not_found)
-        .with_state(state);
-    if let Some(dir) = assets_dir {
-        router = router.nest_service("/assets", ServeDir::new(dir));
-    }
-    router
+        .with_state(state)
 }
 
 /// Serve only the immutable bytes loaded with each template release.
@@ -154,17 +149,6 @@ pub fn mount_theme_assets(
         );
     }
     router
-}
-
-/// 兼容无静态资源/探针的调用方（如测试）。
-pub fn public_router_minimal(state: Arc<PublicSiteInteractor>) -> Router {
-    public_router(
-        PublicSiteState {
-            site: state,
-            health: None,
-        },
-        None,
-    )
 }
 
 /// 挂载后台 SPA（`apps/admin` 的构建产物）到 `/admin` 子树。

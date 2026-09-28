@@ -23,7 +23,7 @@ psql "$DATABASE_URL" -v app_role=blog_app -v maintenance_role=blog_maintenance \
 
 后台“设置 → 数据保留期”要求 settings.manage，默认评论 IP、审计各保留 **180 天**。范围为 1–36,500 整数天，分别保存到 settings.comments.ip_retention_days、settings.audit.retention_days，并校验两组版本、保留其他字段。缩短保留期会在下次维护时清理此前仍保留的数据。
 
-维护只读取 BLOG_MAINTENANCE_DATABASE_URL，不回退到运行连接，不执行迁移、权限初始化或 HTML 重建：
+维护只读取 BLOG_MAINTENANCE_DATABASE_URL 或 TOML 的 maintenance.database_url，不回退到运行连接，不执行迁移、权限初始化或 HTML 重建：
 
 ```sh
 # 维护连接由受保护环境注入，先查看预计处理量。
@@ -75,7 +75,7 @@ blog rebuild-html --batch-size 100 --max-batches 100
 
 [media_cleanup.py](../scripts/media_cleanup.py) 只接受明确选中的媒体 UUID，每份计划最多 1,000 个。所选媒体必须已进回收站、没有已知引用，文件路径、大小及 SHA-256 与登记一致。不会按软删除时间、零引用或未登记文件自动清扫，也不扫描全站正文。草稿、私密、归档和回收站内容仍计入 media_refs；封面、头像外键及站点 logo 另行复核，缺少引用记账也不会绕过它们。
 
-结构管理连接由 DATABASE_URL 注入；执行主机必须能访问正式媒体目录，并有删除所选文件的权限。Docker 模式只在指定容器内执行 PostgreSQL 工具，媒体路径仍属于脚本所在主机；非 Docker 部署省略 --docker-container 并提供 psql。不要把这些权限授予保留期维护账号。
+资源目录支持 --config / --blog-bin，统一通过已构建的 blog 程序解析环境变量、TOML 与默认值；显式路径参数优先于环境和 TOML。结构管理连接仍由 DATABASE_URL 注入；执行主机必须能访问正式媒体目录，并有删除所选文件的权限。Docker 模式只在指定容器内执行 PostgreSQL 工具，媒体路径仍属于脚本所在主机；非 Docker 部署省略 --docker-container 并提供 psql。不要把这些权限授予保留期维护账号。
 
 ```sh
 # 只读生成计划；重复 --id 明确选择每一个媒体 UUID。
@@ -120,19 +120,19 @@ python3 -B scripts/recovery.py backup \
 python3 -B scripts/recovery.py verify /secure/backups/blog-2026-09-27
 ```
 
-目标目录必须尚不存在。工具使用 DATABASE_URL。Docker 模式在指定数据库容器内运行工具，忽略 URL 主机/端口，依赖容器内可用认证；资源路径仍是脚本所在主机的路径。非 Docker 部署省略该参数，并提供匹配版本的 pg_dump、pg_restore、psql、createdb。
+目标目录必须尚不存在。资源目录从命令行、环境、TOML 依次解析；可用 --config 和 --blog-bin 指定配置文件与程序。数据库连接仍只使用显式 DATABASE_URL。Docker 模式在指定数据库容器内运行工具，忽略 URL 主机/端口，依赖容器内可用认证；资源路径仍是脚本所在主机的路径。非 Docker 部署省略该参数，并提供匹配版本的 pg_dump、pg_restore、psql、createdb。
 
 | 检查 | 行为 |
 |---|---|
 | 结构 | 精确核对 19 表名单、全部迁移版本与 SHA-384 校验和、成功状态、关键字段；记录列结构，恢复后比对 |
 | 数据库 | custom 格式 pg_dump，使用 --no-owner --no-acl，并检查 archive 列表；不备份集群角色/授权 |
-| 媒体 | 自动复制 --media-dir（回退 BLOG_MEDIA_DIR/data/media），核对所有注册原件的 path、大小和 SHA-256，包括软删除及零引用媒体 |
+| 媒体 | 自动复制 --media-dir（按 BLOG_MEDIA_DIR、TOML paths.media_dir、data/media 回退），核对所有注册原件的 path、大小和 SHA-256，包括软删除及零引用媒体 |
 | 引用 | 复核正文 HTML、Post/Series 封面、头像、logo 与 media_refs 一致；复核评论根关系和分类树无环 |
 | 主题 | 保存默认主题及同级已安装主题，确认数据库选择的主题存在；运行时兼容性需实际启动验证 |
 | 清单 | 格式 2，包含结构、媒体清单、所有表计数、内容状态/回收站计数、文件大小与 SHA-256；COMPLETE 保存清单摘要 |
 | 秘密 | 只保存 OAuth secret_ref 名称，要求恢复环境提供非空值；不复制秘密，也不能证明值正确 |
 
-首次安装生成的 `BLOG_CONFIG_FILE`（默认 `data/config.json`）含数据库凭据，属于部署秘密，不在工具的自动备份范围内，应通过受控秘密存储单独保存。`settings.installation` 随数据库备份恢复。恢复部署可显式用 `DATABASE_URL` 覆盖新库地址；不要对恢复库重跑安装向导，详见[首次安装](installation.md)。
+首次安装生成的 TOML（默认 `data/config.toml`）及旁边的 `config.install-state.json` 均含部署凭据，属于部署秘密，不在工具的自动备份范围内，应通过受控秘密存储单独保存。`settings.installation` 随数据库备份恢复。恢复部署可显式用 `DATABASE_URL` 覆盖新库地址；不要对恢复库重跑安装向导，详见[首次安装](installation.md)。
 
 整个媒体目录中的未注册文件也会保存，不判定为垃圾。附加目录可用 --resource name=目录，media 为保留名称。拒绝符号链接、路径越界及非普通文件。任何注册原件缺失或损坏都会阻止完成备份。
 

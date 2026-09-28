@@ -33,7 +33,7 @@ flowchart TD
 
 [后台 SPA](../apps/admin/package.json) 不属于 Cargo workspace。它使用 React、TypeScript、Vite、Ant Design 和 TanStack Query，通过管理 API 访问同一应用层；公开主题与后台组件各自独立。
 
-首次安装属于部署生命周期：`application::installation` 定义输入、初始凭据校验及安装端口，`interfaces::http_install` 提供内嵌页面和 HTTP 边界，`server::installation` 保存本地配置并装配站点，`infrastructure::installation` 实现空库检查和原子权限/Owner 初始化。连接配置先安全落盘，数据库完成标记与 Owner 同事务提交；动态路由在成功后原地切换，随后才启动预约发布任务。故障续装与部署边界见[首次安装](installation.md)。
+首次安装属于部署生命周期：`application::installation` 定义输入、初始凭据校验及安装端口，`interfaces::http_install` 提供内嵌页面和 HTTP 边界，`server::installation` 发布 TOML 和独立安装记录并装配站点，`infrastructure::installation` 实现空库检查和原子权限/Owner 初始化。安装记录先安全落盘，再发布 TOML；数据库完成标记、初始站点设置与 Owner 同事务提交；动态路由在成功后原地切换，随后才启动预约发布任务。故障续装与部署边界见[首次安装](installation.md)。
 
 ## 模块与公开契约
 
@@ -96,7 +96,7 @@ Post/Page 管理 API 及 Post CLI 通过稳定 UUID 定位资源，公开 URL �
 | `maintenance` | 不执行迁移或派生物回填 | 独立维护连接与保留期清理用例 |
 | `serve` | 结构迁移 | 网站配置、全部用例、主题、静态资源与 HTTP 状态 |
 
-除 `migrate`、`rebuild-html` 与独立的 `maintenance` 外，其余命令在执行前同步权限注册表。只有 `serve` 读取网站配置并加载主题；主题目录损坏或公开 URL 无效不会阻止账号、密码、OAuth 或 HTML 维护。配置项见[配置参考](configuration.md)。
+除 `config`、`migrate`、`rebuild-html` 与独立的 `maintenance` 外，其余命令在执行前同步权限注册表。只有 `serve` 读取网站配置并加载主题；主题目录损坏或公开 URL 无效不会阻止账号、密码、OAuth 或 HTML 维护。启动参数统一由 `server::config` 按 CLI > env > TOML > 默认值解析，并按命令校验；运行期设置仍走应用用例和数据库端口，TOML 不覆盖后台保存。`config check/show` 仅做离线诊断，不连接数据库。配置项见[配置参考](configuration.md)。
 
 结构迁移与 HTML 重建没有组合入口：普通启动和业务命令仅调用 `migrate_schema`，不会扫描全库旧渲染版本。`rebuild-html` 由接口层解析参数、映射 JSON 与退出码；[应用维护用例](../crates/application/src/html_rebuild.rs)定义批次端口，负责参数校验、跨来源预算、游标推进和部分完成结果；`server` 只装配依赖及处理结构、恢复隔离。基础设施负责有界查询、渲染、CAS、引用同步与审计事务。只读预检使用 `verify_schema`，不进入 SQLx 迁移执行路径。历史内容重建失败只影响显式维护进程；规则升级需要在部署流程安排重建，见 [ADR-0017](adr/0017-explicit-html-rebuild.md)、[ADR-0018](adr/0018-bounded-html-maintenance.md) 和[运维步骤](operations-and-recovery.md#html-显式重建)。
 

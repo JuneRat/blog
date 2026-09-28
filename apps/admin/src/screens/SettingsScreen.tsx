@@ -30,8 +30,8 @@ const EMPTY_DRAFT: Draft = { title: "", description: "", logoMediaId: null };
  * 站点设置屏（site 分组：标题与描述）。
  *
  * - 读/写都需 `settings.manage`（后端判定；无权限时展示服务端错误）；
- * - 生效优先级：数据库 site 行 > 环境变量/默认值——`source` 字段标注当前来源，
- *   未配置时保存即「数据库接管」，此后环境变量调整不再影响站点；
+ * - 生效优先级：数据库 site 行 > 内置默认值——`source` 字段标注当前来源，
+ *   未配置时保存即「数据库接管」，部署初始值仅在安装或显式导入时写入数据库；
  * - 保存携带 expected_version；409 `version_conflict` 走统一冲突流程：
  *   保留本地输入，提供「重新加载」（丢弃本地改动）与「仍然覆盖」（按服务器
  *   最新版本重新提交，二次确认），不自动重试、不静默覆盖；
@@ -221,7 +221,7 @@ export function SettingsScreen() {
       ? null
       : settings.source === "database"
         ? `当前生效来源：数据库（v${settings.version}）。`
-        : "当前生效来源：环境变量/默认值（数据库尚未配置；保存后由数据库接管）。";
+        : "当前生效来源：内置默认值（数据库尚未配置；保存后由数据库接管）。";
 
   // 计数按 trim 后的值算：后端也在 trim 后判长度，展示口径与提交口径一致。
   const titleCount = codePointLength(draft.title.trim());

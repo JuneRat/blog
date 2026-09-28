@@ -3,7 +3,7 @@
 - 状态：已采纳
 - 记录日期：原记录未注明
 - 关联决策：[ADR-0004：公开缓存提议](0004-public-cache-generation.md)、[ADR-0015：集中渲染](0015-rendered-content-runtime-and-module-boundaries.md)
-- 当前参考：[主题与渲染](../themes-and-rendering.md)、[桥接原型报告](../../spikes/template-bridge/README.md)
+- 当前参考：[主题与渲染](../themes-and-rendering.md)、[桥接原型报告](../template-bridge-experiment.md)
 
 ## 背景
 
@@ -29,6 +29,6 @@
 
 ## 后续变更
 
-2026-09 的独立原型结论为**桥接方案可行**，采纳预算化函数取数与预取优先的组合。测量环境、测试矩阵、吞吐和开销数据保留在[原型报告](../../spikes/template-bridge/README.md)，生产 crate 不依赖该实验工程。
+2026-09 的独立原型结论为**桥接方案可行**，采纳预算化函数取数与预取优先的组合。测量环境、测试矩阵、吞吐和开销数据保留在[原型报告](../template-bridge-experiment.md)，独立实验代码已移除，正式实现由工作区测试覆盖。
 
 受控模板函数已进入生产代码；[ADR-0015](0015-rendered-content-runtime-and-module-boundaries.md)进一步把执行调度集中到基础设施渲染运行时。当前函数契约和预算参数由主题文档维护。

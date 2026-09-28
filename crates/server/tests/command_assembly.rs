@@ -18,6 +18,7 @@ fn cli_command(database_url: &str, args: &[&str], public_url: &str) -> Command {
         .args(args)
         .current_dir(&project)
         .env("DATABASE_URL", database_url)
+        .env("BLOG_CONFIG_FILE", missing.join("config.toml"))
         .env_remove("BLOG_RECOVERY_MODE")
         .env("BLOG_MIGRATIONS_DIR", project.join("migrations/postgres"))
         .env("BLOG_THEME_DIR", missing.join("theme"))

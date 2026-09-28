@@ -188,7 +188,7 @@ class Acceptance:
         self.bind = "127.0.0.1:0"
         self.origin = None
         self.password = "Test-" + secrets.token_hex(16) + "!"
-        self.config = root / "config.json"
+        self.config = root / "config.toml"
         self.media_dir = root / "media"
         self.restore_dir = root / "restore"
         self.backup_dir = root / "backup"
@@ -286,8 +286,10 @@ class Acceptance:
         require(installed["redirect"] == "/admin/", "installation must return a working admin entry")
         self.assert_installed()
         require(self.config.stat().st_mode & 0o077 == 0, "saved database credentials must be private")
-        saved = json.loads(self.config.read_text())
-        require(set(saved) == {"database_url", "public_base_url", "installation_id"},
+        saved = json.loads(self.config.with_suffix(".install-state.json").read_text())
+        require(set(saved) == {"config_before", "config_after", "installation_id"},
+                "installation journal must contain only identity and deployment snapshots")
+        require(self.password not in json.dumps(saved) and token not in json.dumps(saved),
                 "installation journal must not persist passwords or one-time tokens")
         require(self.query("SELECT value->>'id' FROM settings WHERE key='installation'") == saved["installation_id"],
                 "installation file and database marker must agree")
@@ -559,9 +561,9 @@ class Acceptance:
         # Adapt the saved deployment file to the new connection, retaining the
         # original installation identity. Boot without DATABASE_URL to catch a
         # recovered installed site accidentally reopening installation.
-        saved = json.loads(self.config.read_text())
-        saved["database_url"] = database_url(self.args.admin_url, self.target)
-        self.config.write_text(json.dumps(saved))
+        self.config.write_text("config_version = 1\n[database]\nurl = " +
+                               json.dumps(database_url(self.args.admin_url, self.target)) +
+                               "\n[server]\npublic_base_url = " + json.dumps(self.origin) + "\n")
         self.start(restored=True)
         self.assert_installed()
         self.verification_session.request("GET", API + "/me", status=401)

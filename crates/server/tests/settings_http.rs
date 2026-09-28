@@ -1,5 +1,5 @@
 //! 站点设置 HTTP 集成测试：会话认证 + CSRF + settings.manage 授权 +
-//! 优先级（数据库 > 环境变量/默认值）+ 版本冲突 + 公开页面即时生效。
+//! 优先级（数据库 > 内置默认值）+ 版本冲突 + 公开页面即时生效。
 //!
 //! 栈与生产装配同构：public_router（真实主题）+ auth_router + settings_router。
 
@@ -43,8 +43,8 @@ use uuid::Uuid;
 
 static SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-/// 回退装配值：模拟环境变量/默认值（数据库未配置时公开页面使用它）。
-const FALLBACK_TITLE: &str = "环境变量站点";
+/// 回退装配值：模拟内置默认值（数据库未配置时公开页面使用它）。
+const FALLBACK_TITLE: &str = "默认站点";
 const FALLBACK_DESCRIPTION: &str = "回退描述";
 
 struct FakeIdpClient {
@@ -317,13 +317,10 @@ async fn build(pool: PgPool) -> Stack {
     };
 
     let router = mount_theme_assets(
-        public_router(
-            PublicSiteState {
-                site: public_site,
-                health: None,
-            },
-            None,
-        ),
+        public_router(PublicSiteState {
+            site: public_site,
+            health: None,
+        }),
         theme_assets,
     )
     .merge(auth_router(auth_state))
@@ -527,13 +524,10 @@ async fn revived_public_router(pool: &PgPool) -> axum::Router {
         site_fallback(),
         test_base_url(),
     ));
-    public_router(
-        PublicSiteState {
-            site: public_site,
-            health: None,
-        },
-        None,
-    )
+    public_router(PublicSiteState {
+        site: public_site,
+        health: None,
+    })
 }
 
 /// 以指定用户走完整 OAuth 登录，返回 (会话 cookie, CSRF token)。

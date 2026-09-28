@@ -1,4 +1,4 @@
-//! 受控 CLI 入站适配器：M1 的唯一写通道（不得暴露为公开管理 HTTP）。
+//! 受控 CLI 入站适配器；与管理 HTTP 共用应用用例及权限规则。
 //!
 //! 参数解析与输入/输出映射在本层完成；业务规则全部下沉应用层。
 //! `migrate` 由 server 处理；HTML 维护由本层调用应用用例并呈现结果。
@@ -20,6 +20,9 @@ use clap::{Parser, Subcommand};
 #[derive(Debug, Parser)]
 #[command(name = "blog", version, about = "博客受控 CLI 与公开 SSR 服务入口")]
 pub struct Cli {
+    /// 部署配置文件（优先于 BLOG_CONFIG_FILE，默认 data/config.toml）
+    #[arg(long, global = true)]
+    pub config: Option<PathBuf>,
     #[command(subcommand)]
     pub command: Command,
 }
@@ -32,6 +35,11 @@ pub fn parse_args() -> Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// 检查部署配置或查看脱敏值与来源
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
+    },
     /// 使用 BLOG_MAINTENANCE_DATABASE_URL 清理过期评论 IP 和审计，不运行迁移/发布任务
     Maintenance {
         #[arg(long, default_value_t = 1000)]
@@ -94,6 +102,32 @@ pub enum Command {
         /// 监听地址，如 127.0.0.1:8080
         #[arg(long)]
         addr: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub enum ConfigScope {
+    Serve,
+    Database,
+    Maintenance,
+    Media,
+    Resources,
+    All,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ConfigAction {
+    /// 只校验配置，不连接数据库、不写入文件
+    Check {
+        #[arg(long = "for", value_enum, default_value = "serve")]
+        scope: ConfigScope,
+    },
+    /// 输出脱敏 JSON；运行期设置仍以数据库为准
+    Show {
+        #[arg(long)]
+        sources: bool,
+        #[arg(long = "for", value_enum, default_value = "serve")]
+        scope: ConfigScope,
     },
 }
 

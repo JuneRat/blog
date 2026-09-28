@@ -1,7 +1,7 @@
 //! First-run lifecycle: durable local journal, atomic database bootstrap, then
 //! in-place router activation. The listener stays open throughout installation.
 
-use crate::config::{self, SavedConfig};
+use crate::config::{DeploymentConfig, InstallJournal};
 use application::{
     UseCaseError,
     audit::AuditContext,
@@ -19,8 +19,8 @@ struct LiveSite {
 }
 
 struct Setup {
-    saved: RwLock<Option<SavedConfig>>,
-    config_path: std::path::PathBuf,
+    saved: RwLock<Option<InstallJournal>>,
+    config: DeploymentConfig,
     bind: String,
     gate: Mutex<()>,
     live: Weak<LiveSite>,
@@ -32,9 +32,17 @@ impl Installer for Setup {
         let saved = self.saved.read().expect("saved config lock");
         InstallInfo {
             database_configured: saved.is_some(),
-            public_base_url: std::env::var("BLOG_PUBLIC_BASE_URL")
+            public_base_url: self
+                .config
+                .configured_public_url()
                 .ok()
-                .or_else(|| saved.as_ref().map(|s| s.public_base_url.clone())),
+                .flatten()
+                .or_else(|| {
+                    saved
+                        .as_ref()
+                        .and_then(|saved| saved.deployment(&self.config).ok())
+                        .and_then(|config| config.configured_public_url().ok().flatten())
+                }),
         }
     }
 
@@ -64,20 +72,42 @@ impl Installer for Setup {
             Some(saved) => saved,
             None => {
                 validate_database_url(&input.database_url)?;
-                let public_base_url =
-                    std::env::var("BLOG_PUBLIC_BASE_URL").unwrap_or(input.public_base_url);
+                let public_base_url = self
+                    .config
+                    .configured_public_url()
+                    .map_err(UseCaseError::Invalid)?
+                    .unwrap_or(input.public_base_url);
                 let public_base_url = application::seo::PublicBaseUrl::parse(&public_base_url)
                     .map_err(|e| UseCaseError::Invalid(e.to_string()))?
                     .as_str()
                     .to_owned();
-                SavedConfig {
-                    database_url: input.database_url,
-                    public_base_url,
-                    installation_id: infrastructure::SystemSecureRandom.token_hex()?,
-                }
+                InstallJournal::prepare(
+                    &self.config,
+                    &input.database_url,
+                    &public_base_url,
+                    infrastructure::SystemSecureRandom.token_hex()?,
+                )
+                .map_err(UseCaseError::Invalid)?
             }
         };
-        let site = config::SiteConfig::from_env(Some(self.bind.clone()), Some(&saved))
+        let deployment = if self
+            .config
+            .configured_database_url()
+            .map_err(UseCaseError::Invalid)?
+            .is_some()
+        {
+            self.config.clone()
+        } else {
+            saved
+                .deployment(&self.config)
+                .map_err(UseCaseError::Invalid)?
+        };
+        let site = deployment
+            .site(Some(self.bind.clone()))
+            .map_err(UseCaseError::Invalid)?;
+        let initial_site = deployment.bootstrap_site().map_err(UseCaseError::Invalid)?;
+        let database_url = saved
+            .pending_database_url()
             .map_err(UseCaseError::Invalid)?;
         // A successful setup must lead to an available login page.
         if !site.admin_dist.join("index.html").is_file() {
@@ -86,18 +116,21 @@ impl Installer for Setup {
                     .into(),
             ));
         }
-        let pool = infrastructure::installation::connect(&saved.database_url).await?;
+        let pool = infrastructure::installation::connect(&database_url).await?;
         let complete = previous.is_some()
             && infrastructure::installation::is_complete(&pool, &saved.installation_id).await?;
         if !complete {
             infrastructure::installation::check_target(&pool, previous.is_some()).await?;
             if previous.is_none() {
-                config::save_new(&self.config_path, &saved).map_err(UseCaseError::Invalid)?;
+                saved.publish(&self.config).map_err(UseCaseError::Invalid)?;
                 *self.saved.write().expect("saved config lock") = Some(saved.clone());
             }
             infrastructure::migrate_schema(
                 &pool,
-                config::DatabaseConfig::from_env(Some(&saved)).migrations_dir,
+                deployment
+                    .database()
+                    .map_err(UseCaseError::Invalid)?
+                    .migrations_dir,
             )
             .await
             .map_err(|_| {
@@ -109,7 +142,7 @@ impl Installer for Setup {
         }
         // Preflight website assembly before creating any account. The runtime
         // pool uses normal connection settings, not installation query limits.
-        let runtime_pool = infrastructure::connect(&saved.database_url)
+        let runtime_pool = infrastructure::connect(&database_url)
             .await
             .map_err(|_| UseCaseError::Invalid("连接 PostgreSQL 失败，请检查网络后重试".into()))?;
         let app = crate::website::build_router(
@@ -123,8 +156,14 @@ impl Installer for Setup {
             UseCaseError::Invalid("加载站点主题失败，请检查 BLOG_THEME_DIR 和主题文件后重试".into())
         })?;
         if !complete {
-            infrastructure::installation::initialize(&pool, &saved.installation_id, &owner, audit)
-                .await?;
+            infrastructure::installation::initialize(
+                &pool,
+                &saved.installation_id,
+                &owner,
+                &initial_site,
+                audit,
+            )
+            .await?;
         }
         // No fallible work after the commit. The durable journal already exists;
         // a crash here boots directly into the completed site on the next run.
@@ -138,13 +177,18 @@ impl Installer for Setup {
     }
 }
 
-pub async fn serve(addr: Option<String>, saved: Option<SavedConfig>) -> Result<(), String> {
-    if crate::recovery::mode()? {
+pub async fn serve(
+    config: DeploymentConfig,
+    addr: Option<String>,
+    saved: Option<InstallJournal>,
+) -> Result<(), String> {
+    if config.recovery_mode()? {
         return Err("恢复核验模式不能启动安装向导，请显式配置 DATABASE_URL".into());
     }
-    let bind = config::bind_address(addr);
     // Validate deployment-owned options before opening the installer.
-    let site = config::SiteConfig::from_env(Some(bind.clone()), saved.as_ref())?;
+    let site = config.site(addr)?;
+    config.bootstrap_site()?;
+    let bind = site.bind.clone();
     let token = infrastructure::SystemSecureRandom
         .token_hex()
         .map_err(|e| e.to_string())?;
@@ -155,7 +199,7 @@ pub async fn serve(addr: Option<String>, saved: Option<SavedConfig>) -> Result<(
     });
     let setup = Arc::new(Setup {
         saved: RwLock::new(saved),
-        config_path: config::config_path(),
+        config,
         bind: bind.clone(),
         gate: Mutex::new(()),
         live: Arc::downgrade(&live),

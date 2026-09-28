@@ -134,6 +134,7 @@ pub async fn initialize(
     pool: &PgPool,
     installation_id: &str,
     owner: &InitialOwner,
+    site: &application::ports::SiteSettingsValue,
     audit: AuditContext,
 ) -> Result<(), UseCaseError> {
     let mut tx = pool.begin().await.map_err(database_error)?;
@@ -154,6 +155,13 @@ pub async fn initialize(
     .await
     .map_err(database_error)?;
     ensure_empty(&mut tx).await?;
+    // Initial values become ordinary runtime settings in the same transaction
+    // as the first Owner. Subsequent startups never reapply deployment defaults.
+    if site.title.is_some() || site.description.is_some() {
+        sqlx::query("INSERT INTO settings(key,value) VALUES('site',jsonb_strip_nulls($1))")
+            .bind(serde_json::json!({"schema_version":1,"title":site.title,"description":site.description}))
+            .execute(&mut *tx).await.map_err(database_error)?;
+    }
     for permission in PERMISSION_REGISTRY {
         sqlx::query("INSERT INTO permissions(code,name) VALUES($1,$2)")
             .bind(permission.key)

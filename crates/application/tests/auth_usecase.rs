@@ -10,8 +10,8 @@ use application::error::UseCaseError;
 use application::identity::{Actor, CreateUserCmd, RoleInteractor, UserInteractor};
 use application::ports::{
     Clock, ExternalIdentity, ExternalIdentityClient, OAuthAccountStore, OAuthAttempt,
-    OAuthAttemptStore, OAuthConfigStore, PostRepository, ProviderConfig, ProviderKind,
-    SecureRandom, SessionRecord, SessionStore,
+    OAuthAttemptStore, OAuthConfigStore, ProviderConfig, ProviderKind, SecureRandom, SessionRecord,
+    SessionStore,
 };
 use domain::identity::UserSnapshot;
 use time::OffsetDateTime;
@@ -520,10 +520,6 @@ impl application::ports::RbacStore for NoopRbac {
     }
 }
 
-// PostRepository 端口在认证用例中未使用，占位以满足 UserInteractor 组装。
-#[allow(dead_code)]
-struct Unused;
-
 // ---------------------------------------------------------------------------
 // 用例
 // ---------------------------------------------------------------------------
@@ -785,7 +781,3 @@ async fn provider_summaries_use_display_name_and_fall_back_to_id() {
     assert_eq!(gh.name, "GitHub 登录");
     assert_eq!(gh.kind, "github");
 }
-
-// 确认 PostRepository 未被误删引用（编译期占位）。
-#[allow(dead_code)]
-fn _assert_port_types(_: Option<Arc<dyn PostRepository>>) {}

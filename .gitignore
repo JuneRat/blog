@@ -5,8 +5,10 @@
 # 媒体库文件根目录（默认 BLOG_MEDIA_DIR=data/media）：运行期数据，不入库。
 /data/media
 # 安装配置包含数据库凭据。
-/data/config.json
+/data/config.toml
+/data/*.install-state.json
+/.env
 /data/.blog-config-*.tmp
-# M0 主题桥接原型：独立 workspace 的构建产物与锁文件不入库。
+# 已移除实验工程的本地构建残留不入库。
 /spikes/template-bridge/target
 /spikes/template-bridge/Cargo.lock
