@@ -286,14 +286,14 @@ class Acceptance:
         require(installed["redirect"] == "/admin/", "installation must return a working admin entry")
         self.assert_installed()
         require(self.config.stat().st_mode & 0o077 == 0, "saved database credentials must be private")
-        saved = json.loads(self.config.with_suffix(".install-state.json").read_text())
-        require(set(saved) == {"config_before", "config_after", "installation_id"},
-                "installation journal must contain only identity and deployment snapshots")
-        require(self.password not in json.dumps(saved) and token not in json.dumps(saved),
-                "installation journal must not persist passwords or one-time tokens")
-        require(self.query("SELECT value->>'id' FROM settings WHERE key='installation'") == saved["installation_id"],
-                "installation file and database marker must agree")
-        self.installation_id = saved["installation_id"]
+        require(not self.config.with_suffix(".install-state.json").exists(),
+                "completed installation must remove its temporary journal")
+        config = self.config.read_text()
+        require(self.password not in config and token not in config,
+                "deployment configuration must not persist passwords or one-time tokens")
+        self.installation_id = self.query("SELECT value->>'id' FROM settings WHERE key='installation'")
+        require(re.fullmatch(r"[0-9a-f]{64}", self.installation_id) is not None,
+                "database must retain the installation completion marker")
         require(self.query("SELECT count(*) FROM audit_logs WHERE action='installation.complete'") == "1",
                 "first Owner and installation completion must be audited once")
 

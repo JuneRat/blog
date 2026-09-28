@@ -1,0 +1,67 @@
+name: container
+
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify idempotent environment initialization
+        run: |
+          python3 -B scripts/schema_contract.py
+          PYTHONPATH=scripts python3 -B -m unittest scripts/test_compose_init.py scripts/test_compose_recovery.py
+
+      - name: Build deployable image
+        run: docker build --build-arg VCS_REF="$GITHUB_SHA" --tag blog:ci --tag "blog:$GITHUB_SHA" .
+
+      - name: Build matching recovery image
+        run: docker build --target ops --build-arg VCS_REF="$GITHUB_SHA" --tag blog-ops:ci --tag "blog-ops:$GITHUB_SHA" .
+
+      - name: Pull the database image
+        run: docker pull postgres:18-alpine
+
+      - name: Verify installation, backup and isolated restore with Compose
+        env:
+          BLOG_EXPECT_REVISION: ${{ github.sha }}
+        run: python3 -B scripts/test_compose.py --image blog:ci --ops-image blog-ops:ci
+
+      - name: Package the verified image and deployment files
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        run: |
+          mkdir -p release/ops release/docs release/scripts
+          docker save "blog:$GITHUB_SHA" "blog-ops:$GITHUB_SHA" postgres:18-alpine | gzip > release/blog-linux-amd64.tar.gz
+          cp compose.yaml .env.example release/
+          cp ops/postgres-init.sh release/ops/
+          cp ops/blog-backup.service ops/blog-backup.timer release/ops/
+          cp -R docs/. release/docs/
+          cp -R migrations release/
+          cp scripts/database-roles.sql scripts/compose-init.sh scripts/compose-backup.sh release/scripts/
+          cp scripts/recovery.py scripts/recovery_inventory.py scripts/schema_contract.py scripts/deployment_config.py scripts/media_cleanup.py release/scripts/
+          printf '%s\n' "blog:$GITHUB_SHA" > release/IMAGE
+          printf '%s\n' "blog-ops:$GITHUB_SHA" > release/OPS_IMAGE
+          cd release
+          find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+
+      - name: Save the release bundle
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: blog-compose-linux-amd64-${{ github.sha }}
+          path: release/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 90

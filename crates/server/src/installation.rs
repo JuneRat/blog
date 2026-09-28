@@ -16,6 +16,7 @@ use tower::ServiceExt;
 struct LiveSite {
     router: RwLock<Router>,
     pool: watch::Sender<Option<sqlx::PgPool>>,
+    telemetry: interfaces::observability::Telemetry,
 }
 
 struct Setup {
@@ -116,33 +117,31 @@ impl Installer for Setup {
                     .into(),
             ));
         }
+        let database = deployment.database().map_err(UseCaseError::Invalid)?;
+        let schema_contract =
+            infrastructure::schema_contract::SchemaContract::load(&database.migrations_dir)?;
         let pool = infrastructure::installation::connect(&database_url).await?;
         let complete = previous.is_some()
             && infrastructure::installation::is_complete(&pool, &saved.installation_id).await?;
         if !complete {
-            infrastructure::installation::check_target(&pool, previous.is_some()).await?;
+            infrastructure::installation::check_target(&pool, &schema_contract, previous.is_some())
+                .await?;
             if previous.is_none() {
                 saved.publish(&self.config).map_err(UseCaseError::Invalid)?;
                 *self.saved.write().expect("saved config lock") = Some(saved.clone());
             }
-            infrastructure::migrate_schema(
-                &pool,
-                deployment
-                    .database()
-                    .map_err(UseCaseError::Invalid)?
-                    .migrations_dir,
-            )
-            .await
-            .map_err(|_| {
-                UseCaseError::Invalid(
-                    "初始化数据库结构失败；请检查迁移目录和建表权限，重试会继续使用已保存配置"
-                        .into(),
-                )
-            })?;
+            infrastructure::migrate_schema(&pool, database.migrations_dir)
+                .await
+                .map_err(|_| {
+                    UseCaseError::Invalid(
+                        "初始化数据库结构失败；请检查迁移目录和建表权限，重试会继续使用已保存配置"
+                            .into(),
+                    )
+                })?;
         }
         // Preflight website assembly before creating any account. The runtime
         // pool uses normal connection settings, not installation query limits.
-        let runtime_pool = infrastructure::connect(&database_url)
+        let runtime_pool = infrastructure::connect_with_config(&database_url, &database.pool)
             .await
             .map_err(|_| UseCaseError::Invalid("连接 PostgreSQL 失败，请检查网络后重试".into()))?;
         let app = crate::website::build_router(
@@ -150,6 +149,7 @@ impl Installer for Setup {
             &site,
             crate::assembly::roles(&runtime_pool),
             Arc::new(infrastructure::RenderingRuntime::default()),
+            &live.telemetry,
         )
         .await
         .map_err(|_| {
@@ -158,6 +158,7 @@ impl Installer for Setup {
         if !complete {
             infrastructure::installation::initialize(
                 &pool,
+                &schema_contract,
                 &saved.installation_id,
                 &owner,
                 &initial_site,
@@ -165,15 +166,22 @@ impl Installer for Setup {
             )
             .await?;
         }
-        // No fallible work after the commit. The durable journal already exists;
-        // a crash here boots directly into the completed site on the next run.
+        // Cleanup must not turn a committed installation into an HTTP failure.
+        // A crash or failed unlink leaves the journal for startup to retry.
+        cleanup_completed(&deployment, &saved);
         *live.router.write().expect("live router lock") = app;
         live.pool.send_replace(Some(runtime_pool));
-        println!(
+        crate::notice(format_args!(
             "安装完成，安装入口已关闭。登录地址：{}/admin/",
             site.public_base_url.as_str().trim_end_matches('/')
-        );
+        ));
         Ok(())
+    }
+}
+
+pub fn cleanup_completed(config: &DeploymentConfig, saved: &InstallJournal) {
+    if let Err(error) = saved.remove_completed(config) {
+        tracing::warn!(%error, "安装已完成，临时安装日志清理失败；下次启动会重试残留日志");
     }
 }
 
@@ -188,7 +196,10 @@ pub async fn serve(
     // Validate deployment-owned options before opening the installer.
     let site = config.site(addr)?;
     config.bootstrap_site()?;
+    config.database_pool()?;
     let bind = site.bind.clone();
+    let metrics_listener = crate::observability::bind(config.metrics_bind()?).await?;
+    let telemetry = interfaces::observability::Telemetry::new(&crate::observability::build_info());
     let token = infrastructure::SystemSecureRandom
         .token_hex()
         .map_err(|e| e.to_string())?;
@@ -196,6 +207,7 @@ pub async fn serve(
     let live = Arc::new(LiveSite {
         router: RwLock::new(Router::new()),
         pool,
+        telemetry: telemetry.clone(),
     });
     let setup = Arc::new(Setup {
         saved: RwLock::new(saved),
@@ -204,11 +216,14 @@ pub async fn serve(
         gate: Mutex::new(()),
         live: Arc::downgrade(&live),
     });
+    let metrics_pool = live.pool.subscribe();
     *live.router.write().expect("live router lock") =
         interfaces::http_install::install_router(interfaces::http_install::InstallState {
             installer: setup,
             token: token.clone(),
         })
+        .layer(axum::Extension(telemetry.clone()))
+        .layer(axum::Extension(crate::observability::build_info()))
         .layer(axum::Extension(interfaces::http_client_ip::TrustedProxies(
             site.trusted_proxies,
         )));
@@ -220,17 +235,9 @@ pub async fn serve(
         .await
         .map_err(|e| format!("绑定 {bind} 失败：{e}"))?;
     let address = listener.local_addr().map_err(|e| e.to_string())?;
-    println!("首次安装：http://{address}/install");
-    println!("安装码：{token}");
-    let server = async {
-        axum::serve(
-            listener,
-            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
-        )
-        .with_graceful_shutdown(crate::shutdown_signal())
-        .await
-        .map_err(|e| format!("服务退出：{e}"))
-    };
+    crate::notice(format_args!("首次安装：http://{address}/install"));
+    crate::notice(format_args!("安装码：{token}"));
+    let server = crate::serve_http(listener, app, metrics_listener, telemetry, metrics_pool);
     let scheduler = async {
         let pool = receiver
             .wait_for(|pool| pool.is_some())

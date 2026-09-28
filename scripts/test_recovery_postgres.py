@@ -24,6 +24,8 @@ import uuid
 
 import recovery
 import media_cleanup
+import schema_contract
+from test_schema_contract import release_fixture
 
 PROJECT = Path(__file__).resolve().parent.parent
 PNG = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=")
@@ -125,6 +127,8 @@ class PostgresRecoveryTests(unittest.TestCase):
         self.pg.run("psql", ["-X", "-v", "ON_ERROR_STOP=1", "-v", f"app_role={self.app_role}",
                             "-v", f"maintenance_role={self.maint_role}"], database=self.source,
                     input_path=PROJECT / "scripts/database-roles.sql")
+        schema_contract.verify_database(self.pg, schema_contract.load_contract(), self.source,
+                                        self.app_role, self.maint_role)
         self.cli(["migrate"], role=self.app_role)
         checksum=self.query("SELECT encode(checksum,'hex') FROM _sqlx_migrations WHERE version=1")
         self.query("UPDATE _sqlx_migrations SET checksum=decode('00','hex') WHERE version=1")
@@ -178,6 +182,91 @@ class PostgresRecoveryTests(unittest.TestCase):
         self.assertTrue((output / "RELEASED").is_file())
         self.cli(["publish-due"],database=self.target)
         self.assertEqual(self.query("SELECT status FROM posts WHERE slug='drill-scheduled'",self.target),"published")
+
+    def test_next_release_upgrade_grants_and_versioned_restore(self):
+        (self.root / "config.toml").write_text("")
+        (self.root / "config.toml").chmod(0o600)
+        old = self.root / "old-release"
+        new = self.root / "new-release"
+        baseline = release_fixture(old)
+        upgraded = release_fixture(new, extension=True)
+        migrations = str(new / "migrations/postgres")
+        old_checksum = self.query("SELECT encode(checksum,'hex') FROM _sqlx_migrations WHERE version=1")
+        posts = self.query("SELECT count(*) FROM posts")
+
+        def grants(root):
+            self.pg.run("psql", ["-X", "-v", "ON_ERROR_STOP=1", "-v", f"app_role={self.app_role}",
+                                "-v", f"maintenance_role={self.maint_role}"], database=self.source,
+                        input_path=root / "scripts/database-roles.sql")
+
+        def tool(root, args, success=True):
+            result = subprocess.run(["python3", "-B", str(root / "scripts/recovery.py"), *map(str, args)],
+                                    env=self.env(), capture_output=True, text=True, timeout=60)
+            self.assertEqual(result.returncode == 0, success, result.stdout + result.stderr)
+            return result
+
+        docker = ["--docker-container", self.container] if self.container else []
+        def backup(root, destination):
+            tool(root, ["backup", "--output", destination, "--theme-dir", PROJECT / "themes/default",
+                        "--media-dir", self.media_dir, "--blog-bin", PROJECT / "target/debug/blog",
+                        "--maintenance-confirmed", *docker])
+
+        for role in (self.app_role, self.maint_role):
+            self.query(f"CREATE ROLE {role} LOGIN PASSWORD 'drill-password'")
+        grants(old)
+        schema_contract.verify_database(self.pg, baseline, self.source, self.app_role, self.maint_role)
+        old_backup = self.root / "old-backup"
+        backup(old, old_backup)
+
+        # Upgrade an existing database with real content, preserving 0001 and its history.
+        self.cli(["migrate"], BLOG_MIGRATIONS_DIR=migrations)
+        self.assertEqual(self.query("SELECT encode(checksum,'hex') FROM _sqlx_migrations WHERE version=1"), old_checksum)
+        self.assertEqual(self.query("SELECT count(*) FROM posts"), posts)
+        self.assertEqual(int(self.query("SELECT count(*) FROM _sqlx_migrations")), len(upgraded["migrations"]))
+        with self.assertRaisesRegex(recovery.RecoveryError, "tables differ"):
+            grants(old)
+        with self.assertRaisesRegex(schema_contract.SchemaError, "privileges differ"):
+            schema_contract.verify_database(self.pg, upgraded, self.source, self.app_role, self.maint_role)
+        # Policies can also revoke previously granted columns across releases.
+        self.query(f"GRANT SELECT(author_email) ON comments TO {self.maint_role}")
+        grants(new)
+        schema_contract.verify_database(self.pg, upgraded, self.source, self.app_role, self.maint_role)
+        self.cli(["migrate"], role=self.app_role, BLOG_MIGRATIONS_DIR=migrations)
+        app = recovery.PgTools(self.url(self.source, self.app_role), self.container)
+        app.query("INSERT INTO schema_drill VALUES(gen_random_uuid(),'new release data')")
+        maint = recovery.PgTools(self.url(self.source, self.maint_role), self.container)
+        with self.assertRaises(recovery.RecoveryError):
+            maint.query("SELECT * FROM schema_drill")
+
+        # Strict rejection is intentional: restore old backups with their matching release.
+        mismatch = tool(new, ["verify", old_backup], success=False)
+        self.assertIn("do not match this application revision", mismatch.stderr)
+        output = self.root / "old-restored"
+        tool(old, ["restore", old_backup, "--target-db", self.target, "--output", output,
+                   "--isolation-confirmed", *docker])
+        self.assertEqual(self.query("SELECT count(*) FROM sessions", self.target), "0")
+        tool(old, ["release", "--output", output, "--verification-confirmed", *docker])
+        # Still offline: release removes the DB marker, never starts any writer or HTTP process.
+        self.cli(["migrate"], database=self.target, BLOG_MIGRATIONS_DIR=migrations)
+        schema_contract.verify_database(self.pg, upgraded, self.target)
+        self.assertEqual(self.query("SELECT count(*) FROM posts", self.target), posts)
+        self.assertEqual(self.query("SELECT count(*) FROM schema_drill", self.target), "0")
+
+        # A new-format database round-trips its extra table/data with the same backup format.
+        new_backup = self.root / "new-backup"
+        backup(new, new_backup)
+        manifest = json.loads((new_backup / "manifest.json").read_text())
+        self.assertEqual(manifest["format"], recovery.FORMAT)
+        self.assertEqual(manifest["database_counts"]["schema_drill"], 1)
+        tool(old, ["verify", new_backup], success=False)
+        self.query(f'DROP DATABASE "{self.target}" WITH (FORCE)', "postgres")
+        output = self.root / "new-restored"
+        tool(new, ["restore", new_backup, "--target-db", self.target, "--output", output,
+                   "--isolation-confirmed", *docker])
+        self.assertEqual(self.query("SELECT note FROM schema_drill", self.target), "new release data")
+        self.assertEqual(self.query("SELECT count(*) FROM posts", self.target), posts)
+        self.assertEqual(self.query("SELECT count(*) FROM sessions", self.target), "0")
+        tool(new, ["release", "--output", output, "--verification-confirmed", *docker])
 
     def check_isolated_server(self, output):
         with socket.socket() as sock:

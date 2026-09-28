@@ -1,19 +1,10 @@
 use async_trait::async_trait;
 use sqlx::PgPool;
 use sqlx::migrate::Migrate;
-use sqlx::postgres::PgPoolOptions;
 use time::OffsetDateTime;
 
 use application::error::UseCaseError;
 use application::ports::{Clock, HealthCheck};
-
-pub async fn connect(url: &str) -> Result<PgPool, sqlx::Error> {
-    PgPoolOptions::new()
-        .max_connections(5)
-        .acquire_timeout(std::time::Duration::from_secs(5))
-        .connect(url)
-        .await
-}
 
 /// 从目录加载并执行迁移（sqlx 布局 `<version>_<description>.sql`，每条自动包事务）。
 /// 所有命令只在这里准备或校验结构；HTML 重建由显式维护入口执行。
@@ -21,6 +12,7 @@ pub async fn migrate_schema(
     pool: &PgPool,
     migrations_dir: impl AsRef<std::path::Path>,
 ) -> Result<(), UseCaseError> {
+    crate::schema_contract::SchemaContract::load(&migrations_dir)?;
     let legacy: bool = sqlx::query_scalar(
         "SELECT to_regclass('users') IS NOT NULL AND NOT EXISTS ( \
          SELECT 1 FROM information_schema.columns \
@@ -59,6 +51,7 @@ pub async fn verify_schema(
     pool: &PgPool,
     migrations_dir: impl AsRef<std::path::Path>,
 ) -> Result<(), UseCaseError> {
+    crate::schema_contract::SchemaContract::load(&migrations_dir)?;
     let migrator = sqlx::migrate::Migrator::new(migrations_dir.as_ref())
         .await
         .map_err(|e| UseCaseError::Repository(format!("加载迁移失败：{e}")))?;

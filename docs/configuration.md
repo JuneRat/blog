@@ -1,6 +1,6 @@
 # 配置参考
 
-部署参数使用 **TOML + 环境变量覆盖**；运行期业务设置保存在 PostgreSQL `settings`；安装恢复记录单独保存。配置入口位于 [server/config.rs](../crates/server/src/config.rs)，业务层不读取 TOML 或部署环境。
+部署参数使用 **TOML + 环境变量覆盖**；运行期业务设置保存在 PostgreSQL `settings`；安装恢复记录仅在安装期间临时保存。配置入口位于 [server/config.rs](../crates/server/src/config.rs)，业务层不读取 TOML 或部署环境。
 
 ## 加载与优先级
 
@@ -32,15 +32,44 @@ TOML 可以先只配置路径、代理或 `[bootstrap]`：没有数据库连接�
 | `maintenance.database_url` | `BLOG_MAINTENANCE_DATABASE_URL` | 维护任务独立连接，无兜底；不应把维护凭据注入 HTTP 服务 |
 | `server.bind` | `BLOG_BIND` | `127.0.0.1:8080`；支持 IPv4/IPv6 的 IP:端口 |
 | `server.public_base_url` | `BLOG_PUBLIC_BASE_URL` | `http://127.0.0.1:8080`；公开链接、OAuth 回调与来源校验 |
-| `server.trusted_proxies` | `BLOG_TRUSTED_PROXIES` | 空数组；评论与业务审计可信代理 |
+| `server.trusted_proxies` | `BLOG_TRUSTED_PROXIES` | 空数组；登录/改密限流、评论与业务审计可信代理 |
 | `server.secure_cookies` | `BLOG_SECURE_COOKIES` | 缺省时按公开 URL 是否为 HTTPS 推导 |
 | `paths.theme_dir` | `BLOG_THEME_DIR` | `themes/default`；扫描同级目录建立主题注册表 |
 | `paths.admin_dist` | `BLOG_ADMIN_DIST` | `apps/admin/dist`；安装要求存在 index.html |
 | `paths.media_dir` | `BLOG_MEDIA_DIR` | `data/media` |
 | `logging.filter` | `RUST_LOG` | `info,sqlx=warn`；非法过滤表达式报错 |
+| `logging.format` | `BLOG_LOG_FORMAT` | 原生默认 `text`，可选 `json`；Compose 默认 `json` |
+| `metrics.bind` | `BLOG_METRICS_BIND` | 原生默认不监听；例如 `127.0.0.1:9090`，只对 serve 生效 |
 | `recovery.enabled` | `BLOG_RECOVERY_MODE` | `false`；恢复核验只监听 loopback，停用自动发布 |
 
+迁移目录须同时包含匹配的 SQL 文件与 `schema.json`；自定义路径应成套复制整个目录。路径按进程工作目录解析，生产部署可用绝对路径；Compose 镜像已设置为 `/opt/blog/migrations/postgres`。迁移文件不可改写，新增结构见[迁移演进](schema-migrations.md)。
+
 `BLOG_PG_PORT` 仅用于开发数据库脚本；`BLOG_TEST_ADMIN_URL` 仅用于集成测试，默认 `postgres://blog:blog@127.0.0.1:5432/postgres`。它们不是应用部署字段。修改数据库端口时需同步调整连接串。
+
+## 连接池、查询超时与数据库 TLS
+
+参数对运行池与 CLI 池生效，支持现有 TOML 和 `.env`，不需要额外环境文件。首次安装的临时初始化池仍使用最多 2 个连接、30 秒语句限制和 10 秒锁限制；安装后的运行池使用下表。维护凭据继续独立，池策略共用；长迁移或批量维护可用独立进程环境覆盖限制。
+
+| TOML 字段 | 环境变量 | 默认值 | 范围 / 语义 |
+|---|---|---:|---|
+| `database.max_connections` | `BLOG_DB_MAX_CONNECTIONS` | 5 | 1–1000 |
+| `database.min_connections` | `BLOG_DB_MIN_CONNECTIONS` | 0 | 0–max_connections |
+| `database.acquire_timeout_ms` | `BLOG_DB_ACQUIRE_TIMEOUT_MS` | 5000 | 1–120000 毫秒 |
+| `database.idle_timeout_secs` | `BLOG_DB_IDLE_TIMEOUT_SECS` | 600 | 0–86400 秒；0 禁用连接空闲回收 |
+| `database.max_lifetime_secs` | `BLOG_DB_MAX_LIFETIME_SECS` | 1800 | 0–86400 秒；0 禁用连接寿命限制 |
+| `database.statement_timeout_ms` | `BLOG_DB_STATEMENT_TIMEOUT_MS` | 0 | 0–86400000 毫秒 |
+| `database.lock_timeout_ms` | `BLOG_DB_LOCK_TIMEOUT_MS` | 0 | 0–86400000 毫秒 |
+| `database.idle_in_transaction_timeout_ms` | `BLOG_DB_IDLE_IN_TRANSACTION_TIMEOUT_MS` | 0 | 0–86400000 毫秒 |
+| `database.connect_retries` | `BLOG_DB_CONNECT_RETRIES` | 3 | 0–10 次额外建连尝试 |
+| `database.connect_retry_backoff_ms` | `BLOG_DB_CONNECT_RETRY_BACKOFF_MS` | 250 | 1–5000 毫秒，指数退避上限 5 秒 |
+
+语句、锁、事务空闲限制为 **0 时不覆盖 PostgreSQL 角色、数据库或 DSN 已有设置**，并非强制关闭服务器限制。非零时作为每条新连接的启动参数应用，连接替换后仍生效。生产 HTTP 可从 `statement_timeout_ms=30000`、`lock_timeout_ms=5000`、`idle_in_transaction_timeout_ms=60000` 开始，依据慢查询与维护耗时调整；迁移和维护可在独立环境中使用更长限制。池的 `idle_timeout_secs` 回收空闲连接，与 PostgreSQL 的“事务中空闲超时”不同。
+
+重试仅发生在池首次建立时，且只针对临时网络故障、启动中或连接容量不足等错误；参数、凭据、证书错误不由应用层重试。每次尝试受获取超时约束，退避有上限。不自动重放 SQL 或事务，尤其不重放提交结果不确定的写入。SQLx 后续补充池连接仍遵循其内部连接管理策略。
+
+连接总预算应涵盖 HTTP 进程、独立 CLI/维护、备份和其他应用，不能把每个副本的池大小都设为 PostgreSQL 的 `max_connections`。默认保持 5；用 [公开读取容量测试](public-read-capacity.md)比较真实负载。池满时 `/readyz`（以及 `/healthz`）可能在 2 秒后返回 503；`/livez` 不访问数据库。不要将 readiness 当成自动重启进程的依据。
+
+SQLx 已启用 Rustls。连接公网/远程数据库时可在 `DATABASE_URL` 使用 `?sslmode=verify-full`；私有 CA 追加 `&sslrootcert=/容器内路径/ca.crt`，证书文件须只读挂载且运行用户可读。使用内置公共根证书认可的证书链时无需另设根证书文件。`sslmode=require` 只保证加密，不替代 `verify-full` 的服务器身份验证；默认连接行为不强制 TLS。Compose 自带数据库仍在私有网络，数据库 TLS 与公网 HTTP 的反代 TLS 是两条独立链路。
 
 ## 运行期设置与初始值
 
@@ -60,7 +89,9 @@ Logo 只来自数据库。后台整组保存时省略或传 null 的 `logo_media
 
 ## 安装状态
 
-安装向导在 TOML 同目录保存 `config.install-state.json`（名称随配置文件 stem 变化）。安装记录是内部 JSON 状态，保存安装 ID 和发布前后的配置快照，只用于中断恢复，不参与正常参数覆盖。TOML 发布后可以修改公开地址、连接凭据或恢复库地址；旧快照不会替换这些正常编辑。两个文件都含部署秘密，需单独受控备份。
+安装向导在 TOML 同目录临时保存 `config.install-state.json`（名称随配置文件 stem 变化），记录安装 ID 和发布前后的配置快照，用于中断恢复。数据库提交 Owner 和 `settings.installation` 完成标记后自动删除该日志；清理失败不影响安装成功，下次启动核对完成标记后重试。未完成安装或标记不匹配时保留日志。
+
+常态运行只需要 TOML，完成标记保存在数据库，不参与配置覆盖。可以修改公开地址、连接凭据或恢复库地址，残留日志的快照不会替换正常编辑。TOML 需受控备份；未完成安装的临时日志同样含部署秘密，完成后的备份恢复无需携带它。
 
 ## 检查与命令边界
 
@@ -73,7 +104,7 @@ cargo run -p server -- config show --for resources
 
 `check` 只校验字段和语义，不连接数据库、不检查资源是否完整、不写文件；不代表数据库可连接或主题可加载。`show` 输出 JSON，所有数据库连接均为 `[redacted]`，`--sources` 标出 env/TOML/default/推导来源及生效时机。范围支持 `serve`（默认）、`database`、`maintenance`、`media`、`resources`、`all`；`all` 同时要求独立维护连接。
 
-各命令共享 TOML 语法、字段名称和日志配置解析，但按职责校验字段类型和值。`user`、`role`、`oauth`、`post`、`migrate`、`publish-due`、`rebuild-html` 不校验主题、公开 URL、代理和 Cookie 设置；`media cleanup-staging` 额外校验媒体目录。`maintenance` 只取独立维护连接与恢复模式，不回退到业务 DSN、不读取安装记录、不运行迁移。
+各命令共享 TOML 语法、字段名称和日志配置解析，但按职责校验字段类型和值。`user`、`role`、`oauth`、`post`、`migrate`、`publish-due`、`rebuild-html` 不校验主题、公开 URL、代理和 Cookie 设置；`media cleanup-staging` 额外校验媒体目录。`maintenance` 使用独立维护连接、共用连接池策略与恢复模式，不回退到业务 DSN、不读取安装记录、不运行迁移。
 
 配置文件本身语法损坏、权限不合格或未知字段会报错；需要修复时可通过 `--config` 指向独立的最小维护 TOML。`rebuild-html` 保持显式执行，以上配置修改本身不触发 HTML 重建。
 
@@ -85,6 +116,6 @@ cargo run -p server -- config show --for resources
 
 监听地址和公开地址分别配置：反向代理终止 TLS 时，程序可以监听 `127.0.0.1:8080`，公开地址设为 `https://blog.example.com`，cookie 默认随公开地址启用 Secure。
 
-浏览器写请求的 Origin 检查是另一条独立路径：后台将提供的 Origin 与请求 Host 比较，允许 `http://{Host}` 或 `https://{Host}`；未提供 Origin 时不执行该项检查，已认证写请求仍要求 CSRF token。代理须保持与浏览器入口一致的 Host。认证登录限流仍读取 socket 对端。评论提交/预览额外要求 Origin 与配置的公开地址精确匹配；评论与业务审计来源 IP 共用 `BLOG_TRUSTED_PROXIES`，从 X-Forwarded-For 右侧剥离可信代理，非法或未知来源留空，规则见[评论](comments.md#请求与来源地址)。认证规则见[身份与权限](identity-and-admin.md)。
+浏览器写请求的 Origin 检查是另一条独立路径：后台将提供的 Origin 与请求 Host 比较，允许 `http://{Host}` 或 `https://{Host}`；未提供 Origin 时不执行该项检查，已认证写请求仍要求 CSRF token。代理须保持与浏览器入口一致的 Host。登录与自助改密限流使用同一可信代理解析结果；无法解析时回退 socket 对端桶，不跳过来源限流。评论提交/预览额外要求 Origin 与配置的公开地址精确匹配；评论与业务审计来源 IP 共用 `BLOG_TRUSTED_PROXIES`，从 X-Forwarded-For 右侧剥离可信代理，非法或未知来源留空，规则见[评论](comments.md#请求与来源地址)。认证规则见[身份与权限](identity-and-admin.md)。
 
 业务审计通过显式上下文把已验证账号和来源 IP 传入写事务，不接受客户端请求体声明操作者/IP。可信代理链缺失、包含非法值、超过 20 个地址或没有可识别客户端时留空；非可信 socket 对端的转发头被忽略。审计 IP 随整条审计记录按 audit 保留期删除，评论 IP 单独按 comment 保留期清空。

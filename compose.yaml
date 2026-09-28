@@ -1,0 +1,119 @@
+name: blog
+
+services:
+  db:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: blog
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${BLOG_POSTGRES_PASSWORD:?Run sh scripts/compose-init.sh to initialize .env}
+      BLOG_OWNER_PASSWORD: ${BLOG_OWNER_PASSWORD:?Run sh scripts/compose-init.sh to initialize .env}
+    volumes:
+      # PostgreSQL 18 stores versioned PGDATA under this directory.
+      - postgres-data:/var/lib/postgresql
+      - ./ops/postgres-init.sh:/docker-entrypoint-initdb.d/10-blog.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d blog"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+    logging:
+      driver: local
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  blog:
+    image: ${BLOG_IMAGE:-blog:local}
+    build:
+      context: .
+      args:
+        VCS_REF: ${BLOG_SOURCE_REVISION:-unknown}
+    init: true
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    # Compose reads .env; pass only application variables, never DB admin secrets.
+    # A key without a value stays unset when absent from .env/the shell.
+    environment:
+      - DATABASE_URL
+      - BLOG_DB_MAX_CONNECTIONS
+      - BLOG_DB_MIN_CONNECTIONS
+      - BLOG_DB_ACQUIRE_TIMEOUT_MS
+      - BLOG_DB_IDLE_TIMEOUT_SECS
+      - BLOG_DB_MAX_LIFETIME_SECS
+      - BLOG_DB_STATEMENT_TIMEOUT_MS
+      - BLOG_DB_LOCK_TIMEOUT_MS
+      - BLOG_DB_IDLE_IN_TRANSACTION_TIMEOUT_MS
+      - BLOG_DB_CONNECT_RETRIES
+      - BLOG_DB_CONNECT_RETRY_BACKOFF_MS
+      - BLOG_PUBLIC_BASE_URL
+      - BLOG_TRUSTED_PROXIES
+      - BLOG_SECURE_COOKIES
+      - BLOG_RECOVERY_MODE
+      - RUST_LOG
+      - BLOG_LOG_FORMAT=${BLOG_LOG_FORMAT:-json}
+      - BLOG_METRICS_BIND=0.0.0.0:9090
+      - BLOG_THEME_DIR=${BLOG_THEME_DIR:-/opt/blog/themes/default}
+      - IDP_SECRET
+      - GH_SECRET
+    ports:
+      - "${BLOG_HTTP_HOST:-127.0.0.1}:${BLOG_HTTP_PORT:-8080}:8080"
+      # Management is reachable only from this host and the trusted Compose network.
+      - "127.0.0.1:${BLOG_METRICS_PORT:-9090}:9090"
+    volumes:
+      - blog-config:/var/lib/blog/config
+      - blog-media:/var/lib/blog/media
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    stop_grace_period: 30s
+    logging:
+      driver: local
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  # Only run through scripts/compose-backup.sh; never started by ordinary `up`.
+  ops:
+    profiles: [ops]
+    image: ${BLOG_OPS_IMAGE:-blog-ops:local}
+    build:
+      context: .
+      target: ops
+      args:
+        VCS_REF: ${BLOG_SOURCE_REVISION:-unknown}
+    init: true
+    env_file: .env
+    environment:
+      BLOG_POSTGRES_PASSWORD: ${BLOG_POSTGRES_PASSWORD:?Initialize .env first}
+      BLOG_OWNER_PASSWORD: ${BLOG_OWNER_PASSWORD:?Initialize .env first}
+      BLOG_BACKUP_KEEP: ${BLOG_BACKUP_KEEP:-7}
+      BLOG_BACKUP_REMOTE_KEEP: ${BLOG_BACKUP_REMOTE_KEEP:-30}
+      BLOG_THEME_DIR: ${BLOG_THEME_DIR:-/opt/blog/themes/default}
+    volumes:
+      - blog-config:/var/lib/blog/config
+      - blog-media:/var/lib/blog/media
+      - ./backups:/backups
+      - ./.env:/deployment/.env:ro
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,size=256m
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETUID, SETGID, KILL]
+    security_opt: [no-new-privileges:true]
+    logging:
+      driver: local
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+volumes:
+  postgres-data:
+  blog-config:
+  blog-media:

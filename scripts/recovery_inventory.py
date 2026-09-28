@@ -4,17 +4,9 @@ from html.parser import HTMLParser
 import json
 from pathlib import Path, PurePosixPath
 import uuid
+from schema_contract import SchemaError as RecoveryError, expected_migrations, load_contract
 
-SCHEMA_ID = "blog-19-v1"
-SCHEMA_TABLES = (
-    "users", "oauth_accounts", "sessions", "roles", "permissions", "user_roles",
-    "role_permissions", "media", "media_refs", "posts", "pages", "categories",
-    "series", "tags", "post_tags", "post_series", "comments", "settings", "audit_logs",
-)
 ISOLATION_PREFIX = "blog:recovery-isolated:"
-
-class RecoveryError(Exception):
-    pass
 
 
 def digest(path):
@@ -29,17 +21,11 @@ def query_json(pg, sql, database=None):
     return json.loads(pg.query(sql, database))
 
 
-def expected_migrations():
-    directory = Path(__file__).resolve().parent.parent / "migrations" / "postgres"
-    return [{"version": int(path.name.split("_", 1)[0]),
-             "checksum": hashlib.sha384(path.read_bytes()).hexdigest()}
-            for path in sorted(directory.glob("*.sql"))]
-
-
 def schema_snapshot(pg, database=None):
+    contract = load_contract()
     tables = pg.query("SELECT table_name FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE' AND table_name<>'_sqlx_migrations' ORDER BY table_name", database).splitlines()
-    if set(tables) != set(SCHEMA_TABLES):
-        raise RecoveryError("database does not match the supported 19-table baseline")
+    if set(tables) != set(contract["tables"]):
+        raise RecoveryError("database table set does not match schema.json; use the matching application revision")
     migrations = query_json(pg, "SELECT COALESCE(jsonb_agg(jsonb_build_object('version',version,'checksum',encode(checksum,'hex')) ORDER BY version),'[]') FROM _sqlx_migrations WHERE success", database)
     failed = int(pg.query("SELECT count(*) FROM _sqlx_migrations WHERE NOT success", database))
     if failed or migrations != expected_migrations():
@@ -48,16 +34,19 @@ def schema_snapshot(pg, database=None):
     required = {("users", "auth_version"), ("sessions", "auth_version"), ("roles", "code"), ("comments", "root_id"), ("comments", "content_html"), ("media", "path"), ("posts", "comments_enabled")}
     if not required.issubset({(column[0],column[1]) for column in columns}):
         raise RecoveryError("legacy or incomplete schema detected")
-    return {"id": SCHEMA_ID, "migrations": migrations, "columns": columns}
+    return {"id": contract["id"], "migrations": migrations, "columns": columns}
 
 
 def database_counts(pg, database=None):
-    parts = [f"'{table}',(SELECT count(*) FROM {table})" for table in SCHEMA_TABLES]
+    # Aggregate rows rather than passing two arguments per table to a function
+    # (PostgreSQL's function-argument limit would otherwise cap schema growth).
+    parts = [f"SELECT '{table}' AS key, count(*) AS value FROM public.\"{table}\""
+             for table in load_contract()["tables"]]
     for table in ("posts", "pages"):
         for state in ("draft", "scheduled", "published", "archived"):
-            parts.append(f"'{table}_{state}',(SELECT count(*) FROM {table} WHERE status='{state}')")
-        parts.append(f"'{table}_trash',(SELECT count(*) FROM {table} WHERE deleted_at IS NOT NULL)")
-    return query_json(pg, "SELECT jsonb_build_object(" + ",".join(parts) + ")", database)
+            parts.append(f"SELECT '{table}_{state}', count(*) FROM public.{table} WHERE status='{state}'")
+        parts.append(f"SELECT '{table}_trash', count(*) FROM public.{table} WHERE deleted_at IS NOT NULL")
+    return query_json(pg, "SELECT jsonb_object_agg(key,value) FROM (" + " UNION ALL ".join(parts) + ") counts", database)
 
 
 def media_inventory(pg, database=None):

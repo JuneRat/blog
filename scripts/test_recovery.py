@@ -17,16 +17,15 @@ class RecoveryTests(unittest.TestCase):
     def test_current_baseline_tables_and_all_lifecycle_states_are_counted(self):
         class Pg:
             def query(self, sql, database):
-                for table in recovery.SCHEMA_TABLES:
-                    assert f"FROM {table})" in sql
+                for table in recovery.load_contract()["tables"]:
+                    assert f'FROM public."{table}"' in sql
                 assert "comment_settings" not in sql
                 for state in ("draft", "scheduled", "published", "archived"):
                     assert f"status='{state}'" in sql
                 return '{"comments":7}'
         counts = recovery.database_counts(Pg())
         self.assertEqual(counts["comments"], 7)
-        self.assertEqual(len(recovery.SCHEMA_TABLES),19)
-        self.assertTrue({"media", "media_refs", "post_series", "audit_logs", "sessions"}.issubset(recovery.SCHEMA_TABLES))
+        self.assertTrue({"media", "media_refs", "post_series", "audit_logs", "sessions"}.issubset(recovery.load_contract()["tables"]))
 
     def bundle(self, root):
         data = root / "data"
@@ -41,7 +40,7 @@ class RecoveryTests(unittest.TestCase):
         media.write_bytes(b"image bytes")
         manifest = {
             "format": 2, "backup_id": "test", "secret_refs": [],
-            "source_database": "blog", "schema": {"id": recovery.SCHEMA_ID, "migrations": recovery.expected_migrations()},
+            "source_database": "blog", "schema": {"id": recovery.load_contract()["id"], "migrations": recovery.expected_migrations()},
             "media": [{"id":"test-media","path":"objects/test.png","size":media.stat().st_size,"sha256":recovery.digest(media)}],
             "database_counts": {}, "files": recovery.file_records(data),
         }
@@ -103,7 +102,7 @@ class RecoveryTests(unittest.TestCase):
     def test_schema_rejects_old_migration_even_if_table_count_matches(self):
         class Pg:
             def query(self,sql,database):
-                if "information_schema.tables" in sql: return "\n".join(recovery.SCHEMA_TABLES)
+                if "information_schema.tables" in sql: return "\n".join(recovery.load_contract()["tables"])
                 if "WHERE NOT success" in sql: return "0"
                 return '[{"version":1,"checksum":"legacy-baseline"}]'
         with self.assertRaisesRegex(recovery.RecoveryError,"migration history/checksums"):

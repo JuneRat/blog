@@ -103,6 +103,9 @@ pub fn public_router(state: PublicSiteState) -> Router {
         .route("/sitemap.xml", get(sitemap))
         .route("/robots.txt", get(robots))
         .route("/healthz", get(healthz))
+        .route("/readyz", get(healthz))
+        .route("/livez", get(crate::observability::livez))
+        .route("/version", get(crate::observability::version))
         .route(
             "/install",
             get(|| async { axum::response::Redirect::to("/admin/") }),
@@ -339,14 +342,24 @@ async fn robots(State(state): State<PublicSiteState>) -> Response {
 }
 
 async fn healthz(State(state): State<PublicSiteState>) -> Response {
-    match state.health {
-        Some(check) if !check.check().await => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "degraded: dependency check failed",
-        )
-            .into_response(),
+    let mut response = match state.health {
+        Some(check)
+            if !tokio::time::timeout(std::time::Duration::from_secs(2), check.check())
+                .await
+                .unwrap_or(false) =>
+        {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "degraded: dependency check failed",
+            )
+                .into_response()
+        }
         _ => (StatusCode::OK, "ok").into_response(),
-    }
+    };
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
 }
 
 async fn not_found() -> Response {

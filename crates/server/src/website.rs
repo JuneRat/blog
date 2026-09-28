@@ -31,6 +31,7 @@ pub async fn build_router(
     config: &SiteConfig,
     roles: Arc<RoleInteractor>,
     runtime: Arc<RenderingRuntime>,
+    telemetry: &interfaces::observability::Telemetry,
 ) -> Result<axum::Router, String> {
     let public_posts = Arc::new(PostgresPublishedPostQuery::new(pool.clone()));
     let public_pages = Arc::new(PostgresPublishedPageQuery::new(pool.clone()));
@@ -154,7 +155,9 @@ pub async fn build_router(
                 .to_string(),
             trusted_proxies: config.trusted_proxies.clone(),
         },
-    ))
+    )
+    .layer(axum::Extension(telemetry.clone()))
+    .layer(axum::Extension(crate::observability::build_info())))
 }
 
 struct InstalledThemes {

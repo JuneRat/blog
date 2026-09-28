@@ -1,6 +1,8 @@
 # 保留期、媒体清理与备份恢复
 
-当前工具适配新的 [19 表基线](database-design.md)。采用维护窗口备份和隔离恢复；部署验收仍见[路线图](product-roadmap.md)，不提供在线一致备份或零数据丢失承诺。
+当前工具依据[共享结构清单](../migrations/postgres/schema.json)核对当前版本，初始结构为 [19 表基线](database-design.md)。迁移不可变与跨版本恢复步骤见[迁移演进](schema-migrations.md)。采用维护窗口备份和隔离恢复；部署验收仍见[路线图](product-roadmap.md)，不提供在线一致备份或零数据丢失承诺。
+
+Docker Compose 部署优先使用[Compose 备份恢复入口](compose-backup.md)：自动编排停写、命名卷读取、秘密材料保存、独立项目恢复和 HTTP 核验，并支持定时执行及加密异地副本。下文保留通用宿主机工具的操作方式。
 
 ## 数据库账号与保留期
 
@@ -19,7 +21,7 @@ psql "$DATABASE_URL" -v app_role=blog_app -v maintenance_role=blog_maintenance \
   -f scripts/database-roles.sql
 ```
 
-[授权脚本](../scripts/database-roles.sql)在同一事务内重设两角色的表授权，拒绝超级用户、对象所有者和额外审计修改权限；不会替已有库撤销 PUBLIC 授权，异常授权由部署管理员核对修正。受限运行账号启动时只核对全部迁移版本、成功状态和校验和；发现不匹配便退出，由管理账号先执行迁移。新增表时同步更新授权脚本。
+[授权脚本](../scripts/database-roles.sql)在同一事务内重设两角色的表授权，拒绝超级用户、对象所有者和额外审计修改权限；不会替已有库撤销 PUBLIC 授权，异常授权由部署管理员核对修正。受限运行账号启动时只核对全部迁移版本、成功状态和校验和；发现不匹配便退出，由管理账号先执行迁移。新增表或调整权限时修改 `migrations/postgres/schema.json`，运行 `python3 -B scripts/schema_contract.py --write` 生成授权脚本和 DDL 参考，不能手改生成文件。脚本先核对完整表集合，再清除两角色旧的表级及列级授权并重新授予；CI 还核对实际有效权限。
 
 后台“设置 → 数据保留期”要求 settings.manage，默认评论 IP、审计各保留 **180 天**。范围为 1–36,500 整数天，分别保存到 settings.comments.ip_retention_days、settings.audit.retention_days，并校验两组版本、保留其他字段。缩短保留期会在下次维护时清理此前仍保留的数据。
 
@@ -124,7 +126,7 @@ python3 -B scripts/recovery.py verify /secure/backups/blog-2026-09-27
 
 | 检查 | 行为 |
 |---|---|
-| 结构 | 精确核对 19 表名单、全部迁移版本与 SHA-384 校验和、成功状态、关键字段；记录列结构，恢复后比对 |
+| 结构 | 精确核对共享清单的全部表、全部迁移版本与 SHA-384 校验和、成功状态、关键字段；记录列结构，恢复后比对 |
 | 数据库 | custom 格式 pg_dump，使用 --no-owner --no-acl，并检查 archive 列表；不备份集群角色/授权 |
 | 媒体 | 自动复制 --media-dir（按 BLOG_MEDIA_DIR、TOML paths.media_dir、data/media 回退），核对所有注册原件的 path、大小和 SHA-256，包括软删除及零引用媒体 |
 | 引用 | 复核正文 HTML、Post/Series 封面、头像、logo 与 media_refs 一致；复核评论根关系和分类树无环 |
@@ -132,11 +134,11 @@ python3 -B scripts/recovery.py verify /secure/backups/blog-2026-09-27
 | 清单 | 格式 2，包含结构、媒体清单、所有表计数、内容状态/回收站计数、文件大小与 SHA-256；COMPLETE 保存清单摘要 |
 | 秘密 | 只保存 OAuth secret_ref 名称，要求恢复环境提供非空值；不复制秘密，也不能证明值正确 |
 
-首次安装生成的 TOML（默认 `data/config.toml`）及旁边的 `config.install-state.json` 均含部署凭据，属于部署秘密，不在工具的自动备份范围内，应通过受控秘密存储单独保存。`settings.installation` 随数据库备份恢复。恢复部署可显式用 `DATABASE_URL` 覆盖新库地址；不要对恢复库重跑安装向导，详见[首次安装](installation.md)。
+首次安装生成的 TOML（默认 `data/config.toml`）含部署凭据，属于部署秘密，不在工具的自动备份范围内，应通过受控秘密存储单独保存。临时日志 `config.install-state.json` 在安装完成后自动清理；未完成安装时同样须保护其凭据，完成后的备份恢复无需携带日志。`settings.installation` 随数据库备份恢复。恢复部署可显式用 `DATABASE_URL` 覆盖新库地址；不要对恢复库重跑安装向导，详见[首次安装](installation.md)。
 
 整个媒体目录中的未注册文件也会保存，不判定为垃圾。附加目录可用 --resource name=目录，media 为保留名称。拒绝符号链接、路径越界及非普通文件。任何注册原件缺失或损坏都会阻止完成备份。
 
-格式 1 和旧迁移链备份须使用匹配的旧工具；恢复与升级分开执行。失败不生成 COMPLETE；异常会清理临时目录，强制中止可能留下不能直接恢复的 .partial-*。备份包含私密正文、密码哈希和会话等敏感材料，0700 目录权限不能替代受控存储、传输保护或加密。
+格式 1 和旧迁移链备份须使用匹配的旧工具；恢复与升级分开执行。新增表不改变备份格式 2，但新迁移链不能直接恢复旧链备份；先用旧工具恢复、核验并在停写状态解除数据库隔离，再执行新版本迁移，详见[跨版本恢复顺序](schema-migrations.md#部署与恢复顺序)。失败不生成 COMPLETE；异常会清理临时目录，强制中止可能留下不能直接恢复的 .partial-*。备份包含私密正文、密码哈希和会话等敏感材料，0700 目录权限不能替代受控存储、传输保护或加密。
 
 ## 隔离恢复与重新开放
 
@@ -180,12 +182,14 @@ release 核对该次恢复的数据库标记，重检结构、Owner、当前媒�
 
 ## 验证与部署证据
 
+2026-09-28 完成 Compose 专项演练：创建完整备份、加密仓库上传/取回与保留清理、损坏备份拒绝、媒体缺失时原服务恢复、独立项目导入、错误密码拒绝、管理员登录/页面/图片检查、会话撤销，以及恢复后的站点再次备份和恢复。53 项工具测试和 6 项 PostgreSQL 专项测试通过。加密存取使用独立临时本地 restic 仓库验证，真实 S3 和生产 RPO/RTO 仍待部署环境验收。
+
 [新库全链路验收](acceptance.md)通过真实安装、管理及评论接口创建样本，再调用本节的备份恢复工具完成往返。该流程已接入 CI，保存逐步结果、构建/迁移标识与媒体引用核验报告；它与下方针对数据库角色、恢复失败及清理竞争的专项演练互补。
 
 无数据库测试：
 
 ```sh
-PYTHONPATH=scripts python3 -B -m unittest scripts/test_recovery.py scripts/test_media_cleanup.py
+PYTHONPATH=scripts python3 -B -m unittest scripts/test_schema_contract.py scripts/test_recovery.py scripts/test_media_cleanup.py
 ```
 
 真实往返演练只允许 loopback 管理地址，随机创建并清理专用库和角色：
@@ -197,7 +201,7 @@ BLOG_RECOVERY_TEST=1 BLOG_TEST_PG_CONTAINER=blog-postgres \
 PYTHONPATH=scripts python3 -B -m unittest scripts/test_recovery_postgres.py
 ```
 
-覆盖授权脚本、受限运行账号、维护权限、媒体各状态及多类型引用、多系列、评论树、会话撤销、隔离启动/调度、缺文件拒绝备份、引用缺失拒绝开放，以及媒体清理的审计回滚、版本/引用复核、并发恢复、提交结果丢失、部分文件失败和重试。测试不代替生产维护互斥、RPO/RTO 和故障中断验收；部署层记录备份大小、维护时长、恢复点和实际恢复耗时。
+覆盖临时新增表升级、匹配版本备份往返、旧备份恢复后升级、完整表集合与有效权限检查、授权脚本、受限运行账号、维护权限、媒体各状态及多类型引用、多系列、评论树、会话撤销、隔离启动/调度、缺文件拒绝备份、引用缺失拒绝开放，以及媒体清理的审计回滚、版本/引用复核、并发恢复、提交结果丢失、部分文件失败和重试。测试不代替生产维护互斥、RPO/RTO 和故障中断验收；部署层记录备份大小、维护时长、恢复点和实际恢复耗时。
 
 2026-09-27 已在独立 PostgreSQL 18 临时实例完成上述往返演练，全量检查及前端生产构建通过；受限账号迁移并发和失败后释放锁另有集成测试。现有开发数据库未重建或切换。
 

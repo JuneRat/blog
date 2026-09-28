@@ -1,0 +1,357 @@
+#!/usr/bin/env python3
+"""Exercise the built Compose image using only disposable containers and volumes.
+
+No host Rust/Node build or existing deployment configuration is used. A random
+Compose project and an isolated copy of the deployment files own every resource
+removed by this test. Server logs (including installation tokens) stay private.
+"""
+import argparse
+import json
+import os
+from pathlib import Path
+import re
+import secrets
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+from urllib.error import HTTPError
+from urllib.request import Request
+from urllib.parse import urlsplit
+import uuid
+
+from acceptance import API, PNG, AcceptanceError, AdminAssets, Client, require
+from compose_recovery import dotenv
+
+PROJECT = Path(__file__).resolve().parents[1]
+
+
+def wait_for(action, message, timeout=90):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            value = action()
+            if value:
+                return value
+        except AcceptanceError:
+            pass
+        time.sleep(0.5)
+    raise AcceptanceError(message)
+
+
+def exercise(image, root, ops_image):
+    project = "blog-compose-test-" + uuid.uuid4().hex[:12]
+    password = "Compose-" + secrets.token_hex(16)
+    special_secret = "literal-$MISSING-'quoted'-\\line\nsecond"
+    env_file = root / ".env"
+    (root / "scripts").mkdir()
+    shutil.copyfile(PROJECT / "scripts/compose-init.sh", root / "scripts/compose-init.sh")
+    shutil.copyfile(PROJECT / "scripts/compose-backup.sh", root / "scripts/compose-backup.sh")
+    shutil.copyfile(PROJECT / ".env.example", root / ".env.example")
+    initialized = subprocess.run(["sh", str(root / "scripts/compose-init.sh")], cwd=root,
+                                 capture_output=True, text=True, timeout=10)
+    require(initialized.returncode == 0, "environment initialization failed")
+    owner_password = re.search(r"^BLOG_OWNER_PASSWORD=([a-f0-9]{64})$", env_file.read_text(), re.M).group(1)
+    with env_file.open("a") as stream:
+        stream.write(f"\nBLOG_IMAGE={image}\nBLOG_OPS_IMAGE={ops_image}\nCOMPOSE_PROJECT_NAME={project}\nBLOG_HTTP_HOST=127.0.0.1\nBLOG_HTTP_PORT=0\nBLOG_METRICS_PORT=0\nRUST_LOG=info,sqlx=warn\n")
+        stream.write(dotenv({"GH_SECRET": special_secret, "BLOG_DB_MAX_CONNECTIONS": "9", "BLOG_DB_STATEMENT_TIMEOUT_MS": "30000"}))
+    shutil.copyfile(PROJECT / "compose.yaml", root / "compose.yaml")
+    (root / "ops").mkdir()
+    shutil.copyfile(PROJECT / "ops/postgres-init.sh", root / "ops/postgres-init.sh")
+    env = {key: value for key, value in os.environ.items()
+           if not key.startswith(("BLOG_", "COMPOSE_"))
+           and key not in ("DATABASE_URL", "RUST_LOG", "IDP_SECRET", "GH_SECRET")}
+    base = ["docker", "compose", "--project-directory", str(root),
+            "-f", str(root / "compose.yaml"), "-p", project]
+
+    def compose(*args):
+        result = subprocess.run([*base, *args], cwd=root, env=env,
+                                capture_output=True, text=True, timeout=180)
+        # Do not echo command output: a failed operation may contain credentials.
+        require(result.returncode == 0, f"Compose {args[0]} failed (exit {result.returncode})")
+        return result.stdout.strip()
+
+    def client(port="8080"):
+        address = compose("port", "blog", port)
+        require(re.fullmatch(r"127\.0\.0\.1:\d+", address), "unexpected published address")
+        return Client("http://" + address)
+
+    def sql(query):
+        return compose("exec", "-T", "db", "psql", "-XAt", "-v", "ON_ERROR_STOP=1",
+                       "-U", "postgres", "-d", "blog", "-c", query)
+
+    restored = root / "restored"
+    restored_again = root / "restored-again"
+
+    def operation(*args, directory=root, data=None, success=True):
+        result = subprocess.run(["sh", str(directory / "scripts/compose-backup.sh"), *args],
+                                cwd=directory, env=env, input=data, capture_output=True, text=True, timeout=240)
+        require((result.returncode == 0) == success,
+                f"Compose recovery {args[0]} unexpected exit {result.returncode}: {result.stderr[-1500:]}")
+        return result.stdout
+
+    def restored_compose(*args):
+        result = subprocess.run(["docker", "compose", "--project-directory", str(restored), *args],
+                                cwd=restored, env=env, capture_output=True, text=True, timeout=120)
+        require(result.returncode == 0, f"Restored Compose {args[0]} failed")
+        return result.stdout.strip()
+
+    try:
+        compose("config", "--quiet")
+        # .env is auto-discovered, but cluster/owner passwords stay out of blog.
+        model = json.loads(compose("config", "--format", "json"))
+        application_env = model["services"]["blog"]["environment"]
+        require("BLOG_POSTGRES_PASSWORD" not in application_env and "BLOG_OWNER_PASSWORD" not in application_env,
+                "database administration secrets must not enter the HTTP service")
+        require(application_env.get("DATABASE_URL") is None,
+                "fresh installation must not receive an empty or implicit database URL")
+        require(application_env.get("RUST_LOG") == "info,sqlx=warn", "application settings must come from .env")
+        # `compose config` escapes dollars so its YAML/JSON can be used as Compose input again.
+        require(application_env.get("GH_SECRET", "").replace("$$", "$") == special_secret,
+                "dotenv changed literal secret characters")
+        require(application_env.get("BLOG_LOG_FORMAT") == "json", "Compose must default to JSON logs")
+        ports = model["services"]["blog"]["ports"]
+        require(any(port["target"] == 9090 and port["host_ip"] == "127.0.0.1" for port in ports),
+                "metrics must only publish on loopback")
+        print("==> Compose: fresh installation", flush=True)
+        compose("up", "-d", "--no-build", "--pull", "never")
+        guest = client()
+        token = wait_for(
+            lambda: re.search(r"安装码：([a-f0-9]{64})", compose("logs", "--no-color", "blog")),
+            "installation token was not emitted",
+        ).group(1)
+        guest.request("GET", "/healthz", status=503)
+        guest.request("GET", "/readyz", status=503)
+        guest.request("GET", "/livez")
+        build = guest.json("GET", "/version")
+        require(build["version"] and build["revision"], "build information missing")
+        expected_revision = os.environ.get("BLOG_EXPECT_REVISION")
+        if expected_revision:
+            require(build["revision"] == expected_revision, "binary revision differs from its release")
+        metrics = client("9090")
+        body, _ = metrics.request("GET", "/metrics")
+        require(b"blog_installation_complete 0" in body, "installer metrics must not report an active pool")
+        metrics.request("GET", "/api/install", status=404)
+        installation = {
+            "database_url": f"postgres://blog_owner:{owner_password}@db:5432/blog",
+            "public_base_url": guest.origin,
+            "username": "acceptance-owner", "password": password,
+        }
+        request = Request(guest.origin + "/api/install", method="POST",
+                          data=json.dumps(installation).encode(),
+                          headers={"Origin": guest.origin, "Content-Type": "application/json", "X-Install-Token": token})
+        try:
+            with guest.opener.open(request, timeout=30) as response:
+                require(response.status == 200, "installation did not complete")
+        except HTTPError as error:
+            detail = json.loads(error.read()).get("error", "installation failed")
+            for secret in (installation["database_url"], owner_password, password, token):
+                detail = detail.replace(secret, "[redacted]")
+            raise AcceptanceError(f"installation: HTTP {error.code}: {detail}") from None
+        guest.request("GET", "/healthz")
+        guest.request("GET", "/readyz")
+        guest.request("GET", "/livez")
+        guest.request("GET", "/metrics", status=404)
+        require(guest.json("GET", "/version") == build, "build identity changed after installation")
+        guest.request("GET", "/api/install", status=404)
+        require(sql("SELECT rolsuper OR rolcreatedb OR rolcreaterole FROM pg_roles WHERE rolname='blog_owner'") == "f",
+                "schema owner must not be a cluster administrator")
+
+        print("==> Compose: bundled assets, migration paths and persistent content", flush=True)
+        raw, _ = guest.request("GET", "/admin/")
+        assets = AdminAssets()
+        assets.feed(raw.decode())
+        require(bool(assets.paths), "admin bundle is missing")
+        for path in assets.paths:
+            body, headers = guest.request("GET", path)
+            require(body and headers.get_content_type() != "text/html", "admin asset is missing")
+        require(compose("exec", "-T", "blog", "id", "-u") == "10001", "server must run as non-root")
+        compose("exec", "-T", "-w", "/tmp", "blog", "blog", "migrate")
+        require(compose("exec", "-T", "blog", "stat", "-c", "%a", "/var/lib/blog/config/config.toml") == "600",
+                "persisted configuration must be private")
+        guest.login(password)
+        media = guest.json("POST", API + "/media", PNG, status=201, headers={"Content-Type": "image/png"})
+        page = guest.json("POST", API + "/pages", {
+            "slug": "compose-persistence", "title": "Compose persistence",
+            "content": f"Persistent content ![image]({media['url']})",
+        }, status=201)
+        guest.json("POST", f"{API}/pages/{page['id']}/publish", {"expected_version": page["version"]})
+        installation_id = sql("SELECT value->>'id' FROM settings WHERE key='installation'")
+
+        print("==> Compose: telemetry, JSON logs and dependency failure", flush=True)
+        _, headers = guest.request("GET", "/readyz?token=not-a-log-field")
+        request_id = headers["x-request-id"]
+        body, _ = metrics.request("GET", "/metrics")
+        require(b"blog_installation_complete 1" in body and b'route="/api/install"' in body,
+                "installation must preserve counters and activate pool metrics")
+        require(b'blog_database_pool_connections{state="max"} 9' in body, "configured pool capacity was not applied after installation")
+        require(b"blog_http_request_duration_seconds_bucket" in body, "latency histogram missing")
+        def readiness_errors(body):
+            return sum(float(line.rsplit(b" ", 1)[1]) for line in body.splitlines()
+                       if line.startswith(b"blog_http_requests_total{") and b'route="/readyz"' in line
+                       and b'status="503"' in line)
+        failures_before = readiness_errors(body)
+        # A stalled database exercises the readiness deadline, not just a refused socket.
+        compose("pause", "db")
+        try:
+            started = time.monotonic()
+            guest.request("GET", "/readyz", status=503)
+            require(time.monotonic() - started < 3.5, "readiness did not respect its dependency timeout")
+            guest.request("GET", "/livez")
+            guest.request("GET", "/healthz", status=503)
+            body, _ = metrics.request("GET", "/metrics")
+            require(readiness_errors(body) > failures_before, "runtime failures must increment metrics after installation")
+        finally:
+            compose("unpause", "db")
+        wait_for(lambda: guest.request("GET", "/readyz"), "readiness did not recover")
+        logs = compose("logs", "--no-color", "--no-log-prefix", "blog")
+        records = [json.loads(line) for line in logs.splitlines() if line.strip()]
+        require(any(record.get("span", {}).get("request_id") == request_id
+                    and record.get("fields", {}).get("status") == 200 for record in records),
+                "JSON completion log must contain the response request ID and status")
+        require(not any(secret in logs for secret in (password, owner_password, "not-a-log-field")),
+                "request logs leaked credentials or query parameters")
+
+        print("==> Compose: container replacement preserves database, config and media", flush=True)
+        compose("down", "--timeout", "30")  # Deliberately retain all three named volumes.
+        compose("up", "-d", "--no-build", "--pull", "never", "--wait", "--wait-timeout", "90")
+        guest = client()
+        guest.request("GET", "/healthz")
+        guest.request("GET", "/livez")
+        require(guest.json("GET", "/version") == build, "build identity changed after restart")
+        guest.request("GET", "/api/install", status=404)
+        guest.login(password)
+        body, _ = guest.request("GET", "/compose-persistence")
+        require(b"Persistent content" in body, "published page did not survive replacement")
+        body, _ = guest.request("GET", media["url"])
+        require(body == PNG, "media object did not survive replacement")
+        require(sql("SELECT value->>'id' FROM settings WHERE key='installation'") == installation_id,
+                "installation was unexpectedly repeated")
+        # Exercise the Docker healthcheck itself, not just a request from the host.
+        container = compose("ps", "-q", "blog")
+        inspection = subprocess.run(["docker", "inspect", "--format", "{{json .State.Health.Status}}", container],
+                                    capture_output=True, text=True, check=True)
+        require(json.loads(inspection.stdout) == "healthy", "Docker readiness check did not pass")
+        print("==> Compose: complete backup and encrypted repository round trip", flush=True)
+        compose("--profile", "ops", "run", "--rm", "--no-deps", "--entrypoint", "python3", "ops", "-c",
+                "import toml; p='/var/lib/blog/config/config.toml'; c=toml.load(p); c['database']['max_lifetime_secs']=777; open(p,'w').write(toml.dumps(c))")
+        # The local repository exercises encryption/upload/fetch without external credentials.
+        # Production selects S3 through the same restic interface.
+        with env_file.open("a") as stream:
+            stream.write(f"\nRESTIC_REPOSITORY=/backups/test-repository\nRESTIC_PASSWORD={secrets.token_hex(32)}\nBLOG_BACKUP_KEEP=2\nBLOG_BACKUP_REMOTE_KEEP=1\n")
+        operation("remote-init")
+        operation("backup")
+        operation("backup")
+        backups = sorted((root / "backups").glob("blog-*.tar.gz"))
+        require(len(backups) == 2, "two complete backup archives expected")
+        archive = backups[-1]
+        require(archive.stat().st_mode & 0o777 == 0o600, "backup archive must be private")
+        operation("verify", str(archive))
+        guest = client()
+        wait_for(lambda: guest.request("GET", "/readyz"), "backup did not restart source")
+        snapshots = json.loads(operation("remote-list"))
+        require(len(snapshots) == 1, "remote retention must group changing archive paths by site")
+        saved = archive.with_suffix(".saved")
+        # On virtualized macOS bind mounts, a host rename may remain stale inside
+        # a new container. Remove the local copy from the same filesystem view as fetch.
+        compose("run", "--rm", "--no-deps", "--entrypoint", "mv", "ops",
+                "/backups/" + archive.name, "/backups/" + saved.name)
+        require(not archive.exists(), "backup rename did not remove original local file")
+        require(any(path.endswith(archive.name) for path in snapshots[0]["paths"]),
+                "remote snapshot does not contain the latest local archive")
+        operation("fetch", snapshots[0]["id"])
+        import hashlib
+        require(hashlib.sha256(archive.read_bytes()).digest() == hashlib.sha256(saved.read_bytes()).digest(),
+                "encrypted fetch changed backup bytes")
+        damaged = root / "backups/damaged.tar.gz"
+        damaged.write_bytes(b"not a backup")
+        operation("verify", str(damaged), success=False)
+
+        print("==> Compose: backup failure restarts the source and preserves previous backups", flush=True)
+        media_path = "/var/lib/blog/media/" + sql(f"SELECT path FROM media WHERE id='{media['id']}'")
+        compose("exec", "-T", "blog", "mv", media_path, media_path + ".saved")
+        try:
+            operation("backup", success=False)
+        finally:
+            compose("exec", "-T", "blog", "mv", media_path + ".saved", media_path)
+        guest = client()  # Docker may reassign port 0 when a stopped container restarts.
+        wait_for(lambda: guest.request("GET", "/readyz"), "failed backup left source stopped")
+        require(archive.is_file(), "failed backup pruned the previous backup")
+        require(json.loads((root / "backups/status.json").read_text())["status"] == "failed",
+                "failed backup status missing")
+        require((root / "backups/last-successful-backup.json").is_file(), "last successful backup was lost")
+
+        print("==> Compose: fresh deployment restore, isolation, login/media verification and release", flush=True)
+        operation("restore", str(archive), str(restored))
+        restored_model = json.loads(restored_compose("config", "--format", "json"))
+        restored_database = urlsplit(restored_model["services"]["blog"]["environment"]["DATABASE_URL"]).path.lstrip("/")
+        for key, value in (("BLOG_DB_MAX_CONNECTIONS", "9"), ("BLOG_DB_STATEMENT_TIMEOUT_MS", "30000")):
+            require(restored_model["services"]["blog"]["environment"].get(key) == value,
+                    "restored deployment lost database policy: " + key)
+        require(restored_model["services"]["blog"]["environment"].get("GH_SECRET", "").replace("$$", "$") == special_secret,
+                "restore changed a secret containing quotes, dollars, backslashes or newlines")
+        require(restored_compose("ps", "--services", "--status", "running") == "db",
+                "restore must not start a public application")
+        def restored_sql(query):
+            return restored_compose("exec", "-T", "db", "psql", "-XAt", "-v", "ON_ERROR_STOP=1",
+                                    "-U", "postgres", "-d", restored_database, "-c", query)
+        require(restored_sql("SELECT count(*) FROM sessions") == "0", "restored sessions were not revoked")
+        require(restored_sql("SELECT value->>'id' FROM settings WHERE key='installation'") == installation_id,
+                "restore lost the site identity")
+        operation("release", directory=restored, success=False)
+        operation("check", "acceptance-owner", "--password-stdin", directory=restored, data="wrong-password\n", success=False)
+        operation("check", "acceptance-owner", "--password-stdin", directory=restored, data=password + "\n")
+        require(restored_sql("SELECT count(*) FROM sessions") == "0", "verification left a reusable session")
+        operation("release", directory=restored)
+        restored_compose("exec", "-T", "blog", "test", "!", "-e",
+                         "/var/lib/blog/config/recovered/resources/deployment")
+        target = Client("http://" + restored_compose("port", "blog", "8080"))
+        target.request("GET", "/readyz")
+        body, _ = target.request("GET", "/compose-persistence")
+        require(b"Persistent content" in body, "restored page missing")
+        body, _ = target.request("GET", media["url"])
+        require(body == PNG, "restored media differs")
+        require(restored_sql("SELECT count(*) FROM sessions") == "0", "release retained verification sessions")
+        require(restored_sql("SELECT rolsuper OR rolcreatedb OR rolcreaterole FROM pg_roles WHERE rolname='blog_app'") == "f",
+                "restored application uses elevated database permissions")
+        guest.request("GET", "/readyz")
+        require(sql("SELECT value->>'id' FROM settings WHERE key='installation'") == installation_id,
+                "restore modified the source deployment")
+        restored_compose("--profile", "ops", "run", "--rm", "--no-deps", "--entrypoint", "python3", "ops", "-c",
+                         "import toml; assert toml.load('/var/lib/blog/config/config.toml')['database']['max_lifetime_secs'] == 777")
+        print("==> Compose: a recovered site can itself be backed up and restored again", flush=True)
+        operation("backup", directory=restored)
+        recovered_archives = list((restored / "backups").glob("blog-*.tar.gz"))
+        require(len(recovered_archives) == 1, "recovered deployment did not create a complete backup")
+        operation("restore", str(recovered_archives[0]), str(restored_again), directory=restored)
+        print("Compose installation, telemetry, persistence, backup, encrypted copy and isolated recovery passed.", flush=True)
+    finally:
+        if (restored_again / ".env").is_file():
+            subprocess.run(["docker", "compose", "--project-directory", str(restored_again), "down",
+                            "--volumes", "--remove-orphans", "--timeout", "30"],
+                           cwd=restored_again, env=env, capture_output=True, text=True, timeout=120, check=True)
+        if (restored / ".env").is_file():
+            restored_compose("down", "--volumes", "--remove-orphans", "--timeout", "30")
+        # The test repository is intentionally local, so restore host ownership for cleanup.
+        compose("run", "--rm", "--no-deps", "--entrypoint", "sh", "ops", "-c",
+                f"chown -R {os.getuid()}:{os.getgid()} /backups")
+        compose("down", "--volumes", "--remove-orphans", "--timeout", "30")
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--image", default="blog:local", help="already-built local image")
+    parser.add_argument("--ops-image", default="blog-ops:local", help="matching already-built ops image")
+    args = parser.parse_args()
+    try:
+        with tempfile.TemporaryDirectory(prefix="blog-compose-test-") as directory:
+            exercise(args.image, Path(directory), args.ops_image)
+    except (AcceptanceError, OSError, subprocess.SubprocessError) as error:
+        print(f"Compose verification failed: {error}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

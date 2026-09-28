@@ -6,6 +6,17 @@ config_version = 1
 # 推荐通过 DATABASE_URL 注入。留空（不设置 url）时 serve 进入安装向导。
 # url = "postgres://blog:change-me@127.0.0.1:5432/blog"
 migrations_dir = "migrations/postgres"
+# 连接池与超时；0 的查询限制沿用数据库角色/DSN 设置。
+# max_connections = 5
+# min_connections = 0
+# acquire_timeout_ms = 5000
+# idle_timeout_secs = 600
+# max_lifetime_secs = 1800
+# statement_timeout_ms = 0
+# lock_timeout_ms = 0
+# idle_in_transaction_timeout_ms = 0
+# connect_retries = 3
+# connect_retry_backoff_ms = 250
 
 [server]
 bind = "127.0.0.1:8080"
@@ -22,6 +33,11 @@ media_dir = "data/media"
 
 [logging]
 filter = "info,sqlx=warn"
+format = "text" # json for structured stderr; Compose defaults to json.
+
+# Separate management listener; absent by default for native processes.
+# [metrics]
+# bind = "127.0.0.1:9090"
 
 [recovery]
 enabled = false

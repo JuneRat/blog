@@ -1,6 +1,8 @@
 //! Empty-database installation. No existing account, including a deleted or
 //! disabled Owner, can make a database eligible for installation again.
 
+use crate::schema_contract::SchemaContract;
+
 use application::{
     UseCaseError,
     audit::AuditContext,
@@ -28,28 +30,6 @@ pub async fn connect(url: &str) -> Result<PgPool, UseCaseError> {
             )
         })
 }
-
-const TABLES: &[&str] = &[
-    "users",
-    "sessions",
-    "oauth_accounts",
-    "roles",
-    "permissions",
-    "user_roles",
-    "role_permissions",
-    "media",
-    "categories",
-    "tags",
-    "series",
-    "posts",
-    "post_tags",
-    "post_series",
-    "pages",
-    "media_refs",
-    "comments",
-    "settings",
-    "audit_logs",
-];
 
 fn database_error(_: sqlx::Error) -> UseCaseError {
     // Connection and PostgreSQL diagnostics may contain credentials or submitted
@@ -84,7 +64,11 @@ pub async fn is_complete(pool: &PgPool, installation_id: &str) -> Result<bool, U
 
 /// A saved local journal permits resuming only our empty baseline. Arbitrary
 /// tables, schemas, views and recovery databases are never migrated by setup.
-pub async fn check_target(pool: &PgPool, resume: bool) -> Result<(), UseCaseError> {
+pub async fn check_target(
+    pool: &PgPool,
+    schema_contract: &SchemaContract,
+    resume: bool,
+) -> Result<(), UseCaseError> {
     let (schema, comment): (Option<String>, Option<String>) = sqlx::query_as(
         "SELECT current_schema(), shobj_description(oid,'pg_database') FROM pg_database WHERE datname=current_database()",
     ).fetch_one(pool).await.map_err(database_error)?;
@@ -105,7 +89,7 @@ pub async fn check_target(pool: &PgPool, resume: bool) -> Result<(), UseCaseErro
         || objects.iter().any(|(schema, table, kind)| {
             schema != "public"
                 || kind != "r"
-                || (table != "_sqlx_migrations" && !TABLES.contains(&table.as_str()))
+                || (table != "_sqlx_migrations" && !schema_contract.contains(table))
         })
     {
         return Err(occupied());
@@ -117,7 +101,7 @@ pub async fn check_target(pool: &PgPool, resume: bool) -> Result<(), UseCaseErro
         .filter(|(_, table, _)| table != "_sqlx_migrations")
     {
         let exists: bool =
-            sqlx::query_scalar(&format!("SELECT EXISTS(SELECT 1 FROM public.{table})"))
+            sqlx::query_scalar(&format!("SELECT EXISTS(SELECT 1 FROM public.\"{table}\")"))
                 .fetch_one(pool)
                 .await
                 .map_err(database_error)?;
@@ -132,6 +116,7 @@ pub async fn check_target(pool: &PgPool, resume: bool) -> Result<(), UseCaseErro
 /// one transaction. Failed/competing installs cannot leave a partial account.
 pub async fn initialize(
     pool: &PgPool,
+    schema_contract: &SchemaContract,
     installation_id: &str,
     owner: &InitialOwner,
     site: &application::ports::SiteSettingsValue,
@@ -149,12 +134,12 @@ pub async fn initialize(
     // must not race the final empty-database check.
     sqlx::query(&format!(
         "LOCK TABLE {} IN SHARE ROW EXCLUSIVE MODE",
-        TABLES.join(",")
+        schema_contract.lock_tables_sql()
     ))
     .execute(&mut *tx)
     .await
     .map_err(database_error)?;
-    ensure_empty(&mut tx).await?;
+    ensure_empty(&mut tx, schema_contract).await?;
     // Initial values become ordinary runtime settings in the same transaction
     // as the first Owner. Subsequent startups never reapply deployment defaults.
     if site.title.is_some() || site.description.is_some() {
@@ -223,10 +208,13 @@ pub async fn initialize(
     tx.commit().await.map_err(database_error)
 }
 
-async fn ensure_empty(tx: &mut Transaction<'_, Postgres>) -> Result<(), UseCaseError> {
-    for table in TABLES {
+async fn ensure_empty(
+    tx: &mut Transaction<'_, Postgres>,
+    schema_contract: &SchemaContract,
+) -> Result<(), UseCaseError> {
+    for table in schema_contract.tables() {
         let exists: bool =
-            sqlx::query_scalar(&format!("SELECT EXISTS(SELECT 1 FROM public.{table})"))
+            sqlx::query_scalar(&format!("SELECT EXISTS(SELECT 1 FROM public.\"{table}\")"))
                 .fetch_one(&mut **tx)
                 .await
                 .map_err(database_error)?;

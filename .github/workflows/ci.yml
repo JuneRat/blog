@@ -33,6 +33,15 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Immutable migrations and generated schema artifacts
+        env:
+          SCHEMA_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          python3 -B scripts/schema_contract.py --base-ref "$SCHEMA_BASE_REF"
+          PYTHONPATH=scripts python3 -B -m unittest scripts/test_schema_contract.py
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -55,9 +64,9 @@ jobs:
         run: cargo test --workspace
 
       - name: Recovery, media cleanup and acceptance tool tests
-        run: PYTHONPATH=scripts python3 -B -m unittest scripts/test_recovery.py scripts/test_media_cleanup.py scripts/test_acceptance.py scripts/test_deployment_config.py
+        run: PYTHONPATH=scripts python3 -B -m unittest scripts/test_recovery.py scripts/test_media_cleanup.py scripts/test_acceptance.py scripts/test_deployment_config.py scripts/test_compose_recovery.py
 
-      - name: Isolated recovery, database roles and media purge drill
+      - name: Isolated recovery, schema upgrade, database roles and media purge drill
         env:
           BLOG_RECOVERY_TEST: "1"
           BLOG_TEST_PG_CONTAINER: ${{ job.services.postgres.id }}

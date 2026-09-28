@@ -7,9 +7,14 @@
 | 你要做什么 | 从这里开始 |
 |---|---|
 | 首次运行项目 | [项目首页](../README.md) → [开发指南](development.md) |
+| 用容器部署单机站点 | [Docker Compose 部署](docker-compose.md) |
+| Compose 停写备份、独立恢复、定时与加密异地副本 | [Compose 备份恢复](compose-backup.md) |
 | 配置环境、域名、数据库或媒体目录 | [配置参考](configuration.md) |
 | 修改后端或判断代码应放在哪一层 | [架构](architecture.md) → [领域模型](domain.md) |
 | 查看已确认的新数据库方案 | [目标数据库设计](database-design.md) → [ADR-0016](adr/0016-confirmed-blog-schema.md) → [目标 DDL](../blog_schema.sql) |
+| 新增表、升级结构或恢复旧版本备份 | [迁移演进](schema-migrations.md) |
+| 比较连接池大小和公开页面容量 | [公开读取容量验证](public-read-capacity.md) |
+| 检查服务健康、错误率、延迟或运行版本 | [探针、日志与指标](observability.md) |
 | 修改当前编辑、发布、删除或媒体引用实现 | [内容生命周期](content-lifecycle.md) → [当前数据库实现](database-current.md)；新方案的实施见[路线图](product-roadmap.md#已采纳数据库设计的实施) |
 | 开发后台界面 | [后台开发指南](admin-development.md) → [管理 API](admin-api.md) |
 | 接入管理接口 | [管理 API](admin-api.md) → [身份、权限与后台](identity-and-admin.md) |
@@ -28,6 +33,8 @@
 |---|---|
 | [开发指南](development.md) | 本地环境、CLI、前端联调、检查命令与测试库 |
 | [首次安装](installation.md) | 安装向导、初始 Owner、连接配置保存与中断恢复 |
+| [Docker Compose 部署](docker-compose.md) | 镜像构建与交付、持久卷、安装、健康检查和部署维护 |
+| [Compose 备份恢复](compose-backup.md) | 容器内工具、完整备份包、隔离核验、加密仓库与定时任务 |
 | [后台开发指南](admin-development.md) | 组件、表单、查询缓存、失效与前端测试约定 |
 | [配置参考](configuration.md) | 环境变量、配置优先级、路径与命令作用域 |
 | [架构](architecture.md) | 模块职责、依赖方向、装配、事务与执行边界 |
@@ -35,6 +42,9 @@
 | [内容生命周期](content-lifecycle.md) | 编辑、发布、回收站、并发与媒体生命周期 |
 | [数据库设计](database-design.md) | 已采纳的 19 表目标设计、业务规则及与当前实现的差异 |
 | [当前数据库实现](database-current.md) | 当前迁移对应的表结构、约束、索引与事务边界 |
+| [迁移演进](schema-migrations.md) | 不可变迁移、共享清单、SQL 生成、升级与跨版本恢复 |
+| [公开读取容量验证](public-read-capacity.md) | 查询路径、连接池对比和独立测试库上的压测 |
+| [探针、日志与指标](observability.md) | 健康端点、JSON 日志、指标访问及 Prometheus 抓取 |
 | [身份、权限与后台](identity-and-admin.md) | 认证、授权、会话、Owner 保护与后台交互约束 |
 | [管理 API](admin-api.md) | 当前路由、请求形态、版本与错误约定 |
 | [主题与渲染](themes-and-rendering.md) | 模板契约、HTML 派生、执行预算、主题与 SEO |
@@ -44,7 +54,7 @@
 | [扩展与数据能力](extensions-and-data.md) | 尚未交付的扩展接口、格式和设计约束 |
 | [ADR](adr/README.md) | 决策背景、理由、后果与替代关系 |
 
-当前数据库迁移位于 [migrations/postgres](../migrations/postgres/)，[postgres-core.sql](sql/postgres-core.sql) 汇总当前结构。根目录 [blog_schema.sql](../blog_schema.sql) 的结构已纳入新的 `0001_initial_schema.sql`，三份 DDL 保持一致；仅用于空库，不与旧迁移链叠加。身份与会话已适配，其他模块进度见路线图。桥接实验结论保存在[归档报告](template-bridge-experiment.md)，独立实验代码已移除。
+当前数据库以 [migrations/postgres](../migrations/postgres/) 的迁移链为唯一结构来源；[blog_schema.sql](../blog_schema.sql) 与 [postgres-core.sql](sql/postgres-core.sql) 由该链自动生成，只供空库 DDL 参考。已有 `0001_initial_schema.sql` 不再改写，后续按[迁移演进规则](schema-migrations.md)追加；不能与已删除的旧链叠加。桥接实验结论保存在[归档报告](template-bridge-experiment.md)，独立实验代码已移除。
 
 ## 维护约定
 

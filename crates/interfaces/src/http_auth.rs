@@ -9,9 +9,8 @@
 //!
 //! Cookie：不透明高熵令牌，HttpOnly + SameSite=Lax（HTTPS 部署加 Secure）；
 //! 登录另发短命 `blog_oauth_state`（Secure 部署用 `__Host-` 前缀）绑定浏览器。
-//! 会话状态存服务端内存，每次请求重新读取用户与权限。
+//! 会话持久化到数据库，每次请求重新读取用户与权限。
 
-use std::net::SocketAddr;
 use std::sync::Arc;
 
 use application::auth::{ATTEMPT_TTL_SECS, AuthInteractor, SESSION_COOKIE_NAME};
@@ -19,7 +18,7 @@ use application::content::PostInteractor;
 use application::error::UseCaseError;
 use application::identity::UserInteractor;
 use application::password::PasswordInteractor;
-use axum::extract::{ConnectInfo, DefaultBodyLimit, Extension, Path, Query, State};
+use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::middleware;
 use axum::response::{IntoResponse, Redirect, Response};
@@ -165,22 +164,20 @@ async fn password_login(
     State(state): State<AuthState>,
     request_id: RequestId,
     headers: HeaderMap,
-    connect_info: Option<Extension<ConnectInfo<SocketAddr>>>,
+    client_key: crate::http_client_ip::ClientRateLimitKey,
     client: crate::http_client_ip::ClientAddress,
     Json(body): Json<PasswordLoginBody>,
 ) -> Response {
     if let Err(e) = ensure_same_origin(&headers) {
         return admin_error(e, &request_id);
     }
-    // 只使用 socket 对端地址做限流键，不读取可伪造的转发头。
-    let client_key = connect_info.map(|Extension(ConnectInfo(addr))| addr.ip().to_string());
     let next = body.next.unwrap_or_else(|| "/admin/".to_string());
     match state
         .passwords
         .login(
             &body.username,
             &body.password,
-            client_key.as_deref(),
+            client_key.0.as_deref(),
             &next,
             client.0,
         )
@@ -381,7 +378,7 @@ async fn change_password(
     State(state): State<AdminState>,
     request_id: RequestId,
     headers: HeaderMap,
-    connect_info: Option<Extension<ConnectInfo<SocketAddr>>>,
+    client_key: crate::http_client_ip::ClientRateLimitKey,
     client: crate::http_client_ip::ClientAddress,
     Json(body): Json<ChangePasswordBody>,
 ) -> Response {
@@ -405,16 +402,15 @@ async fn change_password(
     }
     request_id.set_actor(actor.user_id.0);
 
-    // 重新认证与登录共用失败预算；来源地址维度只取 socket 对端，不读转发头。
+    // 重新认证与登录共用失败预算和可信代理解析规则。
     let actor = actor.with_audit_ip(client.0);
-    let client_key = connect_info.map(|Extension(ConnectInfo(addr))| addr.ip().to_string());
     match state
         .passwords
         .change_own_password(
             &actor,
             body.current_password.as_deref(),
             &body.new_password,
-            client_key.as_deref(),
+            client_key.0.as_deref(),
         )
         .await
     {

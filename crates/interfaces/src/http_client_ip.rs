@@ -13,6 +13,26 @@ pub struct TrustedProxies(pub Vec<IpAddr>);
 
 #[derive(Clone, Copy, Default)]
 pub struct ClientAddress(pub Option<IpAddr>);
+
+/// Rate limits must retain a source bucket even when a trusted proxy supplies
+/// invalid/missing forwarding data. Audits still leave that client IP unknown.
+pub struct ClientRateLimitKey(pub Option<String>);
+impl<S: Send + Sync> FromRequestParts<S> for ClientRateLimitKey {
+    type Rejection = Infallible;
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        Ok(Self(
+            ClientAddress::from_parts(parts)
+                .0
+                .or_else(|| {
+                    parts
+                        .extensions
+                        .get::<ConnectInfo<SocketAddr>>()
+                        .map(|p| p.0.ip())
+                })
+                .map(|ip| ip.to_string()),
+        ))
+    }
+}
 impl ClientAddress {
     pub fn from_parts(parts: &Parts) -> Self {
         let peer = parts

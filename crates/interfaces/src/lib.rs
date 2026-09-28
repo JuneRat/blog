@@ -16,3 +16,5 @@ pub mod http_support;
 pub mod http_retention;
 
 mod syndication;
+
+pub mod observability;

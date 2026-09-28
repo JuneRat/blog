@@ -33,7 +33,7 @@ flowchart TD
 
 [后台 SPA](../apps/admin/package.json) 不属于 Cargo workspace。它使用 React、TypeScript、Vite、Ant Design 和 TanStack Query，通过管理 API 访问同一应用层；公开主题与后台组件各自独立。
 
-首次安装属于部署生命周期：`application::installation` 定义输入、初始凭据校验及安装端口，`interfaces::http_install` 提供内嵌页面和 HTTP 边界，`server::installation` 发布 TOML 和独立安装记录并装配站点，`infrastructure::installation` 实现空库检查和原子权限/Owner 初始化。安装记录先安全落盘，再发布 TOML；数据库完成标记、初始站点设置与 Owner 同事务提交；动态路由在成功后原地切换，随后才启动预约发布任务。故障续装与部署边界见[首次安装](installation.md)。
+首次安装属于部署生命周期：`application::installation` 定义输入、初始凭据校验及安装端口，`interfaces::http_install` 提供内嵌页面和 HTTP 边界，`server::installation` 发布 TOML 和临时恢复日志并装配站点，`infrastructure::installation` 实现空库检查和原子权限/Owner 初始化。日志先安全落盘，再发布 TOML；数据库完成标记、初始站点设置与 Owner 同事务提交。提交后清理日志，失败只记警告，由后续启动核对标记后重试；动态路由原地切换，随后才启动预约发布任务。完成状态由数据库保存，正常部署不依赖安装日志。故障续装与部署边界见[首次安装](installation.md)。
 
 ## 模块与公开契约
 
@@ -77,7 +77,7 @@ Post/Page 管理 API 及 Post CLI 通过稳定 UUID 定位资源，公开 URL �
 
 后台普通列表及回收站统一由 `ContentQueries` 授权，依赖 `AdminPostQuery` / `AdminPageQuery` 窄端口；Post CLI 也走这条路径。Post/Page 写仓储只保留聚合加载与提交，不承担列表查询。独立查询适配器只投影列表展示字段，不读取 Markdown、HTML 或关联集合；固定每页 20 条，支持状态/可见性筛选，同一个只读 REPEATABLE READ 事务读取总数和分页。稳定排序以 UUID 打破时间戳并列；跨请求不承诺冻结快照。
 
-公开读取采用面向页面的查询 DTO，共用同一个数据库，不为公开读取重建聚合。公开 Post/Page 查询只返回 `published + public + 未软删除 + 发布时间已到` 内容；公开详情直接使用持久化 `content_html`。sitemap 按剩余额度限制文章、Page 和三类目录的 SQL 查询，所有来源共用 50,000 条上限，耗尽后跳过后续查询。当前没有公开页面缓存或跨请求主题查询缓存，每次请求重新读取公开状态。浏览器和代理的缓存行为仍取决于部署配置，应用内部无缓存不等于能够撤回已发送的响应。
+公开读取采用面向页面的查询 DTO，共用同一个数据库，不为公开读取重建聚合。公开 Post/Page 查询只返回 `published + public + 未软删除 + 发布时间已到` 内容；公开详情直接使用持久化 `content_html`。sitemap 按剩余额度限制文章、Page 和三类目录的 SQL 查询，所有来源共用 50,000 条上限，耗尽后跳过后续查询。当前没有公开页面缓存或跨请求主题查询缓存，每次请求重新读取公开状态。运行池大小、获取/空闲/查询超时和建连退避可部署配置，容量测试见[公开读取容量验证](public-read-capacity.md)。浏览器和代理的缓存行为仍取决于部署配置，应用内部无缓存不等于能够撤回已发送的响应。
 
 渲染执行、正文派生物回填及预算见[主题与渲染](themes-and-rendering.md)；当前表和锁协议见[数据库实现参考](database-current.md)。
 
@@ -103,6 +103,8 @@ Post/Page 管理 API 及 Post CLI 通过稳定 UUID 定位资源，公开 URL �
 服务装配共享一个 `RenderingRuntime`，供 Post/Page 仓储及所有主题使用。接口层组合 HTTP 路由；监听 socket、连接信息和退出信号由 `server` 持有。默认主题必须加载成功，其他无效主题被跳过；详见主题文档。
 
 完整 HTTP 路由统一由 `interfaces::http::app_router` 组合，包括评论、审计和保留期设置。`server::website` 仅构造用例、资源与 `HttpConfig`；请求编号中间件和可信代理配置在接口层统一挂载，子路由保留各自的认证、请求体和缓存规则。
+
+`interfaces::observability` 提供固定探针、版本 DTO 及请求指标，现有请求上下文中间件按路由模板采集计数和响应头延迟。`server::observability` 管理独立指标监听器与运行池快照；`server` 将同一指标实例跨安装切换传递，并统一关闭业务和管理监听器。JSON 格式与日志过滤来自部署配置，详见[可观测性](observability.md)。
 
 预约发布由 `application::publishing::PublishDueInteractor` 编排，受控 CLI 和每 30 秒的定时触发共用同一用例；`server` 只持有定时器、恢复隔离与关闭策略。`ScheduledPublicationStore` 在基础设施中以 `SKIP LOCKED` 执行 Post/Page 原子批次，保持状态、版本和审计一致。错误返回后已提交批次保持生效，下一次触发继续处理剩余到期内容。
 

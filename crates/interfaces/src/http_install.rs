@@ -50,6 +50,12 @@ pub fn install_router(state: InstallState) -> Router {
             }),
         )
         .route("/api/install", get(info).post(install))
+        .route("/livez", get(crate::observability::livez))
+        .route("/version", get(crate::observability::version))
+        .route(
+            "/readyz",
+            get(|| async { (StatusCode::SERVICE_UNAVAILABLE, "installation required") }),
+        )
         .route(
             "/healthz",
             get(|| async { (StatusCode::SERVICE_UNAVAILABLE, "installation required") }),

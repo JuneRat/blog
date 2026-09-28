@@ -4,10 +4,16 @@
 mod assembly;
 mod config;
 mod installation;
+mod observability;
 mod recovery;
 mod website;
 
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
+
+static JSON_LOGS: AtomicBool = AtomicBool::new(false);
 
 use infrastructure::RenderingRuntime;
 use interfaces::cli::{Command, parse_args};
@@ -29,13 +35,47 @@ async fn main() {
             std::process::exit(1);
         }
     };
-    tracing_subscriber::fmt()
+    let json = match config.log_json() {
+        Ok(json) => json,
+        Err(error) => {
+            eprintln!("错误：{error}");
+            std::process::exit(1);
+        }
+    };
+    JSON_LOGS.store(json, Ordering::Relaxed);
+    let subscriber = tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
-        .with_env_filter(log_filter)
-        .init();
+        .with_ansi(false)
+        .with_env_filter(log_filter);
+    if json {
+        subscriber
+            .json()
+            .with_current_span(true)
+            .with_span_list(false)
+            .init();
+    } else {
+        subscriber.init();
+    }
     if let Err(error) = run(cli.command, config).await {
-        eprintln!("错误：{error}");
+        tracing::error!(%error, "命令执行失败");
         std::process::exit(1);
+    }
+}
+
+// Installation codes and listening addresses must remain visible even with
+// RUST_LOG=warn. In JSON mode these finite operator notices are JSON on stderr;
+// command result stdout remains owned by the CLI contract.
+pub fn notice(message: std::fmt::Arguments<'_>) {
+    if JSON_LOGS.load(Ordering::Relaxed) {
+        eprintln!(
+            "{}",
+            serde_json::json!({
+                "timestamp": time::OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc3339).unwrap_or_default(),
+                "level":"INFO", "target":"blog", "fields":{"message": message.to_string()}
+            })
+        );
+    } else {
+        println!("{message}");
     }
 }
 
@@ -50,7 +90,7 @@ async fn run(command: Command, mut config: config::DeploymentConfig) -> Result<(
     } = command
     {
         let url = config.maintenance_url()?;
-        let pool = infrastructure::connect(&url)
+        let pool = infrastructure::connect_with_config(&url, &config.database_pool()?)
             .await
             .map_err(|e| e.to_string())?;
         if config.recovery_mode()? || recovery::is_isolated(&pool).await? {
@@ -84,7 +124,7 @@ async fn run(command: Command, mut config: config::DeploymentConfig) -> Result<(
     if matches!(command, Command::Media { .. }) {
         config.media_dir()?;
     }
-    let pool = infrastructure::connect(&database.url)
+    let pool = infrastructure::connect_with_config(&database.url, &database.pool)
         .await
         .map_err(|error| format!("连接 PostgreSQL 失败：{error}"))?;
     let recovery_mode = config.recovery_mode()?;
@@ -100,18 +140,21 @@ async fn run(command: Command, mut config: config::DeploymentConfig) -> Result<(
     }
     if let Command::Serve { addr } = &command
         && let Some(saved) = journal.as_ref()
-        && !infrastructure::installation::is_complete(&pool, &saved.installation_id)
+    {
+        if !infrastructure::installation::is_complete(&pool, &saved.installation_id)
             .await
             .map_err(|e| e.to_string())?
-    {
-        if database.url != saved.pending_database_url()? {
-            return Err(
-                "未完成安装的数据库目标已改变，拒绝续装；请恢复原连接或为独立部署使用新的配置路径"
-                    .into(),
-            );
+        {
+            if database.url != saved.pending_database_url()? {
+                return Err(
+                    "未完成安装的数据库目标已改变，拒绝续装；请恢复原连接或为独立部署使用新的配置路径"
+                        .into(),
+                );
+            }
+            pool.close().await;
+            return installation::serve(config, addr.clone(), Some(saved.clone())).await;
         }
-        pool.close().await;
-        return installation::serve(config, addr.clone(), Some(saved.clone())).await;
+        installation::cleanup_completed(&config, saved);
     }
     // Validate the recovery listener before any migration or permission writes.
     let site_config = if let Command::Serve { addr } = &command {
@@ -183,10 +226,25 @@ async fn run(command: Command, mut config: config::DeploymentConfig) -> Result<(
         }
         Command::Serve { .. } => {
             let site = site_config.expect("serve configuration was validated above");
-            let app =
-                website::build_router(&pool, &site, roles, Arc::new(RenderingRuntime::default()))
-                    .await?;
-            serve(app, &site.bind, assembly::publisher(&pool), recovery_mode).await
+            let telemetry = interfaces::observability::Telemetry::new(&observability::build_info());
+            let metrics_listener = observability::bind(config.metrics_bind()?).await?;
+            let app = website::build_router(
+                &pool,
+                &site,
+                roles,
+                Arc::new(RenderingRuntime::default()),
+                &telemetry,
+            )
+            .await?;
+            serve(
+                app,
+                &site.bind,
+                pool,
+                telemetry,
+                metrics_listener,
+                recovery_mode,
+            )
+            .await
         }
     }
 }
@@ -194,31 +252,60 @@ async fn run(command: Command, mut config: config::DeploymentConfig) -> Result<(
 async fn serve(
     app: axum::Router,
     bind: &str,
-    publisher: application::publishing::PublishDueInteractor,
+    pool: sqlx::PgPool,
+    telemetry: interfaces::observability::Telemetry,
+    metrics_listener: Option<tokio::net::TcpListener>,
     recovery_mode: bool,
 ) -> Result<(), String> {
     let listener = tokio::net::TcpListener::bind(bind)
         .await
         .map_err(|error| format!("绑定 {bind} 失败：{error}"))?;
-    println!(
+    notice(format_args!(
         "公开站点已启动：http://{}",
         listener.local_addr().map_err(|e| e.to_string())?
-    );
-    let server = async {
+    ));
+    let (_pool_sender, pool_receiver) = tokio::sync::watch::channel(Some(pool.clone()));
+    let server = serve_http(listener, app, metrics_listener, telemetry, pool_receiver);
+    let scheduler = publish_scheduler(assembly::publisher(&pool));
+    if recovery_mode {
+        tracing::info!("恢复核验模式：预约发布任务已停用");
+        return server.await;
+    }
+    tokio::select! { result=server=>result, _=scheduler=>unreachable!("scheduler loops until server shuts down") }
+}
+
+async fn serve_http(
+    listener: tokio::net::TcpListener,
+    app: axum::Router,
+    metrics_listener: Option<tokio::net::TcpListener>,
+    telemetry: interfaces::observability::Telemetry,
+    pool: tokio::sync::watch::Receiver<Option<sqlx::PgPool>>,
+) -> Result<(), String> {
+    let (shutdown, mut receiver) = tokio::sync::watch::channel(false);
+    let enabled = metrics_listener.is_some();
+    let management = observability::serve(metrics_listener, telemetry, pool, receiver.clone());
+    let public = async {
         axum::serve(
             listener,
             app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
         )
-        .with_graceful_shutdown(shutdown_signal())
+        .with_graceful_shutdown(async move {
+            let _ = receiver.wait_for(|closed| *closed).await;
+        })
         .await
         .map_err(|error| format!("服务退出：{error}"))
     };
-    let scheduler = publish_scheduler(publisher);
-    if recovery_mode {
-        println!("恢复核验模式：预约发布任务已停用。");
-        return server.await;
+    tokio::pin!(public, management);
+    tokio::select! {
+        result = &mut public => result,
+        result = &mut management => result,
+        _ = shutdown_signal() => {
+            shutdown.send_replace(true);
+            public.await?;
+            if enabled { management.await?; }
+            Ok(())
+        }
     }
-    tokio::select! { result=server=>result, _=scheduler=>unreachable!("scheduler loops until server shuts down") }
 }
 
 async fn publish_scheduler(publisher: application::publishing::PublishDueInteractor) {
@@ -248,5 +335,5 @@ async fn shutdown_signal() {
     #[cfg(not(unix))]
     let terminate = std::future::pending::<()>();
     tokio::select! { _ = ctrl_c => {}, _ = terminate => {} }
-    println!("收到退出信号，正在关闭…");
+    tracing::info!("收到退出信号，正在关闭");
 }

@@ -4,6 +4,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+echo "==> Immutable migrations and generated schema artifacts"
+python3 -B scripts/schema_contract.py --base-ref "${SCHEMA_BASE_REF:-$(git rev-parse HEAD)}"
+PYTHONPATH=scripts python3 -B -m unittest scripts/test_schema_contract.py
+
 echo "==> Cargo dependency boundaries"
 python3 -B scripts/check_dependencies.py
 PYTHONPATH=scripts python3 -B -m unittest scripts/test_check_dependencies.py
@@ -21,7 +25,7 @@ echo "==> admin SPA: tsc --noEmit + vitest"
 (cd apps/admin && pnpm typecheck && pnpm test)
 
 echo "==> recovery, media cleanup and acceptance tool tests"
-PYTHONPATH=scripts python3 -B -m unittest scripts/test_recovery.py scripts/test_media_cleanup.py scripts/test_acceptance.py scripts/test_deployment_config.py
+PYTHONPATH=scripts python3 -B -m unittest scripts/test_recovery.py scripts/test_media_cleanup.py scripts/test_acceptance.py scripts/test_deployment_config.py scripts/test_compose_init.py scripts/test_compose_recovery.py
 if [[ "${BLOG_RECOVERY_TEST:-}" == "1" || "${BLOG_ACCEPTANCE_TEST:-}" == "1" ]]; then
   cargo build -p server --bin blog
 fi

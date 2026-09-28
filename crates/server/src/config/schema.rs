@@ -4,6 +4,7 @@ use interfaces::cli::ConfigScope;
 pub(super) enum Kind {
     String,
     Bool,
+    Integer,
     Strings,
 }
 
@@ -12,6 +13,7 @@ impl Kind {
         match self {
             Self::String => value.is_str(),
             Self::Bool => value.is_bool(),
+            Self::Integer => value.is_integer(),
             Self::Strings => value
                 .as_array()
                 .is_some_and(|a| a.iter().all(toml::Value::is_str)),
@@ -21,6 +23,7 @@ impl Kind {
         match self {
             Self::String => "字符串",
             Self::Bool => "布尔值",
+            Self::Integer => "整数",
             Self::Strings => "字符串数组",
         }
     }
@@ -38,6 +41,10 @@ impl Field {
     pub fn parse_env(&self, value: &str) -> Result<toml::Value, String> {
         Ok(match self.kind {
             Kind::String => value.into(),
+            Kind::Integer => value
+                .parse::<i64>()
+                .map(toml::Value::Integer)
+                .map_err(|_| format!("{} / {} 必须是整数", self.key, self.env.unwrap_or("TOML")))?,
             Kind::Bool => match value.to_ascii_lowercase().as_str() {
                 "true" | "1" => true.into(),
                 "false" | "0" => false.into(),
@@ -66,7 +73,11 @@ impl Field {
         match scope {
             ConfigScope::All => true,
             ConfigScope::Serve => !self.key.starts_with("maintenance."),
-            ConfigScope::Maintenance => self.key.starts_with("maintenance."),
+            ConfigScope::Maintenance => {
+                self.key.starts_with("maintenance.")
+                    || (self.key.starts_with("database.")
+                        && !matches!(self.key, "database.url" | "database.migrations_dir"))
+            }
             ConfigScope::Database => self.key.starts_with("database."),
             ConfigScope::Media => {
                 self.key.starts_with("database.") || self.key == "paths.media_dir"
@@ -90,6 +101,76 @@ macro_rules! field {
 
 pub(super) const FIELDS: &[Field] = &[
     field!("database.url", Some("DATABASE_URL"), String, None, true),
+    field!(
+        "database.max_connections",
+        Some("BLOG_DB_MAX_CONNECTIONS"),
+        Integer,
+        Some("5"),
+        false
+    ),
+    field!(
+        "database.min_connections",
+        Some("BLOG_DB_MIN_CONNECTIONS"),
+        Integer,
+        Some("0"),
+        false
+    ),
+    field!(
+        "database.acquire_timeout_ms",
+        Some("BLOG_DB_ACQUIRE_TIMEOUT_MS"),
+        Integer,
+        Some("5000"),
+        false
+    ),
+    field!(
+        "database.idle_timeout_secs",
+        Some("BLOG_DB_IDLE_TIMEOUT_SECS"),
+        Integer,
+        Some("600"),
+        false
+    ),
+    field!(
+        "database.max_lifetime_secs",
+        Some("BLOG_DB_MAX_LIFETIME_SECS"),
+        Integer,
+        Some("1800"),
+        false
+    ),
+    field!(
+        "database.statement_timeout_ms",
+        Some("BLOG_DB_STATEMENT_TIMEOUT_MS"),
+        Integer,
+        Some("0"),
+        false
+    ),
+    field!(
+        "database.lock_timeout_ms",
+        Some("BLOG_DB_LOCK_TIMEOUT_MS"),
+        Integer,
+        Some("0"),
+        false
+    ),
+    field!(
+        "database.idle_in_transaction_timeout_ms",
+        Some("BLOG_DB_IDLE_IN_TRANSACTION_TIMEOUT_MS"),
+        Integer,
+        Some("0"),
+        false
+    ),
+    field!(
+        "database.connect_retries",
+        Some("BLOG_DB_CONNECT_RETRIES"),
+        Integer,
+        Some("3"),
+        false
+    ),
+    field!(
+        "database.connect_retry_backoff_ms",
+        Some("BLOG_DB_CONNECT_RETRY_BACKOFF_MS"),
+        Integer,
+        Some("250"),
+        false
+    ),
     field!(
         "database.migrations_dir",
         Some("BLOG_MIGRATIONS_DIR"),
@@ -151,6 +232,20 @@ pub(super) const FIELDS: &[Field] = &[
         Some("BLOG_MEDIA_DIR"),
         String,
         Some("data/media"),
+        false
+    ),
+    field!(
+        "logging.format",
+        Some("BLOG_LOG_FORMAT"),
+        String,
+        Some("text"),
+        false
+    ),
+    field!(
+        "metrics.bind",
+        Some("BLOG_METRICS_BIND"),
+        String,
+        None,
         false
     ),
     field!(

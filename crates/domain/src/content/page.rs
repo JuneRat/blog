@@ -38,6 +38,10 @@ pub const RESERVED_ROOT_SLUGS: &[&str] = &[
     "icon",
     "apple-touch-icon",
     "healthz",
+    "readyz",
+    "livez",
+    "version",
+    "metrics",
 ];
 
 /// slug 是否与系统保留路径冲突。保留名全为 ASCII，按 ASCII 大小写不敏感比较，

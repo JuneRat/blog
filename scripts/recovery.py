@@ -22,7 +22,7 @@ from urllib.parse import unquote, urlsplit
 from deployment_config import resource_paths
 
 from recovery_inventory import (
-    RecoveryError, SCHEMA_ID, SCHEMA_TABLES, ISOLATION_PREFIX, digest, safe_file,
+    RecoveryError, load_contract, ISOLATION_PREFIX, digest, safe_file,
     expected_migrations, schema_snapshot, database_counts, media_inventory,
     validate_media, validate_relations, owner_count,
 )
@@ -207,8 +207,10 @@ def backup(args):
         refs = secret_refs(pg)
         assert_secret_refs(refs)
         counts = database_counts(pg)
-        commit = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True,
-                                check=False).stdout.strip() or "unknown"
+        commit = "unknown"
+        if shutil.which("git"):
+            commit = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True,
+                                    check=False).stdout.strip() or "unknown"
         manifest = {
             "format": FORMAT, "backup_id": str(uuid.uuid4()),
             "created_at": dt.datetime.now(dt.timezone.utc).isoformat(),
@@ -241,7 +243,7 @@ def verify(path):
     if manifest.get("format") != FORMAT:
         raise RecoveryError("unsupported backup format; use the matching old recovery tool for old backups")
     schema = manifest.get("schema", {})
-    if schema.get("id") != SCHEMA_ID or schema.get("migrations") != expected_migrations():
+    if schema.get("id") != load_contract()["id"] or schema.get("migrations") != expected_migrations():
         raise RecoveryError("backup schema/checksums do not match this application revision")
     records = manifest.get("files", [])
     if not records or not any(item.get("path") == "database.dump" for item in records):
@@ -277,6 +279,9 @@ def restore(args):
         raise RecoveryError("target cannot be the source database")
     if not args.isolation_confirmed:
         raise RecoveryError("isolate the target from public traffic and pass --isolation-confirmed")
+    owner = getattr(args, "target_owner", None)
+    if owner and not SAFE_NAME.fullmatch(owner):
+        raise RecoveryError("target owner must be a simple PostgreSQL identifier")
     assert_secret_refs(manifest["secret_refs"])
     pg = PgTools(os.environ.get("DATABASE_URL", ""), args.docker_container)
     if pg.config["PGDATABASE"] == args.target_db:
@@ -291,9 +296,11 @@ def restore(args):
     tag = ISOLATION_PREFIX + uuid.uuid4().hex
     (target / "ISOLATED").write_text(tag + "\n")
     try:
-        pg.run("createdb", ["--template=template0", args.target_db], database="postgres")
+        pg.run("createdb", ["--template=template0", *(["--owner=" + owner] if owner else []),
+                            args.target_db], database="postgres")
         pg.query(f"COMMENT ON DATABASE \"{args.target_db}\" IS '{tag}'", database=args.target_db)
-        pg.run("pg_restore", ["--exit-on-error", "--no-owner", "--no-acl", "--dbname=" + args.target_db],
+        pg.run("pg_restore", ["--exit-on-error", "--no-owner", "--no-acl",
+                              *(["--role=" + owner] if owner else []), "--dbname=" + args.target_db],
                input_path=Path(args.backup) / "data" / "database.dump")
         if pg.query("SELECT shobj_description(oid,'pg_database') FROM pg_database WHERE datname=current_database()", args.target_db) != tag:
             raise RecoveryError("restored database isolation guard was lost")
@@ -351,7 +358,8 @@ def release(args):
         raise RecoveryError("database isolation guard does not match this restore")
     if schema_snapshot(pg, database) != result["schema"] or owner_count(pg, database) < 1:
         raise RecoveryError("schema or Owner validation failed")
-    validate_media(target / "resources" / "media", media_inventory(pg, database))
+    validate_media(Path(getattr(args, "media_dir", None) or target / "resources" / "media"),
+                   media_inventory(pg, database))
     validate_relations(pg, database)
     assert_secret_refs(secret_refs(pg, database))
     # Revoke even sessions created during verification; opening requires a new login.
@@ -377,11 +385,13 @@ def main():
     r = sub.add_parser("restore")
     r.add_argument("backup")
     r.add_argument("--target-db", required=True)
+    r.add_argument("--target-owner", help="existing role to own the restored database and objects")
     r.add_argument("--output", required=True, help="new directory for restored theme and isolation markers")
     r.add_argument("--isolation-confirmed", action="store_true")
     release_parser = sub.add_parser("release", help="remove the database isolation guard after verification")
     release_parser.add_argument("--output", required=True, help="successful restore output directory")
     release_parser.add_argument("--verification-confirmed", action="store_true")
+    release_parser.add_argument("--media-dir", help="actual deployed media directory, if relocated after restore")
     for command in (b, r, release_parser):
         command.add_argument("--docker-container", help="run PostgreSQL tools inside this DB container")
     args = parser.parse_args()

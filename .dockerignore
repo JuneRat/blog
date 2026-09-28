@@ -1,0 +1,23 @@
+# Only build inputs enter the context; deployment secrets and local data never do.
+**
+!Dockerfile
+!Cargo.toml
+!Cargo.lock
+!crates/
+!crates/**
+!apps/
+!apps/admin/
+!apps/admin/**
+apps/admin/node_modules
+apps/admin/dist
+!migrations/
+!migrations/**
+!themes/
+!themes/**
+!scripts/
+!scripts/recovery.py
+!scripts/recovery_inventory.py
+!scripts/schema_contract.py
+!scripts/deployment_config.py
+!scripts/compose_recovery.py
+!scripts/database-roles.sql

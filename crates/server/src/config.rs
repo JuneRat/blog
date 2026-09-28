@@ -19,6 +19,7 @@ pub const DEFAULT_PATH: &str = "data/config.toml";
 pub struct DatabaseConfig {
     pub url: String,
     pub migrations_dir: PathBuf,
+    pub pool: infrastructure::DatabasePoolConfig,
 }
 
 pub struct SiteConfig {
@@ -175,7 +176,32 @@ impl DeploymentConfig {
                 .configured_database_url()?
                 .ok_or("请配置 database.url 或 DATABASE_URL")?,
             migrations_dir: self.path_value("database.migrations_dir")?,
+            pool: self.database_pool()?,
         })
+    }
+
+    pub fn database_pool(&self) -> Result<infrastructure::DatabasePoolConfig, String> {
+        let number = |key: &str| -> Result<u64, String> {
+            let value = self.value(key)?.0.unwrap().as_integer().unwrap();
+            u64::try_from(value).map_err(|_| format!("{key} 不能为负数"))
+        };
+        let small = |key: &str| -> Result<u32, String> {
+            u32::try_from(number(key)?).map_err(|_| format!("{key} 超出范围"))
+        };
+        let pool = infrastructure::DatabasePoolConfig {
+            max_connections: small("database.max_connections")?,
+            min_connections: small("database.min_connections")?,
+            acquire_timeout_ms: number("database.acquire_timeout_ms")?,
+            idle_timeout_secs: number("database.idle_timeout_secs")?,
+            max_lifetime_secs: number("database.max_lifetime_secs")?,
+            statement_timeout_ms: number("database.statement_timeout_ms")?,
+            lock_timeout_ms: number("database.lock_timeout_ms")?,
+            idle_in_transaction_timeout_ms: number("database.idle_in_transaction_timeout_ms")?,
+            connect_retries: small("database.connect_retries")?,
+            connect_retry_backoff_ms: number("database.connect_retry_backoff_ms")?,
+        };
+        pool.validate()?;
+        Ok(pool)
     }
 
     pub fn maintenance_url(&self) -> Result<String, String> {
@@ -190,6 +216,24 @@ impl DeploymentConfig {
 
     pub fn recovery_mode(&self) -> Result<bool, String> {
         Ok(self.boolean("recovery.enabled")?.unwrap_or(false))
+    }
+
+    pub fn log_json(&self) -> Result<bool, String> {
+        match self.string("logging.format")?.as_str() {
+            "text" => Ok(false),
+            "json" => Ok(true),
+            _ => Err("logging.format / BLOG_LOG_FORMAT 只能是 text 或 json".into()),
+        }
+    }
+
+    pub fn metrics_bind(&self) -> Result<Option<std::net::SocketAddr>, String> {
+        self.optional_string("metrics.bind")?
+            .map(|value| {
+                value
+                    .parse()
+                    .map_err(|_| "metrics.bind / BLOG_METRICS_BIND 必须是 IP:端口".into())
+            })
+            .transpose()
     }
 
     pub fn log_filter(&self) -> Result<tracing_subscriber::EnvFilter, String> {
@@ -207,6 +251,7 @@ impl DeploymentConfig {
     }
 
     pub fn site(&self, addr: Option<String>) -> Result<SiteConfig, String> {
+        self.metrics_bind()?;
         let public_base_url = PublicBaseUrl::parse(&self.string("server.public_base_url")?)
             .map_err(|_| "server.public_base_url / BLOG_PUBLIC_BASE_URL 无效，须为不含路径前缀的 http/https 地址".to_owned())?;
         let bind = match addr {
@@ -255,10 +300,12 @@ impl DeploymentConfig {
 
     pub fn check(&self, scope: ConfigScope) -> Result<(), String> {
         self.log_filter()?;
+        self.log_json()?;
         self.recovery_mode()?;
         match scope {
             ConfigScope::Serve => {
                 self.configured_database_url()?;
+                self.database_pool()?;
                 self.site(None)?;
                 self.bootstrap_site()?;
                 self.path_value("database.migrations_dir")?;
@@ -268,6 +315,7 @@ impl DeploymentConfig {
             }
             ConfigScope::Maintenance => {
                 self.maintenance_url()?;
+                self.database_pool()?;
             }
             ConfigScope::Media => {
                 self.database()?;
@@ -281,6 +329,7 @@ impl DeploymentConfig {
             ConfigScope::All => {
                 self.check(ConfigScope::Serve)?;
                 self.maintenance_url()?;
+                self.database_pool()?;
             }
         }
         Ok(())

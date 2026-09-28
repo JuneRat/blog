@@ -773,6 +773,121 @@ async fn session_is_invalidated_by_out_of_process_identity_change() {
     );
 }
 
+#[tokio::test]
+async fn trusted_proxy_login_and_password_change_use_client_buckets_without_forwarding_bypass() {
+    let _g = SERIAL.lock().await;
+    let mut stack = fresh_stack_with(ThrottleConfig {
+        client_max_failures: 2,
+        ..Default::default()
+    })
+    .await;
+    let proxy: SocketAddr = "127.0.0.1:9000".parse().unwrap();
+    stack.router = stack
+        .router
+        .layer(axum::Extension(interfaces::http_client_ip::TrustedProxies(
+            vec![proxy.ip()],
+        )));
+    for (user, forwarded) in [
+        ("sun", "203.0.113.1"),
+        ("nobody", "198.51.100.1, 203.0.113.1"),
+    ] {
+        assert_eq!(
+            request_with_client(
+                &stack.router,
+                "POST",
+                "/auth/login/password",
+                &[("x-forwarded-for", forwarded)],
+                Some(serde_json::json!({"username":user,"password":"wrong-password-value"})),
+                Some(proxy)
+            )
+            .await
+            .0,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+    let body = || Some(serde_json::json!({"username":"sun","password":PASSWORD}));
+    assert_eq!(
+        request_with_client(
+            &stack.router,
+            "POST",
+            "/auth/login/password",
+            &[("x-forwarded-for", "203.0.113.1")],
+            body(),
+            Some(proxy)
+        )
+        .await
+        .0,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    let (status, headers, _) = request_with_client(
+        &stack.router,
+        "POST",
+        "/auth/login/password",
+        &[("x-forwarded-for", "2001:db8::2")],
+        body(),
+        Some(proxy),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let cookie = session_cookie(&headers).unwrap();
+    let (_, me) = me(&stack, &cookie).await;
+    let csrf = me["csrf_token"].as_str().unwrap();
+    let cookie = format!("blog_session={cookie}");
+    // Reauthentication uses the same client key; another client is still usable.
+    for _ in 0..2 {
+        assert_eq!(request_with_client(&stack.router, "POST", "/api/admin/v1/me/password",
+            &[("cookie", &cookie), ("x-csrf-token", csrf), ("x-forwarded-for", "203.0.113.3")],
+            Some(serde_json::json!({"current_password":"wrong-password-value","new_password":NEW_PASSWORD})), Some(proxy)).await.0,
+            StatusCode::FORBIDDEN);
+    }
+    for (ip, status) in [
+        ("203.0.113.3", StatusCode::TOO_MANY_REQUESTS),
+        ("203.0.113.4", StatusCode::OK),
+    ] {
+        assert_eq!(
+            request_with_client(
+                &stack.router,
+                "POST",
+                "/api/admin/v1/me/password",
+                &[
+                    ("cookie", &cookie),
+                    ("x-csrf-token", csrf),
+                    ("x-forwarded-for", ip)
+                ],
+                Some(serde_json::json!({"current_password":PASSWORD,"new_password":NEW_PASSWORD})),
+                Some(proxy)
+            )
+            .await
+            .0,
+            status
+        );
+    }
+    let ip: Option<String> = sqlx::query_scalar("SELECT host(ip_address) FROM audit_logs WHERE actor_id=$1 AND action='user.password.set' ORDER BY created_at DESC,id DESC LIMIT 1")
+        .bind(stack.user_id).fetch_one(&stack.pool).await.unwrap();
+    assert_eq!(ip.as_deref(), Some("203.0.113.4"));
+    // Untrusted peers cannot obtain fresh buckets by forging forwarding headers.
+    let stranger = "192.0.2.10:4321".parse().unwrap();
+    for (n, expected) in [
+        (1, StatusCode::UNAUTHORIZED),
+        (2, StatusCode::UNAUTHORIZED),
+        (3, StatusCode::TOO_MANY_REQUESTS),
+    ] {
+        assert_eq!(request_with_client(&stack.router, "POST", "/auth/login/password",
+            &[("x-forwarded-for", &format!("203.0.113.{n}"))],
+            Some(serde_json::json!({"username":format!("unknown{n}"),"password":"wrong-password-value"})), Some(stranger)).await.0, expected);
+    }
+    // Missing/invalid chains share the proxy fallback bucket, never omit limiting.
+    for (value, expected) in [
+        ("bad", StatusCode::UNAUTHORIZED),
+        ("127.0.0.1", StatusCode::UNAUTHORIZED),
+        ("", StatusCode::TOO_MANY_REQUESTS),
+    ] {
+        assert_eq!(request_with_client(&stack.router, "POST", "/auth/login/password",
+            &[("x-forwarded-for", value)],
+            Some(serde_json::json!({"username":"unknown-fallback","password":"wrong-password-value"})), Some(proxy)).await.0, expected);
+    }
+}
+
 /// 同一个会话逐次读取最新角色权限，角色变更不撤销登录。
 #[tokio::test]
 async fn role_change_updates_permissions_without_invalidating_session() {

@@ -14,7 +14,7 @@ use std::sync::{Arc, OnceLock};
 use application::error::{ConflictKind, UseCaseError};
 use application::ports::OAUTH_STATE_COOKIE;
 use axum::Json;
-use axum::extract::{FromRequestParts, Request};
+use axum::extract::{FromRequestParts, MatchedPath, Request};
 use axum::http::request::Parts;
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::middleware::Next;
@@ -81,6 +81,16 @@ pub async fn request_context(mut req: Request, next: Next) -> Response {
     let id = request_id.as_str().to_string();
     let method = req.method().clone();
     let path = req.uri().path().to_string();
+    let route = req
+        .extensions()
+        .get::<MatchedPath>()
+        .map(|path| path.as_str())
+        .unwrap_or("unmatched")
+        .to_owned();
+    let measurement = req
+        .extensions()
+        .get::<crate::observability::Telemetry>()
+        .map(|metrics| metrics.begin(&method, &route));
     // 认证提取器与用例边界通过请求扩展回读同一个上下文。
     req.extensions_mut().insert(request_id.clone());
 
@@ -89,33 +99,36 @@ pub async fn request_context(mut req: Request, next: Next) -> Response {
         request_id = %id,
         method = %method,
         path = %path,
+        route = %route,
     );
     let started = std::time::Instant::now();
     let mut response = next.run(req).instrument(span.clone()).await;
 
     let status = response.status();
+    if let Some(measurement) = measurement {
+        measurement.complete(status);
+    }
     let elapsed_ms = started.elapsed().as_millis() as u64;
     let actor_id = request_id.actor_id();
-    // 在 span 作用域内记录，保证日志行带 request_id 上下文。
+    // Repeat correlation fields on the event: an info span is disabled when
+    // RUST_LOG=warn, but its 5xx completion must still carry the request ID.
     span.in_scope(|| match (status.is_server_error(), actor_id.as_deref()) {
-        (true, Some(actor)) => {
-            tracing::warn!(
-                status = status.as_u16(),
-                elapsed_ms,
-                actor_id = %actor,
-                "请求完成"
-            )
-        }
-        (true, None) => tracing::warn!(status = status.as_u16(), elapsed_ms, "请求完成"),
-        (false, Some(actor)) => {
-            tracing::info!(
-                status = status.as_u16(),
-                elapsed_ms,
-                actor_id = %actor,
-                "请求完成"
-            )
-        }
-        (false, None) => tracing::info!(status = status.as_u16(), elapsed_ms, "请求完成"),
+        (true, Some(actor)) => tracing::warn!(
+            request_id = %id, method = %method, path = %path, route = %route,
+            status = status.as_u16(), elapsed_ms, actor_id = %actor, "请求完成"
+        ),
+        (true, None) => tracing::warn!(
+            request_id = %id, method = %method, path = %path, route = %route,
+            status = status.as_u16(), elapsed_ms, "请求完成"
+        ),
+        (false, Some(actor)) => tracing::info!(
+            request_id = %id, method = %method, path = %path, route = %route,
+            status = status.as_u16(), elapsed_ms, actor_id = %actor, "请求完成"
+        ),
+        (false, None) => tracing::info!(
+            request_id = %id, method = %method, path = %path, route = %route,
+            status = status.as_u16(), elapsed_ms, "请求完成"
+        ),
     });
 
     // 无论成败（含提取器提前拒绝）都回写编号：客户端据此报障。
@@ -296,7 +309,7 @@ pub fn admin_error_with_status(
     request_id: &RequestId,
 ) -> Response {
     if matches!(e, UseCaseError::Repository(_) | UseCaseError::Render(_)) {
-        tracing::error!(error = %e, "管理 API 内部错误");
+        tracing::error!(request_id = request_id.as_str(), error = %e, "管理 API 内部错误");
     }
     // 内部错误只回通用文案；其余错误按用例语义回显（不含 SQL/存储细节）。
     let message = match &e {

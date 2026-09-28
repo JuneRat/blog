@@ -11,6 +11,7 @@ pub mod persistence;
 pub mod rbac;
 mod render_executor;
 pub mod rendering;
+pub mod schema_contract;
 pub mod sessions;
 pub mod settings;
 mod theme_functions;
@@ -23,12 +24,13 @@ pub use oauth::{
 };
 pub use password::Argon2PasswordHasher;
 pub use persistence::{
-    CONTENT_RENDER_VERSION, PgHealthCheck, PostgresAdminContentQuery, PostgresCategoryRepository,
-    PostgresHtmlRebuildStore, PostgresMediaRepository, PostgresPageRepository,
-    PostgresPostRepository, PostgresPublishedCategoryQuery, PostgresPublishedPageQuery,
-    PostgresPublishedPostQuery, PostgresPublishedSeriesQuery, PostgresPublishedTagQuery,
-    PostgresScheduledPublicationStore, PostgresSeriesRepository, PostgresTagRepository,
-    PostgresUserRepository, SystemClock, connect, migrate_schema, verify_schema,
+    CONTENT_RENDER_VERSION, DatabasePoolConfig, PgHealthCheck, PostgresAdminContentQuery,
+    PostgresCategoryRepository, PostgresHtmlRebuildStore, PostgresMediaRepository,
+    PostgresPageRepository, PostgresPostRepository, PostgresPublishedCategoryQuery,
+    PostgresPublishedPageQuery, PostgresPublishedPostQuery, PostgresPublishedSeriesQuery,
+    PostgresPublishedTagQuery, PostgresScheduledPublicationStore, PostgresSeriesRepository,
+    PostgresTagRepository, PostgresUserRepository, SystemClock, connect, connect_with_config,
+    migrate_schema, verify_schema,
 };
 pub use rbac::PostgresRbacStore;
 pub use rendering::{

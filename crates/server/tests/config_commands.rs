@@ -39,6 +39,17 @@ fn success(output: Output) -> String {
 }
 
 #[test]
+fn json_logging_keeps_cli_stdout_machine_readable() {
+    let dir = common::media_dir("config-json-logging");
+    let output = command(&dir, &["config", "show", "--for", "resources"])
+        .env("BLOG_LOG_FORMAT", "json")
+        .output()
+        .unwrap();
+    let value: Value = serde_json::from_str(&success(output)).unwrap();
+    assert!(value["fields"].is_array());
+}
+
+#[test]
 fn check_and_show_are_read_only_scoped_and_do_not_leak_credentials() {
     let dir = common::media_dir("config-cli");
     let text = "config_version=1\n[database]\nurl='postgres://user:private-token@127.0.0.1:1/offline'\n[server]\npublic_base_url='broken'\nsecure_cookies='typo'\n[paths]\nmedia_dir='custom/media'\n";

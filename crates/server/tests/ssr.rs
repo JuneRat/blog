@@ -165,7 +165,7 @@ async fn stack_with_theme(theme_dir: &str) -> Stack {
 
     let router = public_router(PublicSiteState {
         site: public_site,
-        health: None,
+        health: Some(Arc::new(infrastructure::PgHealthCheck::new(pool.clone()))),
     });
     Stack {
         router,
@@ -302,6 +302,21 @@ async fn healthz_responds_ok() {
     let (status, body) = get(&s.router, "/healthz").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body, "ok");
+}
+
+#[tokio::test]
+async fn pool_saturation_affects_readiness_but_not_liveness_and_recovers() {
+    let _g = SERIAL.lock().await;
+    let s = stack().await;
+    let mut held = Vec::new();
+    for _ in 0..s.pool.options().get_max_connections() {
+        held.push(s.pool.acquire().await.unwrap());
+    }
+    let (ready, live) = tokio::join!(get(&s.router, "/readyz"), get(&s.router, "/livez"));
+    assert_eq!(ready.0, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(live.0, StatusCode::OK);
+    drop(held);
+    assert_eq!(get(&s.router, "/readyz").await.0, StatusCode::OK);
 }
 
 #[tokio::test]

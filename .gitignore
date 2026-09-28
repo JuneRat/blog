@@ -8,6 +8,9 @@
 /data/config.toml
 /data/*.install-state.json
 /.env
+/.env.*
+!/.env.example
+/backups/
 /data/.blog-config-*.tmp
 # 已移除实验工程的本地构建残留不入库。
 /spikes/template-bridge/target

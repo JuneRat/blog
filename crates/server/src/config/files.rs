@@ -1,5 +1,6 @@
 //! Private installation journal and durable configuration publication. The
 //! journal is published first; its snapshot repairs a crash before TOML publication.
+//! It is removed only after the database confirms installation completion.
 use super::DeploymentConfig;
 use std::{
     io::{Read, Write},
@@ -8,7 +9,7 @@ use std::{
 
 const MAX_FILE_SIZE: u64 = 256 * 1024;
 
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct InstallJournal {
     pub installation_id: String,
@@ -91,6 +92,29 @@ impl InstallJournal {
         // Once published, the TOML remains operator-owned. Normal edits (URL,
         // credential rotation, recovered DB) must not be replaced by the snapshot.
         Ok(config.clone())
+    }
+
+    /// The caller must have committed or verified this installation's database
+    /// marker. Cleanup is idempotent and never replaces configuration changes.
+    pub fn remove_completed(&self, config: &DeploymentConfig) -> Result<(), String> {
+        let Some(current) = Self::read(&config.path)? else {
+            return Ok(());
+        };
+        if current != *self {
+            return Err("安装日志已被修改，未删除".into());
+        }
+        // Keep the recovery snapshot if the durable deployment was lost or
+        // damaged while installation was committing.
+        let deployment = config.reload()?;
+        if deployment.original.is_none() || deployment.configured_database_url()?.is_none() {
+            return Err("部署配置缺失或没有数据库地址，未删除安装日志".into());
+        }
+        let path = Self::path(&config.path);
+        match std::fs::remove_file(&path) {
+            Ok(()) => sync_parent(&path),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(_) => Err("无法删除临时安装日志，请检查配置目录的写入权限".into()),
+        }
     }
 }
 

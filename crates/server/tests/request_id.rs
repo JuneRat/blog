@@ -146,3 +146,69 @@ async fn request_id_header_body_and_log_agree() {
         "actor 必须来自补录的身份：{logs}"
     );
 }
+
+#[tokio::test]
+async fn json_logs_preserve_request_context_and_exclude_query_secrets() {
+    let buffer = LogBuffer::default();
+    let subscriber = tracing_subscriber::fmt()
+        .json()
+        .with_current_span(true)
+        .with_span_list(false)
+        .with_writer(buffer.clone())
+        .with_env_filter("info")
+        .finish();
+    let _guard = tracing::subscriber::set_default(subscriber);
+    let (status, id, _) = fetch(&app(), "/forbidden?token=must-not-be-logged").await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let logs = buffer.contents();
+    assert!(!logs.contains("must-not-be-logged"));
+    let records: Vec<serde_json::Value> = logs
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let record = records
+        .iter()
+        .find(|record| record["fields"]["message"] == "请求完成")
+        .unwrap();
+    assert_eq!(record["span"]["request_id"], id.unwrap());
+    assert_eq!(record["span"]["route"], "/forbidden");
+    assert_eq!(record["fields"]["status"], 403);
+    assert!(record["fields"]["elapsed_ms"].is_number());
+}
+
+#[tokio::test]
+async fn warn_filter_keeps_5xx_correlation_when_info_spans_are_disabled() {
+    let buffer = LogBuffer::default();
+    let subscriber = tracing_subscriber::fmt()
+        .json()
+        .with_writer(buffer.clone())
+        .with_env_filter("warn")
+        .finish();
+    let _guard = tracing::subscriber::set_default(subscriber);
+    let app = Router::new()
+        .route(
+            "/failure",
+            get(|id: RequestId| async move {
+                admin_error(UseCaseError::Repository("test failure".into()), &id)
+            }),
+        )
+        .layer(middleware::from_fn(request_context));
+    let (status, id, _) = fetch(&app, "/failure").await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    let records: Vec<serde_json::Value> = buffer
+        .contents()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(records.len(), 2);
+    let id = id.unwrap();
+    for record in &records {
+        assert_eq!(record["fields"]["request_id"], id);
+    }
+    let completion = records
+        .iter()
+        .find(|record| record["level"] == "WARN")
+        .unwrap();
+    assert_eq!(completion["fields"]["status"], 500);
+    assert_eq!(completion["fields"]["route"], "/failure");
+}

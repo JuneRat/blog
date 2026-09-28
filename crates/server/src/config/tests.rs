@@ -1,4 +1,108 @@
 use super::*;
+
+#[test]
+fn database_pool_policy_is_typed_bounded_and_scoped() {
+    let default = config("", &[]).database_pool().unwrap();
+    assert_eq!(
+        default.max_connections,
+        infrastructure::DatabasePoolConfig::default().max_connections
+    );
+    let chosen = config(
+        "[database]\nmax_connections=8\nmin_connections=2\nstatement_timeout_ms=30000",
+        &[
+            ("BLOG_DB_MAX_CONNECTIONS", "12"),
+            ("BLOG_DB_ACQUIRE_TIMEOUT_MS", "800"),
+        ],
+    )
+    .database_pool()
+    .unwrap();
+    assert_eq!(
+        (
+            chosen.max_connections,
+            chosen.min_connections,
+            chosen.acquire_timeout_ms,
+            chosen.statement_timeout_ms
+        ),
+        (12, 2, 800, 30000)
+    );
+    for (key, value) in [
+        ("MAX_CONNECTIONS", "0"),
+        ("MAX_CONNECTIONS", "1001"),
+        ("MAX_CONNECTIONS", "4294967296"),
+        ("MIN_CONNECTIONS", "6"),
+        ("ACQUIRE_TIMEOUT_MS", "0"),
+        ("ACQUIRE_TIMEOUT_MS", "invalid"),
+        ("IDLE_TIMEOUT_SECS", "-1"),
+        ("MAX_LIFETIME_SECS", "86401"),
+        ("STATEMENT_TIMEOUT_MS", "86400001"),
+        ("LOCK_TIMEOUT_MS", "1.5"),
+        ("IDLE_IN_TRANSACTION_TIMEOUT_MS", "-1"),
+        ("CONNECT_RETRIES", "11"),
+        ("CONNECT_RETRY_BACKOFF_MS", "0"),
+    ] {
+        let key = format!("BLOG_DB_{key}");
+        assert!(
+            config("", &[(&key, value)]).database_pool().is_err(),
+            "{key}"
+        );
+    }
+    let invalid = config("[database]\nmax_connections='bad'", &[]);
+    assert!(invalid.check(ConfigScope::Serve).is_err());
+    assert!(invalid.check(ConfigScope::Resources).is_ok());
+    let valid = config(
+        "[database]\nmax_connections='bad'",
+        &[("BLOG_DB_MAX_CONNECTIONS", "7")],
+    );
+    assert_eq!(valid.database_pool().unwrap().max_connections, 7);
+    let maintenance = config(
+        "[database]\nurl=false\nmax_connections=3",
+        &[(
+            "BLOG_MAINTENANCE_DATABASE_URL",
+            "postgres://m:p@localhost/blog",
+        )],
+    );
+    let shown = maintenance.show(ConfigScope::Maintenance, false).unwrap();
+    assert!(
+        shown["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f["key"] == "database.max_connections" && f["value"] == 3)
+    );
+    assert!(
+        !shown["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f["key"] == "database.url")
+    );
+}
+
+#[test]
+fn observability_configuration_is_validated_and_scoped() {
+    assert!(!config("", &[]).log_json().unwrap());
+    assert!(config("", &[]).metrics_bind().unwrap().is_none());
+    assert!(config("[logging]\nformat='json'", &[]).log_json().unwrap());
+    assert!(
+        config("", &[("BLOG_LOG_FORMAT", "yaml")])
+            .log_json()
+            .is_err()
+    );
+    let deployment = config("[metrics]\nbind='broken'", &[]);
+    assert!(deployment.check(ConfigScope::Serve).is_err());
+    assert!(deployment.check(ConfigScope::Resources).is_ok());
+    assert_eq!(
+        config(
+            "[metrics]\nbind='broken'",
+            &[("BLOG_METRICS_BIND", "127.0.0.1:0")]
+        )
+        .metrics_bind()
+        .unwrap()
+        .unwrap()
+        .port(),
+        0
+    );
+}
 use std::path::Path;
 
 fn config(source: &str, env: &[(&str, &str)]) -> DeploymentConfig {
@@ -264,5 +368,42 @@ fn symlinks_permissions_and_concurrent_file_creation_fail_closed() {
     assert!(journal.publish(&config).is_err());
     assert!(!InstallJournal::path(&path).exists());
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "config_version=1");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn completed_journal_cleanup_preserves_configuration_and_rejects_changed_records() {
+    let dir = dir();
+    let path = dir.join("config.toml");
+    let config = DeploymentConfig::parse(path.clone(), None, BTreeMap::new()).unwrap();
+    let journal = InstallJournal::prepare(
+        &config,
+        "postgres://u:secret@localhost/blog",
+        "https://example.com",
+        "a".repeat(64),
+    )
+    .unwrap();
+    journal.publish(&config).unwrap();
+    let journal_path = InstallJournal::path(&path);
+    let mut replacement = journal.clone();
+    replacement.installation_id = "b".repeat(64);
+    let replacement_text = serde_json::to_string(&replacement).unwrap();
+    std::fs::write(&journal_path, &replacement_text).unwrap();
+    assert!(journal.remove_completed(&config).is_err());
+    assert_eq!(
+        std::fs::read_to_string(&journal_path).unwrap(),
+        replacement_text
+    );
+
+    std::fs::write(&journal_path, serde_json::to_string(&journal).unwrap()).unwrap();
+    std::fs::remove_file(&path).unwrap();
+    assert!(journal.remove_completed(&config).is_err());
+    assert!(journal_path.exists());
+    let edited = "# Operator change\n[database]\nurl='postgres://new:secret@localhost/restored'\n";
+    files::publish_new(&path, edited.as_bytes()).unwrap();
+    journal.remove_completed(&config).unwrap();
+    journal.remove_completed(&config).unwrap();
+    assert!(!journal_path.exists());
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), edited);
     std::fs::remove_dir_all(dir).unwrap();
 }

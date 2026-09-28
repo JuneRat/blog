@@ -4,7 +4,7 @@
 
 ## 1. 权威来源与迁移
 
-执行依据是 [0001_initial_schema.sql](../migrations/postgres/0001_initial_schema.sql)，由已确认的 [blog_schema.sql](../blog_schema.sql) 整理而来；[汇总 DDL](sql/postgres-core.sql)同步相同结构。原 `0001_identity_rbac.sql` 至 `0009_comments.sql` 已删除，不保留升级或兼容链。
+执行依据是 [migrations/postgres](../migrations/postgres) 的不可变前向迁移链，当前基线为 [0001_initial_schema.sql](../migrations/postgres/0001_initial_schema.sql)。[blog_schema.sql](../blog_schema.sql) 与[汇总 DDL](sql/postgres-core.sql)均由该链生成，不再独立维护；表集合、迁移哈希及授权策略使用[共享清单](../migrations/postgres/schema.json)，操作规则见[迁移演进](schema-migrations.md)。原 `0001_identity_rbac.sql` 至 `0009_comments.sql` 已删除，不保留升级或兼容链。
 
 迁移仅支持空库或已应用新基线的数据库。入口检测到旧 users 结构时明确拒绝，SQLx 仍检查迁移历史及校验和；不会自动 DROP、清空历史或跳过校验。不要手工导入设计稿后再运行迁移。开发时先用[独立空库](development.md#新基线的隔离验证)，其余模块适配后再显式重建原开发库。
 

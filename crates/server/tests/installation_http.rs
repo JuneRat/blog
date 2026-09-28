@@ -36,6 +36,8 @@ fn command(dir: &Path) -> Command {
         .env_remove("BLOG_SECURE_COOKIES")
         .env_remove("BLOG_RECOVERY_MODE")
         .env_remove("BLOG_TRUSTED_PROXIES")
+        .env_remove("BLOG_METRICS_BIND")
+        .env("BLOG_LOG_FORMAT", "text")
         .env("BLOG_CONFIG_FILE", dir.join("config.toml"))
         .env("BLOG_MIGRATIONS_DIR", project.join("migrations/postgres"))
         .env("BLOG_THEME_DIR", project.join("themes/default"))
@@ -46,11 +48,22 @@ fn command(dir: &Path) -> Command {
 }
 
 async fn start(dir: &Path, broken_theme: bool) -> Server {
+    start_with_migrations(dir, broken_theme, None).await
+}
+
+async fn start_with_migrations(
+    dir: &Path,
+    broken_theme: bool,
+    migrations: Option<&Path>,
+) -> Server {
     std::fs::create_dir_all(dir.join("admin")).unwrap();
     std::fs::write(dir.join("admin/index.html"), "<h1>Admin bundle</h1>").unwrap();
     let log = dir.join(format!("server-{}.log", uuid::Uuid::now_v7()));
     let output = std::fs::File::create(&log).unwrap();
     let mut command = command(dir);
+    if let Some(migrations) = migrations {
+        command.env("BLOG_MIGRATIONS_DIR", migrations);
+    }
     if broken_theme {
         command.env("BLOG_THEME_DIR", dir.join("missing-theme"));
     }
@@ -281,6 +294,7 @@ async fn empty_database_installs_once_logs_in_and_restarts_from_saved_config() {
     let audits: (i64, Option<String>) = sqlx::query_as("SELECT count(*),min(host(ip_address)) FROM audit_logs WHERE action='installation.complete' AND actor_id IS NULL").fetch_one(&pool).await.unwrap();
     assert_eq!(audits, (1, Some("127.0.0.1".into())));
     let config = std::fs::read_to_string(dir.join("config.toml")).unwrap();
+    assert!(!dir.join("config.install-state.json").exists());
     assert!(!config.contains(PASSWORD));
     assert!(!config.contains(&server.token));
     #[cfg(unix)]
@@ -410,6 +424,10 @@ async fn interrupted_install_resumes_without_overwriting_saved_database_and_roll
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     assert!(response.text().await.unwrap().contains("主题"));
     assert!(dir.join("config.toml").exists());
+    let journal_path = dir.join("config.install-state.json");
+    let journal = std::fs::read_to_string(&journal_path).unwrap();
+    assert!(!journal.contains(PASSWORD));
+    assert!(!journal.contains(&server.token));
     let users: i64 = sqlx::query_scalar("SELECT count(*) FROM users")
         .fetch_one(&pool)
         .await
@@ -430,6 +448,7 @@ async fn interrupted_install_resumes_without_overwriting_saved_database_and_roll
     let retry = input("postgres://ignored:ignored@127.0.0.1:1/ignored");
     let response = submit(&server, retry.clone()).await;
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(std::fs::read_to_string(&journal_path).unwrap(), journal);
     let counts: (i64,i64,i64) = sqlx::query_as("SELECT (SELECT count(*) FROM users),(SELECT count(*) FROM roles),(SELECT count(*) FROM settings)").fetch_one(&pool).await.unwrap();
     assert_eq!(counts, (0, 0, 0));
     sqlx::raw_sql(
@@ -446,6 +465,7 @@ async fn interrupted_install_resumes_without_overwriting_saved_database_and_roll
         response.text().await.unwrap()
     );
     login(&server).await;
+    assert!(!journal_path.exists());
     drop(server);
     pool.close().await;
     std::fs::remove_dir_all(dir).unwrap();
@@ -479,6 +499,178 @@ async fn existing_and_recovery_databases_are_refused_without_cleaning_them() {
     assert!(response.text().await.unwrap().contains("恢复隔离"));
     assert!(!dir.join("config.toml").exists());
     drop(server);
+    pool.close().await;
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn committed_installation_with_a_remaining_journal_is_verified_then_cleaned_on_startup() {
+    let (pool, url) = empty_database("blog_install_committed_journal_test").await;
+    let dir = common::media_dir("installation-committed-journal");
+    let server = start(&dir, true).await;
+    assert_eq!(
+        submit(&server, input(&url)).await.status(),
+        StatusCode::BAD_REQUEST
+    );
+    drop(server);
+    let path = dir.join("config.toml");
+    let journal_path = dir.join("config.install-state.json");
+    let journal_text = std::fs::read_to_string(&journal_path).unwrap();
+    let mut journal: Value = serde_json::from_str(&journal_text).unwrap();
+    let installation_id = journal["installation_id"].as_str().unwrap().to_owned();
+    // Reproduce a crash after the real DB transaction commits, before the
+    // server can clean the journal or activate its router.
+    let owner = application::installation::InitialOwner::prepare(
+        "first-writer",
+        PASSWORD,
+        &infrastructure::Argon2PasswordHasher::with_defaults(),
+        time::OffsetDateTime::now_utc(),
+    )
+    .await
+    .unwrap();
+    let schema_contract =
+        infrastructure::schema_contract::SchemaContract::load("../../migrations/postgres").unwrap();
+    infrastructure::installation::initialize(
+        &pool,
+        &schema_contract,
+        &installation_id,
+        &owner,
+        &application::ports::SiteSettingsValue {
+            title: None,
+            description: None,
+            logo_media_id: None,
+        },
+        application::audit::AuditContext::system(),
+    )
+    .await
+    .unwrap();
+    let edited = format!(
+        "{}\n# Keep this deployment edit\n",
+        std::fs::read_to_string(&path).unwrap()
+    );
+    std::fs::write(&path, &edited).unwrap();
+
+    journal["installation_id"] = json!(if installation_id == "a".repeat(64) {
+        "b".repeat(64)
+    } else {
+        "a".repeat(64)
+    });
+    let mismatched = serde_json::to_string(&journal).unwrap();
+    std::fs::write(&journal_path, &mismatched).unwrap();
+    let output = command(&dir).output().unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("不属于本次安装"));
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("安装码"));
+    assert_eq!(std::fs::read_to_string(&journal_path).unwrap(), mismatched);
+    std::fs::write(&journal_path, &journal_text).unwrap();
+
+    let output = command(&dir)
+        .env("DATABASE_URL", "postgres://blog:blog@127.0.0.1:1/missing")
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("安装码"));
+    assert_eq!(
+        std::fs::read_to_string(&journal_path).unwrap(),
+        journal_text
+    );
+    std::fs::write(&path, "broken").unwrap();
+    assert!(!command(&dir).output().unwrap().status.success());
+    assert_eq!(
+        std::fs::read_to_string(&journal_path).unwrap(),
+        journal_text
+    );
+    std::fs::write(&path, &edited).unwrap();
+
+    let restarted = start(&dir, false).await;
+    assert!(restarted.token.is_empty());
+    assert!(!journal_path.exists());
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), edited);
+    login(&restarted).await;
+    assert_eq!(
+        submit(&restarted, input(&url)).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    let counts: (i64, i64) = sqlx::query_as("SELECT (SELECT count(*) FROM users),(SELECT count(*) FROM audit_logs WHERE action='installation.complete')").fetch_one(&pool).await.unwrap();
+    assert_eq!(counts, (1, 1));
+    drop(restarted);
+    pool.close().await;
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn cleanup_permission_failure_does_not_fail_installation_and_restart_retries_it() {
+    use std::os::unix::fs::PermissionsExt;
+    struct RestorePermissions(PathBuf, std::fs::Permissions);
+    impl Drop for RestorePermissions {
+        fn drop(&mut self) {
+            let _ = std::fs::set_permissions(&self.0, self.1.clone());
+        }
+    }
+
+    let (pool, url) = empty_database("blog_install_cleanup_failure_test").await;
+    let dir = common::media_dir("installation-cleanup-failure");
+    let server = start(&dir, true).await;
+    assert_eq!(
+        submit(&server, input(&url)).await.status(),
+        StatusCode::BAD_REQUEST
+    );
+    drop(server);
+    let server = start(&dir, false).await;
+    let journal_path = dir.join("config.install-state.json");
+    let journal = std::fs::read_to_string(&journal_path).unwrap();
+    let config = std::fs::read_to_string(dir.join("config.toml")).unwrap();
+    let probe = dir.join("unlink-probe");
+    std::fs::write(&probe, "probe").unwrap();
+    let permissions =
+        RestorePermissions(dir.clone(), std::fs::metadata(&dir).unwrap().permissions());
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o500)).unwrap();
+    if std::fs::remove_file(&probe).is_ok() {
+        // Privileged runners can bypass mode bits; do not claim to have tested
+        // a permission failure on a filesystem that cannot reproduce one.
+        eprintln!("skipping unlink-denied case: process bypasses directory permissions");
+        drop(permissions);
+        drop(server);
+        pool.close().await;
+        std::fs::remove_dir_all(dir).unwrap();
+        return;
+    }
+    let response = submit(&server, input(&url)).await;
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "{}",
+        response.text().await.unwrap()
+    );
+    login(&server).await;
+    assert_eq!(
+        submit(&server, input(&url)).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(std::fs::read_to_string(&journal_path).unwrap(), journal);
+    assert_eq!(
+        std::fs::read_to_string(dir.join("config.toml")).unwrap(),
+        config
+    );
+    let log = std::fs::read_to_string(&server.log).unwrap();
+    assert!(log.contains("临时安装日志清理失败"));
+    assert!(!log.contains(&url));
+    assert!(!log.contains(PASSWORD));
+    drop(permissions);
+    drop(server);
+
+    let restarted = start(&dir, false).await;
+    assert!(restarted.token.is_empty());
+    assert!(!journal_path.exists());
+    login(&restarted).await;
+    let count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM audit_logs WHERE action='installation.complete'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(count, 1);
+    drop(restarted);
     pool.close().await;
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -527,12 +719,7 @@ async fn toml_bootstrap_is_saved_once_and_runtime_edits_survive_restart() {
     let config = std::fs::read_to_string(&path).unwrap();
     assert!(config.contains("# Operator comment"));
     assert!(!config.contains("installation_id"));
-    let saved: Value = serde_json::from_str(
-        &std::fs::read_to_string(dir.join("config.install-state.json")).unwrap(),
-    )
-    .unwrap();
-    assert!(!saved.to_string().contains(PASSWORD));
-    assert!(!saved.to_string().contains(&server.token));
+    assert!(!dir.join("config.install-state.json").exists());
     // Model a saved runtime setting, then change deployment bootstrap values.
     sqlx::query("UPDATE settings SET value=jsonb_build_object('title','Admin title','description',''), version=version+1 WHERE key='site'").execute(&pool).await.unwrap();
     drop(server);
@@ -587,9 +774,25 @@ async fn competing_bootstraps_commit_exactly_one_owner_and_marker() {
     let first_id = "a".repeat(64);
     let second_id = "b".repeat(64);
     let audit = application::audit::AuditContext::system();
+    let schema_contract =
+        infrastructure::schema_contract::SchemaContract::load("../../migrations/postgres").unwrap();
     let (a, b) = tokio::join!(
-        infrastructure::installation::initialize(&pool, &first_id, &first, &site, audit),
-        infrastructure::installation::initialize(&pool, &second_id, &second, &site, audit),
+        infrastructure::installation::initialize(
+            &pool,
+            &schema_contract,
+            &first_id,
+            &first,
+            &site,
+            audit
+        ),
+        infrastructure::installation::initialize(
+            &pool,
+            &schema_contract,
+            &second_id,
+            &second,
+            &site,
+            audit
+        ),
     );
     assert_ne!(a.is_ok(), b.is_ok());
     let row: (i64,i64,i64) = sqlx::query_as("SELECT (SELECT count(*) FROM users),(SELECT count(*) FROM user_roles),(SELECT count(*) FROM audit_logs WHERE action='installation.complete')").fetch_one(&pool).await.unwrap();
@@ -626,4 +829,94 @@ async fn a_concurrently_created_config_is_never_overwritten_and_prevents_databas
     drop(server);
     pool.close().await;
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+// A release can extend the baseline without hardcoded installation table lists.
+#[tokio::test]
+async fn next_schema_installs_and_resumes_without_accepting_populated_extension() {
+    let (pool, url) = empty_database("blog_install_next_schema_test").await;
+    let dir = common::media_dir("installation-next-schema");
+    let migrations = dir.join("migrations");
+    std::fs::create_dir_all(&migrations).unwrap();
+    let baseline = Path::new("../../migrations/postgres");
+    for entry in std::fs::read_dir(baseline).unwrap() {
+        let entry = entry.unwrap();
+        std::fs::copy(entry.path(), migrations.join(entry.file_name())).unwrap();
+    }
+    let mut contract: Value =
+        serde_json::from_slice(&std::fs::read(migrations.join("schema.json")).unwrap()).unwrap();
+    let version = contract["migrations"].as_array().unwrap().last().unwrap()["version"]
+        .as_i64()
+        .unwrap()
+        + 1;
+    let filename = format!("{version:04}_installation_drill.sql");
+    std::fs::write(
+        migrations.join(&filename),
+        "CREATE TABLE installation_drill (id uuid PRIMARY KEY);\n",
+    )
+    .unwrap();
+    let migrator = sqlx::migrate::Migrator::new(migrations.as_path())
+        .await
+        .unwrap();
+    let migration = migrator
+        .iter()
+        .find(|migration| migration.version == version)
+        .unwrap();
+    let checksum: String = migration
+        .checksum
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    contract["id"] = json!("blog-installation-drill");
+    contract["migrations"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"version":version,"file":filename,"checksum":checksum}));
+    contract["tables"]["installation_drill"] = json!({"app":[],"maintenance":[]});
+    std::fs::write(
+        migrations.join("schema.json"),
+        serde_json::to_vec(&contract).unwrap(),
+    )
+    .unwrap();
+
+    // Migrate the extended schema, then interrupt before ownership commits.
+    let server = start_with_migrations(&dir, true, Some(&migrations)).await;
+    let response = submit(&server, input(&url)).await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert!(response.text().await.unwrap().contains("主题"));
+    drop(server);
+    sqlx::query("INSERT INTO installation_drill VALUES(gen_random_uuid())")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let server = start_with_migrations(&dir, false, Some(&migrations)).await;
+    let response = submit(&server, input(&url)).await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert!(response.text().await.unwrap().contains("已有数据"));
+    sqlx::query("DELETE FROM installation_drill")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let response = submit(&server, input(&url)).await;
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "{}",
+        response.text().await.unwrap()
+    );
+    let owners: i64 = sqlx::query_scalar("SELECT count(*) FROM users")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(owners, 1);
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM _sqlx_migrations")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        count as usize,
+        contract["migrations"].as_array().unwrap().len()
+    );
+    drop(server);
+    pool.close().await;
 }

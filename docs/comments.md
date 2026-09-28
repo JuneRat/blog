@@ -38,7 +38,7 @@
 
 会话失效时，公开表单保留正文并通过 `/me` 重新确认身份，等待用户确认后显式重试。只有确定失效的 Cookie 才清除；数据库故障不会清除 Cookie。
 
-默认记录 socket 对端 IP，不信任转发头。`BLOG_TRUSTED_PROXIES` 可配置逗号分隔的精确 IPv4/IPv6 地址；只有 socket 对端在列表中才解析 `X-Forwarded-For`。从右向左剥离可信代理，取第一个非可信地址；无来源、缺失/非法链、超过 20 跳或全为可信地址时保存 NULL。不支持 CIDR，也不读取 `Forwarded`、`X-Real-IP`。例如 `BLOG_TRUSTED_PROXIES=127.0.0.1,::1`。非法配置会使 `serve` 启动失败，认证登录限流仍使用原有 socket 来源规则。
+默认记录 socket 对端 IP，不信任转发头。`BLOG_TRUSTED_PROXIES` 可配置逗号分隔的精确 IPv4/IPv6 地址；只有 socket 对端在列表中才解析 `X-Forwarded-For`。从右向左剥离可信代理，取第一个非可信地址；无来源、缺失/非法链、超过 20 跳或全为可信地址时保存 NULL。不支持 CIDR，也不读取 `Forwarded`、`X-Real-IP`。例如 `BLOG_TRUSTED_PROXIES=127.0.0.1,::1`。非法配置会使 `serve` 启动失败，登录和自助改密限流也使用此解析结果；未知来源时限流回退 socket 桶，审计/评论 IP 仍留空。
 
 IP 以可空 inet 保存主机地址，审核不覆盖提交 IP。默认保留 180 天，可在后台设置中调整；独立维护账号运行 blog maintenance 分批清空超期 IP，不改编辑版本或更新时间。部署层需另行启用调度，详见[保留期与运维](operations-and-recovery.md)。
 
