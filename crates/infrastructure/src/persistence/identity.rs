@@ -5,11 +5,12 @@ use uuid::Uuid;
 
 use crate::audit::{AuditEntry, append_audit_log, record_change};
 use application::error::UseCaseError;
+use application::identity::policy::{self, StatusChangePlan};
 use application::ports::{
     AccountAdministration, AdminUserRow, ClearPasswordOutcome, PasswordCredential,
     PasswordCredentialStore, UserProfileStore, UserQuery,
 };
-use domain::identity::{UserSnapshot, UserStatus};
+use domain::identity::{LoginMethod, LoginMethods, UserSnapshot, UserStatus};
 
 use super::sql::{map_row_error, map_sqlx_error};
 
@@ -262,9 +263,7 @@ impl AccountAdministration for PostgresUserRepository {
         } else {
             PostgresRbacStore::permissions_for(&mut *tx, actor.user_id.0).await?
         };
-        if !permissions.has("user.manage") {
-            return Err(UseCaseError::Forbidden);
-        }
+        policy::require_account_management(&permissions)?;
         // 只保护状态和版本，不锁外键身份。会话创建可能先淘汰旧行，再取得用户
         // KEY SHARE；使用 FOR UPDATE 会与下面的会话删除形成反向等待。
         let row = sqlx::query(&format!(
@@ -284,22 +283,23 @@ impl AccountAdministration for PostgresUserRepository {
         .fetch_one(&mut *tx)
         .await
         .map_err(map_sqlx_error)?;
-        if is_owner && !permissions.has("ownership.manage") {
-            return Err(UseCaseError::Forbidden);
-        }
-        if before.version != expected_version {
-            return Err(UseCaseError::VersionConflict);
-        }
-        if before.status == status {
-            tx.commit().await.map_err(map_sqlx_error)?;
-            return Ok(before);
-        }
-        if status == UserStatus::Disabled
-            && is_owner
-            && PostgresRbacStore::user_has_login_method(&mut *tx, user_id).await?
-            && PostgresRbacStore::active_owner_count(&mut *tx).await? <= 1
-        {
-            return Err(UseCaseError::LastOwnerProtected);
+        let plan =
+            policy::plan_status_change(&permissions, &before, is_owner, status, expected_version)?;
+        match plan {
+            StatusChangePlan::Unchanged => {
+                tx.commit().await.map_err(map_sqlx_error)?;
+                return Ok(before);
+            }
+            StatusChangePlan::Update {
+                requires_owner_check,
+            } => {
+                if requires_owner_check
+                    && PostgresRbacStore::user_has_login_method(&mut *tx, user_id).await?
+                {
+                    let owners = PostgresRbacStore::active_owner_count(&mut *tx).await?;
+                    policy::ensure_owner_removal_allowed(owners)?;
+                }
+            }
         }
         let row = sqlx::query(&format!(
             "UPDATE users SET status=$2, version=version+1, auth_version=auth_version+1, updated_at=$3 \
@@ -423,13 +423,17 @@ impl PasswordCredentialStore for PostgresUserRepository {
             return Ok(ClearPasswordOutcome::NoPassword);
         }
 
-        let other: Option<(i32,)> =
-            sqlx::query_as("SELECT 1 FROM oauth_accounts WHERE user_id = $1 LIMIT 1")
+        let external_identities: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM oauth_accounts WHERE user_id = $1")
                 .bind(user_id)
-                .fetch_optional(&mut *tx)
+                .fetch_one(&mut *tx)
                 .await
                 .map_err(map_sqlx_error)?;
-        if other.is_none() {
+        let methods = LoginMethods {
+            password_enabled: hash.is_some(),
+            external_identities,
+        };
+        if !methods.can_remove(LoginMethod::Password) {
             tx.commit().await.map_err(map_sqlx_error)?;
             return Ok(ClearPasswordOutcome::LastLoginMethod);
         }

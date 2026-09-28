@@ -6,6 +6,8 @@
 
 use std::sync::Arc;
 
+pub mod policy;
+
 use uuid::Uuid;
 
 use crate::error::UseCaseError;
@@ -596,9 +598,7 @@ impl UserInteractor {
         expected_version: i64,
     ) -> Result<UserStatusView, UseCaseError> {
         actor.ensure_write_channel()?;
-        if !actor.has_permission("user.manage") {
-            return Err(UseCaseError::Forbidden);
-        }
+        policy::require_account_management(actor.permissions())?;
         if expected_version < 1 {
             return Err(UseCaseError::Invalid(
                 "expected_version 必须为正整数".into(),
@@ -691,7 +691,7 @@ impl UserInteractor {
                 // 与 remove_role 的保护条件同构：确实持有 owner 且可登录，
                 // 且全站只剩这一个可登录 Owner。
                 let is_last_loginable_owner = can_login
-                    && loginable_owners <= 1
+                    && !policy::has_other_loginable_owner(loginable_owners)
                     && roles.iter().any(|slug| slug == OWNER_ROLE_SLUG);
                 AdminUserDto {
                     id: row.id,

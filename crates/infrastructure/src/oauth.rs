@@ -619,9 +619,9 @@ impl OAuthAccountStore for PostgresOAuthAccountStore {
                 .map_err(|e| UseCaseError::Repository(e.to_string()));
         }
 
-        let (remaining, password): (i64, Option<String>) = sqlx::query_as(
+        let (external_identities, password): (i64, Option<String>) = sqlx::query_as(
             "SELECT \
-                (SELECT count(*) FROM oauth_accounts WHERE user_id = $1) - 1, \
+                (SELECT count(*) FROM oauth_accounts WHERE user_id = $1), \
                 (SELECT password_hash FROM users WHERE id = $1)",
         )
         .bind(user_id)
@@ -630,7 +630,11 @@ impl OAuthAccountStore for PostgresOAuthAccountStore {
         .map_err(|e| UseCaseError::Repository(e.to_string()))?;
 
         // 解绑必须保留另一外部身份或本地密码。
-        if remaining <= 0 && password.is_none() {
+        let methods = domain::identity::LoginMethods {
+            password_enabled: password.is_some(),
+            external_identities,
+        };
+        if !methods.can_remove(domain::identity::LoginMethod::ExternalIdentity) {
             return Err(UseCaseError::Forbidden);
         }
 

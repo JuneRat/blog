@@ -352,3 +352,46 @@ async fn enabling_never_restores_deleted_accounts_or_bypasses_owner_permissions(
         Err(UseCaseError::NotFound(_))
     ));
 }
+
+#[tokio::test]
+async fn owner_noop_still_checks_permissions_and_version_without_side_effects() {
+    let _g = SERIAL.lock().await;
+    let pool = database().await;
+    let (owner, target) = account(&pool, "owner", "owner").await;
+    let (admin, _) = account(&pool, "admin", "admin").await;
+    let repo = PostgresUserRepository::new(pool.clone());
+    let sessions = PostgresSessionStore::with_defaults(pool.clone());
+    let token = sessions
+        .create(target.id, target.auth_version)
+        .await
+        .unwrap();
+    assert!(matches!(
+        change(&repo, &admin, &target, UserStatus::Active).await,
+        Err(UseCaseError::Forbidden)
+    ));
+    assert!(matches!(
+        repo.change_status(
+            target.id,
+            UserStatus::Active,
+            target.version + 1,
+            OffsetDateTime::now_utc(),
+            &owner
+        )
+        .await,
+        Err(UseCaseError::VersionConflict)
+    ));
+    assert_eq!(
+        change(&repo, &owner, &target, UserStatus::Active)
+            .await
+            .unwrap(),
+        target
+    );
+    assert_eq!(repo.find_by_id(target.id).await.unwrap().unwrap(), target);
+    assert!(sessions.validate(&token).await.unwrap().is_some());
+    let audits: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM audit_logs WHERE action='user.status.update'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(audits, 0);
+}

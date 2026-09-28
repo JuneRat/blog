@@ -392,9 +392,7 @@ impl RbacStore for PostgresRbacStore {
             let target_has_login = Self::user_has_login_method(&mut *tx, user_id).await?;
             if target_has_login {
                 let owners = Self::active_owner_count(&mut *tx).await?;
-                if owners <= 1 {
-                    return Err(UseCaseError::LastOwnerProtected);
-                }
+                application::identity::policy::ensure_owner_removal_allowed(owners)?;
             }
         }
 

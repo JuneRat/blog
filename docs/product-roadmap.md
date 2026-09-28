@@ -32,7 +32,7 @@
 | 主题 | 已实现受控只读函数、请求级预算、第二主题 `paper` 与后台切换；桥接原型验证完成。cursor、导航及公开作者函数未实现 | [主题与渲染](themes-and-rendering.md)、[原型报告](../spikes/template-bridge/README.md) |
 | 原生评论 | 已适配游客/账号提交、受限 Markdown/预览、HTML 持久化、多级两级展示、删除占位、审核恢复和开关；IP 保留期已接入独立维护任务 | [评论](comments.md) |
 | 媒体 | 已实现正文图片、Post/Series 封面、用户头像和站点 logo，以及上传、引用保护、独立公开链接和回收站；正式文件可按明确计划在维护窗口清理，失败后原计划重试 | [内容生命周期](content-lifecycle.md) |
-| 渲染与模块边界 | 已实现持久化清洗 HTML、集中渲染运行时、按命令装配、业务模块拆分和 CI 依赖检查；身份端口按读取/资料/账号管理/凭据收窄，HTTP 路由统一组合，预约发布与保留期清理由应用用例编排；未启用跨请求整页缓存 | [架构](architecture.md)、[ADR-0015](adr/0015-rendered-content-runtime-and-module-boundaries.md) |
+| 渲染与模块边界 | 已实现持久化清洗 HTML、集中渲染运行时、按命令装配、业务模块拆分和 CI 依赖检查；身份端口按读取/资料/账号管理/凭据收窄，账号状态/Owner/登录方式保护已提为纯规则并在事务锁内执行，HTTP 路由统一组合，预约发布与保留期清理由应用用例编排；未启用跨请求整页缓存 | [架构](architecture.md)、[ADR-0015](adr/0015-rendered-content-runtime-and-module-boundaries.md) |
 | 备份恢复 | 已适配新表、媒体原件/引用、预约任务隔离与会话撤销；已有真实往返演练，并将首次安装、HTTP 写作/评论和恢复后重开串入 CI；生产维护/RPO/RTO 尚未验收 | [备份与恢复](operations-and-recovery.md)、[全链路验收](acceptance.md) |
 
 首次预约或发布后 slug 锁定，无旧路径跳转；永久删除释放地址。会话持久化不等于完整多实例支持。已有身份、角色、媒体、内容、目录、评论和设置写入口已接入事务审计、可信来源 IP 和独立 audit.read 权限的后台只读查询；会话活跃刷新等运行事件不作为业务变更审计。没有邀请、通用任务队列或 outbox。

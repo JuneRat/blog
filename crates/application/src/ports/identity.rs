@@ -43,7 +43,11 @@ impl AdminUserRow {
     pub fn can_login(&self) -> bool {
         self.status == domain::identity::UserStatus::Active
             && !self.deleted
-            && (self.password_enabled || self.external_identities > 0)
+            && domain::identity::LoginMethods {
+                password_enabled: self.password_enabled,
+                external_identities: self.external_identities,
+            }
+            .can_login()
     }
 }
 
@@ -94,7 +98,7 @@ pub trait AccountAdministration: Send + Sync {
         audit_actor: crate::audit::AuditContext,
     ) -> Result<(), UseCaseError>;
 
-    /// 身份排他锁内复核操作者当前权限、目标版本和最后可登录 Owner。
+    /// 身份排他锁内取得当前权限、目标版本及全局 Owner 事实，调用 identity::policy 复核。
     /// 需 user.manage；目标持有 owner 时另需 ownership.manage。
     /// 实际变更同事务递增 version/auth_version、撤销会话并记录审计；
     /// 相同状态且版本匹配时不写入，软删除账号不能通过此入口恢复。
@@ -234,7 +238,7 @@ pub trait RbacStore: Send + Sync {
         audit_actor: crate::audit::AuditContext,
     ) -> Result<(), UseCaseError>;
 
-    /// 移除角色分配；内置保护（如最后一个有效 Owner）由实现拒绝。
+    /// 移除角色分配；实现须在身份锁内调用 identity::policy 保护最后可登录 Owner。
     async fn remove_role(
         &self,
         user_id: Uuid,
