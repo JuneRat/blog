@@ -18,6 +18,10 @@ Usage: sh scripts/compose-backup.sh COMMAND
   remote-list                    List remote snapshots (IDs needed for fetch)
   sync ARCHIVE_NAME               Retry uploading a local archive from backups/
   fetch SNAPSHOT_ID              Retrieve and verify one remote backup into backups/
+  maintenance                    Run privacy retention with the dedicated database role
+  media-plan NAME.json UUID...    Create an explicit media purge plan in backups/plans/
+  media-apply NAME.json --maintenance-confirmed --break-links-confirmed
+                                 Stop blog, apply the reviewed plan, then restart
 
 Uses this deployment's existing .env. No additional env file is required.
 EOF
@@ -26,7 +30,7 @@ EOF
 action=${1:-help}
 case "$action" in
     help|--help|-h) usage; exit 0 ;;
-    backup|verify|restore|check|release|status|remote-init|remote-list|sync|fetch|restore-data) ;;
+    backup|verify|restore|check|release|status|remote-init|remote-list|sync|fetch|restore-data|maintenance|media-plan|media-apply) ;;
     *) usage >&2; exit 2 ;;
 esac
 shift
@@ -100,6 +104,26 @@ trap 'exit 130' HUP INT TERM
 write_status running
 
 case "$action" in
+    media-plan)
+        [ "$#" -ge 2 ] || { usage >&2; exit 2; }
+        phase=media-plan
+        ops ops media-plan "$@"
+        ;;
+    media-apply)
+        [ "$#" = 3 ] && [ "$2" = --maintenance-confirmed ] && [ "$3" = --break-links-confirmed ] || { usage >&2; exit 2; }
+        phase=stopping
+        if [ -n "$(dc ps --status running -q blog)" ]; then
+            restart=1
+            dc stop blog
+        fi
+        phase=media-purge
+        ops ops media-apply "$@"
+        ;;
+    maintenance)
+        [ "$#" = 0 ] || { usage >&2; exit 2; }
+        phase=privacy-retention
+        ops maintenance
+        ;;
     backup)
         [ "$#" = 0 ] || { usage >&2; exit 2; }
         phase=preflight

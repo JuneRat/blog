@@ -194,6 +194,33 @@ async fn run(command: Command, mut config: config::DeploymentConfig) -> Result<(
         .map_err(|error| format!("校验或准备迁移失败：{error}"))?;
         return interfaces::cli::run_html_rebuild(&assembly::html_rebuilder(&pool), options).await;
     }
+    if let Command::Media {
+        action:
+            interfaces::cli::MediaAction::Purge {
+                legacy_container,
+                action,
+            },
+    } = command
+    {
+        if isolated || recovery_mode {
+            return Err("恢复隔离期间禁止媒体物理清理".into());
+        }
+        infrastructure::verify_schema(&pool, &database.migrations_dir)
+            .await
+            .map_err(|e| e.to_string())?;
+        let root = match &action {
+            interfaces::cli::MediaPurgeAction::Plan {
+                media_dir: Some(root),
+                ..
+            } => root.clone(),
+            _ => config.media_dir()?,
+        };
+        return interfaces::cli::run_media_purge(
+            &assembly::media_cleanup(&pool, root, legacy_container),
+            action,
+        )
+        .await;
+    }
     // Keep automatic schema initialization for schema owners; restricted runtime
     // roles verify the applied migrations. Derived HTML is rebuilt only by the
     // explicit maintenance command, never as a startup or migration side effect.

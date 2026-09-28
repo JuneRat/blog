@@ -166,7 +166,7 @@ def generated_files(root, contract):
         parts.append(f'\n-- Migration: {record["file"]}\n' + (directory / record["file"]).read_text().rstrip() + "\n")
     parts.append("\nCOMMIT;\n")
     ddl = "".join(parts)
-    return {root / "blog_schema.sql": ddl, root / "docs/sql/postgres-core.sql": ddl,
+    return {root / "docs/sql/postgres-core.sql": ddl,
             root / "scripts/database-roles.sql": roles_sql(contract, (root / "scripts/sql/database-roles.sql.in").read_text())}
 
 

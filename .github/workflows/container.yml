@@ -20,10 +20,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Verify idempotent environment initialization
+      - name: Verify schema artifacts
         run: |
           python3 -B scripts/schema_contract.py
-          PYTHONPATH=scripts python3 -B -m unittest scripts/test_compose_init.py scripts/test_compose_recovery.py
 
       - name: Build deployable image
         run: docker build --build-arg VCS_REF="$GITHUB_SHA" --tag blog:ci --tag "blog:$GITHUB_SHA" .
@@ -47,10 +46,9 @@ jobs:
           cp compose.yaml .env.example release/
           cp ops/postgres-init.sh release/ops/
           cp ops/blog-backup.service ops/blog-backup.timer release/ops/
+          cp ops/blog-maintenance.service ops/blog-maintenance.timer release/ops/
           cp -R docs/. release/docs/
-          cp -R migrations release/
           cp scripts/database-roles.sql scripts/compose-init.sh scripts/compose-backup.sh release/scripts/
-          cp scripts/recovery.py scripts/recovery_inventory.py scripts/schema_contract.py scripts/deployment_config.py scripts/media_cleanup.py release/scripts/
           printf '%s\n' "blog:$GITHUB_SHA" > release/IMAGE
           printf '%s\n' "blog-ops:$GITHUB_SHA" > release/OPS_IMAGE
           cd release

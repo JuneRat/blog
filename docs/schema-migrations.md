@@ -15,7 +15,7 @@
 | `migrations/postgres/*.sql` | 唯一可执行的结构演进来源；已有文件不可变 |
 | `migrations/postgres/schema.json` | 本版本的迁移校验和、完整表集合、逐表运行及维护权限 |
 | `scripts/database-roles.sql` | 从清单与通用模板生成的授权脚本 |
-| `blog_schema.sql`、`docs/sql/postgres-core.sql` | 从迁移链生成的空库 DDL 参考，不作为部署入口 |
+| `docs/sql/postgres-core.sql` | 从迁移链生成的空库 DDL 参考，不作为部署入口 |
 
 Rust 的迁移加载和安装续跑、Python 备份恢复共同读取迁移目录内的 `schema.json`，不再各自维护固定表数。任何本版本之外的表、迁移版本或校验和仍会被拒绝。运行目录必须包含 SQL 文件与清单；Compose 镜像已成套打包并使用绝对路径。
 
@@ -32,7 +32,7 @@ python3 -B scripts/schema_contract.py --write
 python3 -B scripts/schema_contract.py
 ```
 
-4. 提交新增 SQL、清单和生成文件。不要手改授权 SQL 或两份 DDL 参考。通用授权规则在 `scripts/sql/database-roles.sql.in` 中维护。
+4. 提交新增 SQL、清单和生成文件。不要手改授权 SQL 或 DDL 参考。通用授权规则在 `scripts/sql/database-roles.sql.in` 中维护。
 5. 在临时 PostgreSQL 中验证空库安装、带数据升级、有效权限、备份恢复，以及受影响业务的数据不变量。特别是删除或重命名媒体、身份等核心结构，不能只修改表清单。
 
 CI 对比 PR 基线（push 对比前一提交），阻止修改或删除旧 SQL；检查清单与生成文件一致性；在真实 PostgreSQL 上核对全部表和表级、列级有效权限。额外演练在临时目录追加一张测试表，验证已有数据升级、漏授权失败、旧备份按旧版本恢复再升级、新备份往返，以及安装中断后的续跑和非空表保护。测试不会向正式迁移目录添加业务表。

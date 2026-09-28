@@ -99,6 +99,8 @@ class SchemaContractTests(unittest.TestCase):
         result = subprocess.run(["python3", "-B", str(extended / "scripts/schema_contract.py")], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         grant = extended / "scripts/database-roles.sql"
+        self.assertTrue((extended / "docs/sql/postgres-core.sql").is_file())
+        self.assertFalse((extended / "blog_schema.sql").exists())
         self.assertIn('ON public."schema_drill" TO :"app_role"', grant.read_text())
         grant.write_text(grant.read_text() + "-- hand edit\n")
         result = subprocess.run(["python3", "-B", str(extended / "scripts/schema_contract.py")], capture_output=True, text=True)

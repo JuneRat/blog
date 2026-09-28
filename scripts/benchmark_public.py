@@ -24,7 +24,8 @@ import threading
 import time
 from urllib.parse import urlsplit
 
-from acceptance import API, Acceptance, AcceptanceError, Client, PROJECT, admin_url, require
+from acceptance import Acceptance, PROJECT, admin_url
+from acceptance_support import API, AcceptanceError, Client, require
 
 
 class CapacitySite(Acceptance):

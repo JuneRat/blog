@@ -79,6 +79,25 @@ services:
         max-size: "10m"
         max-file: "5"
 
+  # Use compose-backup.sh maintenance so retention and backup share the operation lock.
+  maintenance:
+    profiles: [ops]
+    image: ${BLOG_IMAGE:-blog:local}
+    init: true
+    command: [maintenance, --batch-size, "1000", --max-batches, "100"]
+    environment:
+      - BLOG_MAINTENANCE_DATABASE_URL
+      - BLOG_RECOVERY_MODE
+      - BLOG_LOG_FORMAT=${BLOG_LOG_FORMAT:-json}
+      - BLOG_DB_MAX_CONNECTIONS=2
+      - BLOG_DB_STATEMENT_TIMEOUT_MS=60000
+      - BLOG_DB_LOCK_TIMEOUT_MS=5000
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+
   # Only run through scripts/compose-backup.sh; never started by ordinary `up`.
   ops:
     profiles: [ops]

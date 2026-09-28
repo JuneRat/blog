@@ -1,12 +1,14 @@
 [Unit]
-Description=Blog privacy retention cleanup
-After=network-online.target
+Description=Blog Compose privacy retention cleanup
+Requires=docker.service
+After=docker.service
 
 [Service]
 Type=oneshot
 User=blog
 WorkingDirectory=/opt/blog
-EnvironmentFile=/etc/blog/maintenance.env
-ExecStart=/opt/blog/blog maintenance --batch-size 1000 --max-batches 100
-NoNewPrivileges=true
-PrivateTmp=true
+ExecStart=/bin/sh /opt/blog/scripts/compose-backup.sh maintenance
+UMask=0077
+TimeoutStartSec=30min
+TimeoutStopSec=60
+KillMode=mixed

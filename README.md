@@ -4,7 +4,7 @@ Rust 模块化单体博客，公开站点使用服务端渲染，管理后台使
 
 目前支持文章与独立页面、标签/分类/系列、OAuth 与本地密码登录、角色权限、媒体库、站点设置、主题切换，以及 RSS、sitemap 和 SEO 元数据。项目仍在开发阶段，接口与数据模型可直接调整，不维护旧管理接口的兼容层。交付状态和后续范围见[路线图](docs/product-roadmap.md)。
 
-**新数据库基线已完成适配。** [19 表基线](migrations/postgres/0001_initial_schema.sql)已替换旧迁移链，身份、持久会话、媒体、内容、目录与评论已适配；保留期维护、新库备份恢复和正式媒体显式清理已接入，已有业务写入口已补齐事务审计、可信来源 IP 和后台只读查询。首次安装至备份恢复的[全链路验收](docs/acceptance.md)已通过，本地空库安装也已验证，生产部署验收仍单独执行。旧结构需另建空库，不能原地升级。生成的 DDL 参考见 [blog_schema.sql](blog_schema.sql)，后续变更遵循[迁移演进规则](docs/schema-migrations.md)，已实现边界见[数据库实现参考](docs/database-current.md)。
+**新数据库基线已完成适配。** [19 表基线](migrations/postgres/0001_initial_schema.sql)已替换旧迁移链，身份、持久会话、媒体、内容、目录与评论已适配；保留期维护、新库备份恢复和正式媒体显式清理已接入，已有业务写入口已补齐事务审计、可信来源 IP 和后台只读查询。首次安装至备份恢复的[全链路验收](docs/acceptance.md)已通过，本地空库安装也已验证，生产部署验收仍单独执行。旧结构需另建空库，不能原地升级。生成的 DDL 参考见 [汇总 DDL](docs/sql/postgres-core.sql)，后续变更遵循[迁移演进规则](docs/schema-migrations.md)，已实现边界见[数据库实现参考](docs/database-current.md)。
 
 ## 快速开始
 

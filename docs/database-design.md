@@ -1,6 +1,6 @@
 # 数据库设计
 
-本文记录已确认的 PostgreSQL 18 目标设计，共 **19 张表：18 张业务表和 `sessions`**。字段、外键、CHECK 与索引以 [migrations/postgres](../migrations/postgres) 的迁移链为准，根目录的 [blog_schema.sql](../blog_schema.sql) 是自动生成的 DDL 参考，选择理由见 [ADR-0016](adr/0016-confirmed-blog-schema.md)。
+本文记录已确认的 PostgreSQL 18 目标设计，共 **19 张表：18 张业务表和 `sessions`**。字段、外键、CHECK 与索引以 [migrations/postgres](../migrations/postgres) 的迁移链为准，[汇总 DDL](sql/postgres-core.sql) 是自动生成的 DDL 参考，选择理由见 [ADR-0016](adr/0016-confirmed-blog-schema.md)。
 
 **新建库基线、身份会话、媒体、内容、目录与评论已接入。** `migrate` 现在执行新的 [0001_initial_schema.sql](../migrations/postgres/0001_initial_schema.sql)，原九个迁移已替换，仅支持空库或已应用新基线的库；检测到旧结构时退出，不自动清库。保留期任务、独立授权、新库恢复、正式媒体显式清理和已有业务写入口的事务审计已接入，生产上线验收仍待完成。实际适配边界见[当前数据库实现](database-current.md)，后续验收见[路线图](product-roadmap.md#已采纳数据库设计的实施)。
 
@@ -123,7 +123,7 @@ Post/Page 统一使用 draft、scheduled、published、archived 四种状态，�
 
 正文引用从同一份清洗 HTML 提取；封面、头像采用明确媒体外键；站点 logo 的 ID 放在 `settings.site`，与站点引用同事务保存。`source_id` 是多态关系，来源存在性、更新和清理由应用保证。草稿、私密、归档及回收站内容都计入引用；软删除不清理引用。
 
-保存时同步当前来源的引用集合，不需要每次扫描全站。全量扫描可用于核对和修复，但不能发现全部站外链接。物理清理由独立流程执行：与新增引用遵循同一媒体行锁协议，存在已知引用就拒绝删除；即使零引用也需要显式确认清理范围，不能自动判定为可删除。现有适配器为 `scripts/media_cleanup.py`，按 ID 生成计划、维护窗口复核执行；数据库删除与审计凭据先提交，再按凭据删除文件，同一计划重试，不增加媒体状态或额外任务表。操作和失败边界见[运维](operations-and-recovery.md#正式媒体物理清理)。
+保存时同步当前来源的引用集合，不需要每次扫描全站。全量扫描可用于核对和修复，但不能发现全部站外链接。物理清理由独立流程执行：与新增引用遵循同一媒体行锁协议，存在已知引用就拒绝删除；即使零引用也需要显式确认清理范围，不能自动判定为可删除。入口为 `blog media purge`，按 ID 生成计划、维护窗口复核执行；数据库删除与审计凭据先提交，再按凭据删除文件，同一计划重试，不增加媒体状态或额外任务表。操作和失败边界见[运维](operations-and-recovery.md#正式媒体物理清理)。
 
 ## 5. 评论
 

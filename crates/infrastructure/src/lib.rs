@@ -18,6 +18,7 @@ pub mod test_support {
 
 pub mod audit;
 pub mod installation;
+pub mod media_cleanup;
 mod media_refs;
 pub mod media_storage;
 pub mod oauth;

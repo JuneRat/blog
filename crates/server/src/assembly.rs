@@ -121,6 +121,22 @@ pub fn media(pool: &Database, root: PathBuf) -> Arc<MediaInteractor> {
     ))
 }
 
+pub fn media_cleanup(
+    pool: &Database,
+    root: PathBuf,
+    legacy_container: Option<String>,
+) -> application::media_cleanup::MediaCleanup {
+    use infrastructure::media_cleanup::{
+        LocalMediaPurgeFiles, LocalMediaPurgePlans, PostgresMediaPurgeStore,
+    };
+    application::media_cleanup::MediaCleanup::new(
+        Arc::new(PostgresMediaPurgeStore::new(pool.clone(), legacy_container)),
+        Arc::new(LocalMediaPurgeFiles::new(root)),
+        Arc::new(LocalMediaPurgePlans),
+        Arc::new(SystemClock),
+    )
+}
+
 /// Browser authentication is assembled only for the HTTP server. OAuth CLI
 /// maintenance uses `oauth_commands`, with no login client or callback URL.
 pub fn auth(

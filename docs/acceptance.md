@@ -72,3 +72,5 @@ HTTP 客户端不自动跟随重定向，避免将错误跳转后的 200 响应�
 这套流程验证实际 HTTP/SSR 和静态资源，不执行浏览器中的 JavaScript 交互，也不替代真实域名、移动端排版、部署停写能力、容量及 RPO/RTO 验收。生产项仍在[路线图 M5](product-roadmap.md#3-里程碑与验收入口)单独确认。脚本通过后不会自动重建或切换开发数据库。
 
 候选版本按[上线验收模板](release-acceptance-template.md)补充浏览器关键路径和目标环境证据；持续读取/保存/系列重排使用[混合容量工具](public-read-capacity.md)。两者的通过范围分别记录，不能由本脚本的 `passed` 推定已完成浏览器与容量验证。
+
+原生与 Compose 验收共用 `scripts/acceptance_support.py` 的 HTTP 客户端、内容生命周期、分类、评论和媒体场景；两个入口分别保留本机进程与容器部署的启动、停止和恢复验证。

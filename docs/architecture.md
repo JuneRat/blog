@@ -92,13 +92,14 @@ Post/Page 管理 API 及 Post CLI 通过稳定 UUID 定位资源，公开 URL �
 | `migrate` | 结构迁移，完成后退出 | 数据库 |
 | `rebuild-html` | 执行时准备结构；`--dry-run` 仅读校验迁移 | HTML 维护用例、批次端口与正文/评论渲染运行时 |
 | `user`、`role`、`oauth` | 结构迁移 | 对应身份用例；不读取网站 URL 或主题 |
-| `media` | 结构迁移 | 媒体仓储与文件存储 |
+| `media cleanup-staging` | 结构迁移 | 媒体仓储与文件存储 |
+| `media purge` | 只读校验结构 | 显式清理用例、数据库提交与计划/文件端口 |
 | `post` | 结构迁移 | 用户、内容用例及本次写入的正文渲染 |
 | `publish-due` | 结构迁移 | 到期发布用例及原子批次适配器 |
 | `maintenance` | 不执行迁移或派生物回填 | 独立维护连接与保留期清理用例 |
 | `serve` | 结构迁移 | 网站配置、全部用例、主题、静态资源与 HTTP 状态 |
 
-除 `config`、`migrate`、`rebuild-html` 与独立的 `maintenance` 外，其余命令在执行前同步权限注册表。只有 `serve` 读取网站配置并加载主题；主题目录损坏或公开 URL 无效不会阻止账号、密码、OAuth 或 HTML 维护。启动参数统一由 `server::config` 按 CLI > env > TOML > 默认值解析，并按命令校验；运行期设置仍走应用用例和数据库端口，TOML 不覆盖后台保存。`config check/show` 仅做离线诊断，不连接数据库。配置项见[配置参考](configuration.md)。
+除 `config`、`migrate`、`rebuild-html`、`media purge` 与独立的 `maintenance` 外，其余命令在执行前同步权限注册表。只有 `serve` 读取网站配置并加载主题；主题目录损坏或公开 URL 无效不会阻止账号、密码、OAuth 或 HTML 维护。启动参数统一由 `server::config` 按 CLI > env > TOML > 默认值解析，并按命令校验；运行期设置仍走应用用例和数据库端口，TOML 不覆盖后台保存。`config check/show` 仅做离线诊断，不连接数据库。配置项见[配置参考](configuration.md)。
 
 结构迁移与 HTML 重建没有组合入口：普通启动和业务命令仅调用 `migrate_schema`，不会扫描全库旧渲染版本。`rebuild-html` 由接口层解析参数、映射 JSON 与退出码；[应用维护用例](../crates/application/src/html_rebuild.rs)定义批次端口，负责参数校验、跨来源预算、游标推进和部分完成结果；`server` 只装配依赖及处理结构、恢复隔离。基础设施负责有界查询、渲染、CAS、引用同步与审计事务。只读预检使用 `verify_schema`，不进入 SQLx 迁移执行路径。历史内容重建失败只影响显式维护进程；规则升级需要在部署流程安排重建，见 [ADR-0017](adr/0017-explicit-html-rebuild.md)、[ADR-0018](adr/0018-bounded-html-maintenance.md) 和[运维步骤](operations-and-recovery.md#html-显式重建)。
 
@@ -111,6 +112,8 @@ Post/Page 管理 API 及 Post CLI 通过稳定 UUID 定位资源，公开 URL �
 预约发布由 `application::publishing::PublishDueInteractor` 编排，受控 CLI 和每 30 秒的定时触发共用同一用例；`server` 只持有定时器、恢复隔离与关闭策略。`ScheduledPublicationStore` 在基础设施中以 `SKIP LOCKED` 执行 Post/Page 原子批次，保持状态、版本和审计一致。错误返回后已提交批次保持生效，下一次触发继续处理剩余到期内容。
 
 保留期清理由 `application::retention::RetentionMaintenance` 校验批次参数并聚合结果；`RetentionCleanupStore` 每批在锁内重读策略，事务内清理并审计。达到批次上限或因行锁没有进展时返回 `has_more`，避免忙循环；dry-run 只统计一次，不计入已执行批次。独立维护凭据及恢复隔离守卫仍由部署入口控制。
+
+正式媒体清理由 `application::media_cleanup` 协调计划生成、全量预检、数据库提交和按凭据删除文件，事务契约不暴露 SQLx。`infrastructure::media_cleanup` 实现引用/版本重检、删除与审计同事务提交，以及本地路径和哈希校验；CLI 只解析参数、输出结果。Compose 脚本负责容器停写与操作锁，不维护另一套业务删除规则。
 
 ## 架构检查与验证
 

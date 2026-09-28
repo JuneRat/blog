@@ -3,7 +3,7 @@
 - 状态：已采纳
 - 记录日期：2026-09-26
 - 关联决策：局部替代 [ADR-0008](0008-thirteen-table-blog-core.md) 的内容关系、删除及扩表选择，[ADR-0009](0009-local-password-authentication.md) 和 [ADR-0010](0010-persistent-postgres-sessions.md) 的用户版本会话绑定，[ADR-0014](0014-content-commits-and-stable-admin-identity.md) 的归档与恢复规则；扩展 [ADR-0015](0015-rendered-content-runtime-and-module-boundaries.md) 的持久化 HTML 范围
-- 当前参考：[目标数据库设计](../database-design.md)、[目标 DDL](../../blog_schema.sql)、[当前数据库实现](../database-current.md)、[实施路线](../product-roadmap.md#已采纳数据库设计的实施)
+- 当前参考：[目标数据库设计](../database-design.md)、[目标 DDL](../sql/postgres-core.sql)、[当前数据库实现](../database-current.md)、[实施路线](../product-roadmap.md#已采纳数据库设计的实施)
 
 ## 背景
 
@@ -13,7 +13,7 @@
 
 ## 决策
 
-以根目录 blog_schema.sql 和目标数据库设计文档作为已采纳方案，保留 18 张业务表与独立 sessions。实施采用可重建空库：原九个迁移由一个新初始基线替换，不做旧数据转换或兼容；第一批同步身份、RBAC、sessions 和审计追加基础，后续媒体、内容、评论与恢复适配在路线图跟踪。
+以目标 DDL（现保存为 docs/sql/postgres-core.sql）和目标数据库设计文档作为已采纳方案，保留 18 张业务表与独立 sessions。实施采用可重建空库：原九个迁移由一个新初始基线替换，不做旧数据转换或兼容；第一批同步身份、RBAC、sessions 和审计追加基础，后续媒体、内容、评论与恢复适配在路线图跟踪。
 
 - 媒体链接独立公开，私密文章不限制媒体 URL。保留 media_refs 查询使用位置和保护物理删除；软删除保留文件和链接，零引用不自动回收，因为引用表无法覆盖站外使用。
 - 文章与系列采用 post_series 多对多，position 为可重复的非负权重；分类保留单归属与树结构，标签/系列删除只清理关联。

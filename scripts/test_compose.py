@@ -21,7 +21,7 @@ from urllib.request import Request
 from urllib.parse import urlsplit
 import uuid
 
-from acceptance import API, PNG, AcceptanceError, AdminAssets, Client, require
+from acceptance_support import API, PNG, AcceptanceError, Client, SiteScenario, require
 from compose_recovery import dotenv
 
 PROJECT = Path(__file__).resolve().parents[1]
@@ -65,9 +65,9 @@ def exercise(image, root, ops_image):
     base = ["docker", "compose", "--project-directory", str(root),
             "-f", str(root / "compose.yaml"), "-p", project]
 
-    def compose(*args):
+    def compose(*args, data=None):
         result = subprocess.run([*base, *args], cwd=root, env=env,
-                                capture_output=True, text=True, timeout=180)
+                                input=data, capture_output=True, text=True, timeout=180)
         # Do not echo command output: a failed operation may contain credentials.
         require(result.returncode == 0, f"Compose {args[0]} failed (exit {result.returncode})")
         return result.stdout.strip()
@@ -80,6 +80,12 @@ def exercise(image, root, ops_image):
     def sql(query):
         return compose("exec", "-T", "db", "psql", "-XAt", "-v", "ON_ERROR_STOP=1",
                        "-U", "postgres", "-d", "blog", "-c", query)
+
+    def healthy(service):
+        container = compose("ps", "-q", service)
+        result = subprocess.run(["docker", "inspect", "--format", "{{json .State.Health.Status}}", container],
+                                capture_output=True, text=True, check=True)
+        return json.loads(result.stdout) == "healthy"
 
     restored = root / "restored"
     restored_again = root / "restored-again"
@@ -159,24 +165,17 @@ def exercise(image, root, ops_image):
                 "schema owner must not be a cluster administrator")
 
         print("==> Compose: bundled assets, migration paths and persistent content", flush=True)
-        raw, _ = guest.request("GET", "/admin/")
-        assets = AdminAssets()
-        assets.feed(raw.decode())
-        require(bool(assets.paths), "admin bundle is missing")
-        for path in assets.paths:
-            body, headers = guest.request("GET", path)
-            require(body and headers.get_content_type() != "text/html", "admin asset is missing")
+        scenario = SiteScenario(guest, Client(guest.origin), sql)
+        scenario.assert_installed()
         require(compose("exec", "-T", "blog", "id", "-u") == "10001", "server must run as non-root")
         compose("exec", "-T", "-w", "/tmp", "blog", "blog", "migrate")
         require(compose("exec", "-T", "blog", "stat", "-c", "%a", "/var/lib/blog/config/config.toml") == "600",
                 "persisted configuration must be private")
         guest.login(password)
-        media = guest.json("POST", API + "/media", PNG, status=201, headers={"Content-Type": "image/png"})
-        page = guest.json("POST", API + "/pages", {
-            "slug": "compose-persistence", "title": "Compose persistence",
-            "content": f"Persistent content ![image]({media['url']})",
-        }, status=201)
-        guest.json("POST", f"{API}/pages/{page['id']}/publish", {"expected_version": page["version"]})
+        scenario.media_and_content()
+        scenario.lifecycles()
+        scenario.comments()
+        media = scenario.media
         installation_id = sql("SELECT value->>'id' FROM settings WHERE key='installation'")
 
         print("==> Compose: telemetry, JSON logs and dependency failure", flush=True)
@@ -205,6 +204,9 @@ def exercise(image, root, ops_image):
         finally:
             compose("unpause", "db")
         wait_for(lambda: guest.request("GET", "/readyz"), "readiness did not recover")
+        # Docker's cached health status can lag the HTTP recovery until its next probe.
+        # Later maintenance restarts depend on that health status as well.
+        wait_for(lambda: healthy("db"), "database healthcheck did not recover")
         logs = compose("logs", "--no-color", "--no-log-prefix", "blog")
         records = [json.loads(line) for line in logs.splitlines() if line.strip()]
         require(any(record.get("span", {}).get("request_id") == request_id
@@ -212,6 +214,48 @@ def exercise(image, root, ops_image):
                 "JSON completion log must contain the response request ID and status")
         require(not any(secret in logs for secret in (password, owner_password, "not-a-log-field")),
                 "request logs leaked credentials or query parameters")
+
+        print("==> Compose: dedicated retention role and reviewed media purge", flush=True)
+        maintenance_password = secrets.token_hex(32)
+        sql(f"CREATE ROLE blog_app LOGIN; CREATE ROLE blog_maintenance LOGIN PASSWORD '{maintenance_password}';")
+        compose("exec", "-T", "db", "psql", "-X", "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d", "blog",
+                "-v", "app_role=blog_app", "-v", "maintenance_role=blog_maintenance",
+                data=(PROJECT / "scripts/database-roles.sql").read_text())
+        with env_file.open("a") as stream:
+            stream.write(dotenv({"BLOG_MAINTENANCE_DATABASE_URL":
+                                 f"postgres://blog_maintenance:{maintenance_password}@db:5432/blog"}))
+        model = json.loads(compose("--profile", "ops", "config", "--format", "json"))
+        require("BLOG_MAINTENANCE_DATABASE_URL" not in model["services"]["blog"]["environment"],
+                "maintenance credentials must stay out of the HTTP service")
+        maintenance_env = model["services"]["maintenance"]["environment"]
+        require(not {"DATABASE_URL", "BLOG_OWNER_PASSWORD", "BLOG_POSTGRES_PASSWORD"} & maintenance_env.keys(),
+                "retention must only receive the dedicated role")
+        retention = json.loads(operation("maintenance"))
+        require(not retention["dry_run"], "scheduled retention must execute")
+        guest.request("GET", "/readyz")
+        removable = guest.json("POST", API + "/media?filename=purge.png", PNG, status=201,
+                               headers={"Content-Type": "image/png"})
+        guest.json("DELETE", API + "/media/" + removable["id"],
+                   {"expected_version": removable["version"]}, status=204)
+        operation("media-plan", "purge.json", removable["id"])
+        plan_file = root / "backups/plans/purge.json"
+        require(plan_file.stat().st_mode & 0o777 == 0o600, "media plan must be private")
+        operation("media-apply", "purge.json", success=False)
+        guest.request("GET", removable["url"])
+        for attempt in range(2):
+            result = json.loads(operation("media-apply", "purge.json",
+                                          "--maintenance-confirmed", "--break-links-confirmed"))
+            require(result["records_purged"] == 1 and not result["failures"], "media purge did not finish")
+            require(result["files_deleted"] == 1 - attempt and result["files_already_absent"] == attempt,
+                    "retry must use the original durable receipt")
+            guest = client()
+            wait_for(lambda: guest.request("GET", "/readyz"), "media purge did not restart the source")
+            guest.request("GET", removable["url"], status=404)
+        require(sql(f"SELECT count(*) FROM audit_logs WHERE action='media.purge' AND target_id='{removable['id']}'") == "1",
+                "media purge retry duplicated the receipt")
+        guest.login(password)
+        scenario.admin, scenario.guest = guest, Client(guest.origin)
+        metrics = client("9090")
 
         print("==> Compose: container replacement preserves database, config and media", flush=True)
         compose("down", "--timeout", "30")  # Deliberately retain all three named volumes.
@@ -222,17 +266,15 @@ def exercise(image, root, ops_image):
         require(guest.json("GET", "/version") == build, "build identity changed after restart")
         guest.request("GET", "/api/install", status=404)
         guest.login(password)
-        body, _ = guest.request("GET", "/compose-persistence")
-        require(b"Persistent content" in body, "published page did not survive replacement")
+        scenario.admin, scenario.guest = guest, Client(guest.origin)
+        scenario.assert_public_content()
+        scenario.assert_comments()
         body, _ = guest.request("GET", media["url"])
         require(body == PNG, "media object did not survive replacement")
         require(sql("SELECT value->>'id' FROM settings WHERE key='installation'") == installation_id,
                 "installation was unexpectedly repeated")
         # Exercise the Docker healthcheck itself, not just a request from the host.
-        container = compose("ps", "-q", "blog")
-        inspection = subprocess.run(["docker", "inspect", "--format", "{{json .State.Health.Status}}", container],
-                                    capture_output=True, text=True, check=True)
-        require(json.loads(inspection.stdout) == "healthy", "Docker readiness check did not pass")
+        require(healthy("blog"), "Docker readiness check did not pass")
         print("==> Compose: complete backup and encrypted repository round trip", flush=True)
         compose("--profile", "ops", "run", "--rm", "--no-deps", "--entrypoint", "python3", "ops", "-c",
                 "import toml; p='/var/lib/blog/config/config.toml'; c=toml.load(p); c['database']['max_lifetime_secs']=777; open(p,'w').write(toml.dumps(c))")
@@ -308,8 +350,9 @@ def exercise(image, root, ops_image):
                          "/var/lib/blog/config/recovered/resources/deployment")
         target = Client("http://" + restored_compose("port", "blog", "8080"))
         target.request("GET", "/readyz")
-        body, _ = target.request("GET", "/compose-persistence")
-        require(b"Persistent content" in body, "restored page missing")
+        scenario.admin, scenario.guest = target, Client(target.origin)
+        scenario.assert_public_content()
+        scenario.assert_comments()
         body, _ = target.request("GET", media["url"])
         require(body == PNG, "restored media differs")
         require(restored_sql("SELECT count(*) FROM sessions") == "0", "release retained verification sessions")

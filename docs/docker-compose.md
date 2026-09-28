@@ -1,6 +1,6 @@
 # Docker Compose 部署
 
-单机常驻服务为 `blog` 和 `db`；备份恢复使用按需启动的 `ops` 服务。主机只需 Docker Engine/Desktop 与 Docker Compose 2.24 或更新版本；构建及备份所需工具均在镜像内。运行镜像包含 release 二进制、后台生产资源、两套主题和 PostgreSQL 迁移，全部资源使用容器内绝对路径。
+单机常驻服务为 `blog` 和 `db`；备份恢复和媒体清理使用按需启动的 `ops` 服务，保留期维护使用独立的 `maintenance` 服务。主机只需 Docker Engine/Desktop 与 Docker Compose 2.24 或更新版本；构建及备份所需工具均在镜像内。运行镜像包含 release 二进制、后台生产资源、两套主题和 PostgreSQL 迁移，全部资源使用容器内绝对路径。
 
 ## 从源码构建并首次安装
 
@@ -31,7 +31,7 @@ postgres://blog_owner:<BLOG_OWNER_PASSWORD 的值>@db:5432/blog
 
 ## 镜像交付与验证
 
-`container` workflow 构建匹配的应用与 ops 镜像，再验证安装、媒体/页面持久化、备份、加密仓库存取、失败恢复和独立项目恢复。`v*` 标签或手动触发产出 `blog-compose-linux-amd64-<commit>` artifact，包含应用、ops 和 PostgreSQL 镜像归档、部署脚本、迁移清单、`IMAGE` / `OPS_IMAGE` 和 `SHA256SUMS`。当前不自动推送镜像仓库，也不创建 GitHub Release；artifact 保留 90 天，正式发布应将它与对应备份保存到长期存储。
+`container` workflow 构建匹配的应用与 ops 镜像，再验证安装、媒体/页面持久化、备份、加密仓库存取、失败恢复和独立项目恢复。`v*` 标签或手动触发产出 `blog-compose-linux-amd64-<commit>` artifact，包含应用、ops 和 PostgreSQL 镜像归档、部署脚本、定时任务单元、`IMAGE` / `OPS_IMAGE` 和 `SHA256SUMS`。迁移与恢复工具随匹配镜像交付，宿主机无需再保留重复副本。当前不自动推送镜像仓库，也不创建 GitHub Release；artifact 保留 90 天，正式发布应将它与对应备份保存到长期存储。
 
 下载并解压 artifact 后，在解压目录执行：
 
@@ -119,12 +119,13 @@ docker compose run --rm --no-deps -e DATABASE_URL blog migrate
 
 迁移成功后重跑新版本生成的授权脚本，再启动 `blog`。已有 `0001_initial_schema.sql` 保留原始校验和，新版本只追加迁移；跨版本恢复先用备份匹配的版本恢复并核验，再升级，详见[迁移演进](schema-migrations.md)。受限运行账号只校验迁移历史，不负责升级结构。旧数据库基线仍不支持原地转换；切回旧镜像也不等于数据库回滚。
 
-保留期任务可由宿主机调度单次 CLI。将独立维护 DSN 注入终端的 `BLOG_MAINTENANCE_DATABASE_URL` 后执行，该变量不会由 Compose 自动传入 HTTP 服务：
+在现有 `.env` 设置 `BLOG_MAINTENANCE_DATABASE_URL=postgres://blog_maintenance:<编码后的密码>@db:5432/blog`，再运行：
 
 ```sh
-docker compose run --rm --no-deps \
-  -e BLOG_MAINTENANCE_DATABASE_URL blog maintenance --batch-size 1000 --max-batches 100
+sh scripts/compose-backup.sh maintenance
 ```
+
+此入口使用独立维护容器，只传入维护凭据与必要运行参数，和备份共用操作锁；正常 HTTP 服务无需停止。每日调度使用 `ops/blog-maintenance.service` / `.timer`，按实际部署修改 `/opt/blog` 和运行用户后安装并启用 timer。无需额外的环境文件。正式媒体物理清理使用同一脚本的 `media-plan` / `media-apply`，复核与重试规则见[运维说明](operations-and-recovery.md#正式媒体物理清理)。
 
 命名卷是持久存储。Compose 的完整备份、隔离恢复、定时执行与加密异地副本见[Compose 备份恢复](compose-backup.md)。原有宿主机 `recovery.py` 入口继续支持非 Compose 部署；Compose 用户无需安装 Python、导出命名卷或手工设置文件权限。
 

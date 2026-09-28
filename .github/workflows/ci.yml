@@ -41,7 +41,6 @@ jobs:
           SCHEMA_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: |
           python3 -B scripts/schema_contract.py --base-ref "$SCHEMA_BASE_REF"
-          PYTHONPATH=scripts python3 -B -m unittest scripts/test_schema_contract.py
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -52,7 +51,6 @@ jobs:
       - name: Dependency boundaries
         run: |
           python3 -B scripts/check_dependencies.py
-          PYTHONPATH=scripts python3 -B -m unittest scripts/test_check_dependencies.py
 
       - name: Format
         run: cargo fmt --all --check
@@ -63,10 +61,10 @@ jobs:
       - name: Tests
         run: cargo test --workspace
 
-      - name: Recovery, media cleanup and acceptance tool tests
-        run: PYTHONPATH=scripts python3 -B -m unittest scripts/test_recovery.py scripts/test_media_cleanup.py scripts/test_acceptance.py scripts/test_deployment_config.py scripts/test_compose_recovery.py
+      - name: Script unit tests
+        run: BLOG_RECOVERY_TEST=0 PYTHONPATH=scripts python3 -B -m unittest discover -s scripts -p 'test_*.py'
 
-      - name: Isolated recovery, schema upgrade, database roles and media purge drill
+      - name: Isolated recovery, schema upgrade and database roles drill
         env:
           BLOG_RECOVERY_TEST: "1"
           BLOG_TEST_PG_CONTAINER: ${{ job.services.postgres.id }}

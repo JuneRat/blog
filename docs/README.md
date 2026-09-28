@@ -11,7 +11,7 @@
 | Compose 停写备份、独立恢复、定时与加密异地副本 | [Compose 备份恢复](compose-backup.md) |
 | 配置环境、域名、数据库或媒体目录 | [配置参考](configuration.md) |
 | 修改后端或判断代码应放在哪一层 | [架构](architecture.md) → [领域模型](domain.md) |
-| 查看已确认的新数据库方案 | [目标数据库设计](database-design.md) → [ADR-0016](adr/0016-confirmed-blog-schema.md) → [目标 DDL](../blog_schema.sql) |
+| 查看已确认的新数据库方案 | [目标数据库设计](database-design.md) → [ADR-0016](adr/0016-confirmed-blog-schema.md) → [目标 DDL](sql/postgres-core.sql) |
 | 新增表、升级结构或恢复旧版本备份 | [迁移演进](schema-migrations.md) |
 | 比较连接池大小、公开页面与后台混合负载容量 | [容量验证](public-read-capacity.md) |
 | 检查服务健康、错误率、延迟或运行版本 | [探针、日志与指标](observability.md) |
@@ -57,7 +57,7 @@
 | [扩展与数据能力](extensions-and-data.md) | 尚未交付的扩展接口、格式和设计约束 |
 | [ADR](adr/README.md) | 决策背景、理由、后果与替代关系 |
 
-当前数据库以 [migrations/postgres](../migrations/postgres/) 的迁移链为唯一结构来源；[blog_schema.sql](../blog_schema.sql) 与 [postgres-core.sql](sql/postgres-core.sql) 由该链自动生成，只供空库 DDL 参考。已有 `0001_initial_schema.sql` 不再改写，后续按[迁移演进规则](schema-migrations.md)追加；不能与已删除的旧链叠加。桥接实验结论保存在[归档报告](template-bridge-experiment.md)，独立实验代码已移除。
+当前数据库以 [migrations/postgres](../migrations/postgres/) 的迁移链为唯一结构来源；[汇总 DDL](sql/postgres-core.sql) 由该链自动生成，只供空库 DDL 参考。已有 `0001_initial_schema.sql` 不再改写，后续按[迁移演进规则](schema-migrations.md)追加；不能与已删除的旧链叠加。桥接实验结论保存在[归档报告](template-bridge-experiment.md)，独立实验代码已移除。
 
 ## 维护约定
 

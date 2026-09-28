@@ -85,6 +85,10 @@ name = "media"
 required-features = ["sqlx-test-support"]
 
 [[test]]
+name = "media_cleanup"
+required-features = ["sqlx-test-support"]
+
+[[test]]
 name = "migration_permissions"
 required-features = ["sqlx-test-support"]
 

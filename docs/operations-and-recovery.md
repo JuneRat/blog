@@ -35,7 +35,7 @@ blog maintenance --batch-size 1000 --max-batches 100
 
 按 created_at 严格早于截止时间处理：评论仅置空 IP，不改正文、审核状态、关系、version 或 updated_at；过期审计被永久删除。每批最多分别处理指定数量的两类记录，同事务追加不含个人信息的清理计数。审计追加失败则整批回滚。多维护进程按事务锁串行，评论遇到锁定行时跳过。JSON 结果含 comment_ips、audit_logs、batches、has_more、dry_run；has_more=true 表示达到批次上限或仍有锁定记录，可再次执行。
 
-每日调度示例为 [service](../ops/blog-maintenance.service) 与 [timer](../ops/blog-maintenance.timer)。按部署修改路径和用户，将独立维护凭据放在受保护的 /etc/blog/maintenance.env。仓库不会安装或启用这些服务。恢复隔离期间拒绝执行维护。
+每日调度示例为 [service](../ops/blog-maintenance.service) 与 [timer](../ops/blog-maintenance.timer)。它通过 Compose 启动独立维护容器，与备份共用操作锁；按部署修改路径和用户，在现有 `.env` 中设置 `BLOG_MAINTENANCE_DATABASE_URL`（数据库主机为 `db`），凭据不会传入 HTTP 服务。手工执行使用 `sh scripts/compose-backup.sh maintenance`。仓库不会安装或启用这些服务。恢复隔离期间拒绝执行维护。
 
 保留期不清理备份副本；备份保留规则另行制定。正式媒体文件也不属于此命令：零引用仍可能有站外链接。blog media cleanup-staging 仅清理过期暂存文件；正式对象按下面的显式计划清理。
 
@@ -75,27 +75,40 @@ blog rebuild-html --batch-size 100 --max-batches 100
 
 ## 正式媒体物理清理
 
-[media_cleanup.py](../scripts/media_cleanup.py) 只接受明确选中的媒体 UUID，每份计划最多 1,000 个。所选媒体必须已进回收站、没有已知引用，文件路径、大小及 SHA-256 与登记一致。不会按软删除时间、零引用或未登记文件自动清扫，也不扫描全站正文。草稿、私密、归档和回收站内容仍计入 media_refs；封面、头像外键及站点 logo 另行复核，缺少引用记账也不会绕过它们。
+`blog media purge` 只接受明确选中的媒体 UUID，每份计划最多 1,000 个。所选媒体必须已进回收站、没有已知引用，文件路径、大小及 SHA-256 与登记一致。不会按软删除时间、零引用或未登记文件自动清扫，也不扫描全站正文。草稿、私密、归档和回收站内容仍计入 media_refs；封面、头像外键及站点 logo 另行复核，缺少引用记账也不会绕过它们。
 
-资源目录支持 --config / --blog-bin，统一通过已构建的 blog 程序解析环境变量、TOML 与默认值；显式路径参数优先于环境和 TOML。结构管理连接仍由 DATABASE_URL 注入；执行主机必须能访问正式媒体目录，并有删除所选文件的权限。Docker 模式只在指定容器内执行 PostgreSQL 工具，媒体路径仍属于脚本所在主机；非 Docker 部署省略 --docker-container 并提供 psql。不要把这些权限授予保留期维护账号。
+清理由 Rust 应用用例协调，基础设施负责 PostgreSQL 事务和本地文件校验；Python 仅保留 Compose 部署封装。命令只校验已应用的迁移，不自动升级结构或初始化权限，也不依赖主题、公开 URL 与后台资源。
+
+Compose 部署使用以下入口，计划写入 `backups/plans/`，无需主机 Python 或 PostgreSQL 工具：
 
 ```sh
-# 只读生成计划；重复 --id 明确选择每一个媒体 UUID。
-python3 -B scripts/media_cleanup.py plan \
-  --id 00000000-0000-0000-0000-000000000001 \
-  --media-dir "${BLOG_MEDIA_DIR:-data/media}" \
-  --output /secure/maintenance/media-purge.json \
-  --docker-container blog-postgres
-
-# 复核计划、站外链接影响，并停止全部写入后执行。
-python3 -B scripts/media_cleanup.py apply /secure/maintenance/media-purge.json \
-  --docker-container blog-postgres \
+sh scripts/compose-backup.sh media-plan media-purge.json \
+  00000000-0000-0000-0000-000000000001
+# 复核计划和站外链接影响，停止其他写入后执行。
+sh scripts/compose-backup.sh media-apply media-purge.json \
   --maintenance-confirmed --break-links-confirmed
 ```
 
+包装脚本与备份、恢复和保留期维护共用操作锁；执行时自动停止本站 `blog`，结束或失败后恢复原先运行的服务，并拒绝仍有其他数据库客户端连接的执行。外部写入进程仍须由操作者停止。数据库记录提交删除后，即使文件删除失败，旧图片 URL 也已经失效；保留原计划重试即可。
+
+非 Compose 部署使用本机 CLI，通过 `DATABASE_URL` 或安装配置连接结构管理账号，执行主机须有媒体目录的删除权限。不要把这些权限授予保留期维护账号：
+
+```sh
+# 只读生成计划；重复 --id 明确选择每一个媒体 UUID。
+blog media purge plan \
+  --id 00000000-0000-0000-0000-000000000001 \
+  --media-dir "${BLOG_MEDIA_DIR:-data/media}" \
+  --output /secure/maintenance/media-purge.json
+
+blog media purge apply /secure/maintenance/media-purge.json \
+  --maintenance-confirmed --break-links-confirmed
+```
+
+`--media-dir` 优先于环境、TOML 与默认值；配置文件由 `BLOG_CONFIG_FILE` 选择。原 Python 工具生成的格式 1 计划和已提交审计凭据仍可重试。旧计划若采用 Docker 端点标识，在 `purge` 后添加 `--legacy-container 原容器名`，同时让 `DATABASE_URL` 实际连接该原数据库；该参数只兼容旧端点标识，不调用 Docker，也不映射主机媒体路径。原主机计划不能直接搬进 Compose 容器执行。
+
 示例 UUID 须替换为实际选中记录。计划文件以 0600 独占创建，包含数据库名称/OID/连接端点、媒体根目录、所选 ID/path/版本/删除时间/大小/校验和及操作编号。复核后保留原文件，不能编辑或覆盖部分执行的计划。计划摘要用于检测损坏，不是签名或权限凭据；文件和媒体目录由部署方保护。
 
-执行前在部署层取得维护互斥，停止 HTTP、上传、定时任务、保留期任务和所有 CLI 写入，等待在途操作结束；整个执行及重试期间均须维持这一条件。两个确认参数仅记录操作者声明，工具不能验证进程已停止。站外链接无法完整枚举，--break-links-confirmed 表示接受所选图片 URL 永久失效。恢复隔离库禁止清理，旧计划也不能直接用于新恢复库。
+执行前在部署层取得维护互斥，停止 HTTP、上传、定时任务、保留期任务和所有 CLI 写入，等待在途操作结束；整个执行及重试期间均须维持这一条件。两个确认参数是操作者声明；CLI 本身不能验证进程已停止，Compose 封装额外检查当前数据库连接。站外链接无法完整枚举，--break-links-confirmed 表示接受所选图片 URL 永久失效。恢复隔离库禁止清理，旧计划也不能直接用于新恢复库。
 
 | 阶段 | 保护与失败行为 |
 |---|---|
@@ -189,7 +202,7 @@ release 核对该次恢复的数据库标记，重检结构、Owner、当前媒�
 无数据库测试：
 
 ```sh
-PYTHONPATH=scripts python3 -B -m unittest scripts/test_schema_contract.py scripts/test_recovery.py scripts/test_media_cleanup.py
+BLOG_RECOVERY_TEST=0 PYTHONPATH=scripts python3 -B -m unittest discover -s scripts -p 'test_*.py'
 ```
 
 真实往返演练只允许 loopback 管理地址，随机创建并清理专用库和角色：
@@ -201,7 +214,14 @@ BLOG_RECOVERY_TEST=1 BLOG_TEST_PG_CONTAINER=blog-postgres \
 PYTHONPATH=scripts python3 -B -m unittest scripts/test_recovery_postgres.py
 ```
 
-覆盖临时新增表升级、匹配版本备份往返、旧备份恢复后升级、完整表集合与有效权限检查、授权脚本、受限运行账号、维护权限、媒体各状态及多类型引用、多系列、评论树、会话撤销、隔离启动/调度、缺文件拒绝备份、引用缺失拒绝开放，以及媒体清理的审计回滚、版本/引用复核、并发恢复、提交结果丢失、部分文件失败和重试。测试不代替生产维护互斥、RPO/RTO 和故障中断验收；部署层记录备份大小、维护时长、恢复点和实际恢复耗时。
+Python 专项覆盖临时新增表升级、匹配版本备份往返、旧备份恢复后升级、完整表集合与有效权限检查、授权脚本、受限运行账号、维护权限、媒体各状态及多类型引用、多系列、评论树、会话撤销、隔离启动/调度、缺文件拒绝备份、引用缺失拒绝开放。媒体清理的审计回滚、版本/引用复核、并发恢复、提交结果丢失、部分文件失败和重试由 Rust 用例与 PostgreSQL 集成测试覆盖：
+
+```sh
+cargo test -p application --test media_cleanup_usecase
+cargo test -p infrastructure --features sqlx-test-support --test media_cleanup
+```
+
+测试不代替生产维护互斥、RPO/RTO 和故障中断验收；部署层记录备份大小、维护时长、恢复点和实际恢复耗时。
 
 2026-09-27 已在独立 PostgreSQL 18 临时实例完成上述往返演练，全量检查及前端生产构建通过；受限账号迁移并发和失败后释放锁另有集成测试。现有开发数据库未重建或切换。
 

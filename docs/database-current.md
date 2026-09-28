@@ -4,7 +4,7 @@
 
 ## 1. 权威来源与迁移
 
-执行依据是 [migrations/postgres](../migrations/postgres) 的不可变前向迁移链，当前基线为 [0001_initial_schema.sql](../migrations/postgres/0001_initial_schema.sql)。[blog_schema.sql](../blog_schema.sql) 与[汇总 DDL](sql/postgres-core.sql)均由该链生成，不再独立维护；表集合、迁移哈希及授权策略使用[共享清单](../migrations/postgres/schema.json)，操作规则见[迁移演进](schema-migrations.md)。原 `0001_identity_rbac.sql` 至 `0009_comments.sql` 已删除，不保留升级或兼容链。
+执行依据是 [migrations/postgres](../migrations/postgres) 的不可变前向迁移链，当前基线为 [0001_initial_schema.sql](../migrations/postgres/0001_initial_schema.sql)。[汇总 DDL](sql/postgres-core.sql)由该链生成，不再独立维护；表集合、迁移哈希及授权策略使用[共享清单](../migrations/postgres/schema.json)，操作规则见[迁移演进](schema-migrations.md)。原 `0001_identity_rbac.sql` 至 `0009_comments.sql` 已删除，不保留升级或兼容链。
 
 迁移仅支持空库或已应用新基线的数据库。入口检测到旧 users 结构时明确拒绝，SQLx 仍检查迁移历史及校验和；不会自动 DROP、清空历史或跳过校验。不要手工导入设计稿后再运行迁移。开发时先用[独立空库](development.md#新基线的隔离验证)，其余模块适配后再显式重建原开发库。
 
@@ -55,7 +55,7 @@ Post/Page 已支持 scheduled、可逆归档、回收站与恢复。恢复一律
 
 引用同步在来源写事务内按媒体 ID 顺序加共享锁。新增引用拒绝不存在或已软删除图片；同一来源可保留历史引用。头像、站点 logo、系列封面及正文共用该协议，使用位置仍按内容阅读权限过滤。内容软删除保留引用，永久删除同事务清除引用。
 
-`blog media cleanup-staging` 仅删除超过一小时的暂存残留。正式对象由 `scripts/media_cleanup.py` 按显式 ID 生成计划，在维护窗口确认外链失效后执行；要求已软删除、无已知引用、文件一致。媒体行锁内重检版本和引用，删除与审计凭据一起提交，再按凭据删除文件；同一计划可重试断线或文件失败。不会自动清理零引用或未登记文件，登记提交结果不确定的正式文件也保留。完整流程见[运维](operations-and-recovery.md#正式媒体物理清理)。
+`blog media cleanup-staging` 仅删除超过一小时的暂存残留。正式对象由 `blog media purge` 按显式 ID 生成计划，在维护窗口确认外链失效后执行；要求已软删除、无已知引用、文件一致。媒体行锁内重检版本和引用，删除与审计凭据一起提交，再按凭据删除文件；同一计划可重试断线或文件失败。不会自动清理零引用或未登记文件，登记提交结果不确定的正式文件也保留。完整流程见[运维](operations-and-recovery.md#正式媒体物理清理)。
 
 ## 6. 分组设置
 

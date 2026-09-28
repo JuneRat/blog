@@ -2,7 +2,7 @@
 
 本文负责本地运行、CLI、后台联调和检查流程。完整环境变量见[配置参考](configuration.md)，业务规则见[内容生命周期](content-lifecycle.md)，接口见[管理 API](admin-api.md)。后台组件、表单、查询缓存和测试约定见[后台开发指南](admin-development.md)。
 
-迁移链已重写为新的 [19 表初始基线](../migrations/postgres/0001_initial_schema.sql)，仅支持空库。身份、会话、媒体、内容、目录和评论已适配，保留期任务、独立授权、新结构恢复、显式媒体物理清理与已有业务写入口的事务审计已接入；生产验收仍单独进行。不要把 `blog_schema.sql` 手工导入后再执行迁移；统一通过 `migrate` 建立 SQLx 记录。进度见[实施路线](product-roadmap.md#已采纳数据库设计的实施)。
+迁移从 [19 表初始基线](../migrations/postgres/0001_initial_schema.sql)建立空库，已采用该基线的库按[迁移演进规则](schema-migrations.md)追加升级；旧九文件迁移链须另建新库迁移数据。不要把 `docs/sql/postgres-core.sql` 手工导入后再执行迁移；统一通过 `migrate` 建立 SQLx 记录。业务交付与生产验收状态见[实施路线](product-roadmap.md#已采纳数据库设计的实施)。
 
 ## 环境准备
 

@@ -409,6 +409,44 @@ def release():
     print("Restore released; verification sessions revoked.")
 
 
+def media_cleanup(action, name, ids, maintenance_confirmed, break_links_confirmed):
+    """Deployment wrapper only; the Rust application owns plan, commit and file semantics."""
+    import tomllib
+    require(bool(name and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\.json", name)),
+            "use a simple plan filename ending in .json")
+    configured = tomllib.loads((CONFIG / "config.toml").read_text())
+    selected = recovery.db_config(os.environ.get("DATABASE_URL") or configured["database"]["url"])
+    require(selected["PGHOST"] == "db" and selected["PGPORT"] == "5432", "media cleanup requires the Compose database")
+    plans = BACKUPS / "plans"
+    require(not plans.is_symlink(), "plan directory must not be a symbolic link")
+    plans.mkdir(mode=0o700, exist_ok=True)
+    path = plans / name
+    require(not path.is_symlink(), "plan must not be a symbolic link")
+    env = {"PATH": os.environ["PATH"], "BLOG_CONFIG_FILE": str(CONFIG / "config.toml"),
+           "BLOG_MEDIA_DIR": str(MEDIA), "BLOG_MIGRATIONS_DIR": "/opt/blog/migrations/postgres",
+           "BLOG_RECOVERY_MODE": os.environ.get("BLOG_RECOVERY_MODE", "false"),
+           "DATABASE_URL": "postgres://blog_owner:" + quote(os.environ["BLOG_OWNER_PASSWORD"], safe="")
+                           + "@db:5432/" + selected["PGDATABASE"]}
+    command = ["blog", "media", "purge"]
+    if action == "media-plan":
+        require(bool(ids), "select media IDs explicitly")
+        command += ["plan", "--output", str(path)]
+        for mid in ids:
+            command += ["--id", mid]
+    else:
+        require(not ids and maintenance_confirmed and break_links_confirmed, "confirm maintenance and permanent link removal")
+        assert_quiet(pg(selected["PGDATABASE"]))
+        command += ["apply", str(path), "--maintenance-confirmed", "--break-links-confirmed"]
+    result = subprocess.run(command, env=env, capture_output=True, text=True, check=False)
+    # stdout is the typed CLI result, stderr can contain configuration/storage details.
+    if result.stdout.strip():
+        print(result.stdout.strip())
+    if path.is_file():
+        host_owned(path)
+    host_owned(plans)
+    require(result.returncode == 0, "media cleanup failed; check the reviewed plan, references, object files and database permissions")
+
+
 def retention(key, default):
     value = int(os.environ.get(key, str(default)))
     require(1 <= value <= 10000, f"{key} must be between 1 and 10000")
@@ -464,12 +502,19 @@ def main():
     os.umask(0o077)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=("preflight", "backup", "verify", "prepare", "restore", "check",
-                                           "release", "finalize", "sync", "remote-init", "remote-list", "fetch"))
+                                           "release", "finalize", "sync", "remote-init", "remote-list", "fetch", "media-plan", "media-apply"))
     parser.add_argument("argument", nargs="?")
+    parser.add_argument("ids", nargs="*")
     parser.add_argument("--password-stdin", action="store_true")
+    parser.add_argument("--maintenance-confirmed", action="store_true")
+    parser.add_argument("--break-links-confirmed", action="store_true")
     args = parser.parse_args()
     try:
-        if args.action == "preflight": preflight()
+        if args.action in ("media-plan", "media-apply"):
+            media_cleanup(args.action, args.argument, args.ids, args.maintenance_confirmed, args.break_links_confirmed)
+        elif args.ids or args.maintenance_confirmed or args.break_links_confirmed:
+            raise RecoveryError("unexpected media cleanup arguments")
+        elif args.action == "preflight": preflight()
         elif args.action == "backup": backup()
         elif args.action == "verify":
             with unpack("/input/backup.tar.gz") as (_, manifest, _, _):
