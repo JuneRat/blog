@@ -6,10 +6,9 @@ use std::path::Path;
 use std::sync::Arc;
 
 use application::error::UseCaseError;
-use application::public_site::{
-    CategoryView, PageView, PostCard, PostView, SeriesView, SiteInfo, TagView,
-};
+use application::public_site::{CategoryView, PageView, PostCard, PostView, SeriesView, TagView};
 use application::seo::SeoMeta;
+use application::site_info::SiteInfo;
 use application::theme_data::ThemeData;
 use application::themes::ThemeAssets;
 use minijinja::{AutoEscape, Environment, UndefinedBehavior, Value};
@@ -460,7 +459,7 @@ mod tests {
     #[tokio::test]
     async fn auxiliary_templates_escape_html_regardless_of_extension() {
         let runtime = super::RenderingRuntime::default();
-        let site = application::public_site::SiteInfo {
+        let site = application::site_info::SiteInfo {
             title: "Site".into(),
             description: String::new(),
             logo_url: None,

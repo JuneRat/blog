@@ -10,7 +10,7 @@ use crate::error::UseCaseError;
 /// settings.site 分组的存储形态。
 ///
 /// 字段 Option 化以容忍**历史/手工写入的不完整行**：缺字段按「该字段未配置」
-/// 处理，读取时逐字段回退到装配值（见 `application::settings::effective_site`）。
+/// 处理，读取时逐字段回退到装配值（见 `application::site_info::effective_site`）。
 /// 写入路径（`SettingsInteractor::save_site`）只产生完整对象。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SiteSettingsValue {

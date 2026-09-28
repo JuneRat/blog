@@ -341,7 +341,10 @@ impl PublishedTagQuery for PostgresPublishedTagQuery {
         Ok((posts, total))
     }
 
-    async fn list_public_directories(&self) -> Result<Vec<PublicUrlEntry>, UseCaseError> {
+    async fn list_public_directories(
+        &self,
+        limit: i64,
+    ) -> Result<Vec<PublicUrlEntry>, UseCaseError> {
         // INNER JOIN 直接实现「非空才收录」：没有公开文章的标签根本不出现在结果里。
         // lastmod 取该标签下公开文章的最近更新时间（tags 表没有 updated_at）。
         let rows = sqlx::query(&format!(
@@ -353,8 +356,10 @@ impl PublishedTagQuery for PostgresPublishedTagQuery {
             WHERE {POST_PUBLIC_PREDICATE}
             GROUP BY t.slug
             ORDER BY t.slug
+            LIMIT $1
             "#
         ))
+        .bind(limit.max(0))
         .fetch_all(&self.pool)
         .await
         .map_err(map_sqlx_error)?;
@@ -809,7 +814,10 @@ impl PublishedCategoryQuery for PostgresPublishedCategoryQuery {
         Ok((posts, total))
     }
 
-    async fn list_public_directories(&self) -> Result<Vec<PublicUrlEntry>, UseCaseError> {
+    async fn list_public_directories(
+        &self,
+        limit: i64,
+    ) -> Result<Vec<PublicUrlEntry>, UseCaseError> {
         // 与标签页同口径：INNER JOIN 只保留有直接归属公开文章的分类，空分类不收。
         // lastmod 取「分类自身改名时间」与「成员文章最近更新时间」的较晚者：
         // 改分类名也会改变公开页展示内容。
@@ -821,8 +829,10 @@ impl PublishedCategoryQuery for PostgresPublishedCategoryQuery {
             WHERE {POST_PUBLIC_PREDICATE}
             GROUP BY c.id, c.slug, c.updated_at
             ORDER BY c.slug
+            LIMIT $1
             "#
         ))
+        .bind(limit.max(0))
         .fetch_all(&self.pool)
         .await
         .map_err(map_sqlx_error)?;
@@ -1300,7 +1310,10 @@ impl PublishedSeriesQuery for PostgresPublishedSeriesQuery {
         Ok((posts, total))
     }
 
-    async fn list_public_directories(&self) -> Result<Vec<PublicUrlEntry>, UseCaseError> {
+    async fn list_public_directories(
+        &self,
+        limit: i64,
+    ) -> Result<Vec<PublicUrlEntry>, UseCaseError> {
         // 与分类页同口径：只收录有公开文章的系列；lastmod 取系列改名与成员更新的较晚者。
         let rows = sqlx::query(&format!(
             r#"
@@ -1311,8 +1324,10 @@ impl PublishedSeriesQuery for PostgresPublishedSeriesQuery {
             WHERE {POST_PUBLIC_PREDICATE}
             GROUP BY s.id, s.slug, s.updated_at
             ORDER BY s.slug
+            LIMIT $1
             "#
         ))
+        .bind(limit.max(0))
         .fetch_all(&self.pool)
         .await
         .map_err(map_sqlx_error)?;

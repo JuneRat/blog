@@ -12,7 +12,8 @@ use application::ports::{
     CategoryRepository, PublishedCategoryQuery, PublishedTagQuery, TagRepository,
 };
 use application::ports::{PageRepository, PostRepository, PublishedPageQuery, PublishedPostQuery};
-use application::public_site::{PublicSiteInteractor, SiteInfo};
+use application::public_site::PublicSiteInteractor;
+use application::site_info::SiteInfo;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;

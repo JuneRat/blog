@@ -9,10 +9,10 @@ use application::ports::{
 };
 use application::public_site::{
     CATEGORY_PAGE_SIZE, CategoryCard, CategoryView, PageView, PostCard, PostView, SERIES_PAGE_SIZE,
-    SeriesCard, SeriesPostCard, SeriesView, SiteInfo, TAG_PAGE_SIZE, TagCard, TagView,
-    format_datetime,
+    SeriesCard, SeriesPostCard, SeriesView, TAG_PAGE_SIZE, TagCard, TagView, format_datetime,
 };
 use application::seo::{PublicBaseUrl, SeoMeta};
+use application::site_info::SiteInfo;
 use application::theme_data::ThemeData;
 use async_trait::async_trait;
 use time::OffsetDateTime;
@@ -133,7 +133,10 @@ impl PublishedCategoryQuery for Fixtures {
     ) -> Result<(Vec<PublicPostSummary>, i64), UseCaseError> {
         Ok((self.rows(limit, offset), self.count as i64))
     }
-    async fn list_public_directories(&self) -> Result<Vec<PublicUrlEntry>, UseCaseError> {
+    async fn list_public_directories(
+        &self,
+        _limit: i64,
+    ) -> Result<Vec<PublicUrlEntry>, UseCaseError> {
         Ok(vec![])
     }
 }
@@ -165,7 +168,10 @@ impl PublishedTagQuery for Fixtures {
     ) -> Result<(Vec<PublicPostSummary>, i64), UseCaseError> {
         Ok((self.rows(limit, offset), self.count as i64))
     }
-    async fn list_public_directories(&self) -> Result<Vec<PublicUrlEntry>, UseCaseError> {
+    async fn list_public_directories(
+        &self,
+        _limit: i64,
+    ) -> Result<Vec<PublicUrlEntry>, UseCaseError> {
         Ok(vec![])
     }
 }

@@ -222,7 +222,7 @@ async fn fresh_stack_with(secure_cookies: bool) -> Stack {
         settings: Arc::new(application::settings::SettingsInteractor::new(
             std::sync::Arc::new(infrastructure::PostgresSettingsStore::new(pool.clone())),
             std::sync::Arc::new(infrastructure::SystemClock),
-            application::public_site::SiteInfo {
+            application::site_info::SiteInfo {
                 title: "测试站点".into(),
                 description: "测试描述".into(),
                 logo_url: None,

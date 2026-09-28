@@ -4,10 +4,9 @@ use async_trait::async_trait;
 use uuid::Uuid;
 
 use crate::error::UseCaseError;
-use crate::public_site::{
-    CategoryView, PageView, PostCard, PostView, SeriesView, SiteInfo, TagView,
-};
+use crate::public_site::{CategoryView, PageView, PostCard, PostView, SeriesView, TagView};
 use crate::seo::SeoMeta;
+use crate::site_info::SiteInfo;
 
 /// 同次渲染的清洗后 HTML 与正文图片引用，必须一起持久化。
 #[derive(Debug, Clone, PartialEq, Eq)]

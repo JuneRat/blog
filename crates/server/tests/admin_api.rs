@@ -243,7 +243,7 @@ async fn fresh_stack() -> Stack {
     let settings = Arc::new(application::settings::SettingsInteractor::new(
         Arc::new(infrastructure::PostgresSettingsStore::new(pool.clone())),
         clock.clone(),
-        application::public_site::SiteInfo {
+        application::site_info::SiteInfo {
             title: "测试站点".into(),
             description: "集成测试".into(),
             logo_url: None,

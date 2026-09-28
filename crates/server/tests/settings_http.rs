@@ -15,8 +15,9 @@ use application::ports::{
     Clock, ExternalIdentity, ExternalIdentityClient, OAuthAccountStore, OAuthConfigStore,
     ProviderConfig, ProviderKind, SecureRandom, SettingsStore, ThemeSettingsStore,
 };
-use application::public_site::{PublicSiteInteractor, SiteInfo};
+use application::public_site::PublicSiteInteractor;
 use application::settings::SettingsInteractor;
+use application::site_info::SiteInfo;
 use application::themes::ThemeRegistry;
 use async_trait::async_trait;
 use axum::body::Body;

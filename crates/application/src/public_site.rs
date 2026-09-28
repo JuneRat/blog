@@ -1,4 +1,4 @@
-//! 公开站点读取用例：组装渲染数据并调用主题渲染端口。
+//! 公开站点读取用例：组装主题渲染数据与 RSS/sitemap 数据。
 //! 匿名可见条件唯一：published + public + 未删除 + 发布时间已到。
 
 use std::sync::Arc;
@@ -11,7 +11,7 @@ use crate::ports::{
     PublishedTagQuery, SettingsStore, ThemeRenderer, ThemeSettingsStore,
 };
 use crate::seo::{self, PublicBaseUrl, SeoMeta};
-use crate::settings::effective_site;
+use crate::site_info::{SiteInfo, effective_site};
 use crate::syndication::{self, FeedChannel, FeedItem, SitemapEntry};
 use crate::themes::ThemeRegistry;
 use domain::content::is_reserved_root_slug;
@@ -21,19 +21,6 @@ use domain::content::is_reserved_root_slug;
 pub fn format_datetime(t: OffsetDateTime) -> String {
     let fmt = time::macros::format_description!("[year]-[month]-[day] [hour]:[minute] UTC");
     t.format(fmt).unwrap_or_else(|_| t.to_string())
-}
-
-/// 站点基础信息：一次渲染的生效值。
-///
-/// 生效优先级（M3 起由 settings 驱动）：数据库 site 行 > 装配回退值
-/// （环境变量 `BLOG_SITE_TITLE`/`BLOG_SITE_DESCRIPTION` 或内置默认值）。
-/// 解析见 [`crate::settings::effective_site`]。
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct SiteInfo {
-    pub title: String,
-    pub description: String,
-    /// 站点 logo 的站内地址（None = 无 logo）。站点配置公开，因此有 logo 即公开来源。
-    pub logo_url: Option<String>,
 }
 
 /// 列表页模板数据契约。
@@ -461,11 +448,11 @@ impl PublicSiteInteractor {
             .await
     }
 
-    /// 渲染 `/feed.xml`：最新公开已发布文章的 RSS 2.0。
+    /// 组装 `/feed.xml` 的频道数据：最新公开已发布文章的 RSS 2.0。
     ///
     /// 复用 `list_public`——草稿、私密、已撤回与软删除在查询谓词里就被排除，
     /// 这里不做第二次可见性判断（两处判断迟早会漂移）。
-    pub async fn render_feed(&self) -> Result<String, UseCaseError> {
+    pub async fn feed_channel(&self) -> Result<FeedChannel, UseCaseError> {
         let site = self.site_info().await;
         let summaries = self
             .posts
@@ -480,16 +467,16 @@ impl PublicSiteInteractor {
                 published_at: s.published_at,
             })
             .collect();
-        Ok(syndication::render_feed(&FeedChannel {
+        Ok(FeedChannel {
             title: site.title.clone(),
             description: site.description.clone(),
             link: self.base_url.root(),
             self_url: seo::feed_url(&self.base_url),
             items,
-        }))
+        })
     }
 
-    /// 渲染 `/sitemap.xml`。
+    /// 组装 `/sitemap.xml` 的收录条目。
     ///
     /// 收录规则（docs/content-lifecycle.md §4 与 SEO 约定一致）：
     /// - 首页恒定收录；
@@ -499,11 +486,10 @@ impl PublicSiteInteractor {
     /// - 草稿、私密、已撤回、软删除内容一律不出现在任何入口。
     ///
     /// 50,000 条上限是**整个文件**的预算（首页 + 文章 + Page + 目录共享）。
-    /// 文章与 Page 按剩余名额限制查询；标签、分类、系列在还有名额时仍全量读取，
-    /// 预算耗尽后跳过后续来源，最终由渲染层截断到总上限。
+    /// 每个来源都按剩余名额限制查询；预算耗尽后跳过后续来源。
     /// 各来源各自取 50,000 再相加会拼出超限文件，而超限 sitemap 会被抓取器
     /// 整体拒绝。内容超过 50,000 条需要 sitemap index（多文件），属后续范围。
-    pub async fn render_sitemap(&self) -> Result<String, UseCaseError> {
+    pub async fn sitemap_entries(&self) -> Result<Vec<SitemapEntry>, UseCaseError> {
         let mut entries = vec![SitemapEntry {
             loc: self.base_url.root(),
             lastmod: None,
@@ -511,7 +497,13 @@ impl PublicSiteInteractor {
 
         let slots = syndication::remaining_slots(entries.len());
         if slots > 0 {
-            for post in self.posts.list_public_for_sitemap(slots).await? {
+            for post in self
+                .posts
+                .list_public_for_sitemap(slots)
+                .await?
+                .into_iter()
+                .take(slots as usize)
+            {
                 entries.push(SitemapEntry {
                     loc: seo::post_url(&self.base_url, &post.slug),
                     lastmod: Some(post.updated_at),
@@ -520,18 +512,28 @@ impl PublicSiteInteractor {
         }
         let slots = syndication::remaining_slots(entries.len());
         if slots > 0 {
-            for page in self.pages.list_public_for_sitemap(slots).await? {
+            for page in self
+                .pages
+                .list_public_for_sitemap(slots)
+                .await?
+                .into_iter()
+                .take(slots as usize)
+            {
                 entries.push(SitemapEntry {
                     loc: seo::page_url(&self.base_url, &page.slug),
                     lastmod: Some(page.updated_at),
                 });
             }
         }
-        // 目录枚举端口不接受 limit，因此目录可能把 entries 推过上限；
-        // render_sitemap 的兜底截断保证输出仍然合法（目录排在最后，先被截掉）。
         let slots = syndication::remaining_slots(entries.len());
         if slots > 0 {
-            for tag in self.tags.list_public_directories().await? {
+            for tag in self
+                .tags
+                .list_public_directories(slots)
+                .await?
+                .into_iter()
+                .take(slots as usize)
+            {
                 entries.push(SitemapEntry {
                     loc: seo::tag_url(&self.base_url, &tag.slug, 1),
                     lastmod: Some(tag.updated_at),
@@ -540,7 +542,13 @@ impl PublicSiteInteractor {
         }
         let slots = syndication::remaining_slots(entries.len());
         if slots > 0 {
-            for category in self.categories.list_public_directories().await? {
+            for category in self
+                .categories
+                .list_public_directories(slots)
+                .await?
+                .into_iter()
+                .take(slots as usize)
+            {
                 entries.push(SitemapEntry {
                     loc: seo::category_url(&self.base_url, &category.slug, 1),
                     lastmod: Some(category.updated_at),
@@ -549,31 +557,25 @@ impl PublicSiteInteractor {
         }
         let slots = syndication::remaining_slots(entries.len());
         if slots > 0 {
-            for series in self.series.list_public_directories().await? {
+            for series in self
+                .series
+                .list_public_directories(slots)
+                .await?
+                .into_iter()
+                .take(slots as usize)
+            {
                 entries.push(SitemapEntry {
                     loc: seo::series_url(&self.base_url, &series.slug, 1),
                     lastmod: Some(series.updated_at),
                 });
             }
         }
-        Ok(syndication::render_sitemap(&entries))
+        Ok(entries)
     }
 
-    /// 渲染 `/robots.txt`：允许抓取公开内容，屏蔽后台/接口/认证前缀，
-    /// 并声明 sitemap 地址（否则抓取器无从发现 sitemap）。
-    ///
-    /// 纯字符串，不读数据库——robots 是站点级约定，不随内容变化。
-    pub fn render_robots(&self) -> String {
-        format!(
-            "User-agent: *\n\
-             Allow: /\n\
-             Disallow: /admin\n\
-             Disallow: /api\n\
-             Disallow: /auth\n\
-             \n\
-             Sitemap: {}\n",
-            seo::sitemap_url(&self.base_url)
-        )
+    /// 可信站点地址生成的 sitemap 地址，供 robots 响应声明。
+    pub fn sitemap_url(&self) -> String {
+        seo::sitemap_url(&self.base_url)
     }
 }
 

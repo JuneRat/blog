@@ -58,6 +58,8 @@ flowchart TD
 
 应用用例按实际功能文件组织，包括 `content`、`content_queries`、`page`、`tag`、`category`、`series`、`identity`、`auth`、`password`、`media`、`settings`、`public_site` 等；没有通用 `common` crate、每表一个用例或通用工作单元框架。
 
+站点生效信息与字段回退规则集中在 [site_info.rs](../crates/application/src/site_info.rs)，设置、公开展示、SEO 和渲染端口共用这一契约，设置与公开用例不互相依赖。RSS/sitemap 用例只返回结构化数据；XML 转义、协议日期格式、robots 文本及 HTTP 响应由接口层负责，不依赖主题。
+
 ## 内容读写边界
 
 写入通过聚合维护业务规则，通过仓储端口表达一次原子提交：
@@ -75,7 +77,7 @@ Post/Page 管理 API 及 Post CLI 通过稳定 UUID 定位资源，公开 URL �
 
 后台普通列表及回收站统一由 `ContentQueries` 授权，依赖 `AdminPostQuery` / `AdminPageQuery` 窄端口；Post CLI 也走这条路径。Post/Page 写仓储只保留聚合加载与提交，不承担列表查询。独立查询适配器只投影列表展示字段，不读取 Markdown、HTML 或关联集合；固定每页 20 条，支持状态/可见性筛选，同一个只读 REPEATABLE READ 事务读取总数和分页。稳定排序以 UUID 打破时间戳并列；跨请求不承诺冻结快照。
 
-公开读取采用面向页面的查询 DTO，共用同一个数据库，不为公开读取重建聚合。公开 Post 查询只返回 `published + public + 未软删除` 内容，Page 查询只返回 `published + public` 内容；公开详情直接使用持久化 `content_html`。当前没有公开页面缓存或跨请求主题查询缓存，每次请求重新读取公开状态。浏览器和代理的缓存行为仍取决于部署配置，应用内部无缓存不等于能够撤回已发送的响应。
+公开读取采用面向页面的查询 DTO，共用同一个数据库，不为公开读取重建聚合。公开 Post/Page 查询只返回 `published + public + 未软删除 + 发布时间已到` 内容；公开详情直接使用持久化 `content_html`。sitemap 按剩余额度限制文章、Page 和三类目录的 SQL 查询，所有来源共用 50,000 条上限，耗尽后跳过后续查询。当前没有公开页面缓存或跨请求主题查询缓存，每次请求重新读取公开状态。浏览器和代理的缓存行为仍取决于部署配置，应用内部无缓存不等于能够撤回已发送的响应。
 
 渲染执行、正文派生物回填及预算见[主题与渲染](themes-and-rendering.md)；当前表和锁协议见[数据库实现参考](database-current.md)。
 

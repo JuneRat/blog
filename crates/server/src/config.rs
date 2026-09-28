@@ -3,8 +3,8 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use application::public_site::SiteInfo;
 use application::seo::PublicBaseUrl;
+use application::site_info::SiteInfo;
 
 pub struct DatabaseConfig {
     pub url: String,

@@ -242,8 +242,12 @@ pub trait PublishedSeriesQuery: Send + Sync {
 
     /// sitemap 用：**至少有一篇公开文章**的系列，含该系列公开文章的最近更新时间。
     ///
+    /// 按 slug 升序返回最多 limit 条；limit <= 0 返回空列表。
     /// 空目录天然被过滤掉——列表页没有公开内容，收录它只会制造薄内容。
-    async fn list_public_directories(&self) -> Result<Vec<PublicUrlEntry>, UseCaseError>;
+    async fn list_public_directories(
+        &self,
+        limit: i64,
+    ) -> Result<Vec<PublicUrlEntry>, UseCaseError>;
 }
 
 #[async_trait]
@@ -265,8 +269,11 @@ pub trait PublishedCategoryQuery: Send + Sync {
         offset: i64,
     ) -> Result<(Vec<PublicPostSummary>, i64), UseCaseError>;
 
-    /// sitemap 用：至少有一篇直接归属公开文章的分类（规则同系列）。
-    async fn list_public_directories(&self) -> Result<Vec<PublicUrlEntry>, UseCaseError>;
+    /// sitemap 用：至少有一篇直接归属公开文章的分类（排序及 limit 规则同系列）。
+    async fn list_public_directories(
+        &self,
+        limit: i64,
+    ) -> Result<Vec<PublicUrlEntry>, UseCaseError>;
 }
 
 #[async_trait]
@@ -286,11 +293,14 @@ pub trait PublishedTagQuery: Send + Sync {
         offset: i64,
     ) -> Result<(Vec<PublicPostSummary>, i64), UseCaseError>;
 
-    /// sitemap 用：至少挂有一篇公开文章的标签（规则同系列）。
-    async fn list_public_directories(&self) -> Result<Vec<PublicUrlEntry>, UseCaseError>;
+    /// sitemap 用：至少挂有一篇公开文章的标签（排序及 limit 规则同系列）。
+    async fn list_public_directories(
+        &self,
+        limit: i64,
+    ) -> Result<Vec<PublicUrlEntry>, UseCaseError>;
 }
 
-/// 公开页面详情（Page 无作者、无软删除）。
+/// 公开页面详情（Page 无作者）。
 #[derive(Debug, Clone)]
 pub struct PublicPageDetail {
     pub title: String,
@@ -302,13 +312,13 @@ pub struct PublicPageDetail {
 
 #[async_trait]
 pub trait PublishedPageQuery: Send + Sync {
-    /// 只返回 status=published AND visibility=public 的页面。
+    /// 只返回已发布、公开、未软删除且发布时间已到的页面。
     async fn find_public_by_slug(
         &self,
         slug: &str,
     ) -> Result<Option<PublicPageDetail>, UseCaseError>;
 
-    /// sitemap 用：枚举全部公开页面（Page 无软删除，谓词只有状态与可见性）。
+    /// sitemap 用：按 limit 枚举公开页面，复用详情的公开条件。
     async fn list_public_for_sitemap(
         &self,
         limit: i64,

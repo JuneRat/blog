@@ -8,10 +8,10 @@ use application::identity::{Actor, ActorChannel};
 use application::ports::{
     Clock, SaveOutcome, SettingsStore, SiteSettingsRecord, SiteSettingsValue,
 };
-use application::public_site::SiteInfo;
 use application::settings::{
     SaveSiteSettingsCmd, SettingsInteractor, SiteSettingsSource, SiteSettingsView,
 };
+use application::site_info::SiteInfo;
 use domain::identity::{PermissionSet, UserId};
 use time::OffsetDateTime;
 use uuid::Uuid;

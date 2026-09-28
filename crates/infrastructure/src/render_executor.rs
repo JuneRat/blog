@@ -9,10 +9,9 @@ use std::time::{Duration, Instant};
 
 use application::error::UseCaseError;
 use application::ports::{CommentRenderer, ContentRenderer, RenderedContent, ThemeRenderer};
-use application::public_site::{
-    CategoryView, PageView, PostCard, PostView, SeriesView, SiteInfo, TagView,
-};
+use application::public_site::{CategoryView, PageView, PostCard, PostView, SeriesView, TagView};
 use application::seo::SeoMeta;
+use application::site_info::SiteInfo;
 use async_trait::async_trait;
 use tokio::sync::Semaphore;
 

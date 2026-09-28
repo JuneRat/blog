@@ -14,3 +14,5 @@ pub mod http_media;
 pub mod http_support;
 
 pub mod http_retention;
+
+mod syndication;

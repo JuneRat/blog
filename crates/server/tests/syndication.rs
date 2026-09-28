@@ -14,11 +14,13 @@ use application::content::{CreatePostCmd, PostInteractor};
 use application::identity::{Actor, CreateUserCmd, RoleInteractor, UserInteractor};
 use application::page::{CreatePageCmd, PageInteractor, PageVisibility};
 use application::ports::{
-    CategoryRepository, PageRepository, PostRepository, SeriesRepository, SettingsStore,
-    SiteSettingsValue, TagRepository,
+    CategoryRepository, PageRepository, PostRepository, PublishedCategoryQuery,
+    PublishedSeriesQuery, PublishedTagQuery, SeriesRepository, SettingsStore, SiteSettingsValue,
+    TagRepository,
 };
-use application::public_site::{PublicSiteInteractor, SiteInfo};
+use application::public_site::PublicSiteInteractor;
 use application::seo::PublicBaseUrl;
+use application::site_info::SiteInfo;
 use axum::body::Body;
 use axum::http::{HeaderMap, Request, StatusCode, header};
 use http_body_util::BodyExt;
@@ -435,6 +437,53 @@ async fn sitemap_covers_public_urls_and_skips_empty_directories() {
         !body.contains("site-post"),
         "撤回后立即退出 sitemap：{body}"
     );
+}
+
+#[tokio::test]
+async fn directory_queries_limit_sorted_public_results() {
+    let _g = SERIAL.lock().await;
+    let s = stack().await;
+
+    // 打乱插入顺序；隐藏和空目录排在公开目录前面，确保先过滤再截断。
+    for slug in ["zeta", "alpha", "middle", "a-draft", "a-private", "a-empty"] {
+        let tag = seed_tag(&s, slug, slug).await;
+        let category = seed_category(&s, slug).await;
+        let series = seed_series(&s, slug).await;
+        if slug == "a-empty" {
+            continue;
+        }
+        let mut input = CreatePostCmd {
+            tag_ids: vec![tag],
+            category_id: Some(category),
+            series: vec![application::content::SeriesPlacement {
+                series_id: series,
+                position: 1,
+            }],
+            ..cmd(slug, slug)
+        };
+        if slug == "a-private" {
+            input.visibility = application::content::PostVisibility::Private;
+        }
+        post(&s, input, slug != "a-draft").await;
+    }
+
+    let tags = PostgresPublishedTagQuery::new(s.pool.clone());
+    let categories = PostgresPublishedCategoryQuery::new(s.pool.clone());
+    let series = PostgresPublishedSeriesQuery::new(s.pool.clone());
+    for limit in [-1_i64, 0, 1, 2, 20] {
+        let expected: Vec<_> = ["alpha", "middle", "zeta"]
+            .into_iter()
+            .take(limit.max(0) as usize)
+            .collect();
+        for rows in [
+            tags.list_public_directories(limit).await.unwrap(),
+            categories.list_public_directories(limit).await.unwrap(),
+            series.list_public_directories(limit).await.unwrap(),
+        ] {
+            let slugs: Vec<_> = rows.iter().map(|row| row.slug.as_str()).collect();
+            assert_eq!(slugs, expected, "limit={limit}");
+        }
+    }
 }
 
 #[tokio::test]

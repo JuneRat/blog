@@ -65,7 +65,7 @@ themes/default/
 
 ### RSS、sitemap 与 robots
 
-机器可读输出由应用层[协议渲染函数](../crates/application/src/syndication.rs)和公开用例生成，不经过主题，主题切换不改变其协议契约。
+公开用例返回 [RSS 频道与 sitemap 条目](../crates/application/src/syndication.rs)，接口层负责 [XML 转义、日期格式与 robots 编码](../crates/interfaces/src/syndication.rs)以及 HTTP 响应。数据查询与协议编码均不经过主题，主题切换不改变其协议契约。
 
 | 路径 | 当前契约 |
 |---|---|
@@ -73,7 +73,7 @@ themes/default/
 | `/sitemap.xml` | 收录首页、公开文章、公开 Page，以及至少有一篇公开文章的标签/分类/系列目录；目录只收录第 1 页；内容条目 lastmod 使用更新时间 |
 | `/robots.txt` | 允许抓取公开内容，排除 `/admin`、`/api`、`/auth`，并声明绝对 sitemap 地址 |
 
-sitemap 的 50,000 条限制是整个文件的预算：首页、文章、Page、目录共用，按此顺序分配；超出部分截断，当前没有 sitemap index。XML 文本统一转义并排除非法控制字符；Unicode slug 的路径编码与 canonical 保持一致。三个响应均设置 `Cache-Control: no-cache`，当前不生成 ETag。
+sitemap 的 50,000 条限制是整个文件的预算：首页、文章、Page、标签、分类、系列共用，按此顺序分配。每个来源的 SQL 查询都以剩余额度为上限，额度耗尽后跳过后续来源；应用用例保证返回条目不超限，接口编码另有兜底截断。当前没有 sitemap index。XML 文本统一转义并排除非法控制字符；Unicode slug 的路径编码与 canonical 保持一致。三个响应均设置 `Cache-Control: no-cache`，当前不生成 ETag。
 
 ## 模板数据函数
 

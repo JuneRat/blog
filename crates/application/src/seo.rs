@@ -13,7 +13,7 @@ use std::fmt::Write as _;
 
 use url::{Position, Url};
 
-use crate::public_site::SiteInfo;
+use crate::site_info::SiteInfo;
 
 /// `<meta name="description">` 的字符上限（超出截断并加省略号）。
 pub const META_DESCRIPTION_MAX_CHARS: usize = 160;

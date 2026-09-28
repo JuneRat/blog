@@ -18,6 +18,7 @@ pub mod publishing;
 pub mod seo;
 pub mod series;
 pub mod settings;
+pub mod site_info;
 pub mod syndication;
 pub mod tag;
 pub mod theme_data;

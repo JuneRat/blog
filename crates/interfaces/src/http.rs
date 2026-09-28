@@ -314,13 +314,13 @@ const NO_CACHE: &str = "no-cache";
 
 /// `/feed.xml`：最新公开文章的 RSS 2.0。
 async fn feed(State(state): State<PublicSiteState>) -> Response {
-    match state.site.render_feed().await {
-        Ok(xml) => (
+    match state.site.feed_channel().await {
+        Ok(channel) => (
             [
                 (header::CONTENT_TYPE, "application/rss+xml; charset=utf-8"),
                 (header::CACHE_CONTROL, NO_CACHE),
             ],
-            xml,
+            crate::syndication::render_feed(&channel),
         )
             .into_response(),
         Err(e) => server_error(e),
@@ -329,13 +329,13 @@ async fn feed(State(state): State<PublicSiteState>) -> Response {
 
 /// `/sitemap.xml`：首页、公开文章与 Page，以及非空的标签/分类/系列页。
 async fn sitemap(State(state): State<PublicSiteState>) -> Response {
-    match state.site.render_sitemap().await {
-        Ok(xml) => (
+    match state.site.sitemap_entries().await {
+        Ok(entries) => (
             [
                 (header::CONTENT_TYPE, "application/xml; charset=utf-8"),
                 (header::CACHE_CONTROL, NO_CACHE),
             ],
-            xml,
+            crate::syndication::render_sitemap(&entries),
         )
             .into_response(),
         Err(e) => server_error(e),
@@ -349,7 +349,7 @@ async fn robots(State(state): State<PublicSiteState>) -> Response {
             (header::CONTENT_TYPE, "text/plain; charset=utf-8"),
             (header::CACHE_CONTROL, NO_CACHE),
         ],
-        state.site.render_robots(),
+        crate::syndication::render_robots(&state.site.sitemap_url()),
     )
         .into_response()
 }
