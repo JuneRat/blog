@@ -5,6 +5,13 @@ use crate::{
 };
 use application::{comments::*, error::UseCaseError, ports::CommentRenderer};
 use async_trait::async_trait;
+use domain::{
+    comment::{
+        Comment, CommentAuthor as ResolvedCommentAuthor, CommentError, CommentReference,
+        CommentSnapshot, CommentSubmission, ReplyContext,
+    },
+    identity::UserId,
+};
 use serde_json::json;
 use sqlx::{PgPool, Postgres, Row, Transaction, postgres::PgRow};
 use std::{net::IpAddr, sync::Arc};
@@ -25,6 +32,43 @@ fn db(e: sqlx::Error) -> UseCaseError {
 }
 fn missing() -> UseCaseError {
     UseCaseError::NotFound("文章或评论".into())
+}
+fn domain_error(error: CommentError) -> UseCaseError {
+    match error {
+        CommentError::Closed | CommentError::RestoreBeforeApproval => {
+            UseCaseError::Invalid(error.to_string())
+        }
+        CommentError::InvalidReply => missing(),
+        CommentError::VersionConflict => UseCaseError::VersionConflict,
+        CommentError::InvalidSnapshot(_) => UseCaseError::Repository(error.to_string()),
+    }
+}
+fn status(row: &PgRow) -> Result<CommentStatus, UseCaseError> {
+    CommentStatus::parse(row.get("status")).map_err(|e| UseCaseError::Repository(e.into()))
+}
+fn reference(row: &PgRow) -> Result<CommentReference, UseCaseError> {
+    Ok(CommentReference {
+        id: row.get("id"),
+        post_id: row.get("post_id"),
+        parent_id: row.get("parent_id"),
+        root_id: row.get("root_id"),
+        status: status(row)?,
+    })
+}
+fn aggregate(row: &PgRow) -> Result<Comment, UseCaseError> {
+    Comment::reconstitute(CommentSnapshot {
+        id: row.get("id"),
+        post_id: row.get("post_id"),
+        parent_id: row.get("parent_id"),
+        root_id: row.get("root_id"),
+        user_id: row.get("user_id"),
+        nickname: row.get("author_name"),
+        email: row.get("author_email"),
+        body: row.get("content"),
+        status: status(row)?,
+        version: row.get("version"),
+    })
+    .map_err(domain_error)
 }
 const PUBLIC: &str = "p.status='published' AND p.visibility='public' AND p.deleted_at IS NULL AND p.published_at<=now()";
 // Include only ancestors needed to connect approved descendants. A hidden node's
@@ -73,8 +117,8 @@ fn public_comment(r: PgRow) -> PublicComment {
         created_at: application::public_site::format_datetime(r.get("created_at")),
     }
 }
-fn comment(r: PgRow) -> Comment {
-    Comment {
+fn comment(r: PgRow) -> Result<CommentDto, UseCaseError> {
+    Ok(CommentDto {
         id: r.get("id"),
         post_id: r.get("post_id"),
         post_slug: r.get("post_slug"),
@@ -88,10 +132,10 @@ fn comment(r: PgRow) -> Comment {
         author_email: r.get("author_email"),
         ip_address: r.get("ip_address"),
         is_author: r.get("is_author"),
-        status: r.get("status"),
+        status: status(&r)?,
         version: r.get("version"),
         created_at: application::public_site::format_datetime(r.get("created_at")),
-    }
+    })
 }
 #[async_trait]
 impl CommentRepository for PostgresCommentRepository {
@@ -165,43 +209,55 @@ impl CommentRepository for PostgresCommentRepository {
         .map_err(db)?
         .ok_or_else(missing)?;
         let post_id: Uuid = post.get("id");
-        if !global_enabled || !post.get::<bool, _>("comments_enabled") {
-            return Err(UseCaseError::Invalid("新评论已关闭".into()));
-        }
-        let root_id = if let Some(parent) = cmd.parent_id {
-            let row = sqlx::query("SELECT id,root_id FROM comments WHERE id=$1 AND post_id=$2 AND status='approved' FOR SHARE")
-                .bind(parent).bind(post_id).fetch_optional(&mut *tx).await.map_err(db)?.ok_or_else(missing)?;
-            let root = row.get::<Option<Uuid>, _>("root_id").unwrap_or(parent);
-            let valid: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM comments WHERE id=$1 AND post_id=$2 AND parent_id IS NULL AND root_id IS NULL)")
-                .bind(root).bind(post_id).fetch_one(&mut *tx).await.map_err(db)?;
-            if !valid {
-                return Err(missing());
-            }
-            Some(root)
-        } else {
-            None
+        let mut context = CommentSubmission {
+            post_id,
+            global_enabled,
+            post_enabled: post.get("comments_enabled"),
+            reply: None,
         };
-        let (user, nickname) = match cmd.author {
+        context.ensure_open().map_err(domain_error)?;
+        if let Some(parent) = cmd.parent_id {
+            let row = sqlx::query("SELECT id,post_id,parent_id,root_id,status FROM comments WHERE id=$1 AND post_id=$2 FOR SHARE")
+                .bind(parent).bind(post_id).fetch_optional(&mut *tx).await.map_err(db)?.ok_or_else(missing)?;
+            let parent = reference(&row)?;
+            let root = if let Some(root_id) = parent.root_id {
+                // Relationships are immutable; the parent's FK retains the root.
+                // Its moderation status does not constrain an approved descendant.
+                let row = sqlx::query("SELECT id,post_id,parent_id,root_id,status FROM comments WHERE id=$1 AND post_id=$2")
+                    .bind(root_id).bind(post_id).fetch_optional(&mut *tx).await.map_err(db)?.ok_or_else(missing)?;
+                reference(&row)?
+            } else {
+                parent
+            };
+            context.reply = Some(ReplyContext { parent, root });
+        }
+        let author = match cmd.author {
             CommentAuthor::Account(id) => {
                 let account = sqlx::query("SELECT display_name,username FROM users WHERE id=$1 AND status='active' AND deleted_at IS NULL FOR SHARE")
                     .bind(id).fetch_optional(&mut *tx).await.map_err(db)?.ok_or(UseCaseError::Unauthenticated)?;
-                (
-                    Some(id),
-                    CommentNickname::from_account(
+                ResolvedCommentAuthor::Account {
+                    user_id: UserId(id),
+                    nickname: CommentNickname::from_account(
                         account.get::<Option<&str>, _>("display_name"),
                         account.get("username"),
                     )
                     .map_err(|e| UseCaseError::Invalid(e.into()))?,
-                )
+                }
             }
-            CommentAuthor::Guest(name) => (None, name),
+            CommentAuthor::Guest(nickname) => ResolvedCommentAuthor::Guest {
+                nickname,
+                email: cmd.email,
+            },
         };
-        let id = Uuid::now_v7();
-        sqlx::query("INSERT INTO comments(id,post_id,parent_id,root_id,user_id,author_name,author_email,ip_address,content,content_html,content_render_version) VALUES($1,$2,$3,$4,$5,$6,$7,$8::text::inet,$9,$10,$11)")
-            .bind(id).bind(post_id).bind(cmd.parent_id).bind(root_id).bind(user).bind(nickname.as_str())
-            .bind(cmd.email.as_ref().map(|v| v.as_str())).bind(client.map(|v|v.to_string())).bind(cmd.body.as_str()).bind(html).bind(COMMENT_RENDER_VERSION)
+        let comment = Comment::submit(context, author, cmd.body)
+            .map_err(domain_error)?
+            .snapshot();
+        sqlx::query("INSERT INTO comments(id,post_id,parent_id,root_id,user_id,author_name,author_email,ip_address,content,content_html,content_render_version,status,version) VALUES($1,$2,$3,$4,$5,$6,$7,$8::text::inet,$9,$10,$11,$12,$13)")
+            .bind(comment.id).bind(comment.post_id).bind(comment.parent_id).bind(comment.root_id).bind(comment.user_id).bind(&comment.nickname)
+            .bind(&comment.email).bind(client.map(|v|v.to_string())).bind(&comment.body).bind(html).bind(COMMENT_RENDER_VERSION)
+            .bind(comment.status.as_str()).bind(comment.version)
             .execute(&mut *tx).await.map_err(db)?;
-        append_audit_log(&mut tx, AuditEntry {actor_id:user, ip_address:client, action:"comment.create", target_type:"comment", target_id:&id.to_string(), metadata:json!({"post_id":post_id,"parent_id":cmd.parent_id,"root_id":root_id,"version":1})}).await?;
+        append_audit_log(&mut tx, AuditEntry {actor_id:comment.user_id, ip_address:client, action:"comment.create", target_type:"comment", target_id:&comment.id.to_string(), metadata:json!({"post_id":comment.post_id,"parent_id":comment.parent_id,"root_id":comment.root_id,"version":comment.version})}).await?;
         tx.commit().await.map_err(db)
     }
     async fn list(
@@ -228,7 +284,7 @@ impl CommentRepository for PostgresCommentRepository {
         .await
         .map_err(db)?;
         let items = sqlx::query(&format!("SELECT c.id,c.post_id,c.parent_id,c.root_id,c.author_name,c.author_email,host(c.ip_address) AS ip_address,c.content,c.content_html,c.status,c.version,c.created_at,p.slug AS post_slug,p.title AS post_title,COALESCE(c.user_id=p.author_id,false) AS is_author,parent.author_name AS parent_nickname FROM comments c JOIN posts p ON p.id=c.post_id LEFT JOIN comments parent ON parent.id=c.parent_id WHERE {filter} ORDER BY c.created_at DESC,c.id DESC LIMIT 20 OFFSET $5"))
-            .bind(scope.all).bind(scope.user_id).bind(status.map(CommentStatus::as_str)).bind(post).bind((page-1)*20).fetch_all(&mut *tx).await.map_err(db)?.into_iter().map(comment).collect();
+            .bind(scope.all).bind(scope.user_id).bind(status.map(CommentStatus::as_str)).bind(post).bind((page-1)*20).fetch_all(&mut *tx).await.map_err(db)?.into_iter().map(comment).collect::<Result<Vec<_>, _>>()?;
         tx.commit().await.map_err(db)?;
         Ok(CommentPage {
             items,
@@ -249,30 +305,28 @@ impl CommentRepository for PostgresCommentRepository {
         if !scope.all && post.get::<Uuid, _>("author_id") != scope.user_id {
             return Err(UseCaseError::Forbidden);
         }
-        let row = sqlx::query("SELECT status,version FROM comments WHERE id=$1 FOR UPDATE")
+        let row = sqlx::query("SELECT id,post_id,parent_id,root_id,user_id,author_name,author_email,content,status,version FROM comments WHERE id=$1 FOR UPDATE")
             .bind(id)
             .fetch_optional(&mut *tx)
             .await
             .map_err(db)?
             .ok_or_else(missing)?;
-        if row.get::<i64, _>("version") != version {
-            return Err(UseCaseError::VersionConflict);
-        }
-        let current = CommentStatus::parse(row.get("status"))
-            .map_err(|e| UseCaseError::Repository(e.into()))?;
-        let ModerationAction::SetStatus(next) = action;
-        if !current.may_transition_to(next) {
-            return Err(UseCaseError::Invalid("请先恢复到待审核，再通过审核".into()));
-        }
-        if current != next {
-            sqlx::query(
-                "UPDATE comments SET status=$2,version=version+1,updated_at=now() WHERE id=$1",
+        let mut comment = aggregate(&row)?;
+        let current = comment.status();
+        if comment.moderate(version, action).map_err(domain_error)? {
+            let next = comment.status();
+            let result = sqlx::query(
+                "UPDATE comments SET status=$2,version=version+1,updated_at=now() WHERE id=$1 AND version=$3",
             )
             .bind(id)
             .bind(next.as_str())
+            .bind(version)
             .execute(&mut *tx)
             .await
             .map_err(db)?;
+            if result.rows_affected() != 1 {
+                return Err(UseCaseError::VersionConflict);
+            }
             append_audit_log(&mut tx, AuditEntry { actor_id:Some(scope.user_id), ip_address:scope.ip_address, action:"comment.moderate", target_type:"comment", target_id:&id.to_string(), metadata:json!({"from":current.as_str(),"to":next.as_str(),"version":version+1}) }).await?;
         }
         tx.commit().await.map_err(db)

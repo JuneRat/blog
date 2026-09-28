@@ -4119,6 +4119,8 @@ async fn native_comments_preview_private_fields_and_article_policy_cas() {
     .await;
     let data: serde_json::Value = serde_json::from_str(&body).unwrap();
     let comment = &data["items"][0];
+    assert_eq!(comment["status"], "pending");
+    assert_eq!(comment["version"], 1);
     assert_eq!(comment["content_html"], preview["content_html"]);
     assert_eq!(comment["author_email"], "private@example.com");
     assert_eq!(comment["ip_address"], "127.0.0.1");

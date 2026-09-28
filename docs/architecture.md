@@ -56,6 +56,8 @@ flowchart TD
 
 身份规则分为纯判断与事务执行：`application::identity::policy` 负责账号状态变更的权限/版本/幂等顺序及最后可登录 Owner 阈值；`domain::identity::LoginMethods` 负责登录方式保留规则。基础设施在统一身份排他锁内重新读取事实后调用规则，继续在同一事务撤销会话、维护版本与追加审计。后台账号提示复用相同规则，展示数据不能作为写入授权凭据。
 
+评论以 `domain::comment::Comment` 表达独立的单条聚合，通过 ID 关联文章和父/根评论。创建、回复关系、审核转换和版本前提由聚合校验；应用解析输入并确定可信身份与授权范围，`CommentRepository` 适配器在事务内读取并保护关联事实后调用聚合，原子持久化与审计。后台查询投影为带 `CommentStatus` 的 `CommentDto`，公开投影按隐私契约裁剪，接口层保持既有状态字符串。聚合不加载整棵讨论树，也不持有 HTML、IP 或数据库事务，详见[原生评论](comments.md#领域模型与分层)。
+
 应用用例按实际功能文件组织，包括 `content`、`content_queries`、`page`、`tag`、`category`、`series`、`identity`、`auth`、`password`、`media`、`settings`、`public_site` 等；没有通用 `common` crate、每表一个用例或通用工作单元框架。
 
 站点生效信息与字段回退规则集中在 [site_info.rs](../crates/application/src/site_info.rs)，设置、公开展示、SEO 和渲染端口共用这一契约，设置与公开用例不互相依赖。RSS/sitemap 用例只返回结构化数据；XML 转义、协议日期格式、robots 文本及 HTTP 响应由接口层负责，不依赖主题。

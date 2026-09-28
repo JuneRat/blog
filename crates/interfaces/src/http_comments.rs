@@ -6,7 +6,7 @@ use crate::{
     http_support::{RequestId, admin_error, cookie_value, no_store},
 };
 use application::{
-    comments::{CommentInteractor, CommentPolicy, SubmitComment},
+    comments::{CommentDto, CommentInteractor, CommentPage, CommentPolicy, SubmitComment},
     error::UseCaseError,
     ports::SESSION_COOKIE,
 };
@@ -18,7 +18,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{
     net::{IpAddr, SocketAddr},
     sync::Arc,
@@ -170,8 +170,64 @@ async fn list(
         .list(&auth.actor, q.status.as_deref(), q.post_id, q.page)
         .await
     {
-        Ok(v) => Json(v).into_response(),
+        Ok(v) => Json(CommentPageJson::from(v)).into_response(),
         Err(e) => admin_error(e, &id),
+    }
+}
+#[derive(Serialize)]
+struct CommentPageJson {
+    items: Vec<CommentJson>,
+    total: i64,
+    enabled: bool,
+}
+impl From<CommentPage> for CommentPageJson {
+    fn from(page: CommentPage) -> Self {
+        Self {
+            items: page.items.into_iter().map(CommentJson::from).collect(),
+            total: page.total,
+            enabled: page.enabled,
+        }
+    }
+}
+#[derive(Serialize)]
+struct CommentJson {
+    id: Uuid,
+    post_id: Uuid,
+    post_slug: String,
+    post_title: String,
+    parent_id: Option<Uuid>,
+    root_id: Option<Uuid>,
+    parent_nickname: Option<String>,
+    author_email: Option<String>,
+    ip_address: Option<String>,
+    content_html: String,
+    nickname: String,
+    body: String,
+    is_author: bool,
+    status: &'static str,
+    version: i64,
+    created_at: String,
+}
+impl From<CommentDto> for CommentJson {
+    fn from(comment: CommentDto) -> Self {
+        Self {
+            id: comment.id,
+            post_id: comment.post_id,
+            post_slug: comment.post_slug,
+            post_title: comment.post_title,
+            parent_id: comment.parent_id,
+            root_id: comment.root_id,
+            parent_nickname: comment.parent_nickname,
+            author_email: comment.author_email,
+            ip_address: comment.ip_address,
+            content_html: comment.content_html,
+            nickname: comment.nickname,
+            body: comment.body,
+            is_author: comment.is_author,
+            status: comment.status.as_str(),
+            version: comment.version,
+            created_at: comment.created_at,
+        }
     }
 }
 #[derive(Deserialize)]

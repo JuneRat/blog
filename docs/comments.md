@@ -2,6 +2,14 @@
 
 评论已适配[新数据库设计](database-design.md#5-评论)：受限 Markdown 与清洗 HTML 一起持久化，多级回复以 `parent_id/root_id` 保存，公开界面按两级展示。default 与 paper 主题共享 Rust 提供的评论脚本和样式；需要启用 JavaScript。
 
+## 领域模型与分层
+
+[domain::comment::Comment](../crates/domain/src/comment.rs) 是单条评论聚合，与 `content` 并列。它持有身份、作者快照、源文、父/根 ID、审核状态和版本，负责新评论进入 pending、回复关系校验、审核转换及版本前提；文章和其他评论只通过 ID 关联，不把整棵讨论树装入聚合。创建后源文、作者与关系不可通过聚合修改。数据库重建入口校验快照但不重新规范化旧正文；读取的快照是副本，不能修改聚合内部状态。
+
+[应用用例](../crates/application/src/comments.rs) 负责输入校验、可信账号身份、写入渠道和权限范围。`CommentRepository` 是业务提交端口：适配器在一致的文章开关、账号和父/根事实下调用领域行为，继续在同一事务提交评论、版本及审计。PostgreSQL 的具体锁与 SQL 留在[基础设施](../crates/infrastructure/src/comments.rs)；这些事务语义要求适用于其他适配器。HTML、来源 IP、时间戳和审计记录由基础设施维护。
+
+后台查询返回 `CommentDto`，其 `status` 使用领域 `CommentStatus`；HTTP 边界映射成既有字符串字段。公开查询使用不含私密信息的 `PublicComment` 投影，不重建写聚合。查询 DTO 与领域聚合分别演进，HTTP 格式不因内部改名而改变。
+
 ## 输入与展示
 
 游客填写 1–64 字昵称、1–2,000 字正文和可选邮箱；服务端按 Unicode 字符计数。登录用户使用服务端账号名称快照，去除控制字符并截取前 64 字，忽略客户端昵称和邮箱。只有文章作者的登录账号获得独立「作者」徽标。
@@ -62,4 +70,4 @@ IP 以可空 inet 保存主机地址，审核不覆盖提交 IP。默认保留 1
 
 评论使用独立的 `COMMENT_RENDER_VERSION`，显式 `blog rebuild-html` 命令重建版本不匹配的 HTML；启动和结构迁移不触发重建。更新同时核对源文和编辑版本，不改变业务版本或修改时间，不写 media_refs。公开渲染不回退到未清洗源文。规则升级步骤见[运维](operations-and-recovery.md#html-显式重建)。
 
-验证入口包括基础设施评论集成测试（真实 PostgreSQL 关系、权限、分页、CAS、事务回滚和重建竞争）、评论渲染单元测试、server 的评论 HTTP 测试，以及公开组件、审核界面和文章编辑器 Vitest。恢复工具核验评论根关系、媒体引用和新迁移校验和，见[备份恢复](operations-and-recovery.md)。
+验证入口包括领域聚合测试（创建、关系、审核状态矩阵、快照重建与过期无变化请求）、基础设施评论集成测试（真实 PostgreSQL 关系、权限、分页、CAS、事务回滚、提交与开关/父审核竞争及重建竞争）、评论渲染单元测试、server 的评论 HTTP 测试，以及公开组件、审核界面和文章编辑器 Vitest。恢复工具核验评论根关系、媒体引用和新迁移校验和，见[备份恢复](operations-and-recovery.md)。

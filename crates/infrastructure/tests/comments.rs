@@ -78,7 +78,11 @@ async fn change(
         .await
         .unwrap();
 }
-async fn new_comment(service: &CommentInteractor, admin: &Actor, parent: Option<Uuid>) -> Comment {
+async fn new_comment(
+    service: &CommentInteractor,
+    admin: &Actor,
+    parent: Option<Uuid>,
+) -> CommentDto {
     service
         .submit(
             "discussion",
@@ -368,6 +372,167 @@ async fn moderation_scope_cas_noop_and_post_visibility() {
 }
 
 #[tokio::test]
+async fn aggregate_initial_state_and_moderation_preserve_stored_identity() {
+    let (pool, service, admin, _) = fixture("blog_test_comments_aggregate").await;
+    // Creation must persist the domain's initial state rather than rely on DDL defaults.
+    sqlx::raw_sql("ALTER TABLE comments ALTER COLUMN status SET DEFAULT 'approved'; ALTER TABLE comments ALTER COLUMN version SET DEFAULT 9")
+        .execute(&pool).await.unwrap();
+    let root = new_comment(&service, &admin, None).await;
+    assert_eq!(root.status, CommentStatus::Pending);
+    assert_eq!(root.version, 1);
+    let before: serde_json::Value =
+        sqlx::query_scalar("SELECT to_jsonb(c) FROM comments c WHERE id=$1")
+            .bind(root.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    change(&service, &admin, root.id, 1, CommentStatus::Pending).await;
+    let after: serde_json::Value =
+        sqlx::query_scalar("SELECT to_jsonb(c) FROM comments c WHERE id=$1")
+            .bind(root.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(before, after, "no-op must preserve every stored field");
+    change(&service, &admin, root.id, 1, CommentStatus::Approved).await;
+    assert!(matches!(
+        service
+            .moderate(
+                &admin,
+                root.id,
+                1,
+                ModerationAction::SetStatus(CommentStatus::Approved),
+                None
+            )
+            .await,
+        Err(UseCaseError::VersionConflict)
+    ));
+    let mut after: serde_json::Value =
+        sqlx::query_scalar("SELECT to_jsonb(c) FROM comments c WHERE id=$1")
+            .bind(root.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(after["status"], "approved");
+    assert_eq!(after["version"], 2);
+    let mut before = before;
+    for key in ["status", "version", "updated_at"] {
+        before.as_object_mut().unwrap().remove(key);
+        after.as_object_mut().unwrap().remove(key);
+    }
+    assert_eq!(
+        before, after,
+        "moderation only changes status, version and update time"
+    );
+    let audits: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM audit_logs WHERE action='comment.moderate'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        audits, 1,
+        "no-op and stale requests must not append audit entries"
+    );
+    pool.close().await;
+}
+
+async fn wait_for_blocked_submit(pool: &PgPool, blocker: i32) {
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            let waiting: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND $1=ANY(pg_blocking_pids(pid)))")
+                .bind(blocker).fetch_one(pool).await.unwrap();
+            if waiting {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }).await.expect("submission must wait for the transaction that changes admission facts");
+}
+
+#[tokio::test]
+async fn submission_rechecks_global_post_and_parent_facts_after_waiting() {
+    for gate in ["global", "post", "parent"] {
+        let (pool, service, admin, post) =
+            fixture(&format!("blog_test_comments_wait_{gate}")).await;
+        let parent = if gate == "parent" {
+            let root = new_comment(&service, &admin, None).await;
+            change(&service, &admin, root.id, 1, CommentStatus::Approved).await;
+            Some(root.id)
+        } else {
+            None
+        };
+        let before: (i64, i64) = sqlx::query_as(
+            "SELECT (SELECT count(*) FROM comments), (SELECT count(*) FROM audit_logs)",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let blocker: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap();
+        match gate {
+            "global" => {
+                sqlx::query("SELECT pg_advisory_xact_lock(1129270605,1)")
+                    .execute(&mut *tx)
+                    .await
+                    .unwrap();
+                sqlx::query(
+                    "INSERT INTO settings(key,value) VALUES('comments','{\"enabled\":false}')",
+                )
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+            }
+            "post" => {
+                sqlx::query(
+                    "UPDATE posts SET comments_enabled=false,version=version+1 WHERE id=$1",
+                )
+                .bind(post)
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+            }
+            "parent" => {
+                sqlx::query("UPDATE comments SET status='trash',version=version+1 WHERE id=$1")
+                    .bind(parent)
+                    .execute(&mut *tx)
+                    .await
+                    .unwrap();
+            }
+            _ => unreachable!(),
+        }
+        let submitted = tokio::spawn(async move {
+            service
+                .submit("discussion", None, None, cmd("Racing submission", parent))
+                .await
+        });
+        wait_for_blocked_submit(&pool, blocker).await;
+        tx.commit().await.unwrap();
+        let result = submitted.await.unwrap();
+        if gate == "parent" {
+            assert!(matches!(result, Err(UseCaseError::NotFound(_))));
+        } else {
+            assert!(
+                matches!(result, Err(UseCaseError::Invalid(ref message)) if message == "新评论已关闭")
+            );
+        }
+        let after: (i64, i64) = sqlx::query_as(
+            "SELECT (SELECT count(*) FROM comments), (SELECT count(*) FROM audit_logs)",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            before, after,
+            "rejected submission must leave no row or audit entry"
+        );
+        pool.close().await;
+    }
+}
+
+#[tokio::test]
 async fn policy_defaults_post_versions_and_global_merge() {
     let (pool, service, admin, post) = fixture("blog_test_comments_policy").await;
     let root = new_comment(&service, &admin, None).await;
@@ -574,7 +739,7 @@ async fn audit_failure_rolls_back_create_moderation_and_both_policies() {
     }
     let comments = service.list(&admin, None, None, 1).await.unwrap();
     assert_eq!(comments.total, 1);
-    assert_eq!(comments.items[0].status, "pending");
+    assert_eq!(comments.items[0].status, CommentStatus::Pending);
     assert_eq!(comments.items[0].version, 1);
     assert_eq!(
         service
