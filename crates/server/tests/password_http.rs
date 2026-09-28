@@ -98,7 +98,11 @@ async fn fresh_stack_with(throttle_config: ThrottleConfig) -> Stack {
     let roles = Arc::new(RoleInteractor::new(rbac.clone(), user_repo.clone()));
     roles.sync_registry().await.expect("同步权限目录失败");
     let users = Arc::new(UserInteractor::new(
-        user_repo.clone(),
+        application::identity::UserStores {
+            query: user_repo.clone(),
+            profiles: user_repo.clone(),
+            accounts: user_repo.clone(),
+        },
         rbac,
         clock.clone(),
         common::media_guard(pool.clone()),
@@ -207,6 +211,7 @@ async fn fresh_stack_with(throttle_config: ThrottleConfig) -> Stack {
         secure_cookies: false,
     };
     let admin_state = AdminState {
+        content_queries: common::content_queries(&pool),
         auth,
         users,
         passwords,
@@ -903,7 +908,7 @@ async fn reauthentication_is_rate_limited() {
 
 /// 为账号管理测试建立独立操作者；目标 sun 仍通过真实密码登录。
 async fn status_operator(stack: &Stack, username: &str, role: &str) -> (String, serde_json::Value) {
-    use application::ports::UserRepository;
+    use application::ports::{AccountAdministration, PasswordCredentialStore, UserQuery};
     let repo = PostgresUserRepository::new(stack.pool.clone());
     let user =
         domain::identity::User::new(username, None, None, time::OffsetDateTime::now_utc()).unwrap();

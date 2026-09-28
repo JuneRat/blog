@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { contentPage } from "./contentFixtures";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
@@ -75,7 +76,7 @@ beforeEach(() => {
     { ...posts[0], visibility: "public" },
     { ...posts[1], visibility: "public" },
   ]);
-  vi.mocked(api.listPosts).mockResolvedValue(posts);
+  vi.mocked(api.listPosts).mockResolvedValue(contentPage(posts));
   vi.mocked(api.listTags).mockResolvedValue([]);
   vi.mocked(categoryApi.list).mockResolvedValue([]);
   // 封面选择器打开时才取媒体库第一页；默认给一张可选图片。

@@ -9,7 +9,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::error::UseCaseError;
-use crate::ports::{Clock, RbacStore, RoleDto, UserRepository};
+use crate::ports::{AccountAdministration, Clock, RbacStore, RoleDto, UserProfileStore, UserQuery};
 pub use domain::identity::UserStatus;
 use domain::identity::{PermissionSet, User, UserId, UserSnapshot};
 
@@ -474,8 +474,15 @@ pub struct UserStatusView {
     pub version: i64,
 }
 
+/// 独立注入读取、资料提交和账号管理能力；不包含密码凭据。
+pub struct UserStores {
+    pub query: Arc<dyn UserQuery>,
+    pub profiles: Arc<dyn UserProfileStore>,
+    pub accounts: Arc<dyn AccountAdministration>,
+}
+
 pub struct UserInteractor {
-    users: Arc<dyn UserRepository>,
+    users: UserStores,
     rbac: Arc<dyn RbacStore>,
     clock: Arc<dyn Clock>,
     /// 新增头像引用的可用性校验（`ensure_attachable`）。
@@ -484,7 +491,7 @@ pub struct UserInteractor {
 
 impl UserInteractor {
     pub fn new(
-        users: Arc<dyn UserRepository>,
+        users: UserStores,
         rbac: Arc<dyn RbacStore>,
         clock: Arc<dyn Clock>,
         media_guard: Arc<dyn crate::ports::MediaRefGuard>,
@@ -517,7 +524,10 @@ impl UserInteractor {
         let user = User::new(&username, email, display_name, self.clock.now())
             .map_err(|e| UseCaseError::Invalid(e.to_string()))?;
         let snapshot = user.snapshot();
-        self.users.insert(&user, actor.audit_context()).await?;
+        self.users
+            .accounts
+            .insert(&user, actor.audit_context())
+            .await?;
         Ok(UserDto::from_snapshot(&snapshot))
     }
 
@@ -528,6 +538,7 @@ impl UserInteractor {
     pub async fn profile_of(&self, actor: &Actor) -> Result<ProfileView, UseCaseError> {
         let snapshot = self
             .users
+            .query
             .find_by_id(actor.user_id.0)
             .await?
             .filter(UserSnapshot::is_active)
@@ -545,6 +556,7 @@ impl UserInteractor {
         actor.ensure_write_channel()?;
         let snapshot = self
             .users
+            .query
             .find_by_id(actor.user_id.0)
             .await?
             .filter(UserSnapshot::is_active)
@@ -558,6 +570,7 @@ impl UserInteractor {
             .map_err(|error| UseCaseError::Invalid(error.to_string()))?;
         let result = self
             .users
+            .profiles
             .save_profile(
                 &user,
                 expected_version,
@@ -570,6 +583,7 @@ impl UserInteractor {
 
     pub async fn revoke_authentication(&self, user_id: Uuid) -> Result<(), UseCaseError> {
         self.users
+            .accounts
             .revoke_authentication(user_id, crate::audit::AuditContext::system())
             .await
     }
@@ -592,6 +606,7 @@ impl UserInteractor {
         }
         let snapshot = self
             .users
+            .accounts
             .change_status(user_id, status, expected_version, self.clock.now(), actor)
             .await?;
         Ok(UserStatusView {
@@ -613,6 +628,7 @@ impl UserInteractor {
         actor.ensure_write_channel()?;
         let snapshot = self
             .users
+            .query
             .find_by_id(actor.user_id.0)
             .await?
             .filter(UserSnapshot::is_active)
@@ -623,6 +639,7 @@ impl UserInteractor {
             crate::media::ensure_attachable(&*self.media_guard, id).await?;
         }
         self.users
+            .profiles
             .set_avatar(
                 snapshot.id,
                 avatar_media_id,
@@ -657,7 +674,7 @@ impl UserInteractor {
         };
         let offset = offset.max(0);
 
-        let rows = self.users.list_admin(limit, offset).await?;
+        let rows = self.users.query.list_admin(limit, offset).await?;
         let ids: Vec<Uuid> = rows.iter().map(|row| row.id).collect();
         let mut roles: std::collections::HashMap<Uuid, Vec<String>> =
             std::collections::HashMap::new();
@@ -700,6 +717,7 @@ impl UserInteractor {
             .map_err(|e| UseCaseError::Invalid(e.to_string()))?;
         let snapshot = self
             .users
+            .query
             .find_by_username(&username)
             .await?
             .ok_or_else(|| UseCaseError::NotFound(format!("用户 {username}")))?;
@@ -735,6 +753,7 @@ impl UserInteractor {
     ) -> Result<(Actor, i64), UseCaseError> {
         let snapshot = self
             .users
+            .query
             .find_by_id(id)
             .await?
             .ok_or_else(|| UseCaseError::NotFound("作者用户".into()))?;
@@ -772,11 +791,11 @@ impl UserInteractor {
 /// 权限集合（委派上限，docs §3）；授予/移除 Owner 另需 `ownership.manage`。
 pub struct RoleInteractor {
     rbac: Arc<dyn RbacStore>,
-    users: Arc<dyn UserRepository>,
+    users: Arc<dyn UserQuery>,
 }
 
 impl RoleInteractor {
-    pub fn new(rbac: Arc<dyn RbacStore>, users: Arc<dyn UserRepository>) -> Self {
+    pub fn new(rbac: Arc<dyn RbacStore>, users: Arc<dyn UserQuery>) -> Self {
         Self { rbac, users }
     }
 

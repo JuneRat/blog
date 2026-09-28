@@ -3,9 +3,9 @@ mod common;
 
 use application::identity::{BUILTIN_ROLES, PERMISSION_REGISTRY, PermissionDescriptor};
 use application::ports::{
-    CategoryRepository, ClearPasswordOutcome, OAuthAccountStore, OAuthConfigStore, ProviderConfig,
-    ProviderKind, RbacStore, SaveOutcome, SessionStore, SettingsStore, SiteSettingsValue,
-    ThemeSettingsStore, UserRepository,
+    AccountAdministration, CategoryRepository, ClearPasswordOutcome, OAuthAccountStore,
+    OAuthConfigStore, PasswordCredentialStore, ProviderConfig, ProviderKind, RbacStore,
+    SaveOutcome, SessionStore, SettingsStore, SiteSettingsValue, ThemeSettingsStore, UserQuery,
 };
 use domain::content::{Category, Slug};
 use domain::identity::User;

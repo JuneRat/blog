@@ -1,6 +1,6 @@
 import { QueryClient } from "@tanstack/react-query";
 import { ApiError } from "./api";
-import type { AuditFilter } from "./types";
+import type { AuditFilter, ContentListFilter } from "./types";
 
 /**
  * 服务端状态的查询键。集中定义，避免各屏各写一份字符串数组——
@@ -10,7 +10,9 @@ export const queryKeys = {
   auditLogsAll: () => ["audit-logs"] as const,
   auditLogs: (filter: AuditFilter, cursor?: string) => ["audit-logs", filter, cursor] as const,
   posts: () => ["posts"] as const,
+  postList: (filter: ContentListFilter) => ["posts", filter] as const,
   pages: () => ["pages"] as const,
+  pageList: (filter: ContentListFilter) => ["pages", filter] as const,
   trash: (page: number) => ["trash", page] as const,
   /**
    * 回收站**整族**前缀。

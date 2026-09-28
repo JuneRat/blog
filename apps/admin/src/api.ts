@@ -1,5 +1,7 @@
 import type { SeriesPlacement, PageTrash } from "./types";
 import type {
+  ContentListFilter,
+  ContentPage,
   AuditFilter,
   AuditPage,
   AdminUser,
@@ -273,10 +275,8 @@ export const api = {
       body: JSON.stringify(input),
     }),
 
-  listPosts: (author?: string): Promise<PostSummary[]> =>
-    request<PostSummary[]>(
-      `/api/admin/v1/posts${author ? `?author=${encodeURIComponent(author)}` : ""}`,
-    ),
+  listPosts: (filter: Partial<ContentListFilter> & { author?: string } = {}): Promise<ContentPage<PostSummary>> =>
+    request(`/api/admin/v1/posts${contentQuery(filter)}`),
 
   listTrash: (page = 1, author?: string): Promise<{ items: PostSummary[]; total: number; page: number; per_page: number }> =>
     request(`/api/admin/v1/post-trash?page=${page}${author ? `&author=${encodeURIComponent(author)}` : ""}`),
@@ -321,7 +321,7 @@ export const api = {
       body: JSON.stringify({ expected_version: expectedVersion }),
     }),
 
-  listPages: (): Promise<PageSummary[]> => request<PageSummary[]>("/api/admin/v1/pages"),
+  listPages: (filter: Partial<ContentListFilter> = {}): Promise<ContentPage<PageSummary>> => request(`/api/admin/v1/pages${contentQuery(filter)}`),
 
   getPage: (id: string): Promise<PageDetail> =>
     request<PageDetail>(`/api/admin/v1/pages/${encodeURIComponent(id)}`),
@@ -671,3 +671,12 @@ export const commentsApi = {
   policy: (post?: string) => request<CommentPolicy>(commentPolicyPath(post)),
   savePolicy: (policy: CommentPolicy, post?: string) => request<CommentPolicy>(commentPolicyPath(post), { method: 'PUT', body: JSON.stringify(policy) }),
 };
+
+function contentQuery(filter: Partial<ContentListFilter> & { author?: string }): string {
+  const params = new URLSearchParams();
+  if (filter.page !== undefined) params.set("page", String(filter.page));
+  if (filter.status) params.set("status", filter.status);
+  if (filter.visibility) params.set("visibility", filter.visibility);
+  if (filter.author) params.set("author", filter.author);
+  return params.size ? `?${params}` : "";
+}

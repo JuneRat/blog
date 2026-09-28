@@ -1,7 +1,9 @@
 //! 新库基线、身份修订与事务审计的边界验证。
 mod common;
 
-use application::ports::{OAuthAccountStore, SessionStore, UserRepository};
+use application::ports::{
+    AccountAdministration, OAuthAccountStore, PasswordCredentialStore, SessionStore, UserQuery,
+};
 use infrastructure::audit::{AuditEntry, append_audit_log};
 use infrastructure::{PostgresOAuthAccountStore, PostgresSessionStore, PostgresUserRepository};
 

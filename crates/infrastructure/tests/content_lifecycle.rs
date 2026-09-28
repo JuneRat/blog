@@ -1,6 +1,8 @@
 //! 新基线的内容关系、预约与回收站回归；仅使用独立测试库。
 mod common;
 
+use application::publishing::ScheduledPublicationStore;
+
 use application::ports::{
     PageCommitOutcome, PageRepository, PostCommitOutcome, PostRepository, PublishedPageQuery,
     PublishedPostQuery, PublishedSeriesQuery, SeriesRepository, TagRepository,
@@ -133,7 +135,7 @@ async fn multiple_series_allow_tied_weights_and_directory_deletion_keeps_posts()
         vec![SeriesPlacement::new(b.id(), 7).unwrap()]
     );
     assert_eq!(record.snapshot.version, after.snapshot.version + 1);
-    assert_eq!(posts.list_by_author(author).await.unwrap().len(), 2);
+    assert_eq!(admin_posts(&pool, author, false).await.0.len(), 2);
     let missing_actor: i64 =
         sqlx::query_scalar("SELECT count(*) FROM audit_logs WHERE actor_id IS DISTINCT FROM $1")
             .bind(author)
@@ -223,23 +225,20 @@ async fn due_publishing_is_atomic_idempotent_and_does_not_revive_cancelled_or_tr
             .unwrap()
             .is_none()
     );
+    let publisher = infrastructure::PostgresScheduledPublicationStore::new(pool.clone());
     assert_eq!(
-        infrastructure::publish_due_content(&pool, at - Duration::seconds(1), 100)
+        publisher
+            .publish_batch(at - Duration::seconds(1), 100)
             .await
             .unwrap(),
         0
     );
     let (left, right) = tokio::join!(
-        infrastructure::publish_due_content(&pool, at, 100),
-        infrastructure::publish_due_content(&pool, at, 100)
+        publisher.publish_batch(at, 100),
+        publisher.publish_batch(at, 100)
     );
     assert_eq!(left.unwrap() + right.unwrap(), 2);
-    assert_eq!(
-        infrastructure::publish_due_content(&pool, at, 100)
-            .await
-            .unwrap(),
-        0
-    );
+    assert_eq!(publisher.publish_batch(at, 100).await.unwrap(), 0);
     let due = posts.find_by_id(scheduled_ids[0]).await.unwrap().unwrap();
     assert_eq!(due.status, PostStatus::Published);
     assert_eq!(due.version, 3);
@@ -281,8 +280,8 @@ async fn due_publishing_is_atomic_idempotent_and_does_not_revive_cancelled_or_tr
         .commit_lifecycle(&page, 4, at, Some(author).into())
         .await
         .unwrap();
-    assert!(pages.list().await.unwrap().is_empty());
-    assert_eq!(pages.list_trash(20, 0).await.unwrap().1, 1);
+    assert!(admin_pages(&pool, false).await.0.is_empty());
+    assert_eq!(admin_pages(&pool, true).await.1, 1);
     page.restore();
     let PageCommitOutcome::Saved(restored) = pages
         .commit_lifecycle(&page, 5, at, Some(author).into())
@@ -371,4 +370,39 @@ async fn purge_deletes_entire_comment_tree_and_audit_failure_rolls_back_content(
         .await
         .unwrap();
     assert_eq!(remaining, 0);
+}
+
+async fn admin_posts(
+    pool: &sqlx::PgPool,
+    author: uuid::Uuid,
+    trash: bool,
+) -> (Vec<application::content_queries::AdminPostSummary>, i64) {
+    application::ports::AdminPostQuery::list(
+        &infrastructure::PostgresAdminContentQuery::new(pool.clone()),
+        author,
+        &application::content_queries::ContentListRequest {
+            trash,
+            ..Default::default()
+        }
+        .try_into()
+        .unwrap(),
+    )
+    .await
+    .unwrap()
+}
+async fn admin_pages(
+    pool: &sqlx::PgPool,
+    trash: bool,
+) -> (Vec<application::content_queries::AdminPageSummary>, i64) {
+    application::ports::AdminPageQuery::list(
+        &infrastructure::PostgresAdminContentQuery::new(pool.clone()),
+        &application::content_queries::ContentListRequest {
+            trash,
+            ..Default::default()
+        }
+        .try_into()
+        .unwrap(),
+    )
+    .await
+    .unwrap()
 }

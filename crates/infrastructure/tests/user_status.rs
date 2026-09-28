@@ -3,7 +3,9 @@ mod common;
 
 use application::error::UseCaseError;
 use application::identity::{Actor, ActorChannel, BUILTIN_ROLES, PERMISSION_REGISTRY};
-use application::ports::{RbacStore, SessionStore, UserRepository};
+use application::ports::{
+    AccountAdministration, PasswordCredentialStore, RbacStore, SessionStore, UserQuery,
+};
 use domain::identity::{UserId, UserSnapshot, UserStatus};
 use infrastructure::{PostgresRbacStore, PostgresSessionStore, PostgresUserRepository};
 use sqlx::PgPool;

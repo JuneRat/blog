@@ -42,6 +42,7 @@ flowchart TD
 | 端口模块 | 主要契约 | 对应适配器 |
 |---|---|---|
 | `content` | Post/Page 提交、完整文章记录、公开查询 | [persistence/content.rs](../crates/infrastructure/src/persistence/content.rs) |
+| `content_queries` | 后台文章/页面摘要分页，不依赖写聚合 | [persistence/content_queries.rs](../crates/infrastructure/src/persistence/content_queries.rs) |
 | `taxonomy` | 分类、标签、系列及排序 | [persistence/taxonomy.rs](../crates/infrastructure/src/persistence/taxonomy.rs) |
 | `identity` | 用户、权限、身份提供商、密码、会话 | `persistence/identity.rs`、`rbac.rs`、`oauth.rs`、`password.rs`、`sessions.rs` |
 | `media` | 资产、引用、文件存储 | `persistence/media.rs`、`media_storage.rs` |
@@ -49,9 +50,11 @@ flowchart TD
 | `rendering` | `ContentRenderer`、`RenderedContent`、`ThemeRenderer` | `render_executor.rs`、`rendering.rs` |
 | `runtime` | 时钟、健康检查与通用保存结果 | `persistence/connection.rs` 等 |
 
-[持久化入口](../crates/infrastructure/src/persistence/mod.rs) 同样显式导出适配器，内部拆为 `connection`、`content`、`identity`、`media`、`taxonomy`、`sql`。行映射、SQL 错误映射和事务 helper 保持私有或限定可见性；媒体引用锁、身份锁按实际复用范围在基础设施内部共享。数据库连接与事务对象不进入应用端口。
+身份端口按调用能力拆成 `UserQuery`、`UserProfileStore`、`AccountAdministration` 与 `PasswordCredentialStore`。角色用例只依赖账号读取，密码用例依赖账号读取和凭据端口，用户用例通过 `UserStores` 注入读取、资料提交与账号管理；不再把全部用户存储能力交给每个调用方。`PostgresUserRepository` 实现这些窄端口，共用连接池，资料/头像与引用、账号状态与会话撤销、凭据变更与审计仍由各业务提交方法原子执行。
 
-应用用例按实际功能文件组织，包括 `content`、`page`、`tag`、`category`、`series`、`identity`、`auth`、`password`、`media`、`settings`、`public_site` 等；没有通用 `common` crate、每表一个用例或通用工作单元框架。
+[持久化入口](../crates/infrastructure/src/persistence/mod.rs) 同样显式导出适配器，内部拆为 `connection`、`content`、`content_queries`、`identity`、`media`、`taxonomy`、`sql`。行映射、SQL 错误映射和事务 helper 保持私有或限定可见性；媒体引用锁、身份锁按实际复用范围在基础设施内部共享。数据库连接与事务对象不进入应用端口。
+
+应用用例按实际功能文件组织，包括 `content`、`content_queries`、`page`、`tag`、`category`、`series`、`identity`、`auth`、`password`、`media`、`settings`、`public_site` 等；没有通用 `common` crate、每表一个用例或通用工作单元框架。
 
 ## 内容读写边界
 
@@ -68,7 +71,9 @@ Post/Page 的写端口接收领域聚合，快照用于读取和重建。事务�
 
 Post/Page 管理 API 及 Post CLI 通过稳定 UUID 定位资源，公开 URL 使用 slug；当前没有 Page CLI。草稿改名不改变管理身份，Post/Page 没有旧 slug 管理接口的兼容分支。具体版本、删除和路径规则见[内容生命周期](content-lifecycle.md)与[管理 API](admin-api.md)。
 
-读取采用面向页面的查询 DTO，共用同一个数据库，不为公开读取重建聚合。公开 Post 查询只返回 `published + public + 未软删除` 内容，Page 查询只返回 `published + public` 内容；公开详情直接使用持久化 `content_html`。当前没有公开页面缓存或跨请求主题查询缓存，每次请求重新读取公开状态。浏览器和代理的缓存行为仍取决于部署配置，应用内部无缓存不等于能够撤回已发送的响应。
+后台普通列表及回收站统一由 `ContentQueries` 授权，依赖 `AdminPostQuery` / `AdminPageQuery` 窄端口；Post CLI 也走这条路径。Post/Page 写仓储只保留聚合加载与提交，不承担列表查询。独立查询适配器只投影列表展示字段，不读取 Markdown、HTML 或关联集合；固定每页 20 条，支持状态/可见性筛选，同一个只读 REPEATABLE READ 事务读取总数和分页。稳定排序以 UUID 打破时间戳并列；跨请求不承诺冻结快照。
+
+公开读取采用面向页面的查询 DTO，共用同一个数据库，不为公开读取重建聚合。公开 Post 查询只返回 `published + public + 未软删除` 内容，Page 查询只返回 `published + public` 内容；公开详情直接使用持久化 `content_html`。当前没有公开页面缓存或跨请求主题查询缓存，每次请求重新读取公开状态。浏览器和代理的缓存行为仍取决于部署配置，应用内部无缓存不等于能够撤回已发送的响应。
 
 渲染执行、正文派生物回填及预算见[主题与渲染](themes-and-rendering.md)；当前表和锁协议见[数据库实现参考](database-current.md)。
 
@@ -82,11 +87,19 @@ Post/Page 管理 API 及 Post CLI 通过稳定 UUID 定位资源，公开 URL �
 | `user`、`role`、`oauth` | 结构迁移 | 对应身份用例；不读取网站 URL 或主题 |
 | `media` | 结构迁移 | 媒体仓储与文件存储 |
 | `post` | 结构迁移与正文派生物回填 | 用户、内容用例及正文渲染 |
+| `publish-due` | 结构迁移与正文派生物回填 | 到期发布用例及原子批次适配器 |
+| `maintenance` | 不执行迁移或派生物回填 | 独立维护连接与保留期清理用例 |
 | `serve` | 结构迁移与正文派生物回填 | 网站配置、全部用例、主题、静态资源与 HTTP 状态 |
 
-非 `migrate` 命令在执行前同步权限注册表。只有 `serve` 读取网站配置并加载主题；主题目录损坏或公开 URL 无效不会阻止账号、密码和 OAuth 维护。配置项见[配置参考](configuration.md)。
+除 `migrate` 与独立的 `maintenance` 外，其余命令在执行前同步权限注册表。只有 `serve` 读取网站配置并加载主题；主题目录损坏或公开 URL 无效不会阻止账号、密码和 OAuth 维护。配置项见[配置参考](configuration.md)。
 
 服务装配共享一个 `RenderingRuntime`，供 Post/Page 仓储及所有主题使用。接口层组合 HTTP 路由；监听 socket、连接信息和退出信号由 `server` 持有。默认主题必须加载成功，其他无效主题被跳过；详见主题文档。
+
+完整 HTTP 路由统一由 `interfaces::http::app_router` 组合，包括评论、审计和保留期设置。`server::website` 仅构造用例、资源与 `HttpConfig`；请求编号中间件和可信代理配置在接口层统一挂载，子路由保留各自的认证、请求体和缓存规则。
+
+预约发布由 `application::publishing::PublishDueInteractor` 编排，受控 CLI 和每 30 秒的定时触发共用同一用例；`server` 只持有定时器、恢复隔离与关闭策略。`ScheduledPublicationStore` 在基础设施中以 `SKIP LOCKED` 执行 Post/Page 原子批次，保持状态、版本和审计一致。错误返回后已提交批次保持生效，下一次触发继续处理剩余到期内容。
+
+保留期清理由 `application::retention::RetentionMaintenance` 校验批次参数并聚合结果；`RetentionCleanupStore` 每批在锁内重读策略，事务内清理并审计。达到批次上限或因行锁没有进展时返回 `has_more`，避免忙循环；dry-run 只统计一次，不计入已执行批次。独立维护凭据及恢复隔离守卫仍由部署入口控制。
 
 ## 架构检查与验证
 

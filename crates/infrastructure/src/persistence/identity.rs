@@ -5,7 +5,10 @@ use uuid::Uuid;
 
 use crate::audit::{AuditEntry, append_audit_log, record_change};
 use application::error::UseCaseError;
-use application::ports::{AdminUserRow, ClearPasswordOutcome, PasswordCredential, UserRepository};
+use application::ports::{
+    AccountAdministration, AdminUserRow, ClearPasswordOutcome, PasswordCredential,
+    PasswordCredentialStore, UserProfileStore, UserQuery,
+};
 use domain::identity::{UserSnapshot, UserStatus};
 
 use super::sql::{map_row_error, map_sqlx_error};
@@ -63,7 +66,145 @@ fn user_from_row(row: &sqlx::postgres::PgRow) -> Result<UserSnapshot, UseCaseErr
 }
 
 #[async_trait]
-impl UserRepository for PostgresUserRepository {
+impl UserQuery for PostgresUserRepository {
+    async fn find_by_id(&self, id: Uuid) -> Result<Option<UserSnapshot>, UseCaseError> {
+        let row = sqlx::query(&format!("SELECT {USER_COLUMNS} FROM users WHERE id = $1"))
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(map_sqlx_error)?;
+        row.as_ref().map(user_from_row).transpose()
+    }
+
+    async fn find_by_username(&self, username: &str) -> Result<Option<UserSnapshot>, UseCaseError> {
+        let row = sqlx::query(&format!(
+            "SELECT {USER_COLUMNS} FROM users WHERE lower(username) = lower($1)"
+        ))
+        .bind(username)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(map_sqlx_error)?;
+        row.as_ref().map(user_from_row).transpose()
+    }
+
+    async fn list_admin(&self, limit: i64, offset: i64) -> Result<Vec<AdminUserRow>, UseCaseError> {
+        // 登录方式与 RBAC 的最后 Owner 判定保持同一谓词（oauth 或 password_hash），
+        // 否则界面会提示「可登录」而后端拒绝，两处定义漂移。
+        let rows = sqlx::query(
+            "SELECT u.id, u.username, u.email, u.display_name, \
+                    u.status, u.version, (u.deleted_at IS NOT NULL) AS deleted, \
+                    (u.password_hash IS NOT NULL) AS password_enabled, \
+                    (SELECT count(*) FROM oauth_accounts oa WHERE oa.user_id = u.id) \
+                        AS external_identities \
+             FROM users u \
+             ORDER BY u.username \
+             LIMIT $1 OFFSET $2",
+        )
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_sqlx_error)?;
+
+        rows.iter()
+            .map(|row| {
+                Ok(AdminUserRow {
+                    id: row.try_get("id").map_err(map_row_error)?,
+                    username: row.try_get("username").map_err(map_row_error)?,
+                    email: row.try_get("email").map_err(map_row_error)?,
+                    display_name: row.try_get("display_name").map_err(map_row_error)?,
+                    status: user_status(row.try_get("status").map_err(map_row_error)?)?,
+                    version: row.try_get("version").map_err(map_row_error)?,
+                    deleted: row.try_get("deleted").map_err(map_row_error)?,
+                    password_enabled: row.try_get("password_enabled").map_err(map_row_error)?,
+                    external_identities: row
+                        .try_get("external_identities")
+                        .map_err(map_row_error)?,
+                })
+            })
+            .collect()
+    }
+}
+
+#[async_trait]
+impl UserProfileStore for PostgresUserRepository {
+    async fn save_profile(
+        &self,
+        user: &domain::identity::User,
+        expected_version: i64,
+        now: OffsetDateTime,
+        audit: application::audit::AuditContext,
+    ) -> Result<UserSnapshot, UseCaseError> {
+        let snapshot = user.snapshot();
+        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        let row = sqlx::query(&format!(
+            "UPDATE users SET display_name=$2, bio=$3, version=version+1, updated_at=$4 \
+             WHERE id=$1 AND version=$5 AND status='active' AND deleted_at IS NULL RETURNING {USER_COLUMNS}"
+        ))
+        .bind(snapshot.id).bind(snapshot.display_name).bind(snapshot.bio).bind(now).bind(expected_version)
+        .fetch_optional(&mut *tx).await.map_err(map_sqlx_error)?
+        .ok_or(UseCaseError::VersionConflict)?;
+        let result = user_from_row(&row)?;
+        append_audit_log(
+            &mut tx,
+            AuditEntry {
+                actor_id: audit.actor_id,
+                ip_address: audit.ip_address,
+                action: "user.profile.update",
+                target_type: "user",
+                target_id: &snapshot.id.to_string(),
+                metadata: serde_json::json!({"version": result.version}),
+            },
+        )
+        .await?;
+        tx.commit().await.map_err(map_sqlx_error)?;
+        Ok(result)
+    }
+
+    async fn set_avatar(
+        &self,
+        user_id: Uuid,
+        avatar_media_id: Option<Uuid>,
+        now: OffsetDateTime,
+        audit: application::audit::AuditContext,
+    ) -> Result<(), UseCaseError> {
+        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        let version: i64 = sqlx::query_scalar(
+            "UPDATE users SET avatar_media_id=$2, version=version+1, updated_at=$3 \
+             WHERE id=$1 AND status='active' AND deleted_at IS NULL RETURNING version",
+        )
+        .bind(user_id)
+        .bind(avatar_media_id)
+        .bind(now)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(map_sqlx_error)?
+        .ok_or_else(|| UseCaseError::NotFound("用户".into()))?;
+        super::media::sync_media_refs(
+            &mut tx,
+            application::ports::MediaContentKind::User,
+            user_id,
+            &avatar_media_id.into_iter().collect::<Vec<_>>(),
+        )
+        .await?;
+        append_audit_log(
+            &mut tx,
+            AuditEntry {
+                actor_id: audit.actor_id,
+                ip_address: audit.ip_address,
+                action: "user.avatar.update",
+                target_type: "user",
+                target_id: &user_id.to_string(),
+                metadata: serde_json::json!({"version": version}),
+            },
+        )
+        .await?;
+        tx.commit().await.map_err(map_sqlx_error)
+    }
+}
+
+#[async_trait]
+impl AccountAdministration for PostgresUserRepository {
     async fn insert(
         &self,
         aggregate: &domain::identity::User,
@@ -98,93 +239,6 @@ impl UserRepository for PostgresUserRepository {
         .await?;
         tx.commit().await.map_err(map_sqlx_error)?;
         Ok(())
-    }
-
-    async fn find_by_id(&self, id: Uuid) -> Result<Option<UserSnapshot>, UseCaseError> {
-        let row = sqlx::query(&format!("SELECT {USER_COLUMNS} FROM users WHERE id = $1"))
-            .bind(id)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(map_sqlx_error)?;
-        row.as_ref().map(user_from_row).transpose()
-    }
-
-    async fn find_by_username(&self, username: &str) -> Result<Option<UserSnapshot>, UseCaseError> {
-        let row = sqlx::query(&format!(
-            "SELECT {USER_COLUMNS} FROM users WHERE lower(username) = lower($1)"
-        ))
-        .bind(username)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(map_sqlx_error)?;
-        row.as_ref().map(user_from_row).transpose()
-    }
-
-    async fn save_profile(
-        &self,
-        user: &domain::identity::User,
-        expected_version: i64,
-        now: OffsetDateTime,
-        audit: application::audit::AuditContext,
-    ) -> Result<UserSnapshot, UseCaseError> {
-        let snapshot = user.snapshot();
-        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
-        let row = sqlx::query(&format!(
-            "UPDATE users SET display_name=$2, bio=$3, version=version+1, updated_at=$4 \
-             WHERE id=$1 AND version=$5 AND status='active' AND deleted_at IS NULL RETURNING {USER_COLUMNS}"
-        ))
-        .bind(snapshot.id).bind(snapshot.display_name).bind(snapshot.bio).bind(now).bind(expected_version)
-        .fetch_optional(&mut *tx).await.map_err(map_sqlx_error)?
-        .ok_or(UseCaseError::VersionConflict)?;
-        let result = user_from_row(&row)?;
-        append_audit_log(
-            &mut tx,
-            AuditEntry {
-                actor_id: audit.actor_id,
-                ip_address: audit.ip_address,
-                action: "user.profile.update",
-                target_type: "user",
-                target_id: &snapshot.id.to_string(),
-                metadata: serde_json::json!({"version": result.version}),
-            },
-        )
-        .await?;
-        tx.commit().await.map_err(map_sqlx_error)?;
-        Ok(result)
-    }
-
-    async fn revoke_authentication(
-        &self,
-        user_id: Uuid,
-        audit_actor: application::audit::AuditContext,
-    ) -> Result<(), UseCaseError> {
-        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
-        acquire_identity_lock(&mut *tx)
-            .await
-            .map_err(map_sqlx_error)?;
-        let changed: Option<i64> = sqlx::query_scalar(
-            "UPDATE users SET auth_version=auth_version+1 WHERE id=$1 RETURNING auth_version",
-        )
-        .bind(user_id)
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(map_sqlx_error)?;
-        let revision = changed.ok_or_else(|| UseCaseError::NotFound("用户".into()))?;
-        sqlx::query("DELETE FROM sessions WHERE user_id=$1")
-            .bind(user_id)
-            .execute(&mut *tx)
-            .await
-            .map_err(map_sqlx_error)?;
-        record_change(
-            &mut tx,
-            audit_actor,
-            "user.sessions.revoke",
-            "user",
-            &user_id.to_string(),
-            serde_json::json!({"auth_version":revision}),
-        )
-        .await?;
-        tx.commit().await.map_err(map_sqlx_error)
     }
 
     async fn change_status(
@@ -272,85 +326,43 @@ impl UserRepository for PostgresUserRepository {
         Ok(after)
     }
 
-    async fn set_avatar(
+    async fn revoke_authentication(
         &self,
         user_id: Uuid,
-        avatar_media_id: Option<Uuid>,
-        now: OffsetDateTime,
-        audit: application::audit::AuditContext,
+        audit_actor: application::audit::AuditContext,
     ) -> Result<(), UseCaseError> {
         let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
-        let version: i64 = sqlx::query_scalar(
-            "UPDATE users SET avatar_media_id=$2, version=version+1, updated_at=$3 \
-             WHERE id=$1 AND status='active' AND deleted_at IS NULL RETURNING version",
+        acquire_identity_lock(&mut *tx)
+            .await
+            .map_err(map_sqlx_error)?;
+        let changed: Option<i64> = sqlx::query_scalar(
+            "UPDATE users SET auth_version=auth_version+1 WHERE id=$1 RETURNING auth_version",
         )
         .bind(user_id)
-        .bind(avatar_media_id)
-        .bind(now)
         .fetch_optional(&mut *tx)
         .await
-        .map_err(map_sqlx_error)?
-        .ok_or_else(|| UseCaseError::NotFound("用户".into()))?;
-        super::media::sync_media_refs(
+        .map_err(map_sqlx_error)?;
+        let revision = changed.ok_or_else(|| UseCaseError::NotFound("用户".into()))?;
+        sqlx::query("DELETE FROM sessions WHERE user_id=$1")
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(map_sqlx_error)?;
+        record_change(
             &mut tx,
-            application::ports::MediaContentKind::User,
-            user_id,
-            &avatar_media_id.into_iter().collect::<Vec<_>>(),
-        )
-        .await?;
-        append_audit_log(
-            &mut tx,
-            AuditEntry {
-                actor_id: audit.actor_id,
-                ip_address: audit.ip_address,
-                action: "user.avatar.update",
-                target_type: "user",
-                target_id: &user_id.to_string(),
-                metadata: serde_json::json!({"version": version}),
-            },
+            audit_actor,
+            "user.sessions.revoke",
+            "user",
+            &user_id.to_string(),
+            serde_json::json!({"auth_version":revision}),
         )
         .await?;
         tx.commit().await.map_err(map_sqlx_error)
     }
+}
 
-    async fn list_admin(&self, limit: i64, offset: i64) -> Result<Vec<AdminUserRow>, UseCaseError> {
-        // 登录方式与 RBAC 的最后 Owner 判定保持同一谓词（oauth 或 password_hash），
-        // 否则界面会提示「可登录」而后端拒绝，两处定义漂移。
-        let rows = sqlx::query(
-            "SELECT u.id, u.username, u.email, u.display_name, \
-                    u.status, u.version, (u.deleted_at IS NOT NULL) AS deleted, \
-                    (u.password_hash IS NOT NULL) AS password_enabled, \
-                    (SELECT count(*) FROM oauth_accounts oa WHERE oa.user_id = u.id) \
-                        AS external_identities \
-             FROM users u \
-             ORDER BY u.username \
-             LIMIT $1 OFFSET $2",
-        )
-        .bind(limit)
-        .bind(offset)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(map_sqlx_error)?;
-
-        rows.iter()
-            .map(|row| {
-                Ok(AdminUserRow {
-                    id: row.try_get("id").map_err(map_row_error)?,
-                    username: row.try_get("username").map_err(map_row_error)?,
-                    email: row.try_get("email").map_err(map_row_error)?,
-                    display_name: row.try_get("display_name").map_err(map_row_error)?,
-                    status: user_status(row.try_get("status").map_err(map_row_error)?)?,
-                    version: row.try_get("version").map_err(map_row_error)?,
-                    deleted: row.try_get("deleted").map_err(map_row_error)?,
-                    password_enabled: row.try_get("password_enabled").map_err(map_row_error)?,
-                    external_identities: row
-                        .try_get("external_identities")
-                        .map_err(map_row_error)?,
-                })
-            })
-            .collect()
-    }
-
+#[async_trait]
+impl PasswordCredentialStore for PostgresUserRepository {
     async fn set_password_hash(
         &self,
         user_id: Uuid,

@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { contentPage } from "./contentFixtures";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConfigProvider } from "antd";
@@ -74,7 +75,7 @@ beforeEach(() => {
   vi.mocked(api.listTags).mockResolvedValue([]);
   vi.mocked(api.categoryApi.list).mockResolvedValue([]);
   vi.mocked(seriesApi.list).mockResolvedValue([]);
-  vi.mocked(api.listPosts).mockResolvedValue([]);
+  vi.mocked(api.listPosts).mockResolvedValue(contentPage([]));
 });
 afterEach(cleanup);
 

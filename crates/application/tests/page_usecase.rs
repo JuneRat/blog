@@ -38,19 +38,6 @@ impl PageRepository for FakePageRepo {
             .cloned())
     }
 
-    async fn list(&self) -> Result<Vec<PageSnapshot>, UseCaseError> {
-        let mut all: Vec<PageSnapshot> = self
-            .pages
-            .lock()
-            .unwrap()
-            .values()
-            .filter(|p| p.deleted_at.is_none())
-            .cloned()
-            .collect();
-        all.sort_by_key(|a| std::cmp::Reverse(a.updated_at));
-        Ok(all)
-    }
-
     async fn insert_page(
         &self,
         page: &domain::content::Page,
@@ -88,28 +75,6 @@ impl PageRepository for FakePageRepo {
         Ok(PageCommitOutcome::Saved(next))
     }
 
-    async fn list_trash(
-        &self,
-        limit: i64,
-        offset: i64,
-    ) -> Result<(Vec<PageSnapshot>, i64), UseCaseError> {
-        let rows: Vec<_> = self
-            .pages
-            .lock()
-            .unwrap()
-            .values()
-            .filter(|p| p.deleted_at.is_some())
-            .cloned()
-            .collect();
-        let count = rows.len() as i64;
-        Ok((
-            rows.into_iter()
-                .skip(offset as usize)
-                .take(limit as usize)
-                .collect(),
-            count,
-        ))
-    }
     async fn commit_lifecycle(
         &self,
         page: &domain::content::Page,
@@ -241,7 +206,7 @@ async fn reserved_root_slug_is_rejected_on_create_and_rename() {
 }
 
 #[tokio::test]
-async fn read_and_list_require_page_read() {
+async fn read_requires_page_read() {
     let pages = interactor();
     let editor = actor_with(EDITOR);
     let reader = actor_with(&["page.read"]);
@@ -259,13 +224,6 @@ async fn read_and_list_require_page_read() {
     assert!(pages.find(&reader, created.id).await.is_ok());
     assert!(matches!(
         pages.find(&outsider, created.id).await.unwrap_err(),
-        UseCaseError::Forbidden
-    ));
-
-    let list = pages.list(&reader).await.unwrap();
-    assert_eq!(list.len(), 2, "站点级列表返回全部页面");
-    assert!(matches!(
-        pages.list(&outsider).await.unwrap_err(),
         UseCaseError::Forbidden
     ));
 }

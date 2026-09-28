@@ -30,6 +30,14 @@ pub struct AppState {
     pub public: PublicSiteState,
     pub auth: crate::http_auth::AuthState,
     pub admin: crate::http_auth::AdminState,
+    pub comments: Arc<application::comments::CommentInteractor>,
+    pub retention: Arc<application::retention::RetentionInteractor>,
+    pub audit: Arc<application::audit::AuditInteractor>,
+}
+
+pub struct HttpConfig {
+    pub public_origin: String,
+    pub trusted_proxies: Vec<std::net::IpAddr>,
 }
 
 pub struct HttpAssets {
@@ -38,7 +46,22 @@ pub struct HttpAssets {
 }
 
 /// 组合完整站点路由；监听地址、进程信号和关闭策略由 server 装配层负责。
-pub fn app_router(state: AppState, assets: HttpAssets) -> Router {
+pub fn app_router(state: AppState, assets: HttpAssets, config: HttpConfig) -> Router {
+    let comments = crate::http_comments::comments_router(crate::http_comments::CommentState {
+        comments: state.comments,
+        admin: state.admin.clone(),
+        origin: config.public_origin,
+        trusted_proxies: config.trusted_proxies.clone(),
+    });
+    let retention =
+        crate::http_retention::retention_router(crate::http_retention::RetentionState {
+            retention: state.retention,
+            admin: state.admin.clone(),
+        });
+    let audit = crate::http_audit::audit_router(crate::http_audit::AuditState {
+        audit: state.audit,
+        admin: state.admin.clone(),
+    });
     let media_read = crate::http_media::MediaReadState {
         media: state.admin.media.clone(),
     };
@@ -53,9 +76,15 @@ pub fn app_router(state: AppState, assets: HttpAssets) -> Router {
         .merge(crate::http_admin::settings_router(state.admin.clone()))
         .merge(crate::http_media::media_admin_router(state.admin.clone()))
         .merge(crate::http_identity::identity_router(state.admin))
-        .merge(crate::http_media::media_read_router(media_read));
+        .merge(crate::http_media::media_read_router(media_read))
+        .merge(comments)
+        .merge(retention)
+        .merge(audit);
     mount_admin_spa(app, Some(assets.admin_dist))
         .layer(middleware::from_fn(crate::http_support::request_context))
+        .layer(axum::Extension(crate::http_client_ip::TrustedProxies(
+            config.trusted_proxies,
+        )))
 }
 
 /// 构建公开路由；assets_dir 提供时挂载 /assets/ 静态资源（主题 assets 目录）。

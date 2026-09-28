@@ -2,12 +2,13 @@ import { invalidateAfterWrite } from "../queryEffects";
 import { statusLabel } from "../components/ContentLifecycleControls";
 import { Alert, App as AntdApp, Button, Flex, Space, Table, Typography } from "antd";
 import type { TableProps } from "antd";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { api } from "../api";
 import { permissionMessageOf } from "../apiError";
 import { useAuth } from "../auth";
-import { queryKeys } from "../queryClient";
+import { useContentList } from "../useContentList";
+import { ContentListFilters, ContentPagination } from "../components/ContentListControls";
 import { navigate, paths } from "../router";
 import type { PostSummary } from "../types";
 
@@ -26,7 +27,7 @@ export function PostListScreen() {
    * 错误分两处：`posts.error` 是**取数失败**（含权限口径文案），`actionError` 是
    * 写操作失败；展示时动作错误优先。
    */
-  const posts = useQuery({ queryKey: queryKeys.posts(), queryFn: () => api.listPosts() });
+  const { query: posts, filter, setFilter, setPage } = useContentList("posts", api.listPosts);
   const queryClient = useQueryClient();
   const [actionError, setActionError] = useState<string | null>(null);
   const errorText = actionError ?? (posts.error === null ? null : permissionMessageOf(posts.error));
@@ -133,11 +134,13 @@ export function PostListScreen() {
         )}
       </Flex>
 
+      <ContentListFilters filter={filter} onChange={setFilter} />
+
       <Table<PostSummary>
         rowKey="id"
         size="middle"
-        loading={posts.isPending}
-        dataSource={posts.data ?? []}
+        loading={posts.isFetching}
+        dataSource={posts.data?.items ?? []}
         columns={columns}
         pagination={false}
         // 保留迁移前的语义：整行点击进入该文章的编辑页。
@@ -149,9 +152,12 @@ export function PostListScreen() {
           emptyText:
             errorText !== null
               ? "文章加载失败。"
-              : `还没有文章。${canCreate ? "点击「新建草稿」开始。" : ""}`,
+              : filter.status || filter.visibility
+                ? "没有符合筛选条件的文章。"
+                : `还没有文章。${canCreate ? "点击「新建草稿」开始。" : ""}`,
         }}
       />
+      <ContentPagination data={posts.data} busy={posts.isFetching} onChange={setPage} />
     </>
   );
 }

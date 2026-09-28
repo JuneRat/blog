@@ -73,6 +73,7 @@ pub fn auth_router(state: AuthState) -> Router {
 
 #[derive(Clone)]
 pub struct AdminState {
+    pub content_queries: Arc<application::content_queries::ContentQueries>,
     pub auth: Arc<AuthInteractor>,
     pub users: Arc<UserInteractor>,
     /// 本地密码用例（登录限流、设置/清除、自助改密）。

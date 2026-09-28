@@ -118,7 +118,11 @@ async fn build(pool: PgPool) -> Stack {
     let roles = Arc::new(RoleInteractor::new(rbac.clone(), user_repo.clone()));
     roles.sync_registry().await.expect("同步权限目录失败");
     let users = Arc::new(UserInteractor::new(
-        user_repo.clone(),
+        application::identity::UserStores {
+            query: user_repo.clone(),
+            profiles: user_repo.clone(),
+            accounts: user_repo.clone(),
+        },
         rbac,
         clock.clone(),
         common::media_guard(pool.clone()),
@@ -296,6 +300,7 @@ async fn build(pool: PgPool) -> Stack {
         secure_cookies: false,
     };
     let admin_state = AdminState {
+        content_queries: common::content_queries(&pool),
         auth,
         users,
         passwords,

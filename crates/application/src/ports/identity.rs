@@ -47,17 +47,22 @@ impl AdminUserRow {
     }
 }
 
+/// 账号读取端口；不提供资料、状态或凭据写入。
 #[async_trait]
-pub trait UserRepository: Send + Sync {
-    /// 创建接收已校验的聚合；快照仅用于读取、重建与返回结果。
-    async fn insert(
-        &self,
-        aggregate: &domain::identity::User,
-        audit_actor: crate::audit::AuditContext,
-    ) -> Result<(), UseCaseError>;
+pub trait UserQuery: Send + Sync {
     async fn find_by_id(&self, id: Uuid) -> Result<Option<UserSnapshot>, UseCaseError>;
+
     async fn find_by_username(&self, username: &str) -> Result<Option<UserSnapshot>, UseCaseError>;
 
+    /// 管理列表：按用户名排序的分页读取（含软删除账号，供界面标注）。
+    ///
+    /// 调用方负责给出已收敛的 `limit`/`offset`；实现方不再做范围裁剪。
+    async fn list_admin(&self, limit: i64, offset: i64) -> Result<Vec<AdminUserRow>, UseCaseError>;
+}
+
+/// 本人资料与头像提交；保留媒体引用和审计的原子边界。
+#[async_trait]
+pub trait UserProfileStore: Send + Sync {
     /// 本人资料按编辑版本提交，保留 auth_version；返回同次事务的用户记录。
     async fn save_profile(
         &self,
@@ -66,6 +71,28 @@ pub trait UserRepository: Send + Sync {
         now: OffsetDateTime,
         audit: crate::audit::AuditContext,
     ) -> Result<UserSnapshot, UseCaseError>;
+
+    /// 设置/清除头像（自助；仅本人）。
+    ///
+    /// 递增资料编辑 version，保持 auth_version；头像引用与列同事务替换。
+    async fn set_avatar(
+        &self,
+        user_id: Uuid,
+        avatar_media_id: Option<Uuid>,
+        now: OffsetDateTime,
+        audit: crate::audit::AuditContext,
+    ) -> Result<(), UseCaseError>;
+}
+
+/// 账号创建、状态及认证撤销；跨表身份保护由同一次提交保证。
+#[async_trait]
+pub trait AccountAdministration: Send + Sync {
+    /// 创建接收已校验的聚合；快照仅用于读取、重建与返回结果。
+    async fn insert(
+        &self,
+        aggregate: &domain::identity::User,
+        audit_actor: crate::audit::AuditContext,
+    ) -> Result<(), UseCaseError>;
 
     /// 身份排他锁内复核操作者当前权限、目标版本和最后可登录 Owner。
     /// 需 user.manage；目标持有 owner 时另需 ownership.manage。
@@ -86,23 +113,11 @@ pub trait UserRepository: Send + Sync {
         user_id: Uuid,
         audit_actor: crate::audit::AuditContext,
     ) -> Result<(), UseCaseError>;
+}
 
-    /// 设置/清除头像（自助；仅本人）。
-    ///
-    /// 递增资料编辑 version，保持 auth_version；头像引用与列同事务替换。
-    async fn set_avatar(
-        &self,
-        user_id: Uuid,
-        avatar_media_id: Option<Uuid>,
-        now: OffsetDateTime,
-        audit: crate::audit::AuditContext,
-    ) -> Result<(), UseCaseError>;
-
-    /// 管理列表：按用户名排序的分页读取（含软删除账号，供界面标注）。
-    ///
-    /// 调用方负责给出已收敛的 `limit`/`offset`；实现方不再做范围裁剪。
-    async fn list_admin(&self, limit: i64, offset: i64) -> Result<Vec<AdminUserRow>, UseCaseError>;
-
+/// 密码凭据读取与条件提交；哈希不进入普通账号查询。
+#[async_trait]
+pub trait PasswordCredentialStore: Send + Sync {
     // --- 本地密码凭据 ---
     //
     // 口令材料单独走这几个方法，不进入 `UserSnapshot`，避免哈希随实体到处传播。
@@ -166,7 +181,7 @@ pub trait UserRepository: Send + Sync {
     async fn password_hash_of(&self, user_id: Uuid) -> Result<Option<String>, UseCaseError>;
 }
 
-/// [`UserRepository::clear_password_hash_guarded`] 的结果。
+/// [`PasswordCredentialStore::clear_password_hash_guarded`] 的结果。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClearPasswordOutcome {
     /// 已清除（该用户仍有其他登录方式）。

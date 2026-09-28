@@ -76,7 +76,7 @@ POST 必须带启动终端显示的 `X-Install-Token`，并执行与其他写入
 
 | 方法与路径 | 行为 |
 |---|---|
-| `GET /posts` | 当前用户文章摘要数组；显式 `?author=用户名` 需 `post.read_any` |
+| `GET /posts` | 当前用户文章摘要分页；显式 `?author=用户名` 需 `post.read_any` |
 | `POST /posts` | 创建草稿，返回 201 和详情 |
 | `GET /posts/{id}` | 详情，包含 Markdown `content` 和 `excerpt` |
 | `PATCH /posts/{id}` | 编辑并返回详情；编辑已发布文章会直接更新线上内容 |
@@ -88,6 +88,10 @@ POST 必须带启动终端显示的 `X-Install-Token`，并执行与其他写入
 | `GET /post-trash?page=1` | 回收站分页，可带 `author`；返回 `items/total/page/per_page` |
 | `POST /posts/{id}/restore` | 一律恢复为草稿，返回详情 |
 | `POST /posts/{id}/purge` | 永久删除回收站文章，返回 204 |
+
+普通文章、页面及两类回收站列表统一返回 `{ "items": [...], "total": 23, "page": 1, "per_page": 20 }`。`page` 默认 1，每页固定 20 条，超出末页返回空 `items` 与实际总数；零、负数及会导致偏移溢出的页码返回 400。可选筛选 `status=draft|scheduled|published|archived`、`visibility=public|private`，非法值返回 400。普通列表按 `updated_at DESC, id DESC`，回收站按 `deleted_at DESC, id DESC`；总数与当前页属于同一数据库快照，跨次翻页不冻结内容集合。
+
+列表条目只含 `id/slug/title/status/visibility/version/published_at/updated_at`，文章另含 `author_id`。正文、摘要、标签、分类、系列与封面元数据只由详情端点返回。后台筛选变化回到首页；内容写入使全部分页缓存失效，当前页删空时回到有效页。Post CLI 的 `post list` 同样支持 `--page`、`--status`、`--visibility`，每次输出一页及总数。
 
 创建字段为 `slug`、`title`、`excerpt`、`content`、`visibility`、`tag_ids`、`category_id`、`series`、`cover_media_id`。`slug` 可省略生成临时值，草稿允许未完成的标题与正文；发布要求见[内容生命周期](content-lifecycle.md)。`series` 为数组，例如 `[{ "series_id": "UUID", "position": 0 }]`，省略时为空数组。position 省略时为 0，范围为 0–2147483647，同一系列内可重复；数组内不能重复指定同一系列 ID。文章详情使用相同数组格式。
 
@@ -110,7 +114,7 @@ Page 没有作者，使用站点级 `page.*` 权限。
 
 | 方法与路径 | 行为 |
 |---|---|
-| `GET /pages` | 页面摘要数组 |
+| `GET /pages` | 页面摘要分页 |
 | `POST /pages` | 创建草稿，返回 201 和详情 |
 | `GET /pages/{id}` | 包含 Markdown 的详情 |
 | `PATCH /pages/{id}` | 编辑并返回详情 |
@@ -196,7 +200,7 @@ Page 没有作者，使用站点级 `page.*` 权限。
 
 显式版本过期返回 409 `version_conflict`，即使操作本身幂等也不会绕过版本检查。允许省略版本的用例会读取当前版本再条件写入，仍能检测读取后的并发变化，但不能识别客户端此前编辑的是旧副本。编辑器应总是提交已读取的版本，冲突后让用户选择重新加载或基于新版本再次提交。
 
-内容和目录请求体默认上限为 2 MiB，认证、身份、设置、媒体的特定限制见各节。列表响应形态并不统一：文章和页面为摘要数组；用户接受 limit/offset，但仍返回数组，不包含总数；回收站与媒体返回 `items/total/page/per_page`。客户端不能假定所有列表共享一个分页 DTO。
+内容和目录请求体默认上限为 2 MiB，认证、身份、设置、媒体的特定限制见各节。列表响应形态并不统一：文章、页面、回收站与媒体返回 `items/total/page/per_page`；用户接受 limit/offset，但仍返回数组，不包含总数。客户端不能假定所有列表共享一个分页 DTO。
 
 ## 错误与追踪
 

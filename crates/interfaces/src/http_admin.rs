@@ -11,6 +11,7 @@ use uuid::Uuid;
 
 use application::category::{CategoryDto, CreateCategoryCmd, UpdateCategoryCmd};
 use application::content::{CreatePostCmd, EditPostCmd, PostDto, PostVisibility, SeriesPlacement};
+use application::content_queries::{AdminPageSummary, AdminPostSummary, ContentListRequest};
 use application::error::UseCaseError;
 use application::identity::Actor;
 use application::page::{CreatePageCmd, DeletePageCmd, EditPageCmd, PageDto};
@@ -85,7 +86,7 @@ impl From<&PostDto> for PostJson {
 }
 
 /// 单篇详情：在摘要之上附 Markdown 源文与摘要（后台编辑需要）。
-/// 列表接口保持摘要形态，避免把全部正文塞进列表响应。
+/// 列表通过独立的 PostListJson 输出展示字段。
 #[derive(serde::Serialize)]
 struct PostDetailJson {
     #[serde(flatten)]
@@ -174,6 +175,34 @@ where
     Ok(Some(Option::<T>::deserialize(deserializer)?))
 }
 
+#[derive(serde::Serialize)]
+struct PostListJson {
+    id: Uuid,
+    slug: String,
+    title: String,
+    status: String,
+    visibility: String,
+    version: i64,
+    published_at: Option<String>,
+    updated_at: String,
+    author_id: Uuid,
+}
+impl From<AdminPostSummary> for PostListJson {
+    fn from(dto: AdminPostSummary) -> Self {
+        Self {
+            id: dto.id,
+            slug: dto.slug,
+            title: dto.title,
+            status: dto.status,
+            visibility: dto.visibility,
+            version: dto.version,
+            published_at: dto.published_at.map(api_datetime),
+            updated_at: api_datetime(dto.updated_at),
+            author_id: dto.author_id,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // 请求体
 // ---------------------------------------------------------------------------
@@ -230,6 +259,18 @@ pub struct VersionBody {
 pub struct ListQuery {
     pub author: Option<String>,
     pub page: Option<i64>,
+    pub status: Option<String>,
+    pub visibility: Option<String>,
+}
+impl ListQuery {
+    fn request(self, trash: bool) -> ContentListRequest {
+        ContentListRequest {
+            page: self.page.unwrap_or(1),
+            status: self.status,
+            visibility: self.visibility,
+            trash,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -321,12 +362,12 @@ async fn list_posts(
         }
         _ => actor.user_id,
     };
-    match state.posts.list_by_author(&actor, author_id).await {
-        Ok(list) => (
-            StatusCode::OK,
-            Json(list.iter().map(PostJson::from).collect::<Vec<_>>()),
-        )
-            .into_response(),
+    match state
+        .content_queries
+        .posts(&actor, author_id, query.request(false))
+        .await
+    {
+        Ok(page) => Json(page.map(PostListJson::from)).into_response(),
         Err(e) => admin_error(e, &request_id),
     }
 }
@@ -350,18 +391,11 @@ async fn list_trash(
         _ => actor.user_id,
     };
     match state
-        .posts
-        .list_trash(&actor, author_id, query.page.unwrap_or(1))
+        .content_queries
+        .posts(&actor, author_id, query.request(true))
         .await
     {
-        Ok(page) => (
-            StatusCode::OK,
-            Json(serde_json::json!({
-                "items": page.items.iter().map(PostJson::from).collect::<Vec<_>>(),
-                "total": page.total, "page": page.page, "per_page": page.per_page
-            })),
-        )
-            .into_response(),
+        Ok(page) => Json(page.map(PostListJson::from)).into_response(),
         Err(e) => admin_error(e, &request_id),
     }
 }
@@ -525,6 +559,21 @@ impl From<&PageDto> for PageJson {
     }
 }
 
+impl From<AdminPageSummary> for PageJson {
+    fn from(dto: AdminPageSummary) -> Self {
+        Self {
+            id: dto.id,
+            slug: dto.slug,
+            title: dto.title,
+            status: dto.status,
+            visibility: dto.visibility,
+            version: dto.version,
+            published_at: dto.published_at.map(api_datetime),
+            updated_at: api_datetime(dto.updated_at),
+        }
+    }
+}
+
 /// 页面详情：摘要 + Markdown 源文（后台编辑数据源）。
 #[derive(serde::Serialize)]
 struct PageDetailJson {
@@ -627,13 +676,14 @@ async fn list_pages(
     AdminAuth { actor }: AdminAuth,
     request_id: RequestId,
     State(state): State<AdminState>,
+    Query(query): Query<ListQuery>,
 ) -> Response {
-    match state.pages.list(&actor).await {
-        Ok(list) => (
-            StatusCode::OK,
-            Json(list.iter().map(PageJson::from).collect::<Vec<_>>()),
-        )
-            .into_response(),
+    match state
+        .content_queries
+        .pages(&actor, query.request(false))
+        .await
+    {
+        Ok(page) => Json(page.map(PageJson::from)).into_response(),
         Err(e) => admin_error(e, &request_id),
     }
 }
@@ -1491,9 +1541,13 @@ async fn list_page_trash(
     State(state): State<AdminState>,
     Query(query): Query<ListQuery>,
 ) -> Response {
-    match state.pages.list_trash(&actor,query.page.unwrap_or(1)).await {
-        Ok(page)=>Json(serde_json::json!({"items":page.items.iter().map(PageJson::from).collect::<Vec<_>>(),"total":page.total,"page":page.page,"per_page":page.per_page})).into_response(),
-        Err(e)=>admin_error(e,&request_id),
+    match state
+        .content_queries
+        .pages(&actor, query.request(true))
+        .await
+    {
+        Ok(page) => Json(page.map(PageJson::from)).into_response(),
+        Err(e) => admin_error(e, &request_id),
     }
 }
 

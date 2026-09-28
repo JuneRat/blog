@@ -5,6 +5,8 @@
 
 mod connection;
 mod content;
+mod content_queries;
+pub use content_queries::PostgresAdminContentQuery;
 mod identity;
 mod media;
 mod sql;
@@ -13,7 +15,7 @@ mod taxonomy;
 pub use connection::{PgHealthCheck, SystemClock, connect, migrate, migrate_schema};
 pub use content::{
     CONTENT_RENDER_VERSION, PostgresPageRepository, PostgresPostRepository,
-    PostgresPublishedPageQuery, PostgresPublishedPostQuery, publish_due_content,
+    PostgresPublishedPageQuery, PostgresPublishedPostQuery, PostgresScheduledPublicationStore,
     rebuild_content_html,
 };
 pub use identity::PostgresUserRepository;

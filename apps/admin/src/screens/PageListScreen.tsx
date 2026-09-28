@@ -1,11 +1,11 @@
 import { statusLabel } from "../components/ContentLifecycleControls";
 import { Alert, Button, Flex, Table, Typography } from "antd";
 import type { TableProps } from "antd";
-import { useQuery } from "@tanstack/react-query";
 import { api } from "../api";
 import { permissionMessageOf } from "../apiError";
 import { useAuth } from "../auth";
-import { queryKeys } from "../queryClient";
+import { useContentList } from "../useContentList";
+import { ContentListFilters, ContentPagination } from "../components/ContentListControls";
 import { navigate, paths } from "../router";
 import type { PageSummary } from "../types";
 
@@ -18,7 +18,7 @@ import type { PageSummary } from "../types";
 export function PageListScreen() {
   const { me } = useAuth();
   /** 只读列表：失败按管理屏口径加「没有权限：」前缀（本屏没有写操作）。 */
-  const pages = useQuery({ queryKey: queryKeys.pages(), queryFn: () => api.listPages() });
+  const { query: pages, filter, setFilter, setPage } = useContentList("pages", api.listPages);
   const errorText = pages.error === null ? null : permissionMessageOf(pages.error);
   const canCreate = me?.permissions.includes("page.create") ?? false;
 
@@ -94,11 +94,13 @@ export function PageListScreen() {
         </Flex>
       )}
 
+      <ContentListFilters filter={filter} onChange={setFilter} />
+
       <Table<PageSummary>
         rowKey="id"
         size="middle"
-        loading={pages.isPending}
-        dataSource={pages.data ?? []}
+        loading={pages.isFetching}
+        dataSource={pages.data?.items ?? []}
         columns={columns}
         pagination={false}
         // 保留迁移前的语义：整行点击进入该页面的编辑页。
@@ -110,9 +112,12 @@ export function PageListScreen() {
           emptyText:
             errorText !== null
               ? "页面加载失败。"
-              : `还没有页面。${canCreate ? "点击「新建页面」开始。" : ""}`,
+              : filter.status || filter.visibility
+                ? "没有符合筛选条件的页面。"
+                : `还没有页面。${canCreate ? "点击「新建页面」开始。" : ""}`,
         }}
       />
+      <ContentPagination data={pages.data} busy={pages.isFetching} onChange={setPage} />
     </>
   );
 }

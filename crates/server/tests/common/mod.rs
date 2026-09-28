@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use application::password::{PasswordDeps, PasswordInteractor};
-use application::ports::{LoginThrottle, SessionStore, UserRepository};
+use application::ports::{LoginThrottle, SessionStore};
 
 /// 测试用媒体文件根目录：每个测试进程/用例一个独立临时目录，互不干扰。
 ///
@@ -41,7 +41,7 @@ pub fn media_guard(pool: sqlx::PgPool) -> Arc<dyn application::ports::MediaRefGu
 ///
 /// 会话存储由调用方注入，保证与认证用例看到同一份状态。
 pub fn password_interactor(
-    user_repo: Arc<dyn UserRepository>,
+    user_repo: Arc<infrastructure::PostgresUserRepository>,
     sessions: Arc<dyn SessionStore>,
 ) -> Arc<PasswordInteractor> {
     password_interactor_with_throttle(
@@ -55,12 +55,13 @@ pub fn password_interactor(
 ///
 /// 用于把阈值调低，避免为跑满生产阈值（账号 5 / 来源地址 50 次）做同样多次真实 Argon2 校验。
 pub fn password_interactor_with_throttle(
-    user_repo: Arc<dyn UserRepository>,
+    user_repo: Arc<infrastructure::PostgresUserRepository>,
     sessions: Arc<dyn SessionStore>,
     throttle: Arc<dyn LoginThrottle>,
 ) -> Arc<PasswordInteractor> {
     Arc::new(PasswordInteractor::new(PasswordDeps {
-        users: user_repo,
+        users: user_repo.clone(),
+        credentials: user_repo,
         hasher: Arc::new(infrastructure::Argon2PasswordHasher::with_defaults()),
         throttle,
         sessions,
@@ -122,4 +123,12 @@ pub async fn fresh_database(db_name: &str) -> sqlx::PgPool {
         .await
         .expect("迁移失败");
     pool
+}
+
+pub fn content_queries(pool: &sqlx::PgPool) -> Arc<application::content_queries::ContentQueries> {
+    let query = Arc::new(infrastructure::PostgresAdminContentQuery::new(pool.clone()));
+    Arc::new(application::content_queries::ContentQueries::new(
+        query.clone(),
+        query,
+    ))
 }

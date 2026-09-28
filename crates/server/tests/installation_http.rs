@@ -194,6 +194,39 @@ async fn empty_database_installs_once_logs_in_and_restarts_from_saved_config() {
         StatusCode::NOT_FOUND
     );
     let cookie = login(&server).await;
+    // Exercise the production router after its one-time installation switch.
+    // These routes used to be assembled separately by server; authentication,
+    // no-store and request IDs must now be applied by the common HTTP entry.
+    for path in [
+        "/api/admin/v1/comments",
+        "/api/admin/v1/settings/retention",
+        "/api/admin/v1/audit-logs",
+    ] {
+        let anonymous = client()
+            .get(format!("{}{path}", server.url))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(anonymous.status(), StatusCode::UNAUTHORIZED, "{path}");
+        assert_eq!(anonymous.headers()["cache-control"], "no-store");
+        let request_id = anonymous.headers()["x-request-id"]
+            .to_str()
+            .unwrap()
+            .to_owned();
+        assert_eq!(
+            anonymous.json::<Value>().await.unwrap()["request_id"],
+            request_id
+        );
+        let authenticated = client()
+            .get(format!("{}{path}", server.url))
+            .header("cookie", &cookie)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(authenticated.status(), StatusCode::OK, "{path}");
+        assert_eq!(authenticated.headers()["cache-control"], "no-store");
+        assert!(authenticated.headers().contains_key("x-request-id"));
+    }
     let me = client()
         .get(format!("{}/api/admin/v1/me", server.url))
         .header("cookie", &cookie)
@@ -201,7 +234,45 @@ async fn empty_database_installs_once_logs_in_and_restarts_from_saved_config() {
         .await
         .unwrap();
     assert_eq!(me.status(), StatusCode::OK);
-    assert!(me.text().await.unwrap().contains("ownership.manage"));
+    let me = me.json::<Value>().await.unwrap();
+    assert!(
+        me["permissions"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("ownership.manage"))
+    );
+    let policy = client()
+        .get(format!("{}/api/admin/v1/settings/retention", server.url))
+        .header("cookie", &cookie)
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    let mut updated_policy = policy;
+    updated_policy["audit_days"] = json!(181);
+    let saved = client()
+        .put(format!("{}/api/admin/v1/settings/retention", server.url))
+        .header("cookie", &cookie)
+        .header("origin", &server.url)
+        .header("x-csrf-token", me["csrf_token"].as_str().unwrap())
+        .header("x-forwarded-for", "198.51.100.10")
+        .json(&updated_policy)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(saved.status(), StatusCode::OK);
+    let source_ip: String = sqlx::query_scalar(
+        "SELECT host(ip_address) FROM audit_logs WHERE action='settings.retention'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        source_ip, "127.0.0.1",
+        "untrusted forwarding must not replace the socket peer"
+    );
     let row: (i64, i64, String) = sqlx::query_as("SELECT version,auth_version,status FROM users")
         .fetch_one(&pool)
         .await

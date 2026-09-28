@@ -1,3 +1,4 @@
+import { contentPage } from "./contentFixtures";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
@@ -72,7 +73,7 @@ beforeEach(() => {
     post = { ...post, status: "draft", version: post.version + 1 };
     return post;
   });
-  vi.mocked(api.listPosts).mockImplementation(async () => [post]);
+  vi.mocked(api.listPosts).mockImplementation(async () => contentPage([post]));
   vi.mocked(api.listTags).mockImplementation(async () => [
     { id: "tag", name: "技术标签", slug: "tech", version: 1, public_post_count: count() },
   ]);

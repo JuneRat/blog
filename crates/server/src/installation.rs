@@ -194,7 +194,7 @@ pub async fn serve(addr: Option<String>, saved: Option<SavedConfig>) -> Result<(
             .expect("live site retains sender")
             .clone()
             .expect("ready pool");
-        crate::publish_scheduler(pool).await
+        crate::publish_scheduler(crate::assembly::publisher(&pool)).await
     };
     tokio::select! { result = server => result, _ = scheduler => unreachable!("scheduler loops") }
 }

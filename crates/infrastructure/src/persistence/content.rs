@@ -362,44 +362,6 @@ impl PostRepository for PostgresPostRepository {
         row.as_ref().map(post_from_row).transpose()
     }
 
-    async fn list_by_author(&self, author_id: Uuid) -> Result<Vec<PostSnapshot>, UseCaseError> {
-        let rows = sqlx::query(&format!(
-            "SELECT {POST_COLUMNS} FROM posts WHERE author_id = $1 AND deleted_at IS NULL ORDER BY updated_at DESC, id DESC"
-        ))
-        .bind(author_id)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(map_sqlx_error)?;
-        rows.iter().map(post_from_row).collect()
-    }
-
-    async fn list_trash_by_author(
-        &self,
-        author_id: Uuid,
-        limit: i64,
-        offset: i64,
-    ) -> Result<(Vec<PostSnapshot>, i64), UseCaseError> {
-        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
-        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
-            .execute(&mut *tx)
-            .await
-            .map_err(map_sqlx_error)?;
-        let (total,): (i64,) = sqlx::query_as(
-            "SELECT count(*) FROM posts WHERE author_id = $1 AND deleted_at IS NOT NULL",
-        )
-        .bind(author_id)
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(map_sqlx_error)?;
-        let rows = sqlx::query(&format!("SELECT {POST_COLUMNS} FROM posts WHERE author_id = $1 AND deleted_at IS NOT NULL ORDER BY deleted_at DESC, id DESC LIMIT $2 OFFSET $3"))
-            .bind(author_id).bind(limit).bind(offset).fetch_all(&mut *tx).await.map_err(map_sqlx_error)?;
-        tx.commit().await.map_err(map_sqlx_error)?;
-        Ok((
-            rows.iter().map(post_from_row).collect::<Result<_, _>>()?,
-            total,
-        ))
-    }
-
     async fn purge(
         &self,
         id: Uuid,
@@ -895,34 +857,6 @@ impl PageRepository for PostgresPageRepository {
         row.as_ref().map(page_from_row).transpose()
     }
 
-    async fn list(&self) -> Result<Vec<PageSnapshot>, UseCaseError> {
-        let rows=sqlx::query(&format!("SELECT {PAGE_COLUMNS} FROM pages WHERE deleted_at IS NULL ORDER BY updated_at DESC,id DESC")).fetch_all(&self.pool).await.map_err(map_sqlx_error)?;
-        rows.iter().map(page_from_row).collect()
-    }
-
-    async fn list_trash(
-        &self,
-        limit: i64,
-        offset: i64,
-    ) -> Result<(Vec<PageSnapshot>, i64), UseCaseError> {
-        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
-        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
-            .execute(&mut *tx)
-            .await
-            .map_err(map_sqlx_error)?;
-        let (total,): (i64,) =
-            sqlx::query_as("SELECT count(*) FROM pages WHERE deleted_at IS NOT NULL")
-                .fetch_one(&mut *tx)
-                .await
-                .map_err(map_sqlx_error)?;
-        let rows=sqlx::query(&format!("SELECT {PAGE_COLUMNS} FROM pages WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC,id DESC LIMIT $1 OFFSET $2")).bind(limit.clamp(1,100)).bind(offset.max(0)).fetch_all(&mut *tx).await.map_err(map_sqlx_error)?;
-        tx.commit().await.map_err(map_sqlx_error)?;
-        Ok((
-            rows.iter().map(page_from_row).collect::<Result<_, _>>()?,
-            total,
-        ))
-    }
-
     async fn purge(
         &self,
         id: Uuid,
@@ -963,18 +897,24 @@ impl PageRepository for PostgresPageRepository {
     }
 }
 
-/// 每批到期发布最多处理 limit 条/类型。多进程用 SKIP LOCKED 领取；取消、编辑、删除
-/// 与此 UPDATE 争用同一行锁，只有仍满足预约条件的当前记录会发布。
-pub async fn publish_due_content(
-    pool: &PgPool,
-    now: OffsetDateTime,
-    limit: i64,
-) -> Result<usize, UseCaseError> {
-    let mut tx = pool.begin().await.map_err(map_sqlx_error)?;
-    let mut count = 0;
-    for (table, kind) in [("posts", "post"), ("pages", "page")] {
-        let rows: Vec<(Uuid, i64)> = sqlx::query_as(&format!(
-            "WITH due AS (
+/// 预约发布的 PostgreSQL 原子批次适配器。
+pub struct PostgresScheduledPublicationStore {
+    pool: PgPool,
+}
+impl PostgresScheduledPublicationStore {
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl application::publishing::ScheduledPublicationStore for PostgresScheduledPublicationStore {
+    async fn publish_batch(&self, now: OffsetDateTime, limit: i64) -> Result<usize, UseCaseError> {
+        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        let mut count = 0;
+        for (table, kind) in [("posts", "post"), ("pages", "page")] {
+            let rows: Vec<(Uuid, i64)> = sqlx::query_as(&format!(
+                "WITH due AS (
                 SELECT id FROM {table}
                 WHERE status = 'scheduled' AND deleted_at IS NULL AND published_at <= $1
                 ORDER BY published_at, id LIMIT $2 FOR UPDATE SKIP LOCKED
@@ -984,27 +924,28 @@ pub async fn publish_due_content(
              WHERE p.id = due.id AND p.status = 'scheduled'
                AND p.deleted_at IS NULL AND p.published_at <= $1
              RETURNING p.id, p.version"
-        ))
-        .bind(now)
-        .bind(limit.clamp(1, 1000))
-        .fetch_all(&mut *tx)
-        .await
-        .map_err(map_sqlx_error)?;
-        for (id, version) in rows {
-            audit_content(
-                &mut tx,
-                application::audit::AuditContext::system(),
-                &format!("{kind}.publish_due"),
-                kind,
-                id,
-                serde_json::json!({"version":version}),
-            )
-            .await?;
-            count += 1;
+            ))
+            .bind(now)
+            .bind(limit.clamp(1, 1000))
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(map_sqlx_error)?;
+            for (id, version) in rows {
+                audit_content(
+                    &mut tx,
+                    application::audit::AuditContext::system(),
+                    &format!("{kind}.publish_due"),
+                    kind,
+                    id,
+                    serde_json::json!({"version":version}),
+                )
+                .await?;
+                count += 1;
+            }
         }
+        tx.commit().await.map_err(map_sqlx_error)?;
+        Ok(count)
     }
-    tx.commit().await.map_err(map_sqlx_error)?;
-    Ok(count)
 }
 
 pub struct PostgresPublishedPageQuery {

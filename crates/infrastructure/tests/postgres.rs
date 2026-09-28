@@ -8,10 +8,11 @@ use std::sync::Arc;
 
 use application::error::{ConflictKind, UseCaseError};
 use application::ports::{
-    CategoryRepository, ClearPasswordOutcome, OAuthAccountStore, PageCommitOutcome,
-    PageDeleteOutcome, PageRepository, PostCommitOutcome, PostRepository, PublishedCategoryQuery,
-    PublishedPageQuery, PublishedPostQuery, PublishedSeriesQuery, PublishedTagQuery, RbacStore,
-    SaveOutcome, SeriesRepository, SettingsStore, TagRepository, UserRepository,
+    AccountAdministration, CategoryRepository, ClearPasswordOutcome, OAuthAccountStore,
+    PageCommitOutcome, PageDeleteOutcome, PageRepository, PasswordCredentialStore,
+    PostCommitOutcome, PostRepository, PublishedCategoryQuery, PublishedPageQuery,
+    PublishedPostQuery, PublishedSeriesQuery, PublishedTagQuery, RbacStore, SaveOutcome,
+    SeriesRepository, SettingsStore, TagRepository, UserQuery,
 };
 use domain::content::{Page, PagePatch};
 use domain::content::{Post, PostPatch, PostSnapshot, PostStatus, Slug, Visibility};
@@ -934,7 +935,8 @@ async fn page_repository_crud_version_and_public_query() {
         pool.clone(),
         Arc::new(infrastructure::RenderingRuntime::default()),
     ));
-    let public: Arc<dyn PublishedPageQuery> = Arc::new(PostgresPublishedPageQuery::new(pool));
+    let public: Arc<dyn PublishedPageQuery> =
+        Arc::new(PostgresPublishedPageQuery::new(pool.clone()));
 
     let now = OffsetDateTime::now_utc();
     let mut page = Page::create_draft(
@@ -1002,7 +1004,7 @@ async fn page_repository_crud_version_and_public_query() {
     assert!(detail.published_at.is_some());
 
     // 站点级列表返回全部页面（无作者维度）。
-    assert_eq!(pages.list().await.unwrap().len(), 1);
+    assert_eq!(admin_pages(&pool, false).await.0.len(), 1);
 
     // 改为 private：立即退出公开集合（页面无软删除，只有状态与可见性）。
     let mut private = Page::reconstitute(snapshot.clone()).unwrap();
@@ -2893,17 +2895,13 @@ async fn trash_restore_purge_and_series_reorder_obey_versions() {
         PostCommitOutcome::Saved(record) if record.snapshot.version == 2
     ));
     assert!(
-        posts
-            .list_by_author(author)
+        admin_posts(&pool, author, false)
             .await
-            .unwrap()
+            .0
             .iter()
             .all(|p| p.id != a.id)
     );
-    assert_eq!(
-        posts.list_trash_by_author(author, 20, 0).await.unwrap().1,
-        1
-    );
+    assert_eq!(admin_posts(&pool, author, true).await.1, 1);
     assert!(
         PostgresPublishedPostQuery::new(pool.clone())
             .find_public_by_slug("trash-a")
@@ -3277,4 +3275,39 @@ async fn content_commit_lifecycle_preserves_relations_and_checks_original_state(
         repo.find_record_by_id(restored.snapshot.id).await.unwrap(),
         Some(*restored)
     );
+}
+
+async fn admin_posts(
+    pool: &sqlx::PgPool,
+    author: uuid::Uuid,
+    trash: bool,
+) -> (Vec<application::content_queries::AdminPostSummary>, i64) {
+    application::ports::AdminPostQuery::list(
+        &infrastructure::PostgresAdminContentQuery::new(pool.clone()),
+        author,
+        &application::content_queries::ContentListRequest {
+            trash,
+            ..Default::default()
+        }
+        .try_into()
+        .unwrap(),
+    )
+    .await
+    .unwrap()
+}
+async fn admin_pages(
+    pool: &sqlx::PgPool,
+    trash: bool,
+) -> (Vec<application::content_queries::AdminPageSummary>, i64) {
+    application::ports::AdminPageQuery::list(
+        &infrastructure::PostgresAdminContentQuery::new(pool.clone()),
+        &application::content_queries::ContentListRequest {
+            trash,
+            ..Default::default()
+        }
+        .try_into()
+        .unwrap(),
+    )
+    .await
+    .unwrap()
 }

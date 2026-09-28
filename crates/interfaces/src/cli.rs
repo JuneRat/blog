@@ -288,6 +288,13 @@ pub enum PostAction {
     List {
         #[arg(long)]
         author: String,
+        /// 页码，每页 20 条
+        #[arg(long, default_value_t = 1)]
+        page: i64,
+        #[arg(long)]
+        status: Option<String>,
+        #[arg(long)]
+        visibility: Option<String>,
         /// 操作身份（缺省为 --author 本人）
         #[arg(long = "as")]
         actor: Option<String>,
@@ -302,6 +309,7 @@ pub struct UserCliDeps {
 
 /// 文章命令只需要文章用例和操作身份解析。
 pub struct PostCliDeps {
+    pub content_queries: Arc<application::content_queries::ContentQueries>,
     pub users: Arc<UserInteractor>,
     pub posts: Arc<PostInteractor>,
 }
@@ -761,7 +769,13 @@ pub async fn run_post(deps: PostCliDeps, action: PostAction) -> Result<(), Strin
             Ok(())
         }
 
-        PostAction::List { author, actor } => {
+        PostAction::List {
+            author,
+            actor,
+            page,
+            status,
+            visibility,
+        } => {
             // 操作身份缺省为目标作者本人（actor_for_username 内部走同一规范化）。
             let operator_name = actor.as_deref().unwrap_or(&author);
             let operator = deps
@@ -775,15 +789,28 @@ pub async fn run_post(deps: PostCliDeps, action: PostAction) -> Result<(), Strin
                 .await
                 .map_err(fmt_error)?;
             let list = deps
-                .posts
-                .list_by_author(&operator, who.user_id)
+                .content_queries
+                .posts(
+                    &operator,
+                    who.user_id,
+                    application::content_queries::ContentListRequest {
+                        page,
+                        status,
+                        visibility,
+                        trash: false,
+                    },
+                )
                 .await
                 .map_err(fmt_error)?;
             println!(
                 "{:<36} {:<6} {:<10} {:<8} {:<14} 标题",
                 "ID", "版本", "状态", "可见", "slug"
             );
-            for dto in list {
+            println!(
+                "第 {} 页，每页 {} 条，共 {} 条",
+                list.page, list.per_page, list.total
+            );
+            for dto in list.items {
                 println!(
                     "{} v{:<5} {:<10} {:<8} {:<14} {}",
                     dto.id, dto.version, dto.status, dto.visibility, dto.slug, dto.title
@@ -862,6 +889,32 @@ fn print_post(dto: &application::content::PostDto) {
 
 fn fmt_error(e: UseCaseError) -> String {
     e.to_string()
+}
+
+/// CLI 只负责把维护输入交给用例并呈现结果。
+pub async fn run_maintenance(
+    maintenance: &application::retention::RetentionMaintenance,
+    batch_size: i64,
+    max_batches: u32,
+    dry_run: bool,
+) -> Result<(), String> {
+    let result = maintenance
+        .run(batch_size, max_batches, dry_run)
+        .await
+        .map_err(|e| e.to_string())?;
+    println!(
+        "{}",
+        serde_json::to_string(&result).map_err(|e| e.to_string())?
+    );
+    Ok(())
+}
+
+pub async fn run_publish_due(
+    publisher: &application::publishing::PublishDueInteractor,
+) -> Result<(), String> {
+    let total = publisher.run().await.map_err(|e| e.to_string())?;
+    println!("已发布 {total} 条到期内容。");
+    Ok(())
 }
 
 #[cfg(test)]

@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { contentPage } from "./contentFixtures";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
@@ -67,11 +68,6 @@ function summary(overrides: Partial<PostSummary> = {}): PostSummary {
     published_at: "2026-09-20T00:00:00Z",
     updated_at: "2026-09-22T10:00:00Z",
     author_id: "me",
-    tag_ids: [],
-    category_id: null,
-    series: [],
-    cover_media_id: null,
-    cover_url: null,
     ...overrides,
   };
 }
@@ -88,7 +84,7 @@ const draftPost = summary({
   version: 1,
 });
 
-const rustDetail: PostDetail = { ...rustPost, excerpt: null, content: "正文" };
+const rustDetail: PostDetail = { tag_ids: [], category_id: null, series: [], cover_media_id: null, cover_url: null, ...rustPost, excerpt: null, content: "正文" };
 
 const aboutPage: PageSummary = {
   id: "page-about",
@@ -120,8 +116,8 @@ const trashed = summary({ id: "post-gone", slug: "gone", title: "已删除的稿
 beforeEach(() => {
   vi.resetAllMocks();
   state.permissions = ["post.create", "post.delete", "post.purge", "page.create"];
-  vi.mocked(api.listPosts).mockResolvedValue([rustPost, draftPost]);
-  vi.mocked(api.listPages).mockResolvedValue([aboutPage, contactPage]);
+  vi.mocked(api.listPosts).mockResolvedValue(contentPage([rustPost, draftPost]));
+  vi.mocked(api.listPages).mockResolvedValue(contentPage([aboutPage, contactPage]));
   vi.mocked(api.listTrash).mockResolvedValue({ items: [trashed], total: 1, page: 1, per_page: 10 });
   vi.mocked(api.getPost).mockResolvedValue(rustDetail);
   vi.mocked(api.getPage).mockResolvedValue(aboutDetail);
@@ -174,7 +170,7 @@ describe("我的文章列表", () => {
     await screen.findByText("Rust 指南");
 
     // 移入回收站后后端不再返回这一行：用它证明列表真的刷新了。
-    vi.mocked(api.listPosts).mockResolvedValue([draftPost]);
+    vi.mocked(api.listPosts).mockResolvedValue(contentPage([draftPost]));
 
     // 后端返回顺序即渲染顺序，第一行是 rust-guide。
     fireEvent.click(screen.getAllByRole("button", { name: "移入回收站" })[0]);
@@ -227,7 +223,7 @@ describe("我的文章列表", () => {
   });
 
   it("空列表展示带新建引导的空状态", async () => {
-    vi.mocked(api.listPosts).mockResolvedValue([]);
+    vi.mocked(api.listPosts).mockResolvedValue(contentPage([]));
     render(<App />);
 
     expect(await screen.findByText("还没有文章。点击「新建草稿」开始。")).toBeTruthy();
@@ -289,7 +285,7 @@ describe("独立页面列表", () => {
   });
 
   it("空列表展示带新建引导的空状态", async () => {
-    vi.mocked(api.listPages).mockResolvedValue([]);
+    vi.mocked(api.listPages).mockResolvedValue(contentPage([]));
     render(<App />);
 
     expect(await screen.findByText("还没有页面。点击「新建页面」开始。")).toBeTruthy();
@@ -502,14 +498,14 @@ describe("跨屏缓存一致性", () => {
   // 否则（列表缓存 30s 内仍然新鲜）回去看不到刚恢复的那篇。
   it("回收站恢复后，文章列表能看到它", async () => {
     window.history.replaceState(null, "", paths.list);
-    vi.mocked(api.listPosts).mockResolvedValue([draftPost]);
+    vi.mocked(api.listPosts).mockResolvedValue(contentPage([draftPost]));
     render(<App />);
     await screen.findByText("draft-note"); // 列表缓存先落地（此时没有那篇）
     expect(screen.queryByText("已删除的稿子")).toBeNull();
 
     act(() => { navigate(paths.postTrash); });
     await screen.findByText("已删除的稿子");
-    vi.mocked(api.listPosts).mockResolvedValue([draftPost, trashed]);
+    vi.mocked(api.listPosts).mockResolvedValue(contentPage([draftPost, trashed]));
     fireEvent.click(screen.getByRole("button", { name: "恢复" }));
     await screen.findByText("已恢复「已删除的稿子」。");
 
@@ -520,7 +516,7 @@ describe("跨屏缓存一致性", () => {
   // 与文章编辑器对称：页面保存后返回列表也不能看到旧标题。
   it("页面保存后，页面列表看到新标题", async () => {
     window.history.replaceState(null, "", paths.pages);
-    vi.mocked(api.listPages).mockResolvedValue([aboutPage]);
+    vi.mocked(api.listPages).mockResolvedValue(contentPage([aboutPage]));
     render(<App />);
     await screen.findByText("关于"); // 列表缓存先落地
 
@@ -528,7 +524,7 @@ describe("跨屏缓存一致性", () => {
     await screen.findByDisplayValue("关于");
     fireEvent.change(screen.getByLabelText("标题"), { target: { value: "关于我们" } });
     vi.mocked(api.updatePage).mockResolvedValue({ ...aboutDetail, title: "关于我们", version: 3 });
-    vi.mocked(api.listPages).mockResolvedValue([{ ...aboutPage, title: "关于我们", version: 3 }]);
+    vi.mocked(api.listPages).mockResolvedValue(contentPage([{ ...aboutPage, title: "关于我们", version: 3 }]));
     fireEvent.click(screen.getByRole("button", { name: "保存并更新线上" }));
     await waitFor(() => expect(api.updatePage).toHaveBeenCalledTimes(1));
 
@@ -541,7 +537,7 @@ describe("跨屏缓存一致性", () => {
     // aboutPage 是已发布状态，按钮是「撤回为草稿」，需要 page.unpublish（只影响本条用例）。
     state.permissions = ["page.create", "page.unpublish"];
     window.history.replaceState(null, "", paths.pages);
-    vi.mocked(api.listPages).mockResolvedValue([aboutPage]);
+    vi.mocked(api.listPages).mockResolvedValue(contentPage([aboutPage]));
     render(<App />);
     await screen.findByText("关于"); // 列表缓存先落地
 
@@ -552,7 +548,7 @@ describe("跨屏缓存一致性", () => {
     vi.mocked(api.unpublishPage).mockRejectedValue(
       new ApiError(500, "撤回失败", "internal", "req-8"),
     );
-    vi.mocked(api.listPages).mockResolvedValue([{ ...aboutPage, title: "关于我们", version: 3 }]);
+    vi.mocked(api.listPages).mockResolvedValue(contentPage([{ ...aboutPage, title: "关于我们", version: 3 }]));
 
     fireEvent.click(screen.getByRole("button", { name: "撤回为草稿" }));
     await waitFor(() => expect(api.updatePage).toHaveBeenCalledTimes(1));
@@ -561,5 +557,49 @@ describe("跨屏缓存一致性", () => {
 
     fireEvent.click(screen.getByRole("menuitem", { name: "独立页面" }));
     expect(await screen.findByText("关于我们")).toBeTruthy();
+  });
+});
+
+describe("内容服务端分页", () => {
+  it.each(["post", "page"] as const)("%s 翻页期间保持页码与行一致，切换筛选回到首页", async kind => {
+    const isPost = kind === "post";
+    const listing = isPost ? vi.mocked(api.listPosts) : vi.mocked(api.listPages);
+    const first = isPost ? rustPost : aboutPage;
+    const second = isPost ? draftPost : contactPage;
+    // 两种摘要的共同展示字段一致；文章摘要保留作者字段。
+    listing.mockResolvedValue(contentPage([first as PostSummary], 1, 21));
+    window.history.replaceState(null, "", isPost ? paths.list : paths.pages);
+    render(<App />);
+    await screen.findByText(first.title);
+    let resolve!: (value: ReturnType<typeof contentPage<PostSummary>>) => void;
+    listing.mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+    fireEvent.click(screen.getByRole("button", { name: "下一页" }));
+    await waitFor(() => expect(listing).toHaveBeenLastCalledWith({ page: 2 }));
+    expect(screen.getByText("第 1 页，共 21 条")).toBeTruthy();
+    expect(screen.getByText(first.title)).toBeTruthy();
+    expect((screen.getByRole("button", { name: "下一页" }) as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => resolve(contentPage([second as PostSummary], 2, 21)));
+    await screen.findByText("第 2 页，共 21 条");
+    listing.mockResolvedValue(contentPage([], 1, 0));
+    fireEvent.mouseDown(screen.getByRole("combobox", { name: "筛选状态" }));
+    fireEvent.click(await screen.findByText("已归档"));
+    await waitFor(() => expect(listing).toHaveBeenLastCalledWith({ page: 1, status: "archived", visibility: undefined }));
+    await screen.findByText("第 1 页，共 0 条");
+  });
+
+  it("删除第二页最后一篇后回退首页，并重新读取已缓存的首页", async () => {
+    window.history.replaceState(null, "", paths.list);
+    vi.mocked(api.listPosts).mockImplementation(async filter => contentPage([filter?.page === 2 ? draftPost : rustPost], filter?.page ?? 1, 21));
+    render(<App />);
+    await screen.findByText("Rust 指南");
+    fireEvent.click(screen.getByRole("button", { name: "下一页" }));
+    await screen.findByText("第 2 页，共 21 条");
+    fireEvent.click(screen.getByRole("button", { name: "移入回收站" }));
+    await screen.findByRole("dialog");
+    vi.mocked(api.listPosts).mockImplementation(async filter => contentPage(filter?.page === 2 ? [] : [{ ...rustPost, title: "刷新后的首页" }], filter?.page ?? 1, 20));
+    fireEvent.click(screen.getByRole("button", { name: "确定" }));
+    await screen.findByText("刷新后的首页");
+    expect(screen.getByText("第 1 页，共 20 条")).toBeTruthy();
+    expect(api.trashPost).toHaveBeenCalledWith(draftPost.id, draftPost.version);
   });
 });

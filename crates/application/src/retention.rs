@@ -70,3 +70,72 @@ fn authorize(actor: &Actor) -> Result<(), UseCaseError> {
     }
     Ok(())
 }
+
+/// 每批清理的原子结果；实现须在策略锁内重读当前保留期并同事务记录审计。
+#[derive(Debug, Default)]
+pub struct RetentionBatch {
+    pub comment_ips: i64,
+    pub audit_logs: i64,
+    pub has_more: bool,
+}
+
+#[async_trait]
+pub trait RetentionCleanupStore: Send + Sync {
+    /// dry_run 仅统计预计总量，不删除数据或追加审计。
+    async fn cleanup_batch(
+        &self,
+        batch_size: i64,
+        dry_run: bool,
+    ) -> Result<RetentionBatch, UseCaseError>;
+}
+
+#[derive(Debug, Default, Serialize)]
+pub struct RetentionResult {
+    pub comment_ips: i64,
+    pub audit_logs: i64,
+    pub batches: u32,
+    pub has_more: bool,
+    pub dry_run: bool,
+}
+
+/// 使用独立维护身份装配；执行环境的恢复隔离守卫由部署入口负责。
+pub struct RetentionMaintenance {
+    store: Arc<dyn RetentionCleanupStore>,
+}
+
+impl RetentionMaintenance {
+    pub fn new(store: Arc<dyn RetentionCleanupStore>) -> Self {
+        Self { store }
+    }
+
+    pub async fn run(
+        &self,
+        batch_size: i64,
+        max_batches: u32,
+        dry_run: bool,
+    ) -> Result<RetentionResult, UseCaseError> {
+        if !(1..=10_000).contains(&batch_size) || !(1..=1000).contains(&max_batches) {
+            return Err(UseCaseError::Invalid(
+                "批量大小须为 1–10,000，批次数须为 1–1,000".into(),
+            ));
+        }
+        let mut result = RetentionResult {
+            dry_run,
+            ..Default::default()
+        };
+        for _ in 0..max_batches {
+            let batch = self.store.cleanup_batch(batch_size, dry_run).await?;
+            result.comment_ips += batch.comment_ips;
+            result.audit_logs += batch.audit_logs;
+            if dry_run {
+                return Ok(result);
+            }
+            result.batches += 1;
+            result.has_more = batch.has_more;
+            if !batch.has_more || batch.comment_ips + batch.audit_logs == 0 {
+                break;
+            }
+        }
+        Ok(result)
+    }
+}

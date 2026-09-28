@@ -34,7 +34,7 @@ export interface PasswordLoginResult {
   next: string;
 }
 
-/** 列表条目：摘要形态，不含正文。tag_ids 在列表中恒为空数组（详情才读取）。 */
+/** 列表条目：仅含展示字段；正文与关联元数据由详情读取。 */
 export interface PostSummary {
   id: string;
   slug: string;
@@ -45,6 +45,10 @@ export interface PostSummary {
   published_at: string | null;
   updated_at: string;
   author_id: string;
+}
+
+/** 单篇详情：摘要 + Markdown 源文（编辑器数据源）。 */
+export interface PostDetail extends PostSummary {
   tag_ids: string[];
   category_id: string | null;
   series: SeriesPlacement[];
@@ -52,10 +56,6 @@ export interface PostSummary {
   cover_media_id: string | null;
   /** 封面站内地址（`/media/{id}`；null = 无封面），由后端随 `cover_media_id` 下发。 */
   cover_url: string | null;
-}
-
-/** 单篇详情：摘要 + Markdown 源文（编辑器数据源）。 */
-export interface PostDetail extends PostSummary {
   excerpt: string | null;
   content: string;
 }
@@ -274,4 +274,16 @@ export interface AuditRecord {
 export interface AuditPage {
   items: AuditRecord[];
   next_cursor: string | null;
+}
+
+export interface ContentListFilter {
+  page: number;
+  status?: string;
+  visibility?: Visibility;
+}
+export interface ContentPage<T> {
+  items: T[];
+  total: number;
+  page: number;
+  per_page: number;
 }

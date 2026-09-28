@@ -11,7 +11,7 @@ use application::identity::{Actor, CreateUserCmd, RoleInteractor, UserInteractor
 use application::ports::{
     Clock, ExternalIdentity, ExternalIdentityClient, OAuthAccountStore, OAuthAttempt,
     OAuthAttemptStore, OAuthConfigStore, PostRepository, ProviderConfig, ProviderKind,
-    SecureRandom, SessionRecord, SessionStore, UserRepository,
+    SecureRandom, SessionRecord, SessionStore,
 };
 use domain::identity::UserSnapshot;
 use time::OffsetDateTime;
@@ -248,7 +248,11 @@ async fn fixture() -> Fixture {
     let rbac = Arc::new(NoopRbac);
     let clock = Arc::new(FixedClock);
     let users = Arc::new(UserInteractor::new(
-        user_repo.clone(),
+        application::identity::UserStores {
+            query: user_repo.clone(),
+            profiles: user_repo.clone(),
+            accounts: user_repo.clone(),
+        },
         rbac.clone(),
         clock.clone(),
         Arc::new(common::FakeMediaGuard::new()),
@@ -349,18 +353,33 @@ struct FakeUserRepo {
 }
 
 #[async_trait::async_trait]
-impl UserRepository for FakeUserRepo {
-    async fn change_status(
-        &self,
-        _user_id: uuid::Uuid,
-        _status: domain::identity::UserStatus,
-        _expected_version: i64,
-        _now: time::OffsetDateTime,
-        _actor: &application::identity::Actor,
-    ) -> Result<UserSnapshot, UseCaseError> {
-        unimplemented!("此用例不修改账号状态")
+impl application::ports::UserQuery for FakeUserRepo {
+    async fn find_by_id(&self, id: Uuid) -> Result<Option<UserSnapshot>, UseCaseError> {
+        Ok(self
+            .users
+            .lock()
+            .unwrap()
+            .values()
+            .find(|u| u.id == id)
+            .cloned())
     }
 
+    async fn find_by_username(&self, username: &str) -> Result<Option<UserSnapshot>, UseCaseError> {
+        Ok(self.users.lock().unwrap().get(username).cloned())
+    }
+
+    // 认证用例不涉及账号管理列表；返回空列表即可。
+    async fn list_admin(
+        &self,
+        _limit: i64,
+        _offset: i64,
+    ) -> Result<Vec<application::ports::AdminUserRow>, UseCaseError> {
+        Ok(vec![])
+    }
+}
+
+#[async_trait::async_trait]
+impl application::ports::UserProfileStore for FakeUserRepo {
     async fn save_profile(
         &self,
         user: &domain::identity::User,
@@ -384,20 +403,6 @@ impl UserRepository for FakeUserRepo {
         Ok(current.clone())
     }
 
-    async fn revoke_authentication(
-        &self,
-        user_id: Uuid,
-        _audit_actor: application::audit::AuditContext,
-    ) -> Result<(), UseCaseError> {
-        let mut users = self.users.lock().unwrap();
-        let user = users
-            .values_mut()
-            .find(|u| u.id == user_id)
-            .ok_or_else(|| UseCaseError::NotFound("用户".into()))?;
-        user.auth_version += 1;
-        Ok(())
-    }
-
     /// 头像只走真实认证 HTTP 用例（server/tests）；本 fake 不实现，误用即失败。
     async fn set_avatar(
         &self,
@@ -408,7 +413,10 @@ impl UserRepository for FakeUserRepo {
     ) -> Result<(), UseCaseError> {
         unimplemented!("该用例不使用头像")
     }
+}
 
+#[async_trait::async_trait]
+impl application::ports::AccountAdministration for FakeUserRepo {
     async fn insert(
         &self,
         aggregate: &domain::identity::User,
@@ -421,73 +429,30 @@ impl UserRepository for FakeUserRepo {
             .insert(snapshot.username.clone(), snapshot.clone());
         Ok(())
     }
-    async fn find_by_id(&self, id: Uuid) -> Result<Option<UserSnapshot>, UseCaseError> {
-        Ok(self
-            .users
-            .lock()
-            .unwrap()
-            .values()
-            .find(|u| u.id == id)
-            .cloned())
-    }
-    async fn find_by_username(&self, username: &str) -> Result<Option<UserSnapshot>, UseCaseError> {
-        Ok(self.users.lock().unwrap().get(username).cloned())
+
+    async fn change_status(
+        &self,
+        _user_id: uuid::Uuid,
+        _status: domain::identity::UserStatus,
+        _expected_version: i64,
+        _now: time::OffsetDateTime,
+        _actor: &application::identity::Actor,
+    ) -> Result<UserSnapshot, UseCaseError> {
+        unimplemented!("此用例不修改账号状态")
     }
 
-    // 认证用例不涉及账号管理列表；返回空列表即可。
-    async fn list_admin(
+    async fn revoke_authentication(
         &self,
-        _limit: i64,
-        _offset: i64,
-    ) -> Result<Vec<application::ports::AdminUserRow>, UseCaseError> {
-        Ok(vec![])
-    }
-
-    // OAuth 用例不涉及本地密码；保持显式失败以便误用时立刻暴露。
-    async fn set_password_hash(
-        &self,
-        _user_id: Uuid,
-        _phc_hash: &str,
+        user_id: Uuid,
         _audit_actor: application::audit::AuditContext,
     ) -> Result<(), UseCaseError> {
-        unimplemented!("auth 用例不使用密码凭据")
-    }
-
-    async fn compare_and_set_password_hash(
-        &self,
-        _user_id: Uuid,
-        _expected: Option<&str>,
-        _new_hash: &str,
-        _audit_actor: application::audit::AuditContext,
-    ) -> Result<Option<i64>, UseCaseError> {
-        unimplemented!("auth 用例不使用密码凭据")
-    }
-
-    async fn clear_password_hash_guarded(
-        &self,
-        _user_id: Uuid,
-        _audit_actor: application::audit::AuditContext,
-    ) -> Result<application::ports::ClearPasswordOutcome, UseCaseError> {
-        unimplemented!("auth 用例不使用密码凭据")
-    }
-
-    async fn clear_password_hash(
-        &self,
-        _user_id: Uuid,
-        _audit_actor: application::audit::AuditContext,
-    ) -> Result<(), UseCaseError> {
-        unimplemented!("auth 用例不使用密码凭据")
-    }
-
-    async fn find_password_credential(
-        &self,
-        _username: &str,
-    ) -> Result<Option<application::ports::PasswordCredential>, UseCaseError> {
-        unimplemented!("auth 用例不使用密码凭据")
-    }
-
-    async fn password_hash_of(&self, _user_id: Uuid) -> Result<Option<String>, UseCaseError> {
-        unimplemented!("auth 用例不使用密码凭据")
+        let mut users = self.users.lock().unwrap();
+        let user = users
+            .values_mut()
+            .find(|u| u.id == user_id)
+            .ok_or_else(|| UseCaseError::NotFound("用户".into()))?;
+        user.auth_version += 1;
+        Ok(())
     }
 }
 

@@ -66,13 +66,6 @@ pub trait PostRepository: Send + Sync {
     ) -> Result<PostCommitOutcome, UseCaseError>;
 
     async fn find_by_id(&self, id: Uuid) -> Result<Option<PostSnapshot>, UseCaseError>;
-    async fn list_by_author(&self, author_id: Uuid) -> Result<Vec<PostSnapshot>, UseCaseError>;
-    async fn list_trash_by_author(
-        &self,
-        author_id: Uuid,
-        limit: i64,
-        offset: i64,
-    ) -> Result<(Vec<PostSnapshot>, i64), UseCaseError>;
     async fn purge(
         &self,
         id: Uuid,
@@ -107,13 +100,6 @@ pub trait PageRepository: Send + Sync {
     ) -> Result<PageCommitOutcome, UseCaseError>;
 
     async fn find_by_id(&self, id: Uuid) -> Result<Option<PageSnapshot>, UseCaseError>;
-    /// 站点级列表：无作者过滤，按更新时间倒序。
-    async fn list(&self) -> Result<Vec<PageSnapshot>, UseCaseError>;
-    async fn list_trash(
-        &self,
-        limit: i64,
-        offset: i64,
-    ) -> Result<(Vec<PageSnapshot>, i64), UseCaseError>;
     async fn commit_lifecycle(
         &self,
         page: &Page,

@@ -4,7 +4,7 @@ use application::{
     error::UseCaseError,
     ports::{
         MediaChangeOutcome, MediaRefGuard, MediaRepository, PageRepository, SettingsStore,
-        SiteSettingsValue, UserRepository,
+        SiteSettingsValue, UserProfileStore, UserQuery,
     },
 };
 use domain::{

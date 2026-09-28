@@ -11,9 +11,7 @@ use application::page::{CreatePageCmd, PageInteractor, PageVisibility};
 use application::ports::{
     CategoryRepository, PublishedCategoryQuery, PublishedTagQuery, TagRepository,
 };
-use application::ports::{
-    PageRepository, PostRepository, PublishedPageQuery, PublishedPostQuery, UserRepository,
-};
+use application::ports::{PageRepository, PostRepository, PublishedPageQuery, PublishedPostQuery};
 use application::public_site::{PublicSiteInteractor, SiteInfo};
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -62,7 +60,8 @@ async fn stack_with_theme(theme_dir: &str) -> Stack {
 
     let clock = Arc::new(SystemClock);
     let rendering = Arc::new(RenderingRuntime::default());
-    let user_repo: Arc<dyn UserRepository> = Arc::new(PostgresUserRepository::new(pool.clone()));
+    let user_repo: Arc<infrastructure::PostgresUserRepository> =
+        Arc::new(PostgresUserRepository::new(pool.clone()));
     let post_repo: Arc<dyn PostRepository> =
         Arc::new(PostgresPostRepository::new(pool.clone(), rendering.clone()));
     let page_repo: Arc<dyn PageRepository> =
@@ -76,7 +75,11 @@ async fn stack_with_theme(theme_dir: &str) -> Stack {
         Arc::new(PostgresPublishedPageQuery::new(pool.clone()));
 
     let users = Arc::new(UserInteractor::new(
-        user_repo,
+        application::identity::UserStores {
+            query: user_repo.clone(),
+            profiles: user_repo.clone(),
+            accounts: user_repo,
+        },
         rbac,
         clock.clone(),
         common::media_guard(pool.clone()),

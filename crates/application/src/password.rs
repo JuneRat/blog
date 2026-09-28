@@ -17,8 +17,8 @@ use uuid::Uuid;
 use crate::error::UseCaseError;
 use crate::identity::{Actor, ActorChannel};
 use crate::ports::{
-    ClearPasswordOutcome, LoginThrottle, PasswordHasher, SessionStore, ThrottleSubject,
-    UserRepository,
+    ClearPasswordOutcome, LoginThrottle, PasswordCredentialStore, PasswordHasher, SessionStore,
+    ThrottleSubject, UserQuery,
 };
 use domain::identity::UserSnapshot;
 
@@ -32,7 +32,8 @@ pub struct PasswordLogin {
 
 /// 登录用例的出站依赖集合。
 pub struct PasswordDeps {
-    pub users: Arc<dyn UserRepository>,
+    pub users: Arc<dyn UserQuery>,
+    pub credentials: Arc<dyn PasswordCredentialStore>,
     pub hasher: Arc<dyn PasswordHasher>,
     pub throttle: Arc<dyn LoginThrottle>,
     pub sessions: Arc<dyn SessionStore>,
@@ -92,7 +93,12 @@ impl PasswordInteractor {
         // 用户名形状非法与「不存在」不可区分：一律走统一失败路径。
         let normalized = domain::identity::normalize_username(username).ok();
         let credential = match normalized.as_deref() {
-            Some(normalized) => self.deps.users.find_password_credential(normalized).await,
+            Some(normalized) => {
+                self.deps
+                    .credentials
+                    .find_password_credential(normalized)
+                    .await
+            }
             None => Ok(None),
         };
         let credential = credential?;
@@ -139,7 +145,7 @@ impl PasswordInteractor {
             domain::identity::normalize_username(username).expect("持有凭据时用户名必然规范化成功");
         let current = self
             .deps
-            .users
+            .credentials
             .find_password_credential(&normalized)
             .await?
             .filter(|current| {
@@ -179,7 +185,7 @@ impl PasswordInteractor {
             .map_err(|e| UseCaseError::Invalid(e.to_string()))?;
         let hash = self.deps.hasher.hash(new_password).await?;
         self.deps
-            .users
+            .credentials
             .set_password_hash(target.id, &hash, actor.audit_context())
             .await?;
         // 凭据变更即撤销全部既有会话：被盗会话不能靠旧 cookie 存活。
@@ -200,7 +206,7 @@ impl PasswordInteractor {
         let target = self.active_user(username).await?;
         match self
             .deps
-            .users
+            .credentials
             .clear_password_hash_guarded(target.id, actor.audit_context())
             .await?
         {
@@ -244,7 +250,11 @@ impl PasswordInteractor {
             .filter(UserSnapshot::is_active)
             .ok_or(UseCaseError::Unauthenticated)?;
 
-        let existing = self.deps.users.password_hash_of(actor.user_id.0).await?;
+        let existing = self
+            .deps
+            .credentials
+            .password_hash_of(actor.user_id.0)
+            .await?;
         let Some(existing) = existing else {
             // 未启用密码登录（OAuth 用户设置初始密码）：没有可校验的凭据，也就没有爆破面。
             return self
@@ -300,7 +310,7 @@ impl PasswordInteractor {
         let hash = self.deps.hasher.hash(new_password).await?;
         let revision = self
             .deps
-            .users
+            .credentials
             .compare_and_set_password_hash(user_id, expected_current, &hash, audit)
             .await?
             .ok_or(UseCaseError::VersionConflict)?;
@@ -315,7 +325,7 @@ impl PasswordInteractor {
             .map_err(|e| UseCaseError::Invalid(e.to_string()))?;
         Ok(self
             .deps
-            .users
+            .credentials
             .find_password_credential(&normalized)
             .await?
             .is_some())
@@ -362,7 +372,7 @@ impl PasswordInteractor {
         };
         match self
             .deps
-            .users
+            .credentials
             .compare_and_set_password_hash(
                 credential.user_id,
                 Some(&credential.password_hash),

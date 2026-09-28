@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use application::auth::{AuthDeps, AuthInteractor, OAuthManagementInteractor};
 use application::content::PostInteractor;
-use application::identity::{RoleInteractor, UserInteractor};
+use application::identity::{RoleInteractor, UserInteractor, UserStores};
 use application::media::MediaInteractor;
 use application::password::{PasswordDeps, PasswordInteractor};
 use application::ports::{ContentRenderer, SessionStore};
@@ -17,9 +17,29 @@ use infrastructure::{
 use interfaces::cli::{PostCliDeps, UserCliDeps};
 use sqlx::PgPool;
 
+pub fn publisher(pool: &PgPool) -> application::publishing::PublishDueInteractor {
+    application::publishing::PublishDueInteractor::new(
+        Arc::new(infrastructure::PostgresScheduledPublicationStore::new(
+            pool.clone(),
+        )),
+        Arc::new(SystemClock),
+    )
+}
+
+pub fn retention_maintenance(pool: &PgPool) -> application::retention::RetentionMaintenance {
+    application::retention::RetentionMaintenance::new(Arc::new(
+        infrastructure::retention::PostgresRetentionCleanupStore::new(pool.clone()),
+    ))
+}
+
 pub fn users(pool: &PgPool) -> Arc<UserInteractor> {
+    let store = Arc::new(PostgresUserRepository::new(pool.clone()));
     Arc::new(UserInteractor::new(
-        Arc::new(PostgresUserRepository::new(pool.clone())),
+        UserStores {
+            query: store.clone(),
+            profiles: store.clone(),
+            accounts: store,
+        },
         Arc::new(PostgresRbacStore::new(pool.clone())),
         Arc::new(SystemClock),
         Arc::new(PostgresMediaRepository::new(pool.clone())),
@@ -40,8 +60,10 @@ pub fn sessions(pool: &PgPool) -> Arc<dyn SessionStore> {
 }
 
 pub fn passwords(pool: &PgPool, sessions: Arc<dyn SessionStore>) -> Arc<PasswordInteractor> {
+    let store = Arc::new(PostgresUserRepository::new(pool.clone()));
     Arc::new(PasswordInteractor::new(PasswordDeps {
-        users: Arc::new(PostgresUserRepository::new(pool.clone())),
+        users: store.clone(),
+        credentials: store,
         hasher: Arc::new(infrastructure::Argon2PasswordHasher::with_defaults()),
         throttle: Arc::new(infrastructure::InMemoryLoginThrottle::with_defaults()),
         sessions,
@@ -79,6 +101,7 @@ pub fn post_commands(pool: &PgPool, renderer: Arc<dyn ContentRenderer>) -> PostC
     PostCliDeps {
         users: users(pool),
         posts: posts(pool, renderer),
+        content_queries: content_queries(pool),
     }
 }
 
@@ -113,5 +136,14 @@ pub fn auth(
         users,
         Arc::new(SystemClock),
         base_url,
+    ))
+}
+
+/// 后台与 CLI 共享只读列表用例。
+pub fn content_queries(pool: &PgPool) -> Arc<application::content_queries::ContentQueries> {
+    let query = Arc::new(infrastructure::PostgresAdminContentQuery::new(pool.clone()));
+    Arc::new(application::content_queries::ContentQueries::new(
+        query.clone(),
+        query,
     ))
 }

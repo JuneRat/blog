@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use application::error::UseCaseError;
 use application::identity::{Actor, CreateUserCmd, RoleInteractor, UserInteractor};
 use application::ports::{
-    Clock, RbacStore, RoleDto, TagDeleteOutcome, TagRepository, TagWithUsage, UserRepository,
+    Clock, RbacStore, RoleDto, TagDeleteOutcome, TagRepository, TagWithUsage,
 };
 use application::tag::{CreateTagCmd, TagInteractor};
 use domain::content::TagSnapshot;
@@ -273,18 +273,26 @@ impl FakeUserRepo {
 }
 
 #[async_trait::async_trait]
-impl UserRepository for FakeUserRepo {
-    async fn change_status(
-        &self,
-        _user_id: uuid::Uuid,
-        _status: domain::identity::UserStatus,
-        _expected_version: i64,
-        _now: time::OffsetDateTime,
-        _actor: &application::identity::Actor,
-    ) -> Result<UserSnapshot, UseCaseError> {
-        unimplemented!("此用例不修改账号状态")
+impl application::ports::UserQuery for FakeUserRepo {
+    async fn find_by_id(&self, _id: Uuid) -> Result<Option<UserSnapshot>, UseCaseError> {
+        Ok(None)
     }
 
+    async fn find_by_username(&self, username: &str) -> Result<Option<UserSnapshot>, UseCaseError> {
+        Ok(self.users.lock().unwrap().get(username).cloned())
+    }
+
+    async fn list_admin(
+        &self,
+        _limit: i64,
+        _offset: i64,
+    ) -> Result<Vec<application::ports::AdminUserRow>, UseCaseError> {
+        Ok(Vec::new())
+    }
+}
+
+#[async_trait::async_trait]
+impl application::ports::UserProfileStore for FakeUserRepo {
     async fn save_profile(
         &self,
         user: &domain::identity::User,
@@ -308,20 +316,6 @@ impl UserRepository for FakeUserRepo {
         Ok(current.clone())
     }
 
-    async fn revoke_authentication(
-        &self,
-        user_id: Uuid,
-        _audit_actor: application::audit::AuditContext,
-    ) -> Result<(), UseCaseError> {
-        let mut users = self.users.lock().unwrap();
-        let user = users
-            .values_mut()
-            .find(|u| u.id == user_id)
-            .ok_or_else(|| UseCaseError::NotFound("用户".into()))?;
-        user.auth_version += 1;
-        Ok(())
-    }
-
     /// 头像只走真实认证 HTTP 用例（server/tests）；本 fake 不实现，误用即失败。
     async fn set_avatar(
         &self,
@@ -332,7 +326,10 @@ impl UserRepository for FakeUserRepo {
     ) -> Result<(), UseCaseError> {
         unimplemented!("该用例不使用头像")
     }
+}
 
+#[async_trait::async_trait]
+impl application::ports::AccountAdministration for FakeUserRepo {
     async fn insert(
         &self,
         aggregate: &domain::identity::User,
@@ -345,58 +342,30 @@ impl UserRepository for FakeUserRepo {
             .insert(snapshot.username.clone(), snapshot.clone());
         Ok(())
     }
-    async fn find_by_id(&self, _id: Uuid) -> Result<Option<UserSnapshot>, UseCaseError> {
-        Ok(None)
-    }
-    async fn find_by_username(&self, username: &str) -> Result<Option<UserSnapshot>, UseCaseError> {
-        Ok(self.users.lock().unwrap().get(username).cloned())
-    }
-    async fn list_admin(
+
+    async fn change_status(
         &self,
-        _limit: i64,
-        _offset: i64,
-    ) -> Result<Vec<application::ports::AdminUserRow>, UseCaseError> {
-        Ok(Vec::new())
+        _user_id: uuid::Uuid,
+        _status: domain::identity::UserStatus,
+        _expected_version: i64,
+        _now: time::OffsetDateTime,
+        _actor: &application::identity::Actor,
+    ) -> Result<UserSnapshot, UseCaseError> {
+        unimplemented!("此用例不修改账号状态")
     }
-    async fn set_password_hash(
+
+    async fn revoke_authentication(
         &self,
-        _user_id: Uuid,
-        _phc_hash: &str,
+        user_id: Uuid,
         _audit_actor: application::audit::AuditContext,
     ) -> Result<(), UseCaseError> {
+        let mut users = self.users.lock().unwrap();
+        let user = users
+            .values_mut()
+            .find(|u| u.id == user_id)
+            .ok_or_else(|| UseCaseError::NotFound("用户".into()))?;
+        user.auth_version += 1;
         Ok(())
-    }
-    async fn compare_and_set_password_hash(
-        &self,
-        _user_id: Uuid,
-        _expected: Option<&str>,
-        _new_hash: &str,
-        _audit_actor: application::audit::AuditContext,
-    ) -> Result<Option<i64>, UseCaseError> {
-        Ok(None)
-    }
-    async fn clear_password_hash(
-        &self,
-        _user_id: Uuid,
-        _audit_actor: application::audit::AuditContext,
-    ) -> Result<(), UseCaseError> {
-        Ok(())
-    }
-    async fn clear_password_hash_guarded(
-        &self,
-        _user_id: Uuid,
-        _audit_actor: application::audit::AuditContext,
-    ) -> Result<application::ports::ClearPasswordOutcome, UseCaseError> {
-        Ok(application::ports::ClearPasswordOutcome::NoPassword)
-    }
-    async fn find_password_credential(
-        &self,
-        _username: &str,
-    ) -> Result<Option<application::ports::PasswordCredential>, UseCaseError> {
-        Ok(None)
-    }
-    async fn password_hash_of(&self, _user_id: Uuid) -> Result<Option<String>, UseCaseError> {
-        Ok(None)
     }
 }
 
@@ -417,7 +386,11 @@ async fn fixture() -> Fixture {
     let rbac = Arc::new(FakeRbacStore::new());
     let clock = Arc::new(FixedClock);
     let users = Arc::new(UserInteractor::new(
-        user_repo.clone(),
+        application::identity::UserStores {
+            query: user_repo.clone(),
+            profiles: user_repo.clone(),
+            accounts: user_repo.clone(),
+        },
         rbac.clone(),
         clock.clone(),
         Arc::new(common::FakeMediaGuard::new()),

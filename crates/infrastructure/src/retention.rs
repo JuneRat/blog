@@ -5,7 +5,6 @@ use application::{
     retention::{DEFAULT_RETENTION_DAYS, RetentionSettings, RetentionStore, validate_days},
 };
 use async_trait::async_trait;
-use serde::Serialize;
 use serde_json::{Value, json};
 use sqlx::{PgPool, Postgres, Row, Transaction};
 
@@ -141,33 +140,25 @@ impl RetentionStore for PostgresRetentionStore {
         Ok(result)
     }
 }
-#[derive(Debug, Default, Serialize)]
-pub struct RetentionResult {
-    pub comment_ips: i64,
-    pub audit_logs: i64,
-    pub batches: u32,
-    pub has_more: bool,
-    pub dry_run: bool,
+/// 独立维护连接执行单个原子批次；不迁移、不初始化权限、不启动发布任务。
+pub struct PostgresRetentionCleanupStore {
+    pool: PgPool,
 }
-/// Does not migrate, initialize permissions, rebuild HTML or start a publisher.
-/// Each batch re-reads validated policy while holding its shared policy locks.
-pub async fn run_retention(
-    pool: &PgPool,
-    batch_size: i64,
-    max_batches: u32,
-    dry_run: bool,
-) -> Result<RetentionResult, UseCaseError> {
-    if !(1..=10_000).contains(&batch_size) || !(1..=1000).contains(&max_batches) {
-        return Err(UseCaseError::Invalid(
-            "批量大小须为 1–10,000，批次数须为 1–1,000".into(),
-        ));
+impl PostgresRetentionCleanupStore {
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
     }
-    let mut result = RetentionResult {
-        dry_run,
-        ..Default::default()
-    };
-    for _ in 0..max_batches {
-        let mut tx = pool.begin().await.map_err(db)?;
+}
+
+#[async_trait]
+impl application::retention::RetentionCleanupStore for PostgresRetentionCleanupStore {
+    async fn cleanup_batch(
+        &self,
+        batch_size: i64,
+        dry_run: bool,
+    ) -> Result<application::retention::RetentionBatch, UseCaseError> {
+        let mut result = application::retention::RetentionBatch::default();
+        let mut tx = self.pool.begin().await.map_err(db)?;
         // Serialize cleaners without granting the audit maintenance role UPDATE
         // merely to use SELECT FOR UPDATE. Writers only append audit rows.
         sqlx::query("SELECT pg_advisory_xact_lock(1129270605,3)")
@@ -192,12 +183,8 @@ pub async fn run_retention(
         result.has_more=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM comments WHERE ip_address IS NOT NULL AND created_at < now()-make_interval(days => $1)) OR EXISTS(SELECT 1 FROM audit_logs WHERE created_at < now()-make_interval(days => $2))")
             .bind(policy.comment_ip_days).bind(policy.audit_days).fetch_one(&mut *tx).await.map_err(db)?;
         tx.commit().await.map_err(db)?;
-        result.comment_ips += comments;
-        result.audit_logs += audits;
-        result.batches += 1;
-        if !result.has_more || comments + audits == 0 {
-            break;
-        }
+        result.comment_ips = comments;
+        result.audit_logs = audits;
+        Ok(result)
     }
-    Ok(result)
 }

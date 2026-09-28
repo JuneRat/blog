@@ -19,7 +19,7 @@ use infrastructure::{
     PostgresPublishedSeriesQuery, PostgresPublishedTagQuery, PostgresSeriesRepository,
     PostgresTagRepository, RenderingRuntime, SystemClock,
 };
-use interfaces::http::{AppState, HttpAssets, PublicSiteState};
+use interfaces::http::{AppState, HttpAssets, HttpConfig, PublicSiteState};
 use interfaces::http_auth::{AdminState, AuthState};
 use sqlx::PgPool;
 
@@ -90,6 +90,7 @@ pub async fn build_router(
         secure_cookies: config.secure_cookies,
     };
     let admin = AdminState {
+        content_queries: assembly::content_queries(pool),
         auth,
         users,
         passwords,
@@ -116,36 +117,19 @@ pub async fn build_router(
         media: assembly::media(pool, config.media_dir.clone()),
         secure_cookies: config.secure_cookies,
     };
-    let comments =
-        interfaces::http_comments::comments_router(interfaces::http_comments::CommentState {
-            comments: Arc::new(application::comments::CommentInteractor::new(
-                Arc::new(infrastructure::comments::PostgresCommentRepository::new(
-                    pool.clone(),
-                    runtime.clone(),
-                )),
-                runtime,
-            )),
-            trusted_proxies: config.trusted_proxies.clone(),
-            admin: admin.clone(),
-            origin: config
-                .public_base_url
-                .as_str()
-                .trim_end_matches('/')
-                .to_string(),
-        });
-    let retention =
-        interfaces::http_retention::retention_router(interfaces::http_retention::RetentionState {
-            retention: Arc::new(application::retention::RetentionInteractor::new(Arc::new(
-                infrastructure::retention::PostgresRetentionStore::new(pool.clone()),
-            ))),
-            admin: admin.clone(),
-        });
-    let audits = interfaces::http_audit::audit_router(interfaces::http_audit::AuditState {
-        audit: Arc::new(application::audit::AuditInteractor::new(Arc::new(
-            infrastructure::audit::PostgresAuditQuery::new(pool.clone()),
-        ))),
-        admin: admin.clone(),
-    });
+    let comments = Arc::new(application::comments::CommentInteractor::new(
+        Arc::new(infrastructure::comments::PostgresCommentRepository::new(
+            pool.clone(),
+            runtime.clone(),
+        )),
+        runtime,
+    ));
+    let retention = Arc::new(application::retention::RetentionInteractor::new(Arc::new(
+        infrastructure::retention::PostgresRetentionStore::new(pool.clone()),
+    )));
+    let audit = Arc::new(application::audit::AuditInteractor::new(Arc::new(
+        infrastructure::audit::PostgresAuditQuery::new(pool.clone()),
+    )));
     Ok(interfaces::http::app_router(
         AppState {
             public: PublicSiteState {
@@ -154,24 +138,23 @@ pub async fn build_router(
             },
             auth: auth_state,
             admin,
+            comments,
+            retention,
+            audit,
         },
         HttpAssets {
             themes: installed.assets,
             admin_dist: config.admin_dist.clone(),
         },
-    )
-    .merge(retention.layer(axum::middleware::from_fn(
-        interfaces::http_support::request_context,
-    )))
-    .merge(audits.layer(axum::middleware::from_fn(
-        interfaces::http_support::request_context,
-    )))
-    .merge(comments.layer(axum::middleware::from_fn(
-        interfaces::http_support::request_context,
-    )))
-    .layer(axum::Extension(interfaces::http_client_ip::TrustedProxies(
-        config.trusted_proxies.clone(),
-    ))))
+        HttpConfig {
+            public_origin: config
+                .public_base_url
+                .as_str()
+                .trim_end_matches('/')
+                .to_string(),
+            trusted_proxies: config.trusted_proxies.clone(),
+        },
+    ))
 }
 
 struct InstalledThemes {

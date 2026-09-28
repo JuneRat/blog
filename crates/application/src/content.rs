@@ -111,14 +111,6 @@ pub struct PostDto {
     pub cover_media_id: Option<Uuid>,
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct TrashPage {
-    pub items: Vec<PostDto>,
-    pub total: i64,
-    pub page: i64,
-    pub per_page: i64,
-}
-
 impl PostDto {
     fn from_record(record: PostRecord) -> Self {
         Self::from_snapshot(&record.snapshot, record.tag_ids)
@@ -371,50 +363,6 @@ impl PostInteractor {
             .load_authorized(id, actor, "post.read", "post.read_any")
             .await?;
         Ok(PostDto::from_record(record))
-    }
-
-    /// 列出作者的文章：本人列表需 `post.read`，他人列表需 `post.read_any`。
-    ///
-    /// 与单篇 [`PostInteractor::find`] 使用同一套 own/any 授权：否则同一用户会出现
-    /// 「单篇 `GET` 403、列表 `GET` 200」的自相矛盾（例如被移除 `author` 角色后仍能列草稿）。
-    pub async fn list_by_author(
-        &self,
-        actor: &Actor,
-        author: UserId,
-    ) -> Result<Vec<PostDto>, UseCaseError> {
-        authorize_own_or_any(actor, "post.read", "post.read_any", author)?;
-        let snapshots = self.posts.list_by_author(author.0).await?;
-        // 列表是摘要形态：不逐篇补标签（编辑器打开详情时才读取）。
-        Ok(snapshots
-            .iter()
-            .filter(|s| s.deleted_at.is_none())
-            .map(|s| PostDto::from_snapshot(s, Vec::new()))
-            .collect())
-    }
-
-    pub async fn list_trash(
-        &self,
-        actor: &Actor,
-        author: UserId,
-        page: i64,
-    ) -> Result<TrashPage, UseCaseError> {
-        authorize_own_or_any(actor, "post.read", "post.read_any", author)?;
-        if !(1..=i64::MAX / 20).contains(&page) {
-            return Err(UseCaseError::Invalid("页码超出范围".into()));
-        }
-        let (snapshots, total) = self
-            .posts
-            .list_trash_by_author(author.0, 20, (page - 1) * 20)
-            .await?;
-        Ok(TrashPage {
-            items: snapshots
-                .iter()
-                .map(|s| PostDto::from_snapshot(s, Vec::new()))
-                .collect(),
-            total,
-            page,
-            per_page: 20,
-        })
     }
 
     pub async fn trash(

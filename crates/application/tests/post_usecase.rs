@@ -10,7 +10,7 @@ use application::identity::{
 };
 use application::ports::{
     Clock, PostRepository, RbacStore, RoleDto, SaveOutcome, TagDeleteOutcome, TagRepository,
-    TagWithUsage, UserRepository,
+    TagWithUsage,
 };
 use domain::content::TagSnapshot;
 use domain::content::{PostSnapshot, Visibility};
@@ -158,45 +158,6 @@ impl PostRepository for FakePostRepo {
             .cloned())
     }
 
-    async fn list_by_author(
-        &self,
-        author_id: uuid::Uuid,
-    ) -> Result<Vec<PostSnapshot>, UseCaseError> {
-        Ok(self
-            .posts
-            .lock()
-            .unwrap()
-            .values()
-            .filter(|p| p.author_id == author_id)
-            .cloned()
-            .collect())
-    }
-
-    async fn list_trash_by_author(
-        &self,
-        author_id: Uuid,
-        limit: i64,
-        offset: i64,
-    ) -> Result<(Vec<PostSnapshot>, i64), UseCaseError> {
-        let posts: Vec<_> = self
-            .posts
-            .lock()
-            .unwrap()
-            .values()
-            .filter(|p| p.author_id == author_id && p.deleted_at.is_some())
-            .cloned()
-            .collect();
-        let total = posts.len() as i64;
-        Ok((
-            posts
-                .into_iter()
-                .skip(offset as usize)
-                .take(limit as usize)
-                .collect(),
-            total,
-        ))
-    }
-
     async fn purge(
         &self,
         id: Uuid,
@@ -235,85 +196,7 @@ impl FakeUserRepo {
 }
 
 #[async_trait::async_trait]
-impl UserRepository for FakeUserRepo {
-    async fn change_status(
-        &self,
-        _user_id: uuid::Uuid,
-        _status: domain::identity::UserStatus,
-        _expected_version: i64,
-        _now: time::OffsetDateTime,
-        _actor: &application::identity::Actor,
-    ) -> Result<UserSnapshot, UseCaseError> {
-        unimplemented!("此用例不修改账号状态")
-    }
-
-    async fn save_profile(
-        &self,
-        user: &domain::identity::User,
-        expected_version: i64,
-        now: time::OffsetDateTime,
-        _audit: application::audit::AuditContext,
-    ) -> Result<UserSnapshot, UseCaseError> {
-        let snapshot = user.snapshot();
-        let mut users = self.users.lock().unwrap();
-        let current = users
-            .values_mut()
-            .find(|u| u.id == snapshot.id)
-            .ok_or_else(|| UseCaseError::NotFound("用户".into()))?;
-        if current.version != expected_version || !current.is_active() {
-            return Err(UseCaseError::VersionConflict);
-        }
-        current.display_name = snapshot.display_name;
-        current.bio = snapshot.bio;
-        current.version += 1;
-        current.updated_at = now;
-        Ok(current.clone())
-    }
-
-    async fn revoke_authentication(
-        &self,
-        user_id: Uuid,
-        _audit_actor: application::audit::AuditContext,
-    ) -> Result<(), UseCaseError> {
-        let mut users = self.users.lock().unwrap();
-        let user = users
-            .values_mut()
-            .find(|u| u.id == user_id)
-            .ok_or_else(|| UseCaseError::NotFound("用户".into()))?;
-        user.auth_version += 1;
-        Ok(())
-    }
-
-    async fn set_avatar(
-        &self,
-        user_id: uuid::Uuid,
-        avatar_media_id: Option<uuid::Uuid>,
-        now: time::OffsetDateTime,
-        _audit: application::audit::AuditContext,
-    ) -> Result<(), UseCaseError> {
-        let mut users = self.users.lock().unwrap();
-        let Some(user) = users.values_mut().find(|u| u.id == user_id) else {
-            return Err(UseCaseError::NotFound("用户".into()));
-        };
-        user.avatar_media_id = avatar_media_id;
-        user.updated_at = now;
-        Ok(())
-    }
-
-    async fn insert(
-        &self,
-        aggregate: &domain::identity::User,
-        _audit_actor: application::audit::AuditContext,
-    ) -> Result<(), UseCaseError> {
-        let snapshot = aggregate.snapshot();
-        let mut users = self.users.lock().unwrap();
-        if users.contains_key(&snapshot.username) {
-            return Err(UseCaseError::Conflict(ConflictKind::Username));
-        }
-        users.insert(snapshot.username.clone(), snapshot.clone());
-        Ok(())
-    }
-
+impl application::ports::UserQuery for FakeUserRepo {
     async fn find_by_id(&self, id: uuid::Uuid) -> Result<Option<UserSnapshot>, UseCaseError> {
         Ok(self
             .users
@@ -352,52 +235,89 @@ impl UserRepository for FakeUserRepo {
             })
             .collect())
     }
+}
 
-    // 文章用例不涉及本地密码；保持显式失败以便误用时立刻暴露。
-    async fn set_password_hash(
+#[async_trait::async_trait]
+impl application::ports::UserProfileStore for FakeUserRepo {
+    async fn save_profile(
         &self,
-        _user_id: Uuid,
-        _phc_hash: &str,
+        user: &domain::identity::User,
+        expected_version: i64,
+        now: time::OffsetDateTime,
+        _audit: application::audit::AuditContext,
+    ) -> Result<UserSnapshot, UseCaseError> {
+        let snapshot = user.snapshot();
+        let mut users = self.users.lock().unwrap();
+        let current = users
+            .values_mut()
+            .find(|u| u.id == snapshot.id)
+            .ok_or_else(|| UseCaseError::NotFound("用户".into()))?;
+        if current.version != expected_version || !current.is_active() {
+            return Err(UseCaseError::VersionConflict);
+        }
+        current.display_name = snapshot.display_name;
+        current.bio = snapshot.bio;
+        current.version += 1;
+        current.updated_at = now;
+        Ok(current.clone())
+    }
+
+    async fn set_avatar(
+        &self,
+        user_id: uuid::Uuid,
+        avatar_media_id: Option<uuid::Uuid>,
+        now: time::OffsetDateTime,
+        _audit: application::audit::AuditContext,
+    ) -> Result<(), UseCaseError> {
+        let mut users = self.users.lock().unwrap();
+        let Some(user) = users.values_mut().find(|u| u.id == user_id) else {
+            return Err(UseCaseError::NotFound("用户".into()));
+        };
+        user.avatar_media_id = avatar_media_id;
+        user.updated_at = now;
+        Ok(())
+    }
+}
+
+#[async_trait::async_trait]
+impl application::ports::AccountAdministration for FakeUserRepo {
+    async fn insert(
+        &self,
+        aggregate: &domain::identity::User,
         _audit_actor: application::audit::AuditContext,
     ) -> Result<(), UseCaseError> {
-        unimplemented!("post 用例不使用密码凭据")
+        let snapshot = aggregate.snapshot();
+        let mut users = self.users.lock().unwrap();
+        if users.contains_key(&snapshot.username) {
+            return Err(UseCaseError::Conflict(ConflictKind::Username));
+        }
+        users.insert(snapshot.username.clone(), snapshot.clone());
+        Ok(())
     }
 
-    async fn compare_and_set_password_hash(
+    async fn change_status(
         &self,
-        _user_id: Uuid,
-        _expected: Option<&str>,
-        _new_hash: &str,
-        _audit_actor: application::audit::AuditContext,
-    ) -> Result<Option<i64>, UseCaseError> {
-        unimplemented!("post 用例不使用密码凭据")
+        _user_id: uuid::Uuid,
+        _status: domain::identity::UserStatus,
+        _expected_version: i64,
+        _now: time::OffsetDateTime,
+        _actor: &application::identity::Actor,
+    ) -> Result<UserSnapshot, UseCaseError> {
+        unimplemented!("此用例不修改账号状态")
     }
 
-    async fn clear_password_hash_guarded(
+    async fn revoke_authentication(
         &self,
-        _user_id: Uuid,
-        _audit_actor: application::audit::AuditContext,
-    ) -> Result<application::ports::ClearPasswordOutcome, UseCaseError> {
-        unimplemented!("post 用例不使用密码凭据")
-    }
-
-    async fn clear_password_hash(
-        &self,
-        _user_id: Uuid,
+        user_id: Uuid,
         _audit_actor: application::audit::AuditContext,
     ) -> Result<(), UseCaseError> {
-        unimplemented!("post 用例不使用密码凭据")
-    }
-
-    async fn find_password_credential(
-        &self,
-        _username: &str,
-    ) -> Result<Option<application::ports::PasswordCredential>, UseCaseError> {
-        unimplemented!("post 用例不使用密码凭据")
-    }
-
-    async fn password_hash_of(&self, _user_id: Uuid) -> Result<Option<String>, UseCaseError> {
-        unimplemented!("post 用例不使用密码凭据")
+        let mut users = self.users.lock().unwrap();
+        let user = users
+            .values_mut()
+            .find(|u| u.id == user_id)
+            .ok_or_else(|| UseCaseError::NotFound("用户".into()))?;
+        user.auth_version += 1;
+        Ok(())
     }
 }
 
@@ -798,7 +718,11 @@ async fn fixture() -> Fixture {
 
     let media_guard = Arc::new(common::FakeMediaGuard::new());
     let users = Arc::new(UserInteractor::new(
-        user_repo.clone(),
+        application::identity::UserStores {
+            query: user_repo.clone(),
+            profiles: user_repo.clone(),
+            accounts: user_repo.clone(),
+        },
         rbac.clone(),
         clock.clone(),
         media_guard.clone(),
@@ -1286,56 +1210,6 @@ async fn reader_scope_blocks_others_drafts() {
 }
 
 #[tokio::test]
-async fn list_by_author_requires_read_permission_for_own_posts_too() {
-    let f = fixture().await;
-    let created = f
-        .posts
-        .create(&f.author, draft_cmd("listed-draft"))
-        .await
-        .unwrap();
-
-    // other 无任何角色：列表与单篇必须一致地拒绝，不能「单篇 403、列表 200」。
-    let err = f
-        .posts
-        .list_by_author(&f.other, f.other.user_id)
-        .await
-        .unwrap_err();
-    assert!(
-        matches!(err, UseCaseError::Forbidden),
-        "无 post.read 不得列出本人文章：{err:?}"
-    );
-    assert!(matches!(
-        f.posts.find(&f.other, created.id).await.unwrap_err(),
-        UseCaseError::Forbidden
-    ));
-
-    // author 有 post.read(own)：列自己的文章正常。
-    let own = f
-        .posts
-        .list_by_author(&f.author, f.author.user_id)
-        .await
-        .unwrap();
-    assert_eq!(own.len(), 1);
-    assert_eq!(own[0].slug, "listed-draft");
-
-    // author2 有 post.read(own) 但不是作者，也无 read_any → 拒绝跨作者列表。
-    let err = f
-        .posts
-        .list_by_author(&f.author2, f.author.user_id)
-        .await
-        .unwrap_err();
-    assert!(matches!(err, UseCaseError::Forbidden));
-
-    // editor 有 read_any，可列他人文章。
-    let others = f
-        .posts
-        .list_by_author(&f.editor, f.author.user_id)
-        .await
-        .unwrap();
-    assert_eq!(others.len(), 1);
-}
-
-#[tokio::test]
 async fn author_cannot_publish_others_posts_without_any() {
     let f = fixture().await;
     let author2 = f.users.actor_for_username("author2").await.unwrap();
@@ -1768,26 +1642,6 @@ async fn trash_scope_versions_restore_and_purge_permissions() {
         .await
         .unwrap();
     assert!(deleted.deleted);
-    assert!(
-        f.posts
-            .list_by_author(&f.author, f.author.user_id)
-            .await
-            .unwrap()
-            .iter()
-            .all(|p| p.slug != "trash-cycle")
-    );
-    assert_eq!(
-        f.posts
-            .list_trash(&f.author, f.author.user_id, 1)
-            .await
-            .unwrap()
-            .total,
-        1
-    );
-    assert!(matches!(
-        f.posts.list_trash(&f.author, f.author2.user_id, 1).await,
-        Err(UseCaseError::Forbidden)
-    ));
     assert!(matches!(
         f.posts
             .restore(&f.author2, created.id, Some(deleted.version))

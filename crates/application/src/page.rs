@@ -121,15 +121,6 @@ impl PageInteractor {
         Ok(PageDto::from_snapshot(&page.snapshot()))
     }
 
-    /// 站点级列表：不含作者维度，返回全部页面（含草稿）。
-    pub async fn list(&self, actor: &crate::identity::Actor) -> Result<Vec<PageDto>, UseCaseError> {
-        if !actor.has_permission("page.read") {
-            return Err(UseCaseError::Forbidden);
-        }
-        let snapshots = self.pages.list().await?;
-        Ok(snapshots.iter().map(PageDto::from_snapshot).collect())
-    }
-
     /// 编辑当前正文；保存已发布页面直接更新线上。
     pub async fn edit(
         &self,
@@ -273,24 +264,6 @@ impl PageInteractor {
         }
     }
 
-    pub async fn list_trash(
-        &self,
-        actor: &crate::identity::Actor,
-        page: i64,
-    ) -> Result<PageTrash, UseCaseError> {
-        if !actor.has_permission("page.read") {
-            return Err(UseCaseError::Forbidden);
-        }
-        let page = page.clamp(1, 1_000_000);
-        let (rows, total) = self.pages.list_trash(20, (page - 1) * 20).await?;
-        Ok(PageTrash {
-            items: rows.iter().map(PageDto::from_snapshot).collect(),
-            total,
-            page,
-            per_page: 20,
-        })
-    }
-
     async fn load_trash(
         &self,
         actor: &crate::identity::Actor,
@@ -367,12 +340,4 @@ impl PageInteractor {
 
 fn map_domain(e: PageError) -> UseCaseError {
     UseCaseError::Invalid(e.to_string())
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct PageTrash {
-    pub items: Vec<PageDto>,
-    pub total: i64,
-    pub page: i64,
-    pub per_page: i64,
 }

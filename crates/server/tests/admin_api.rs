@@ -132,7 +132,11 @@ async fn fresh_stack() -> Stack {
     let roles = Arc::new(RoleInteractor::new(rbac.clone(), user_repo.clone()));
     roles.sync_registry().await.expect("同步权限目录失败");
     let users = Arc::new(UserInteractor::new(
-        user_repo.clone(),
+        application::identity::UserStores {
+            query: user_repo.clone(),
+            profiles: user_repo.clone(),
+            accounts: user_repo.clone(),
+        },
         rbac,
         clock.clone(),
         common::media_guard(pool.clone()),
@@ -273,6 +277,7 @@ async fn fresh_stack() -> Stack {
         secure_cookies: false,
     };
     let admin_state = AdminState {
+        content_queries: common::content_queries(&pool),
         auth,
         users,
         passwords,
@@ -4189,4 +4194,126 @@ async fn native_comments_preview_private_fields_and_article_policy_cas() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn content_list_contract_pagination_filters_and_authorization() {
+    let _g = SERIAL.lock().await;
+    let stack = fresh_stack().await;
+    let (author_cookie, _) = login_as(&stack.router, &stack.idp, "author").await;
+    let (editor_cookie, _) = login_as(&stack.router, &stack.idp, "editor").await;
+    let (stranger_cookie, _) = login_as(&stack.router, &stack.idp, "stranger").await;
+    for table in ["posts", "pages"] {
+        let (column, value) = if table == "posts" {
+            (
+                "author_id,",
+                "(SELECT id FROM users WHERE username='author'),",
+            )
+        } else {
+            ("", "")
+        };
+        sqlx::query(&format!("INSERT INTO {table} ({column} id, slug, title, content, content_html, content_render_version, visibility)
+            SELECT {value} gen_random_uuid(), 'listed-' || i, '条目 ' || i, 'PRIVATE_BODY', '<p>body</p>', 1,
+            CASE WHEN i % 2 = 0 THEN 'private' ELSE 'public' END FROM generate_series(1, 23) i"))
+            .execute(&stack.pool).await.unwrap();
+    }
+    for (path, cookie) in [("posts", &author_cookie), ("pages", &editor_cookie)] {
+        for (query, expected_count, expected_total, expected_page) in [
+            ("", 20, 23, 1),
+            ("?page=2", 3, 23, 2),
+            ("?page=3", 0, 23, 3),
+            ("?status=draft&visibility=private", 11, 11, 1),
+            ("?status=published", 0, 0, 1),
+        ] {
+            let (status, body) = api(
+                &stack.router,
+                "GET",
+                &format!("/api/admin/v1/{path}{query}"),
+                Some(cookie),
+                None,
+                None,
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{body}");
+            let result: serde_json::Value = serde_json::from_str(&body).unwrap();
+            assert_eq!(result["items"].as_array().unwrap().len(), expected_count);
+            assert_eq!(result["total"], expected_total);
+            assert_eq!(result["page"], expected_page);
+            assert_eq!(result["per_page"], 20);
+            assert!(!body.contains("PRIVATE_BODY"));
+            for item in result["items"].as_array().unwrap() {
+                for field in [
+                    "content",
+                    "content_html",
+                    "excerpt",
+                    "tag_ids",
+                    "series",
+                    "category_id",
+                    "cover_media_id",
+                ] {
+                    assert!(item.get(field).is_none(), "列表只返回展示字段：{field}");
+                }
+            }
+        }
+        for query in [
+            "page=0",
+            "page=-1",
+            "page=9223372036854775807",
+            "status=invalid",
+            "visibility=invalid",
+        ] {
+            let (status, body) = api(
+                &stack.router,
+                "GET",
+                &format!("/api/admin/v1/{path}?{query}"),
+                Some(cookie),
+                None,
+                None,
+            )
+            .await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+            assert!(body.contains("invalid_request"), "{body}");
+        }
+    }
+    for path in ["posts", "post-trash", "pages", "page-trash"] {
+        let (status, _) = api(
+            &stack.router,
+            "GET",
+            &format!("/api/admin/v1/{path}"),
+            Some(&stranger_cookie),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+    }
+    // 显式作者参数先授权再查用户名；存在与不存在的目标都不能供普通作者探测。
+    for username in ["author2", "missing-user"] {
+        for path in ["posts", "post-trash"] {
+            let (status, _) = api(
+                &stack.router,
+                "GET",
+                &format!("/api/admin/v1/{path}?author={username}"),
+                Some(&author_cookie),
+                None,
+                None,
+            )
+            .await;
+            assert_eq!(status, StatusCode::FORBIDDEN);
+        }
+    }
+    let (status, body) = api(
+        &stack.router,
+        "GET",
+        "/api/admin/v1/posts?author=author&page=2",
+        Some(&editor_cookie),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&body).unwrap()["total"],
+        23
+    );
 }

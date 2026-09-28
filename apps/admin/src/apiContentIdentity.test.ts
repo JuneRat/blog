@@ -39,6 +39,8 @@ describe("内容管理 API 的稳定身份契约", () => {
   it.each([
     { path: "/posts", method: "GET", run: () => api.listPosts() },
     { path: "/pages", method: "GET", run: () => api.listPages() },
+    { path: "/posts?page=2&status=draft&visibility=private&author=a%26b", method: "GET", run: () => api.listPosts({ page: 2, status: "draft", visibility: "private", author: "a&b" }) },
+    { path: "/pages?page=3&status=published", method: "GET", run: () => api.listPages({ page: 3, status: "published" }) },
     { path: "/post-trash?page=2", method: "GET", run: () => api.listTrash(2) },
     { path: "/posts", method: "POST", run: () => api.createPost({ title: "新文章", content: "正文", visibility: "public" }) },
     { path: "/pages", method: "POST", run: () => api.createPage({ title: "新页面", content: "正文", visibility: "public" }) },

@@ -4,7 +4,13 @@ use application::{
     error::UseCaseError,
     retention::{RetentionSettings, RetentionStore},
 };
-use infrastructure::retention::{PostgresRetentionStore, run_retention};
+use infrastructure::retention::{PostgresRetentionCleanupStore, PostgresRetentionStore};
+
+fn maintenance(pool: &PgPool) -> application::retention::RetentionMaintenance {
+    application::retention::RetentionMaintenance::new(std::sync::Arc::new(
+        PostgresRetentionCleanupStore::new(pool.clone()),
+    ))
+}
 use serde_json::{Value, json};
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -99,7 +105,7 @@ async fn cleanup_is_bounded_repeatable_and_preserves_comment_content_and_version
     let pool = common::fresh_database("blog_retention_cleanup_test").await;
     seed(&pool).await;
     let before = comments_without_ip(&pool).await;
-    let dry = run_retention(&pool, 1, 1, true).await.unwrap();
+    let dry = maintenance(&pool).run(1, 1, true).await.unwrap();
     assert_eq!((dry.comment_ips, dry.audit_logs), (3, 2));
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT count(*) FROM comments WHERE ip_address IS NOT NULL")
@@ -108,13 +114,13 @@ async fn cleanup_is_bounded_repeatable_and_preserves_comment_content_and_version
             .unwrap(),
         4
     );
-    let first = run_retention(&pool, 1, 1, false).await.unwrap();
+    let first = maintenance(&pool).run(1, 1, false).await.unwrap();
     assert_eq!((first.comment_ips, first.audit_logs), (1, 1));
     assert!(first.has_more);
-    let rest = run_retention(&pool, 1, 5, false).await.unwrap();
+    let rest = maintenance(&pool).run(1, 5, false).await.unwrap();
     assert_eq!((rest.comment_ips, rest.audit_logs), (2, 1));
     assert!(!rest.has_more);
-    let again = run_retention(&pool, 100, 2, false).await.unwrap();
+    let again = maintenance(&pool).run(100, 2, false).await.unwrap();
     assert_eq!((again.comment_ips, again.audit_logs), (0, 0));
     assert_eq!(before, comments_without_ip(&pool).await);
     assert_eq!(
@@ -138,7 +144,7 @@ async fn cleanup_is_bounded_repeatable_and_preserves_comment_content_and_version
         .execute(&pool)
         .await
         .unwrap();
-    assert!(run_retention(&pool, 100, 2, false).await.is_err());
+    assert!(maintenance(&pool).run(100, 2, false).await.is_err());
 }
 
 #[tokio::test]
@@ -146,7 +152,7 @@ async fn cleanup_audit_failure_rolls_back_ip_and_history_deletion() {
     let pool = common::fresh_database("blog_retention_rollback_test").await;
     seed(&pool).await;
     sqlx::raw_sql("CREATE FUNCTION deny_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'audit unavailable'; END $$; CREATE TRIGGER deny_audit BEFORE INSERT ON audit_logs FOR EACH ROW EXECUTE FUNCTION deny_audit();").execute(&pool).await.unwrap();
-    assert!(run_retention(&pool, 100, 2, false).await.is_err());
-    let dry = run_retention(&pool, 100, 2, true).await.unwrap();
+    assert!(maintenance(&pool).run(100, 2, false).await.is_err());
+    let dry = maintenance(&pool).run(100, 2, true).await.unwrap();
     assert_eq!((dry.comment_ips, dry.audit_logs), (3, 2));
 }

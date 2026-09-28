@@ -12,7 +12,7 @@ use application::identity::{Actor, ActorChannel};
 use application::password::{PasswordDeps, PasswordInteractor};
 use application::ports::{
     ClearPasswordOutcome, ExternalIdentity, LoginThrottle, OAuthAccountStore, PasswordCredential,
-    PasswordHasher, SessionRecord, SessionStore, ThrottleDecision, ThrottleSubject, UserRepository,
+    PasswordHasher, SessionRecord, SessionStore, ThrottleDecision, ThrottleSubject, UserQuery,
 };
 use domain::identity::{PermissionSet, UserSnapshot};
 use time::OffsetDateTime;
@@ -183,76 +183,7 @@ impl FakeUserRepo {
 }
 
 #[async_trait::async_trait]
-impl UserRepository for FakeUserRepo {
-    async fn change_status(
-        &self,
-        _user_id: uuid::Uuid,
-        _status: domain::identity::UserStatus,
-        _expected_version: i64,
-        _now: time::OffsetDateTime,
-        _actor: &application::identity::Actor,
-    ) -> Result<UserSnapshot, UseCaseError> {
-        unimplemented!("此用例不修改账号状态")
-    }
-
-    async fn save_profile(
-        &self,
-        user: &domain::identity::User,
-        expected_version: i64,
-        now: time::OffsetDateTime,
-        _audit: application::audit::AuditContext,
-    ) -> Result<UserSnapshot, UseCaseError> {
-        let snapshot = user.snapshot();
-        let mut users = self.users.lock().unwrap();
-        let current = users
-            .values_mut()
-            .find(|u| u.id == snapshot.id)
-            .ok_or_else(|| UseCaseError::NotFound("用户".into()))?;
-        if current.version != expected_version || !current.is_active() {
-            return Err(UseCaseError::VersionConflict);
-        }
-        current.display_name = snapshot.display_name;
-        current.bio = snapshot.bio;
-        current.version += 1;
-        current.updated_at = now;
-        Ok(current.clone())
-    }
-
-    async fn revoke_authentication(
-        &self,
-        user_id: Uuid,
-        _audit_actor: application::audit::AuditContext,
-    ) -> Result<(), UseCaseError> {
-        let mut users = self.users.lock().unwrap();
-        let user = users
-            .values_mut()
-            .find(|u| u.id == user_id)
-            .ok_or_else(|| UseCaseError::NotFound("用户".into()))?;
-        user.auth_version += 1;
-        Ok(())
-    }
-
-    /// 头像只走真实认证 HTTP 用例（server/tests）；本 fake 不实现，误用即失败。
-    async fn set_avatar(
-        &self,
-        _user_id: uuid::Uuid,
-        _avatar_media_id: Option<uuid::Uuid>,
-        _now: time::OffsetDateTime,
-        _audit: application::audit::AuditContext,
-    ) -> Result<(), UseCaseError> {
-        unimplemented!("该用例不使用头像")
-    }
-
-    async fn insert(
-        &self,
-        aggregate: &domain::identity::User,
-        _audit_actor: application::audit::AuditContext,
-    ) -> Result<(), UseCaseError> {
-        let snapshot = aggregate.snapshot();
-        self.insert_user(snapshot.clone());
-        Ok(())
-    }
-
+impl application::ports::UserQuery for FakeUserRepo {
     async fn find_by_id(&self, id: Uuid) -> Result<Option<UserSnapshot>, UseCaseError> {
         Ok(self
             .users
@@ -275,7 +206,10 @@ impl UserRepository for FakeUserRepo {
     ) -> Result<Vec<application::ports::AdminUserRow>, UseCaseError> {
         Ok(vec![])
     }
+}
 
+#[async_trait::async_trait]
+impl application::ports::PasswordCredentialStore for FakeUserRepo {
     async fn set_password_hash(
         &self,
         user_id: Uuid,
@@ -553,6 +487,7 @@ async fn fixture_with_threshold(max_failures: u32) -> Fixture {
 
     let passwords = Arc::new(PasswordInteractor::new(PasswordDeps {
         users: repo.clone(),
+        credentials: repo.clone(),
         hasher: hasher.clone(),
         throttle: throttle.clone(),
         sessions: sessions.clone(),
