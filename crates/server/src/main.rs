@@ -65,6 +65,9 @@ async fn run(command: Command) -> Result<(), String> {
     if matches!(command, Command::PublishDue) && (isolated || recovery_mode) {
         return Err("恢复隔离期间禁止预约发布任务".into());
     }
+    if matches!(command, Command::RebuildHtml) && (isolated || recovery_mode) {
+        return Err("恢复隔离期间禁止 HTML 重建".into());
+    }
     if matches!(command, Command::Serve { .. }) && isolated && !recovery_mode {
         return Err("恢复数据库尚未解除隔离；核验请设置 BLOG_RECOVERY_MODE=1，完成后用 recovery.py release 解除".into());
     }
@@ -89,22 +92,24 @@ async fn run(command: Command) -> Result<(), String> {
         None
     };
     // Keep automatic schema initialization for schema owners; restricted runtime
-    // roles verify the applied migrations. Website dependencies belong to serve.
-    let migration = match &command {
-        Command::Maintenance { .. } => unreachable!("maintenance returned above"),
-        Command::Migrate | Command::PublishDue | Command::Post { .. } | Command::Serve { .. } => {
-            infrastructure::migrate(&pool, database.migrations_dir).await
-        }
-        Command::User { .. }
-        | Command::Role { .. }
-        | Command::Oauth { .. }
-        | Command::Media { .. } => {
-            infrastructure::migrate_schema(&pool, database.migrations_dir).await
-        }
-    };
-    migration.map_err(|error| format!("执行迁移失败：{error}"))?;
+    // roles verify the applied migrations. Derived HTML is rebuilt only by the
+    // explicit maintenance command, never as a startup or migration side effect.
+    infrastructure::migrate_schema(&pool, database.migrations_dir)
+        .await
+        .map_err(|error| format!("执行迁移失败：{error}"))?;
     if matches!(command, Command::Migrate) {
         println!("迁移完成。");
+        return Ok(());
+    }
+    if matches!(command, Command::RebuildHtml) {
+        let renderer = RenderingRuntime::default();
+        let content = infrastructure::rebuild_content_html(&pool, &renderer)
+            .await
+            .map_err(|error| format!("文章/页面 HTML 重建失败：{error}"))?;
+        let comments = infrastructure::comments::rebuild_comment_html(&pool, &renderer)
+            .await
+            .map_err(|error| format!("评论 HTML 重建失败：{error}"))?;
+        println!("HTML 重建完成：文章/页面 {content} 条，评论 {comments} 条。");
         return Ok(());
     }
     let roles = assembly::roles(&pool);
@@ -115,6 +120,7 @@ async fn run(command: Command) -> Result<(), String> {
     match command {
         Command::Maintenance { .. } => unreachable!("maintenance returned above"),
         Command::Migrate => unreachable!("migration returned above"),
+        Command::RebuildHtml => unreachable!("HTML rebuild returned above"),
         Command::PublishDue => interfaces::cli::run_publish_due(&assembly::publisher(&pool)).await,
         Command::User { action } => {
             interfaces::cli::run_user(assembly::user_commands(&pool), action).await

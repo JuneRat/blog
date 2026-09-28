@@ -60,6 +60,6 @@ IP 以可空 inet 保存主机地址，审核不覆盖提交 IP。默认保留 1
 
 ## 重建与验证
 
-评论使用独立的 `COMMENT_RENDER_VERSION`，完整 `migrate` 启动流程重建版本不匹配的 HTML。更新同时核对源文和编辑版本，不改变业务版本或修改时间，不写 media_refs。公开渲染不回退到未清洗源文。
+评论使用独立的 `COMMENT_RENDER_VERSION`，显式 `blog rebuild-html` 命令重建版本不匹配的 HTML；启动和结构迁移不触发重建。更新同时核对源文和编辑版本，不改变业务版本或修改时间，不写 media_refs。公开渲染不回退到未清洗源文。规则升级步骤见[运维](operations-and-recovery.md#html-显式重建)。
 
 验证入口包括基础设施评论集成测试（真实 PostgreSQL 关系、权限、分页、CAS、事务回滚和重建竞争）、评论渲染单元测试、server 的评论 HTTP 测试，以及公开组件、审核界面和文章编辑器 Vitest。恢复工具核验评论根关系、媒体引用和新迁移校验和，见[备份恢复](operations-and-recovery.md)。

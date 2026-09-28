@@ -7,8 +7,6 @@ use time::OffsetDateTime;
 use application::error::UseCaseError;
 use application::ports::{Clock, HealthCheck};
 
-use super::content::rebuild_content_html;
-
 pub async fn connect(url: &str) -> Result<PgPool, sqlx::Error> {
     PgPoolOptions::new()
         .max_connections(5)
@@ -18,7 +16,7 @@ pub async fn connect(url: &str) -> Result<PgPool, sqlx::Error> {
 }
 
 /// 从目录加载并执行迁移（sqlx 布局 `<version>_<description>.sql`，每条自动包事务）。
-/// 身份与媒体维护只需要结构就绪，不依赖正文渲染或内容引用补齐。
+/// 所有命令只在这里准备或校验结构；HTML 重建由显式维护入口执行。
 pub async fn migrate_schema(
     pool: &PgPool,
     migrations_dir: impl AsRef<std::path::Path>,
@@ -102,18 +100,6 @@ pub async fn migrate_schema(
         .run(pool)
         .await
         .map_err(|e| UseCaseError::Repository(format!("数据库迁移失败：{e}")))?;
-    Ok(())
-}
-
-/// 执行结构迁移，并补齐公开读取所需的持久化 HTML 与媒体引用。
-pub async fn migrate(
-    pool: &PgPool,
-    migrations_dir: impl AsRef<std::path::Path>,
-) -> Result<(), UseCaseError> {
-    migrate_schema(pool, migrations_dir).await?;
-    let renderer = crate::rendering::RenderingRuntime::default();
-    rebuild_content_html(pool, &renderer).await?;
-    crate::comments::rebuild_comment_html(pool, &renderer).await?;
     Ok(())
 }
 

@@ -20,8 +20,9 @@ ADR 记录问题、选择、理由和代价。每篇页首说明决策状态与�
 | [0012 公共 hook 与暂缓 Query](0012-admin-data-layer.md) | 部分被替代 | 暂缓 Query 的选择由 [0013](0013-tanstack-query.md) 替代，公共错误处理原则保留 |
 | [0013 TanStack Query](0013-tanstack-query.md) | 已采纳 | 更新 [0012](0012-admin-data-layer.md) 的取数方案；当前缓存与测试约定见[后台开发指南](../admin-development.md) |
 | [0014 内容提交与后台稳定身份](0014-content-commits-and-stable-admin-identity.md) | 部分被替代 | [0015](0015-rendered-content-runtime-and-module-boundaries.md) 扩展正文派生物；[0016](0016-confirmed-blog-schema.md) 更新归档、恢复及时间语义 |
-| [0015 持久化 HTML、渲染与装配](0015-rendered-content-runtime-and-module-boundaries.md) | 已采纳 | 分层与渲染原则保留，[0016](0016-confirmed-blog-schema.md) 扩展至评论 HTML 及严格保存约束 |
+| [0015 持久化 HTML、渲染与装配](0015-rendered-content-runtime-and-module-boundaries.md) | 部分被替代 | 分层与渲染原则保留，[0016](0016-confirmed-blog-schema.md) 扩展至评论 HTML；[0017](0017-explicit-html-rebuild.md) 将自动重建改为显式维护 |
 | [0016 新博客数据库设计与独立会话版本](0016-confirmed-blog-schema.md) | 已采纳 | 19 表目标方案；局部替代 0008/0009/0010/0014，扩展 0015；应用尚未切换，见[实施路线](../product-roadmap.md#已采纳数据库设计的实施) |
+| [0017 HTML 显式重建](0017-explicit-html-rebuild.md) | 已采纳 | 局部替代 0015 的自动重建入口，普通启动和结构迁移不再重建 HTML |
 
 ## 状态含义
 

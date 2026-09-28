@@ -87,15 +87,18 @@ Post/Page 管理 API 及 Post CLI 通过稳定 UUID 定位资源，公开 URL �
 
 | 命令 | 迁移范围 | 装配范围 |
 |---|---|---|
-| `migrate` | 结构迁移与正文派生物回填，完成后退出 | 数据库与渲染运行时 |
+| `migrate` | 结构迁移，完成后退出 | 数据库 |
+| `rebuild-html` | 结构迁移或校验后显式重建旧渲染版本 HTML | 数据库与正文/评论渲染运行时 |
 | `user`、`role`、`oauth` | 结构迁移 | 对应身份用例；不读取网站 URL 或主题 |
 | `media` | 结构迁移 | 媒体仓储与文件存储 |
-| `post` | 结构迁移与正文派生物回填 | 用户、内容用例及正文渲染 |
-| `publish-due` | 结构迁移与正文派生物回填 | 到期发布用例及原子批次适配器 |
+| `post` | 结构迁移 | 用户、内容用例及本次写入的正文渲染 |
+| `publish-due` | 结构迁移 | 到期发布用例及原子批次适配器 |
 | `maintenance` | 不执行迁移或派生物回填 | 独立维护连接与保留期清理用例 |
-| `serve` | 结构迁移与正文派生物回填 | 网站配置、全部用例、主题、静态资源与 HTTP 状态 |
+| `serve` | 结构迁移 | 网站配置、全部用例、主题、静态资源与 HTTP 状态 |
 
-除 `migrate` 与独立的 `maintenance` 外，其余命令在执行前同步权限注册表。只有 `serve` 读取网站配置并加载主题；主题目录损坏或公开 URL 无效不会阻止账号、密码和 OAuth 维护。配置项见[配置参考](configuration.md)。
+除 `migrate`、`rebuild-html` 与独立的 `maintenance` 外，其余命令在执行前同步权限注册表。只有 `serve` 读取网站配置并加载主题；主题目录损坏或公开 URL 无效不会阻止账号、密码、OAuth 或 HTML 维护。配置项见[配置参考](configuration.md)。
+
+结构迁移与 HTML 重建没有组合入口：普通启动和业务命令仅调用 `migrate_schema`，不会扫描全库旧渲染版本。`rebuild-html` 与结构迁移同属基础设施维护，由接口层解析命令、`server` 分派，基础设施持有渲染、CAS、引用同步与审计事务。历史内容重建失败只影响显式维护进程；规则升级需要在部署流程安排重建，见 [ADR-0017](adr/0017-explicit-html-rebuild.md) 和[运维步骤](operations-and-recovery.md#html-显式重建)。
 
 服务装配共享一个 `RenderingRuntime`，供 Post/Page 仓储及所有主题使用。接口层组合 HTTP 路由；监听 socket、连接信息和退出信号由 `server` 持有。默认主题必须加载成功，其他无效主题被跳过；详见主题文档。
 

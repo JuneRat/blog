@@ -1,7 +1,7 @@
 //! 受控 CLI 入站适配器：M1 的唯一写通道（不得暴露为公开管理 HTTP）。
 //!
 //! 参数解析与输入/输出映射在本层完成；业务规则全部下沉应用层。
-//! `migrate` 由 server 装配层拦截执行（依赖 infrastructure），不经过本模块。
+//! `migrate` 与 `rebuild-html` 是基础设施维护，由 server 装配层拦截执行。
 
 use std::io::Read;
 use std::path::PathBuf;
@@ -44,8 +44,11 @@ pub enum Command {
     },
     /// 发布到期的预约文章与页面。
     PublishDue,
-    /// 执行数据库迁移（由 server 装配层直接处理）
+    /// 执行数据库结构迁移，不重建 HTML（由 server 装配层直接处理）
     Migrate,
+
+    /// 显式重建旧渲染版本的文章、页面与评论 HTML；不改变编辑版本或业务时间
+    RebuildHtml,
 
     /// 用户管理（受控操作，不开放自助注册）
     User {

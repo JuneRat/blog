@@ -112,7 +112,7 @@ sitemap 的 50,000 条限制是整个文件的预算：首页、文章、Page、
 
 [内容仓储](../crates/infrastructure/src/persistence/content.rs) 在事务外等待渲染，然后把源文、`content_html`、`content_render_version` 和媒体关系同事务提交。公开 Post/Page 详情直接读取保存的 HTML，不在每次访问时转换 Markdown。
 
-清洗规则改变时需要递增 `CONTENT_RENDER_VERSION`。完整迁移入口分批重建不匹配的记录，以业务版本和源文作条件，避免覆盖并发编辑；HTML 与引用一起更新，不增加编辑版本或改变业务更新时间。结构迁移与完整迁移的命令分工见[架构](architecture.md)。
+清洗规则改变时需要递增 `CONTENT_RENDER_VERSION`（评论使用 `COMMENT_RENDER_VERSION`），并显式运行 `blog rebuild-html`。该命令分批重建不匹配的记录，以业务版本和源文作条件，避免覆盖并发编辑；HTML 与引用一起更新，不增加编辑版本或改变业务更新时间。启动、结构迁移和普通业务命令不扫描或重建历史 HTML，公开读取仍使用已存储的清洗结果。涉及清洗安全规则的升级必须在恢复公开访问前完成重建；步骤与失败重试见[运维](operations-and-recovery.md#html-显式重建)。
 
 ## 执行策略与实际预算
 

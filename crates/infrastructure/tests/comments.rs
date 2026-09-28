@@ -622,9 +622,12 @@ async fn rebuild_updates_only_derived_fields_and_does_not_clobber_a_newer_source
         .execute(&pool)
         .await
         .unwrap();
-    rebuild_comment_html(&pool, &RenderingRuntime::default())
-        .await
-        .unwrap();
+    assert_eq!(
+        rebuild_comment_html(&pool, &RenderingRuntime::default())
+            .await
+            .unwrap(),
+        1
+    );
     let row = sqlx::query(
         "SELECT content_html,version,updated_at,content_render_version FROM comments WHERE id=$1",
     )
@@ -644,7 +647,7 @@ async fn rebuild_updates_only_derived_fields_and_does_not_clobber_a_newer_source
         .execute(&pool)
         .await
         .unwrap();
-    rebuild_comment_html(
+    let rebuilt = rebuild_comment_html(
         &pool,
         &RacingRenderer {
             pool: pool.clone(),
@@ -654,6 +657,7 @@ async fn rebuild_updates_only_derived_fields_and_does_not_clobber_a_newer_source
     )
     .await
     .unwrap();
+    assert_eq!(rebuilt, 0, "并发编辑使重建失效时不计入成功数");
     let latest = service
         .list(&admin, None, None, 1)
         .await

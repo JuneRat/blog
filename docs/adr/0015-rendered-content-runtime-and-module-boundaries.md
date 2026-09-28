@@ -1,9 +1,10 @@
 # ADR-0015：持久化 HTML、集中渲染与按命令装配
 
-- 状态：已采纳
+- 状态：部分被替代
 - 记录日期：2026-09-26
 - 关联决策：扩展 [ADR-0014](0014-content-commits-and-stable-admin-identity.md) 的内容提交；细化 [ADR-0001](0001-workspace-boundaries.md) 的依赖约束和 [ADR-0002](0002-template-data-functions.md) 的执行边界；[ADR-0016](0016-confirmed-blog-schema.md) 将持久化 HTML 扩展至受限 Markdown 评论
 - 当前参考：[架构](../architecture.md)、[主题与渲染](../themes-and-rendering.md)、[配置](../configuration.md)、[数据库设计](../database-design.md)
+- 后续替代：[ADR-0017](0017-explicit-html-rebuild.md) 将启动、内容命令与完整迁移中的自动重建改为显式 HTML 维护，保留持久化和事务规则。
 
 ## 背景
 
@@ -64,6 +65,8 @@ CI 与本地检查通过 Cargo metadata 检查项目依赖方向和内层第三�
 验证覆盖 HTML 与引用同事务、旧版本重建与并发编辑竞争、取消后的许可生命周期、缓存边界、维护命令隔离以及依赖检查器。执行方式见[开发指南](../development.md)。
 
 ## 后续变更
+
+[ADR-0017](0017-explicit-html-rebuild.md) 替代本篇“完整迁移及网站/内容命令自动重建”的执行边界。结构迁移与 HTML 重建改为独立入口，规则升级由部署流程显式执行；同次保存、CAS、引用同步、审计及渲染预算原则继续有效。
 
 [ADR-0016](0016-confirmed-blog-schema.md) 保留本篇渲染与分层原则，将源文、清洗 HTML 和渲染版本的同事务持久化扩展到评论。目标正常记录不再保留 NULL/版本 0 的待渲染占位，文章、页面和评论按各自规则版本重建；该设计尚待应用切换。
 

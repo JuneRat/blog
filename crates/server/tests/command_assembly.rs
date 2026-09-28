@@ -7,13 +7,14 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 
-fn cli(database_url: &str, args: &[&str], password: Option<&str>, public_url: &str) -> Output {
+fn cli_command(database_url: &str, args: &[&str], public_url: &str) -> Command {
     let project = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let missing = std::env::temp_dir().join(format!(
         "blog-assembly-unavailable-{}",
         uuid::Uuid::now_v7()
     ));
-    let mut child = Command::new(env!("CARGO_BIN_EXE_blog"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_blog"));
+    command
         .args(args)
         .current_dir(&project)
         .env("DATABASE_URL", database_url)
@@ -21,7 +22,12 @@ fn cli(database_url: &str, args: &[&str], password: Option<&str>, public_url: &s
         .env("BLOG_MIGRATIONS_DIR", project.join("migrations/postgres"))
         .env("BLOG_THEME_DIR", missing.join("theme"))
         .env("BLOG_ADMIN_DIST", missing.join("admin"))
-        .env("BLOG_PUBLIC_BASE_URL", public_url)
+        .env("BLOG_PUBLIC_BASE_URL", public_url);
+    command
+}
+
+fn cli(database_url: &str, args: &[&str], password: Option<&str>, public_url: &str) -> Output {
+    let mut child = cli_command(database_url, args, public_url)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -240,18 +246,92 @@ async fn maintenance_does_not_require_a_working_website() {
     ));
     assert_success(cli(&database_url, &["role", "list"], None, invalid_url));
     assert_success(cli(&database_url, &["oauth", "list"], None, invalid_url));
+    assert_success(cli(&database_url, &["migrate"], None, invalid_url));
+    assert_success(cli(
+        &database_url,
+        &["post", "list", "--author", "assembly-user"],
+        None,
+        invalid_url,
+    ));
+    assert_success(cli(&database_url, &["publish-due"], None, invalid_url));
     let pending: i32 =
         sqlx::query_scalar("SELECT content_render_version FROM posts WHERE slug = 'assembly-post'")
             .fetch_one(&pool)
             .await
             .unwrap();
-    assert_eq!(pending, 2, "身份维护不得触发内容派生物重建");
+    assert_eq!(pending, 2, "普通命令不得触发内容派生物重建");
 
-    // Restore valid content so serve reaches its own configuration validation.
+    let failed = cli(&database_url, &["rebuild-html"], None, invalid_url);
+    assert!(!failed.status.success());
+    assert!(String::from_utf8_lossy(&failed.stderr).contains("文章/页面 HTML 重建失败"));
+
+    // 真正启动监听并访问公开页：坏掉的历史源文不会阻止启动或触发即时重建。
+    let project = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let logs = common::media_dir("serve-with-stale-html");
+    let stdout = logs.join("stdout");
+    let stderr = logs.join("stderr");
+    let mut server = RunningServer(
+        cli_command(
+            &database_url,
+            &["serve", "--addr", "127.0.0.1:0"],
+            "https://blog.test",
+        )
+        .env("BLOG_THEME_DIR", project.join("themes/default"))
+        .stdout(std::fs::File::create(&stdout).unwrap())
+        .stderr(std::fs::File::create(&stderr).unwrap())
+        .spawn()
+        .unwrap(),
+    );
+    let base = tokio::time::timeout(std::time::Duration::from_secs(15), async {
+        loop {
+            assert!(
+                server.0.try_wait().unwrap().is_none(),
+                "{}",
+                std::fs::read_to_string(&stderr).unwrap()
+            );
+            let log = std::fs::read_to_string(&stdout).unwrap();
+            if let Some(base) = log
+                .lines()
+                .find_map(|line| line.strip_prefix("公开站点已启动："))
+            {
+                break base.to_string();
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("server should become ready without rebuilding old HTML");
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .unwrap();
+    assert!(
+        client
+            .get(format!("{base}/"))
+            .send()
+            .await
+            .unwrap()
+            .status()
+            .is_success()
+    );
+    drop(server);
+    std::fs::remove_dir_all(logs).unwrap();
+    let pending: i32 =
+        sqlx::query_scalar("SELECT content_render_version FROM posts WHERE slug='assembly-post'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(pending, 2, "serve 不得隐式重建");
+
+    // 修复历史引用后可重跑；网站配置错误仍由 serve 自己报告。
     sqlx::query("UPDATE posts SET content = 'body' WHERE slug = 'assembly-post'")
         .execute(&pool)
         .await
         .unwrap();
+    assert!(
+        assert_success(cli(&database_url, &["rebuild-html"], None, invalid_url))
+            .contains("文章/页面 1 条，评论 0 条")
+    );
     let invalid_site = cli(
         &database_url,
         &["serve", "--addr", "127.0.0.1:0"],
@@ -268,6 +348,92 @@ async fn maintenance_does_not_require_a_working_website() {
     );
     assert!(!invalid_theme.status.success());
     assert!(String::from_utf8_lossy(&invalid_theme.stderr).contains("加载默认主题模板失败"));
+}
+
+struct RunningServer(std::process::Child);
+impl Drop for RunningServer {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+#[tokio::test]
+async fn explicit_html_rebuild_updates_all_three_sources_and_is_repeatable() {
+    let database = "blog_explicit_html_rebuild_test";
+    let pool = common::fresh_database(database).await;
+    let url = common::test_db_url(&common::admin_url(), database);
+    sqlx::raw_sql(
+        "INSERT INTO users(id,username) VALUES(gen_random_uuid(),'html-author');
+         INSERT INTO posts(id,author_id,slug,content,content_html,content_render_version)
+           SELECT gen_random_uuid(),id,'html-post','**fresh**','stale',2 FROM users;
+         INSERT INTO pages(id,slug,content,content_html,content_render_version)
+           VALUES(gen_random_uuid(),'html-page','**fresh**','stale',2);
+         INSERT INTO comments(id,post_id,author_name,content,content_html,content_render_version)
+           SELECT gen_random_uuid(),id,'guest','**fresh**','stale',2 FROM posts;",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let blocked = cli_command(&url, &["rebuild-html"], "unused")
+        .env("BLOG_RECOVERY_MODE", "1")
+        .output()
+        .unwrap();
+    assert!(!blocked.status.success());
+    assert!(String::from_utf8_lossy(&blocked.stderr).contains("恢复隔离期间禁止 HTML 重建"));
+
+    assert_success(cli(&url, &["migrate"], None, "unused"));
+    let mut before = Vec::new();
+    for table in ["posts", "pages", "comments"] {
+        let row: (String, i32, i64, time::OffsetDateTime) = sqlx::query_as(&format!(
+            "SELECT content_html,content_render_version,version,updated_at FROM {table}"
+        ))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row.0, "stale");
+        assert_eq!(row.1, 2);
+        before.push((row.2, row.3));
+    }
+    assert!(
+        assert_success(cli(&url, &["rebuild-html"], None, "unused"))
+            .contains("文章/页面 2 条，评论 1 条")
+    );
+    for (i, table) in ["posts", "pages", "comments"].into_iter().enumerate() {
+        let row: (String, i32, i64, time::OffsetDateTime) = sqlx::query_as(&format!(
+            "SELECT content_html,content_render_version,version,updated_at FROM {table}"
+        ))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(row.0.contains("<strong>fresh</strong>"));
+        assert_eq!(
+            row.1,
+            if table == "comments" {
+                infrastructure::COMMENT_RENDER_VERSION
+            } else {
+                infrastructure::CONTENT_RENDER_VERSION
+            }
+        );
+        assert_eq!((row.2, row.3), before[i]);
+    }
+    assert!(
+        assert_success(cli(&url, &["rebuild-html"], None, "unused"))
+            .contains("文章/页面 0 条，评论 0 条")
+    );
+    let audit_count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM audit_logs WHERE action LIKE '%.html.rebuild'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(audit_count, 3, "每条重建记一次审计，重复执行不制造变更");
+    let roles: i64 = sqlx::query_scalar("SELECT count(*) FROM roles")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(roles, 0, "结构迁移和 HTML 维护不应初始化角色");
+    pool.close().await;
 }
 
 #[tokio::test]
@@ -353,6 +519,7 @@ async fn recovery_database_guard_blocks_normal_start_publishing_and_retention_be
     for args in [
         &["serve", "--addr", "127.0.0.1:0"][..],
         &["publish-due"][..],
+        &["rebuild-html"][..],
     ] {
         let output = cli(&database_url, args, None, "broken-site-config");
         assert!(!output.status.success());

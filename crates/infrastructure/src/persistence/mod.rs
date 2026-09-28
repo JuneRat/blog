@@ -12,7 +12,7 @@ mod media;
 mod sql;
 mod taxonomy;
 
-pub use connection::{PgHealthCheck, SystemClock, connect, migrate, migrate_schema};
+pub use connection::{PgHealthCheck, SystemClock, connect, migrate_schema};
 pub use content::{
     CONTENT_RENDER_VERSION, PostgresPageRepository, PostgresPostRepository,
     PostgresPublishedPageQuery, PostgresPublishedPostQuery, PostgresScheduledPublicationStore,

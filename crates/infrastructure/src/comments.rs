@@ -354,12 +354,13 @@ impl CommentRepository for PostgresCommentRepository {
 pub async fn rebuild_comment_html(
     pool: &PgPool,
     renderer: &dyn CommentRenderer,
-) -> Result<(), UseCaseError> {
+) -> Result<usize, UseCaseError> {
+    let mut rebuilt = 0;
     loop {
         let rows = sqlx::query("SELECT id,content,version FROM comments WHERE content_render_version<>$1 ORDER BY id LIMIT 100")
             .bind(COMMENT_RENDER_VERSION).fetch_all(pool).await.map_err(db)?;
         if rows.is_empty() {
-            return Ok(());
+            return Ok(rebuilt);
         }
         for row in rows {
             let source: String = row.get("content");
@@ -382,6 +383,7 @@ pub async fn rebuild_comment_html(
                 .await?;
             }
             tx.commit().await.map_err(db)?;
+            rebuilt += changed as usize;
         }
     }
 }

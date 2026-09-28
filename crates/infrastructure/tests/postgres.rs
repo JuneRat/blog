@@ -117,7 +117,7 @@ async fn migrations_create_core_tables() {
     for t in expected {
         assert!(tables.iter().any(|x| x == t), "缺少表 {t}");
     }
-    infrastructure::migrate(&pool, "../../migrations/postgres")
+    infrastructure::migrate_schema(&pool, "../../migrations/postgres")
         .await
         .unwrap();
     let applied: Vec<i64> =

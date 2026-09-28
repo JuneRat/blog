@@ -119,7 +119,7 @@ pub async fn fresh_database(db_name: &str) -> sqlx::PgPool {
     let pool = infrastructure::connect(&test_dsn)
         .await
         .expect("连接测试库失败");
-    infrastructure::migrate(&pool, "../../migrations/postgres")
+    infrastructure::migrate_schema(&pool, "../../migrations/postgres")
         .await
         .expect("迁移失败");
     pool

@@ -19,7 +19,7 @@ use super::media::{clear_media_refs, media_ids_for, sync_media_refs};
 use super::sql::{PAGE_PUBLIC_PREDICATE, POST_PUBLIC_PREDICATE, map_row_error, map_sqlx_error};
 use crate::audit::{AuditEntry, append_audit_log};
 
-/// 渲染或清洗规则变更时递增；启动迁移将重建不匹配的派生内容。
+/// 渲染或清洗规则变更时递增；显式 rebuild-html 命令重建不匹配的派生内容。
 pub const CONTENT_RENDER_VERSION: i32 = 1;
 
 /// 重建持久化派生内容。分批读取、事务外渲染，CAS 防止覆盖同时保存的新正文。

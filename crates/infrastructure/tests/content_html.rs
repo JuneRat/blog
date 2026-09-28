@@ -1,4 +1,4 @@
-//! 持久化渲染结果：源文、HTML、媒体关系原子提交；迁移与并发编辑不相互覆盖。
+//! 持久化渲染结果：源文、HTML、媒体关系原子提交；显式重建与并发编辑不相互覆盖。
 use std::sync::Arc;
 
 use application::error::UseCaseError;
@@ -207,7 +207,7 @@ async fn media_failure_and_stale_version_leave_source_html_and_refs_unchanged() 
 }
 
 #[tokio::test]
-async fn migration_rebuilds_outdated_html_without_editing_business_versions() {
+async fn schema_migration_leaves_html_for_explicit_rebuild_without_editing_business_versions() {
     let _guard = SERIAL.lock().await;
     let pool = database().await;
     let author = common::seed_user(&pool, "writer").await;
@@ -228,12 +228,23 @@ async fn migration_rebuilds_outdated_html_without_editing_business_versions() {
     let page_record = pages.insert_page(&page, None.into()).await.unwrap();
     let before_post = stored(&pool, "posts", record.snapshot.id).await;
     let before_page = stored(&pool, "pages", page_record.id).await;
-    // 基线直接包含派生列；模拟另一渲染规则版本，启动时重建但不改业务版本。
+    // 结构就绪不会隐式重建派生物；显式重建才刷新 HTML，且不改业务版本。
     sqlx::raw_sql("UPDATE posts SET content_html='',content_render_version=2; UPDATE pages SET content_html='',content_render_version=2;")
         .execute(&pool).await.unwrap();
-    infrastructure::migrate(&pool, "../../migrations/postgres")
+    infrastructure::migrate_schema(&pool, "../../migrations/postgres")
         .await
         .unwrap();
+    for (table, id) in [("posts", record.snapshot.id), ("pages", page_record.id)] {
+        let (_, html, render_version, _, _) = stored(&pool, table, id).await;
+        assert_eq!(html, "");
+        assert_eq!(render_version, 2);
+    }
+    assert_eq!(
+        rebuild_content_html(&pool, &RenderingRuntime::default())
+            .await
+            .unwrap(),
+        2
+    );
     assert_eq!(
         stored(&pool, "posts", record.snapshot.id).await,
         before_post

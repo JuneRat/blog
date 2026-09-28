@@ -22,7 +22,7 @@ cargo run -p server -- serve
 
 数据库脚本使用容器 `blog-postgres` 和持久卷 `blog-pgdata`，只绑定本机回环地址；已有容器时直接启动。数据库连接失败时先检查 Docker 和端口。改变 `BLOG_PG_PORT` 不会修改已有容器的端口映射，也不会自动更新应用连接串。
 
-已配置数据库的业务命令先执行结构迁移；`migrate`、`post`、`publish-due` 和正常 `serve` 还会重建旧渲染版本的 HTML。安装模式只在验证安装表单与空库后执行结构迁移。用户、角色、OAuth 和媒体维护命令只加载各自需要的依赖，站点 URL 或主题配置错误不会阻止身份修复。详见[架构](architecture.md)。
+已配置数据库的业务命令先执行结构迁移或校验，均不隐式重建历史 HTML；规则升级后显式执行 `cargo run -p server -- rebuild-html`，步骤见[运维](operations-and-recovery.md#html-显式重建)。安装模式只在验证安装表单与空库后执行结构迁移。用户、角色、OAuth 和媒体维护命令只加载各自需要的依赖，站点 URL 或主题配置错误不会阻止身份修复。详见[架构](architecture.md)。
 
 ## 新基线的隔离验证
 
@@ -38,7 +38,7 @@ cargo run -p server -- user passwd --user sun
 cargo run -p server -- role assign --user sun --role owner
 ```
 
-连接串按实际本机端口和凭据调整。后续命令在同一 shell 使用该 `DATABASE_URL`。用户/角色命令会同步权限目录和内置角色；`migrate` 只负责结构与派生重建，不创建账号。
+连接串按实际本机端口和凭据调整。后续命令在同一 shell 使用该 `DATABASE_URL`。用户/角色命令会同步权限目录和内置角色；`migrate` 只负责结构，不重建 HTML 或创建账号。
 
 第一批数据库验证使用以下测试；`BLOG_TEST_ADMIN_URL` 应指向独立 PostgreSQL 实例的管理库，测试会重建固定名称的测试库，不要指向业务库：
 
