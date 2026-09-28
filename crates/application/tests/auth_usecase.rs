@@ -104,16 +104,15 @@ impl OAuthAttemptStore for FakeAttemptStore {
     }
 }
 
-#[derive(Clone)]
 struct FakeProviderConfigStore {
-    providers: Vec<ProviderConfig>,
+    providers: Mutex<Vec<ProviderConfig>>,
 }
 
 #[async_trait::async_trait]
 impl OAuthConfigStore for FakeProviderConfigStore {
     async fn read(&self) -> Result<application::ports::OAuthConfigSnapshot, UseCaseError> {
         Ok(application::ports::OAuthConfigSnapshot {
-            providers: self.providers.clone(),
+            providers: self.providers.lock().unwrap().clone(),
             version: 1,
         })
     }
@@ -241,6 +240,9 @@ impl ExternalIdentityClient for FakeIdentityClient {
 // ---------------------------------------------------------------------------
 
 struct Fixture {
+    configs: Arc<FakeProviderConfigStore>,
+    management: application::auth::OAuthManagementInteractor,
+    accounts: Arc<FakeAccountStore>,
     auth: Arc<AuthInteractor>,
     identity_client: Arc<FakeIdentityClient>,
     sessions: Arc<FakeSessionStore>,
@@ -314,12 +316,21 @@ async fn fixture() -> Fixture {
     });
 
     let sessions = Arc::new(FakeSessionStore::default());
+    let configs = Arc::new(FakeProviderConfigStore {
+        providers: Mutex::new(providers),
+    });
+    let management = application::auth::OAuthManagementInteractor::new(
+        configs.clone(),
+        accounts.clone(),
+        sessions.clone(),
+        users.clone(),
+    );
     let auth = Arc::new(AuthInteractor::new(
         application::auth::AuthDeps {
             sessions: sessions.clone(),
             attempts: Arc::new(FakeAttemptStore::default()),
-            configs: Arc::new(FakeProviderConfigStore { providers }),
-            accounts,
+            configs: configs.clone(),
+            accounts: accounts.clone(),
             identity_client: identity_client.clone(),
             random: Arc::new(FakeRandom),
         },
@@ -329,6 +340,9 @@ async fn fixture() -> Fixture {
     ));
 
     Fixture {
+        configs,
+        management,
+        accounts,
         auth,
         identity_client,
         sessions,
@@ -784,4 +798,89 @@ async fn provider_summaries_use_display_name_and_fall_back_to_id() {
     let gh = summaries.iter().find(|p| p.id == "gh").unwrap();
     assert_eq!(gh.name, "GitHub 登录");
     assert_eq!(gh.kind, "github");
+}
+
+#[tokio::test]
+async fn invalid_stored_providers_fail_before_network_or_identity_writes() {
+    for corruption in [
+        "missing-issuer",
+        "invalid-issuer",
+        "duplicate-id",
+        "empty-client",
+    ] {
+        let f = fixture().await;
+        let mut providers = f.configs.providers.lock().unwrap().clone();
+        match corruption {
+            "missing-issuer" => providers[0].issuer = None,
+            "invalid-issuer" => providers[0].issuer = Some("http://idp.example".into()),
+            "duplicate-id" => providers.push(providers[0].clone()),
+            _ => providers[0].client_id.clear(),
+        }
+        *f.configs.providers.lock().unwrap() = providers.clone();
+        assert!(
+            matches!(
+                f.auth.login_start("idp", "/").await,
+                Err(UseCaseError::Repository(_))
+            ),
+            "{corruption}"
+        );
+        assert!(matches!(
+            f.auth.list_provider_summaries().await,
+            Err(UseCaseError::Repository(_))
+        ));
+        assert!(matches!(
+            f.management.provider_settings().await,
+            Err(UseCaseError::Repository(_))
+        ));
+        assert!(matches!(
+            f.management
+                .bind_external_id(&Actor::bootstrap_cli(), "member", "idp", "new-sub", None)
+                .await,
+            Err(UseCaseError::Repository(_))
+        ));
+        assert!(matches!(
+            f.management
+                .unbind_external_id(&Actor::bootstrap_cli(), "member", "idp", "sub-42")
+                .await,
+            Err(UseCaseError::Repository(_))
+        ));
+        assert!(matches!(
+            f.management
+                .save_providers(&Actor::bootstrap_cli(), &providers, 1)
+                .await,
+            Err(UseCaseError::Invalid(_))
+        ));
+        assert!(
+            f.identity_client
+                .authorize_requests
+                .lock()
+                .unwrap()
+                .is_empty()
+        );
+        assert!(f.identity_client.exchanges.lock().unwrap().is_empty());
+        assert_eq!(f.accounts.bindings.lock().unwrap().len(), 1);
+        assert!(f.sessions.sessions.lock().unwrap().is_empty());
+    }
+    let f = fixture().await;
+    let mut config = f.configs.providers.lock().unwrap()[0].clone();
+    config.issuer = None;
+    assert!(matches!(
+        application::auth::provider_identity_key(&config),
+        Err(UseCaseError::Repository(_))
+    ));
+}
+
+#[tokio::test]
+async fn callback_rechecks_stored_configuration_before_exchange() {
+    let f = fixture().await;
+    let (_, binding) = begin_login(&f, "idp", "/").await;
+    f.configs.providers.lock().unwrap()[0].issuer = None;
+    assert!(matches!(
+        f.auth
+            .login_callback("idp", "code", &binding, Some(&binding))
+            .await,
+        Err(UseCaseError::Repository(_))
+    ));
+    assert!(f.identity_client.exchanges.lock().unwrap().is_empty());
+    assert!(f.sessions.sessions.lock().unwrap().is_empty());
 }

@@ -10,7 +10,35 @@ use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
 #[derive(Default)]
-struct QuerySpy(Mutex<Vec<(Option<Uuid>, ObservedFilter)>>);
+struct QuerySpy(
+    Mutex<Vec<(Option<Uuid>, ObservedFilter)>>,
+    Mutex<Vec<String>>,
+    Mutex<Option<domain::identity::UserSnapshot>>,
+);
+
+#[async_trait::async_trait]
+impl application::ports::UserQuery for QuerySpy {
+    async fn find_by_id(
+        &self,
+        _: Uuid,
+    ) -> Result<Option<domain::identity::UserSnapshot>, UseCaseError> {
+        unreachable!()
+    }
+    async fn find_by_username(
+        &self,
+        name: &str,
+    ) -> Result<Option<domain::identity::UserSnapshot>, UseCaseError> {
+        self.1.lock().unwrap().push(name.into());
+        Ok(self.2.lock().unwrap().clone())
+    }
+    async fn list_admin(
+        &self,
+        _: i64,
+        _: i64,
+    ) -> Result<Vec<application::ports::AdminUserRow>, UseCaseError> {
+        unreachable!()
+    }
+}
 
 struct ObservedFilter {
     limit: i64,
@@ -69,7 +97,7 @@ fn actor(permissions: &[&str]) -> Actor {
 #[tokio::test]
 async fn normal_and_trash_lists_authorize_before_querying() {
     let spy = Arc::new(QuerySpy::default());
-    let queries = ContentQueries::new(spy.clone(), spy.clone());
+    let queries = ContentQueries::new(spy.clone(), spy.clone(), spy.clone());
     let own = actor(&["post.read"]);
     let any = actor(&["post.read_any"]);
     let outsider = actor(&[]);
@@ -115,7 +143,7 @@ async fn normal_and_trash_lists_authorize_before_querying() {
 #[tokio::test]
 async fn invalid_filters_and_overflowing_pages_never_reach_storage() {
     let spy = Arc::new(QuerySpy::default());
-    let queries = ContentQueries::new(spy.clone(), spy.clone());
+    let queries = ContentQueries::new(spy.clone(), spy.clone(), spy.clone());
     let reader = actor(&["post.read", "page.read"]);
     let mut requests: Vec<_> = [0, -1, i64::MAX]
         .into_iter()
@@ -150,7 +178,7 @@ async fn invalid_filters_and_overflowing_pages_never_reach_storage() {
 #[tokio::test]
 async fn page_metadata_and_validated_filters_reach_storage() {
     let spy = Arc::new(QuerySpy::default());
-    let queries = ContentQueries::new(spy.clone(), spy.clone());
+    let queries = ContentQueries::new(spy.clone(), spy.clone(), spy.clone());
     let reader = actor(&["post.read", "page.read"]);
     let request = ContentListRequest {
         page: 3,
@@ -178,7 +206,7 @@ async fn page_metadata_and_validated_filters_reach_storage() {
 #[tokio::test]
 async fn unauthorized_invalid_filters_are_rejected_before_validation() {
     let spy = Arc::new(QuerySpy::default());
-    let queries = ContentQueries::new(spy.clone(), spy.clone());
+    let queries = ContentQueries::new(spy.clone(), spy.clone(), spy.clone());
     let outsider = actor(&[]);
     let request = ContentListRequest {
         page: 0,
@@ -197,4 +225,85 @@ async fn unauthorized_invalid_filters_are_rejected_before_validation() {
         Err(UseCaseError::Forbidden)
     ));
     assert!(spy.0.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn author_lookup_authorizes_before_resolving_and_preserves_target_rules() {
+    let spy = Arc::new(QuerySpy::default());
+    let queries = ContentQueries::new(spy.clone(), spy.clone(), spy.clone());
+    let own = actor(&["post.read"]);
+    let any = actor(&["post.read_any"]);
+    for trash in [false, true] {
+        for name in ["self", "missing", "bad/name", " "] {
+            assert!(matches!(
+                queries
+                    .posts_by_author(
+                        &own,
+                        Some(name),
+                        ContentListRequest {
+                            trash,
+                            ..Default::default()
+                        }
+                    )
+                    .await,
+                Err(UseCaseError::Forbidden)
+            ));
+        }
+        assert!(spy.1.lock().unwrap().is_empty());
+        for name in [None, Some("")] {
+            queries
+                .posts_by_author(
+                    &own,
+                    name,
+                    ContentListRequest {
+                        trash,
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap();
+        }
+        assert!(spy.1.lock().unwrap().is_empty());
+    }
+    assert!(
+        spy.0
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|(id, _)| *id == Some(own.user_id.0))
+    );
+    assert!(matches!(
+        queries
+            .posts_by_author(&any, Some("missing"), Default::default())
+            .await,
+        Err(UseCaseError::NotFound(_))
+    ));
+    let snapshot =
+        domain::identity::User::new("author", None, None, time::OffsetDateTime::UNIX_EPOCH)
+            .unwrap()
+            .snapshot();
+    *spy.2.lock().unwrap() = Some(snapshot.clone());
+    queries
+        .posts_by_author(&any, Some(" AUTHOR "), Default::default())
+        .await
+        .unwrap();
+    assert_eq!(spy.1.lock().unwrap().last().unwrap(), "author");
+    assert_eq!(spy.0.lock().unwrap().last().unwrap().0, Some(snapshot.id));
+    let before = spy.0.lock().unwrap().len();
+    for deleted in [false, true] {
+        let mut inactive = snapshot.clone();
+        if deleted {
+            inactive.deleted_at = Some(time::OffsetDateTime::UNIX_EPOCH);
+        } else {
+            inactive.status = domain::identity::UserStatus::Disabled;
+        }
+        *spy.2.lock().unwrap() = Some(inactive);
+        assert!(matches!(
+            queries
+                .posts_by_author(&any, Some("author"), Default::default())
+                .await,
+            Err(UseCaseError::Forbidden)
+        ));
+    }
+    assert_eq!(spy.0.lock().unwrap().len(), before);
 }

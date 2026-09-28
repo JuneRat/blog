@@ -360,6 +360,8 @@ pub struct OAuthConfigSnapshot {
 
 #[async_trait]
 pub trait OAuthConfigStore: Send + Sync {
+    /// 返回通过共享语义校验的完整配置；缺少分组返回空配置/版本 0。
+    /// 损坏行返回 Repository，不静默跳过提供商或把损坏当成未配置。
     async fn read(&self) -> Result<OAuthConfigSnapshot, UseCaseError>;
     async fn list(&self) -> Result<Vec<ProviderConfig>, UseCaseError> {
         Ok(self.read().await?.providers)

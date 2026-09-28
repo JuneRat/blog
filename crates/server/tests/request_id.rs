@@ -170,8 +170,9 @@ async fn json_logs_preserve_request_context_and_exclude_query_secrets() {
         .iter()
         .find(|record| record["fields"]["message"] == "请求完成")
         .unwrap();
-    assert_eq!(record["span"]["request_id"], id.unwrap());
-    assert_eq!(record["span"]["route"], "/forbidden");
+    assert_eq!(record["fields"]["request_id"], id.unwrap());
+    assert_eq!(record["fields"]["route"], "/forbidden");
+    assert!(record.get("span").is_none(), "完成记录不应重复请求上下文");
     assert_eq!(record["fields"]["status"], 403);
     assert!(record["fields"]["elapsed_ms"].is_number());
 }

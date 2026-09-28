@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use crate::error::UseCaseError;
 use crate::identity::{Actor, authorize_own_or_any};
-use crate::ports::{AdminPageQuery, AdminPostQuery};
+use crate::ports::{AdminPageQuery, AdminPostQuery, UserQuery};
 pub use domain::content::{Visibility, page::PageStatus, post::PostStatus};
 use domain::identity::UserId;
 
@@ -155,11 +155,53 @@ impl TryFrom<ContentListRequest> for PageListFilter {
 pub struct ContentQueries {
     posts: Arc<dyn AdminPostQuery>,
     pages: Arc<dyn AdminPageQuery>,
+    users: Arc<dyn UserQuery>,
 }
 
 impl ContentQueries {
-    pub fn new(posts: Arc<dyn AdminPostQuery>, pages: Arc<dyn AdminPageQuery>) -> Self {
-        Self { posts, pages }
+    pub fn new(
+        posts: Arc<dyn AdminPostQuery>,
+        pages: Arc<dyn AdminPageQuery>,
+        users: Arc<dyn UserQuery>,
+    ) -> Self {
+        Self {
+            posts,
+            pages,
+            users,
+        }
+    }
+
+    /// 显式作者筛选先检查 read_any，再解析用户名；普通列表与回收站共用。
+    /// 缺省/空字符串代表本人。即使显式指定本人用户名，也要求 read_any，
+    /// 不通过用户名是否存在、是否合法或是否停用的差异泄露账号信息。
+    pub async fn posts_by_author(
+        &self,
+        actor: &Actor,
+        author: Option<&str>,
+        request: ContentListRequest,
+    ) -> Result<ContentPage<AdminPostSummary>, UseCaseError> {
+        let author = match author.filter(|name| !name.is_empty()) {
+            None => actor.user_id,
+            Some(name) => {
+                if !actor.has_permission("post.read_any") {
+                    return Err(UseCaseError::Forbidden);
+                }
+                let name = domain::identity::normalize_username(name)
+                    .map_err(|error| UseCaseError::Invalid(error.to_string()))?;
+                let snapshot = self
+                    .users
+                    .find_by_username(&name)
+                    .await?
+                    .ok_or_else(|| UseCaseError::NotFound(format!("用户 {name}")))?;
+                let user = domain::identity::User::reconstitute(snapshot)
+                    .map_err(|error| UseCaseError::Repository(error.to_string()))?;
+                if !user.is_active() {
+                    return Err(UseCaseError::Forbidden);
+                }
+                user.id()
+            }
+        };
+        self.posts(actor, author, request).await
     }
 
     /// 本人须有 post.read，他人须有 post.read_any；any 同样覆盖本人。

@@ -168,5 +168,6 @@ pub fn content_queries(pool: &Database) -> Arc<application::content_queries::Con
     Arc::new(application::content_queries::ContentQueries::new(
         query.clone(),
         query,
+        Arc::new(infrastructure::PostgresUserRepository::new(pool.clone())),
     ))
 }

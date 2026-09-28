@@ -29,6 +29,8 @@ flowchart TD
     application --> domain
 ```
 
+管理 HTTP 适配器位于 `interfaces::http_admin`，按 posts/pages/tags/categories/series/settings 拆分；各资源持有自己的路由与传输 DTO，认证提取器和少量共用字段单独存放。CLI 同样按用户、角色、OAuth、文章、媒体和维护命令拆分；模块入口只保留总命令解析与稳定导出。持久化 `taxonomy` 按标签、分类、系列拆分，事务边界与锁顺序留在各资源适配器中。
+
 接口层调用应用用例，不创建数据库连接池或模板引擎。应用层定义所需能力，基础设施实现端口，`server` 注入具体实现。`domain` 只依赖 UUID、时间和错误类型库；`application` 使用基础类型、DTO 序列化与异步 trait，不在生产依赖中引入 Tokio、SQLx、Axum 或 MiniJinja。
 
 [后台 SPA](../apps/admin/package.json) 不属于 Cargo workspace。它使用 React、TypeScript、Vite、Ant Design 和 TanStack Query，通过管理 API 访问同一应用层；公开主题与后台组件各自独立。
@@ -43,7 +45,7 @@ flowchart TD
 |---|---|---|
 | `content` | Post/Page 提交、完整文章记录、公开查询 | [persistence/content.rs](../crates/infrastructure/src/persistence/content.rs) |
 | `content_queries` | 后台文章/页面摘要分页，不依赖写聚合 | [persistence/content_queries.rs](../crates/infrastructure/src/persistence/content_queries.rs) |
-| `taxonomy` | 分类、标签、系列及排序 | [persistence/taxonomy.rs](../crates/infrastructure/src/persistence/taxonomy.rs) |
+| `taxonomy` | 分类、标签、系列及排序 | [persistence/taxonomy/](../crates/infrastructure/src/persistence/taxonomy/mod.rs) |
 | `identity` | 用户、权限、身份提供商、密码、会话 | `persistence/identity.rs`、`rbac.rs`、`oauth.rs`、`password.rs`、`sessions.rs` |
 | `media` | 资产、引用、文件存储 | `persistence/media.rs`、`media_storage.rs` |
 | `site` | 站点与活动主题设置 | `settings.rs` |
@@ -77,7 +79,7 @@ Post/Page 的写端口接收领域聚合，快照用于读取和重建。端口�
 
 Post/Page 管理 API 及 Post CLI 通过稳定 UUID 定位资源，公开 URL 使用 slug；当前没有 Page CLI。草稿改名不改变管理身份，Post/Page 没有旧 slug 管理接口的兼容分支。具体版本、删除和路径规则见[内容生命周期](content-lifecycle.md)与[管理 API](admin-api.md)。
 
-后台普通列表及回收站统一由 `ContentQueries` 授权，依赖 `AdminPostQuery` / `AdminPageQuery` 窄端口；Post CLI 也走这条路径。Post/Page 写仓储只保留聚合加载与提交，不承担列表查询。独立查询适配器只投影列表展示字段，不读取 Markdown、HTML 或关联集合；原始请求在授权后用领域枚举解析，验证后的 Post/Page 筛选和摘要使用各自的状态类型及 `Visibility`，接口层再转换为稳定的字符串响应。媒体引用按文章、页面、账号及无发布状态的系列/站点分别建模，不混用状态枚举。固定每页 20 条，支持状态/可见性筛选，同一个只读 REPEATABLE READ 事务读取总数和分页。稳定排序以 UUID 打破时间戳并列；跨请求不承诺冻结快照。
+后台普通列表及回收站统一由 `ContentQueries` 授权，显式作者用户名筛选先检查 `post.read_any` 再查询用户，避免账号枚举；目标作者通过 `UserQuery` 解析并校验状态，不加载其权限。列表依赖 `AdminPostQuery` / `AdminPageQuery` 窄端口；Post CLI 也走这条路径。Post/Page 写仓储只保留聚合加载与提交，不承担列表查询。独立查询适配器只投影列表展示字段，不读取 Markdown、HTML 或关联集合；原始请求在授权后用领域枚举解析，验证后的 Post/Page 筛选和摘要使用各自的状态类型及 `Visibility`，接口层再转换为稳定的字符串响应。媒体引用按文章、页面、账号及无发布状态的系列/站点分别建模，不混用状态枚举。固定每页 20 条，支持状态/可见性筛选，同一个只读 REPEATABLE READ 事务读取总数和分页。稳定排序以 UUID 打破时间戳并列；跨请求不承诺冻结快照。
 
 公开读取采用面向页面的查询 DTO，共用同一个数据库，不为公开读取重建聚合。公开 Post/Page 查询只返回 `published + public + 未软删除 + 发布时间已到` 内容；公开详情直接使用持久化 `content_html`。sitemap 按剩余额度限制文章、Page 和三类目录的 SQL 查询，所有来源共用 50,000 条上限，耗尽后跳过后续查询。当前没有公开页面缓存或跨请求主题查询缓存，每次请求重新读取公开状态。运行池大小、获取/空闲/查询超时和建连退避可部署配置，容量测试见[公开读取容量验证](public-read-capacity.md)。浏览器和代理的缓存行为仍取决于部署配置，应用内部无缓存不等于能够撤回已发送的响应。
 

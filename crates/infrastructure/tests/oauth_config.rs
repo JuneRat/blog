@@ -374,3 +374,43 @@ async fn initial_configuration_and_audit_failure_preserve_installation_and_atomi
     assert_eq!(store.read().await.unwrap(), before);
     assert_eq!(audit_count(&pool).await, audits);
 }
+
+#[tokio::test]
+async fn corrupt_provider_json_is_rejected_without_mutating_settings_or_audit() {
+    let _guard = SERIAL.lock().await;
+    let pool = database().await;
+    let store = configs(&pool);
+    let valid = serde_json::to_value(provider("idp", "https://idp.example")).unwrap();
+    let mut missing_issuer = valid.clone();
+    missing_issuer.as_object_mut().unwrap().remove("issuer");
+    let mut invalid_issuer = valid.clone();
+    invalid_issuer["issuer"] = serde_json::json!("http://idp.example");
+    let mut empty_client = valid.clone();
+    empty_client["client_id"] = serde_json::json!("");
+    for providers in [
+        serde_json::json!([missing_issuer]),
+        serde_json::json!([invalid_issuer]),
+        serde_json::json!([valid.clone(), valid]),
+        serde_json::json!([empty_client]),
+    ] {
+        let value = serde_json::json!({"providers": providers});
+        sqlx::query("INSERT INTO settings (key,value) VALUES ('oauth',$1) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value")
+            .bind(&value).execute(&pool).await.unwrap();
+        assert!(matches!(
+            store.read().await,
+            Err(UseCaseError::Repository(_))
+        ));
+        assert!(matches!(
+            store.list().await,
+            Err(UseCaseError::Repository(_))
+        ));
+        // A rejected read does not silently remove or rewrite a provider or its version.
+        let stored: (serde_json::Value, i64) =
+            sqlx::query_as("SELECT value,version FROM settings WHERE key='oauth'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(stored, (value, 1));
+        assert_eq!(audit_count(&pool).await, 0);
+    }
+}

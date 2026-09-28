@@ -13,6 +13,7 @@ pub mod identity;
 pub mod installation;
 pub mod media;
 pub mod media_cleanup;
+pub mod oauth_config;
 pub mod page;
 pub mod password;
 pub mod ports;

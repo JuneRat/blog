@@ -292,11 +292,11 @@ async fn maintenance_does_not_require_a_working_website() {
                 "{}",
                 std::fs::read_to_string(&stderr).unwrap()
             );
-            let log = std::fs::read_to_string(&stdout).unwrap();
-            if let Some(base) = log
-                .lines()
-                .find_map(|line| line.strip_prefix("公开站点已启动："))
-            {
+            let log = std::fs::read_to_string(&stderr).unwrap();
+            if let Some(base) = log.lines().find_map(|line| {
+                line.split_once("  INFO 公开站点已启动：")
+                    .map(|(_, url)| url)
+            }) {
                 break base.to_string();
             }
             tokio::time::sleep(std::time::Duration::from_millis(25)).await;
@@ -318,6 +318,10 @@ async fn maintenance_does_not_require_a_working_website() {
             .is_success()
     );
     drop(server);
+    assert!(
+        std::fs::read_to_string(&stdout).unwrap().is_empty(),
+        "运行日志不得进入 stdout"
+    );
     std::fs::remove_dir_all(logs).unwrap();
     let pending: i32 =
         sqlx::query_scalar("SELECT content_render_version FROM posts WHERE slug='assembly-post'")

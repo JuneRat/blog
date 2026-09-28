@@ -130,6 +130,9 @@ pub fn content_queries(pool: &sqlx::PgPool) -> Arc<application::content_queries:
     Arc::new(application::content_queries::ContentQueries::new(
         query.clone(),
         query,
+        Arc::new(infrastructure::PostgresUserRepository::new(database(
+            pool.clone(),
+        ))),
     ))
 }
 

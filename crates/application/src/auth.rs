@@ -13,6 +13,7 @@ use uuid::Uuid;
 
 use crate::error::UseCaseError;
 use crate::identity::{Actor, ActorChannel, UserInteractor};
+use crate::oauth_config::{validate_provider_configs, validate_stored_providers};
 use crate::ports::{
     ExternalIdentityClient, OAuthAccountStore, OAuthAttempt, OAuthAttemptStore, OAuthConfigStore,
     ProviderConfig, ProviderKind, SESSION_COOKIE, SecureRandom, SessionRecord, SessionStore,
@@ -283,11 +284,9 @@ impl AuthInteractor {
 
     /// 公开登录页用的提供商摘要（只读、匿名可访问）。
     pub async fn list_provider_summaries(&self) -> Result<Vec<ProviderSummary>, UseCaseError> {
-        Ok(self
-            .deps
-            .configs
-            .list()
-            .await?
+        let providers = self.deps.configs.list().await?;
+        validate_stored_providers(&providers)?;
+        Ok(providers
             .into_iter()
             .map(|config| ProviderSummary {
                 name: config.name.clone().unwrap_or_else(|| config.id.clone()),
@@ -323,13 +322,17 @@ impl OAuthManagementInteractor {
 
     /// OAuth 配置管理（`oauth.manage`；受保护配置不受普通 settings 权限覆盖）。
     pub async fn list_providers(&self) -> Result<Vec<ProviderConfig>, UseCaseError> {
-        self.configs.list().await
+        let providers = self.configs.list().await?;
+        validate_stored_providers(&providers)?;
+        Ok(providers)
     }
 
     pub async fn provider_settings(
         &self,
     ) -> Result<crate::ports::OAuthConfigSnapshot, UseCaseError> {
-        self.configs.read().await
+        let snapshot = self.configs.read().await?;
+        validate_stored_providers(&snapshot.providers)?;
+        Ok(snapshot)
     }
 
     pub async fn save_providers(
@@ -345,13 +348,7 @@ impl OAuthManagementInteractor {
         if expected_version < 0 {
             return Err(UseCaseError::Invalid("OAuth 设置版本不能为负数".into()));
         }
-        let mut ids = std::collections::BTreeSet::new();
-        for config in providers {
-            validate_provider_config(config)?;
-            if !ids.insert(&config.id) {
-                return Err(UseCaseError::Invalid("OAuth 提供商 id 不能重复".into()));
-            }
-        }
+        validate_provider_configs(providers)?;
         self.configs
             .save(providers, expected_version, actor.audit_context())
             .await
@@ -371,7 +368,7 @@ impl OAuthManagementInteractor {
             return Err(UseCaseError::Forbidden);
         }
         let config = find_provider_config(self.configs.as_ref(), provider_id).await?;
-        let provider_key = provider_identity_key(&config);
+        let provider_key = provider_identity_key(&config)?;
         let target = self.users.actor_for_username(username).await?;
         self.accounts
             .bind(
@@ -397,7 +394,7 @@ impl OAuthManagementInteractor {
             return Err(UseCaseError::Forbidden);
         }
         let config = find_provider_config(self.configs.as_ref(), provider_id).await?;
-        let provider_key = provider_identity_key(&config);
+        let provider_key = provider_identity_key(&config)?;
         let target = self.users.actor_for_username(username).await?;
         self.accounts
             .unbind(
@@ -425,19 +422,23 @@ async fn find_provider_config(
     configs: &dyn OAuthConfigStore,
     provider_id: &str,
 ) -> Result<ProviderConfig, UseCaseError> {
-    configs
-        .list()
-        .await?
+    let providers = configs.list().await?;
+    validate_stored_providers(&providers)?;
+    providers
         .into_iter()
         .find(|config| config.id == provider_id)
         .ok_or_else(|| UseCaseError::NotFound(format!("OAuth 提供商 {provider_id}")))
 }
 
 /// 身份命名空间键：OIDC 用精确 issuer，GitHub 用固定平台实例标识。
-pub fn provider_identity_key(config: &ProviderConfig) -> String {
+pub fn provider_identity_key(config: &ProviderConfig) -> Result<String, UseCaseError> {
+    validate_stored_providers(std::slice::from_ref(config))?;
     match config.kind {
-        ProviderKind::Oidc => config.issuer.clone().expect("OIDC 配置已校验 issuer 必填"),
-        ProviderKind::GitHub => "github".to_string(),
+        ProviderKind::Oidc => config
+            .issuer
+            .clone()
+            .ok_or_else(|| UseCaseError::Repository("settings.oauth 的 OIDC issuer 缺失".into())),
+        ProviderKind::GitHub => Ok("github".to_string()),
     }
 }
 
@@ -447,36 +448,6 @@ fn provider_kind_label(kind: ProviderKind) -> &'static str {
         ProviderKind::Oidc => "oidc",
         ProviderKind::GitHub => "github",
     }
-}
-
-fn validate_provider_config(config: &ProviderConfig) -> Result<(), UseCaseError> {
-    if config.id.is_empty() || config.id.len() > 64 {
-        return Err(UseCaseError::Invalid("提供商 id 不合法".into()));
-    }
-    if config.id.contains('/') || config.id.contains('.') {
-        return Err(UseCaseError::Invalid("提供商 id 不能包含 / 或 .".into()));
-    }
-    if let Some(name) = config.name.as_deref() {
-        let name = name.trim();
-        if name.is_empty() {
-            return Err(UseCaseError::Invalid("提供商展示名不能为空白".into()));
-        }
-        if name.chars().count() > 100 {
-            return Err(UseCaseError::Invalid("提供商展示名过长".into()));
-        }
-    }
-    if config.secret_ref.is_empty() {
-        return Err(UseCaseError::Invalid("secret_ref 不能为空".into()));
-    }
-    if matches!(config.kind, ProviderKind::Oidc) {
-        let issuer = config.issuer.as_deref().unwrap_or("");
-        if !issuer.starts_with("https://") || issuer.len() < 12 {
-            return Err(UseCaseError::Invalid(
-                "OIDC issuer 必须是精确 https URL".into(),
-            ));
-        }
-    }
-    Ok(())
 }
 
 /// 回跳路径白名单：仅本站相对路径，禁止协议相对与外站。

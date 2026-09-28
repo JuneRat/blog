@@ -81,6 +81,10 @@ async fn start_with_migrations(
     for _ in 0..200 {
         let text = std::fs::read_to_string(&server.log).unwrap();
         for line in text.lines() {
+            // Operator notices now include a timestamp and level on stderr.
+            let Some((_, line)) = line.split_once("  INFO ") else {
+                continue;
+            };
             if let Some(url) = line.strip_prefix("首次安装：") {
                 server.url = url.trim_end_matches("/install").to_owned();
             }

@@ -4,7 +4,7 @@
 
 [新建库基线](database-current.md)已接入，身份、sessions、媒体、内容、目录、评论及保留期设置已适配。
 
-路由与传输 DTO 的实现入口：[内容和设置](../crates/interfaces/src/http_admin.rs)、[身份](../crates/interfaces/src/http_identity.rs)、[媒体](../crates/interfaces/src/http_media.rs)、[认证](../crates/interfaces/src/http_auth.rs)。
+路由与传输 DTO 的实现入口：[内容和设置](../crates/interfaces/src/http_admin/mod.rs)、[身份](../crates/interfaces/src/http_identity.rs)、[媒体](../crates/interfaces/src/http_media.rs)、[认证](../crates/interfaces/src/http_auth.rs)。
 
 ## 通用约定
 

@@ -14,6 +14,7 @@ use sqlx::{Executor, PgPool, Row};
 use uuid::Uuid;
 
 use application::error::{ConflictKind, UseCaseError};
+use application::oauth_config::{validate_provider_configs, validate_stored_providers};
 use application::ports::{
     ExternalIdentity, ExternalIdentityClient, OAuthAccountStore, OAuthConfigSnapshot,
     OAuthConfigStore, ProviderConfig, ProviderKind, SecretSource,
@@ -452,12 +453,14 @@ async fn read_oauth_settings(
             .fetch_optional(executor)
             .await
             .map_err(|e| UseCaseError::Repository(e.to_string()))?;
-    Ok(value
+    let snapshot = value
         .map(|(value, version)| OAuthConfigSnapshot {
             providers: value.0.providers,
             version,
         })
-        .unwrap_or_default())
+        .unwrap_or_default();
+    validate_stored_providers(&snapshot.providers)?;
+    Ok(snapshot)
 }
 
 fn provider_namespaces(providers: &[ProviderConfig]) -> BTreeSet<&str> {
@@ -482,6 +485,7 @@ impl OAuthConfigStore for PostgresOAuthConfigStore {
         expected_version: i64,
         audit_actor: application::audit::AuditContext,
     ) -> Result<i64, UseCaseError> {
+        validate_provider_configs(providers)?;
         let value = serde_json::json!({
             "schema_version": 1,
             "providers": providers,
