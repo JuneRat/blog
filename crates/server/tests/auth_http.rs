@@ -131,6 +131,7 @@ async fn fresh_stack_with(secure_cookies: bool) -> Stack {
                 secret_ref: "IDP_SECRET".into(),
                 scopes: vec![],
             }],
+            0,
             None.into(),
         )
         .await

@@ -159,6 +159,7 @@ async fn fresh_stack_with(throttle_config: ThrottleConfig) -> Stack {
                 secret_ref: "IDP_SECRET".into(),
                 scopes: vec![],
             }],
+            0,
             None.into(),
         )
         .await

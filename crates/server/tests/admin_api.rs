@@ -187,6 +187,7 @@ async fn fresh_stack() -> Stack {
                 secret_ref: "IDP_SECRET".into(),
                 scopes: vec![],
             }],
+            0,
             None.into(),
         )
         .await
@@ -301,6 +302,14 @@ async fn fresh_stack() -> Stack {
     };
 
     let router = auth_router(auth_state)
+        .merge(interfaces::http_content_preview::content_preview_router(
+            interfaces::http_content_preview::ContentPreviewState {
+                preview: Arc::new(application::content_preview::ContentPreview::new(Arc::new(
+                    infrastructure::RenderingRuntime::default(),
+                ))),
+                admin: admin_state.clone(),
+            },
+        ))
         .merge(admin_router(admin_state.clone()))
         .merge(posts_router(admin_state.clone()))
         .merge(interfaces::http_admin::pages_router(admin_state.clone()))
@@ -464,6 +473,89 @@ fn response_id(body: &str) -> Uuid {
         .unwrap()
         .parse()
         .unwrap()
+}
+
+#[tokio::test]
+async fn content_preview_is_authorized_sanitized_non_persistent_and_not_cached() {
+    let _g = SERIAL.lock().await;
+    let stack = fresh_stack().await;
+    let path = "/api/admin/v1/content-preview";
+    let source = "# 预览\n\n<script>alert(1)</script>\n\n[链接](javascript:alert(1))\n\n**正文**";
+    let payload = serde_json::json!({"content": source}).to_string();
+    let (status, _) = api(&stack.router, "POST", path, None, None, Some(&payload)).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (cookie, csrf) = login_as(&stack.router, &stack.idp, "stranger").await;
+    let (status, _) = api(
+        &stack.router,
+        "POST",
+        path,
+        Some(&cookie),
+        Some(&csrf),
+        Some(&payload),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (cookie, csrf) = login_as(&stack.router, &stack.idp, "author").await;
+    let (status, _) = api(
+        &stack.router,
+        "POST",
+        path,
+        Some(&cookie),
+        None,
+        Some(&payload),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let before: (i64, i64, i64, i64) = sqlx::query_as(
+        "SELECT (SELECT count(*) FROM posts),(SELECT count(*) FROM pages),(SELECT count(*) FROM media_refs),(SELECT count(*) FROM audit_logs)"
+    ).fetch_one(&stack.pool).await.unwrap();
+    let response = stack
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(path)
+                .header("cookie", format!("blog_session={cookie}"))
+                .header("x-csrf-token", &csrf)
+                .header("content-type", "application/json")
+                .body(Body::from(payload))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["cache-control"], "no-store");
+    let json: serde_json::Value =
+        serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    let html = json["content_html"].as_str().unwrap();
+    assert!(html.contains("<h1>预览</h1>"));
+    assert!(html.contains("<strong>正文</strong>"));
+    assert!(!html.contains("<script"));
+    assert!(!html.contains("javascript:"));
+    let after: (i64, i64, i64, i64) = sqlx::query_as(
+        "SELECT (SELECT count(*) FROM posts),(SELECT count(*) FROM pages),(SELECT count(*) FROM media_refs),(SELECT count(*) FROM audit_logs)"
+    ).fetch_one(&stack.pool).await.unwrap();
+    assert_eq!(before, after);
+    let (status, saved) = api(
+        &stack.router,
+        "POST",
+        "/api/admin/v1/posts",
+        Some(&cookie),
+        Some(&csrf),
+        Some(&serde_json::json!({"title":"Preview parity", "content":source}).to_string()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{saved}");
+    let persisted: String = sqlx::query_scalar("SELECT content_html FROM posts WHERE id=$1")
+        .bind(response_id(&saved))
+        .fetch_one(&stack.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        html, persisted,
+        "preview must match the publication renderer"
+    );
 }
 
 /// 管理请求只校验一次会话：提取器不再「先取记录、再解析 Actor」各校验一次。

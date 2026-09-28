@@ -111,14 +111,18 @@ struct FakeProviderConfigStore {
 
 #[async_trait::async_trait]
 impl OAuthConfigStore for FakeProviderConfigStore {
-    async fn list(&self) -> Result<Vec<ProviderConfig>, UseCaseError> {
-        Ok(self.providers.clone())
+    async fn read(&self) -> Result<application::ports::OAuthConfigSnapshot, UseCaseError> {
+        Ok(application::ports::OAuthConfigSnapshot {
+            providers: self.providers.clone(),
+            version: 1,
+        })
     }
     async fn save(
         &self,
         _providers: &[ProviderConfig],
+        _expected_version: i64,
         _audit_actor: application::audit::AuditContext,
-    ) -> Result<(), UseCaseError> {
+    ) -> Result<i64, UseCaseError> {
         unimplemented!("测试不覆盖保存")
     }
 }

@@ -47,8 +47,20 @@ curl -fsS http://127.0.0.1:9090/metrics
 | `blog_database_pool_connections{state}` | 运行池 `size`、`idle`、`in_use`、`max` 的采样快照；不包含临时安装连接 |
 | `blog_installation_complete` | 运行池已装配为 1，尚未安装为 0；它不是数据库健康探针 |
 | `blog_build_info{version,revision}` | 当前构建身份，值为 1 |
+| `blog_render_waiting{kind}` | 等待渲染许可的任务数 |
+| `blog_render_active{kind}` | 实际执行中的阻塞渲染任务数；调用者已超时的工作仍计入，直到实际退出 |
+| `blog_render_queue_duration_seconds{kind}` | 等待渲染许可的耗时，包含取消和未获得许可的等待 |
+| `blog_render_queue_total{kind,result}` | 已结束的许可等待次数，结果为 `admitted/timeout/cancelled/closed` |
+| `blog_render_execution_duration_seconds{kind}` | 实际 worker 执行耗时，不含阻塞池调度等待 |
+| `blog_render_completed_total{kind,result}` | 已退出的渲染任务数，结果为 `success/error` |
+| `blog_render_execution_timeouts_total{kind}` | 调用者等待渲染结果超时次数；不表示 worker 已被终止 |
+| `blog_scheduled_publication_runs_total{result}` | 预约发布轮询完成次数，结果为 `success/error` |
+| `blog_scheduled_publication_run_duration_seconds` | 每次预约轮询处理耗时 |
+| `blog_scheduled_publication_last_success_timestamp_seconds` | 最近成功轮询的 Unix 时间；首次成功前为 0 |
 
 标签使用路由模板，如 `/api/admin/posts/{id}`，未知路径统一为 `unmatched`，扩展 HTTP 方法统一为 `OTHER`。不将 slug、用户 ID、请求编号或查询参数放入指标标签。每次进程重启计数归零；安装到运行的同进程切换保留计数。抓取时读取内存计数和连接池快照，不访问数据库，因此故障期间仍可抓取。
+
+渲染 `kind` 固定为 `content/comment/theme`。Markdown 缓存命中不启动 worker，因此不增加执行次数；等待许可期间取消计入队列的 `cancelled` 结果。预约指标描述服务中的轮询健康与耗时，不是从预约时间到实际发布的延迟；停机期间到期内容仍按[内容生命周期](content-lifecycle.md)补发，精确发布时间偏差需另行测量。
 
 ## 抓取与观察
 
@@ -80,6 +92,14 @@ histogram_quantile(0.95, sum by (le, route) (rate(blog_http_request_duration_sec
 # 运行池占用比例；多实例部署按 instance 区分。
 blog_database_pool_connections{state="in_use"}
   / ignoring(state) blog_database_pool_connections{state="max"}
+
+# 各类渲染的 p95 许可等待时间。
+histogram_quantile(0.95, sum by (le, kind) (rate(blog_render_queue_duration_seconds_bucket[5m])))
+
+# 距上次成功预约轮询的秒数；0 值须单独识别为尚未成功。
+time() - blog_scheduled_publication_last_success_timestamp_seconds
 ```
 
 CI 的 Compose 演练覆盖安装前后的探针、版本身份、JSON 请求关联、管理端口映射、数据库暂停后的两秒 readiness 失败、liveness 与指标继续响应，以及数据库恢复与容器替换。生产告警阈值、容量与 RPO/RTO 仍按[部署验收](product-roadmap.md)确定。
+
+每次候选部署在[上线验收记录](release-acceptance-template.md)填写告警阈值、持续时间、接收人和恢复时间目标，关联实际触发与恢复证据。混合压测的客户端延迟包含响应体及写入前的版本读取；上方 HTTP 直方图只统计单次请求到响应头的耗时，二者应分别展示。

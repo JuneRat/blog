@@ -525,15 +525,15 @@ describe("跨屏缓存一致性", () => {
     fireEvent.change(screen.getByLabelText("标题"), { target: { value: "关于我们" } });
     vi.mocked(api.updatePage).mockResolvedValue({ ...aboutDetail, title: "关于我们", version: 3 });
     vi.mocked(api.listPages).mockResolvedValue(contentPage([{ ...aboutPage, title: "关于我们", version: 3 }]));
-    fireEvent.click(screen.getByRole("button", { name: "保存并更新线上" }));
+    fireEvent.click(screen.getByRole("button", { name: /保存草稿|保存预约内容|更新已发布内容/ }));
     await waitFor(() => expect(api.updatePage).toHaveBeenCalledTimes(1));
 
     fireEvent.click(screen.getByRole("menuitem", { name: "独立页面" }));
     expect(await screen.findByText("关于我们")).toBeTruthy();
   });
 
-  // 与文章对称：先行保存成功、状态切换失败时，列表也必须反映保存结果。
-  it("页面撤回失败时，先行保存的结果仍会反映到列表", async () => {
+  // 撤回不应将编辑器里的未公开修改先更新到线上。
+  it("页面撤回失败时，保留本地输入且列表保持服务器内容", async () => {
     // aboutPage 是已发布状态，按钮是「撤回为草稿」，需要 page.unpublish（只影响本条用例）。
     state.permissions = ["page.create", "page.unpublish"];
     window.history.replaceState(null, "", paths.pages);
@@ -548,15 +548,16 @@ describe("跨屏缓存一致性", () => {
     vi.mocked(api.unpublishPage).mockRejectedValue(
       new ApiError(500, "撤回失败", "internal", "req-8"),
     );
-    vi.mocked(api.listPages).mockResolvedValue(contentPage([{ ...aboutPage, title: "关于我们", version: 3 }]));
 
     fireEvent.click(screen.getByRole("button", { name: "撤回为草稿" }));
-    await waitFor(() => expect(api.updatePage).toHaveBeenCalledTimes(1));
-    expect(api.unpublishPage).toHaveBeenCalledWith(aboutPage.id, 3);
+    await waitFor(() => expect(api.unpublishPage).toHaveBeenCalledWith(aboutPage.id, aboutDetail.version));
+    expect(api.updatePage).not.toHaveBeenCalled();
     expect(await screen.findByText(/撤回失败（错误编号 req-8）/)).toBeTruthy();
 
     fireEvent.click(screen.getByRole("menuitem", { name: "独立页面" }));
-    expect(await screen.findByText("关于我们")).toBeTruthy();
+    fireEvent.click(await screen.findByRole("button", { name: "放弃修改并离开" }));
+    expect(await screen.findByText("关于")).toBeTruthy();
+    expect(screen.queryByText("关于我们")).toBeNull();
   });
 });
 

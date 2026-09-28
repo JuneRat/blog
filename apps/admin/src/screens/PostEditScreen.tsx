@@ -1,3 +1,8 @@
+import { useEditorRequestGuard } from "../useEditorRequestGuard";
+import { ContentPreview } from "../components/ContentPreview";
+import { ContentConflict, conflictFields } from "../components/ContentConflict";
+import { useConflictSnapshot } from "../useConflictSnapshot";
+import { useLocalDraft } from "../localDraft";
 import { invalidateAfterWrite } from "../queryEffects";
 import { ContentLifecycleControls, statusLabel, type ContentAction } from "../components/ContentLifecycleControls";
 import { CommentSwitch } from "../components/CommentSwitch";
@@ -184,7 +189,7 @@ type TextAreaHandle = { resizableTextArea?: { textArea: HTMLTextAreaElement } };
  * 冲突策略（docs/content-lifecycle.md §1）：写入携带 expected_version；
  * 409 时**保留客户端编辑并提示处理**，不自动覆盖：
  * - 「重新加载」拉取服务器最新内容并丢弃本地改动；
- * - 「仍然覆盖」二次确认后，用**服务器最新 version** 重新提交本地内容。
+ * - 「仍然覆盖」二次确认后，绑定已展示的服务器版本提交本地内容。
  *
  * 值的唯一来源是 antd Form 的 store；`view` 只是给渲染与脏判断用的镜像，
  * 由 `onValuesChange`（同步回调）与写入函数共同维护，不另立第二份数据。
@@ -192,6 +197,12 @@ type TextAreaHandle = { resizableTextArea?: { textArea: HTMLTextAreaElement } };
  * 保留「请求飞行期间的新输入不被服务器响应覆盖」的既有语义。
  */
 export function PostEditScreen({ id }: { id: string | null }) {
+  const { me } = useAuth();
+  return <PostEditor key={me?.user_id ?? "anonymous"} id={id} />;
+}
+
+function PostEditor({ id }: { id: string | null }) {
+  const beginRequest = useEditorRequestGuard(id);
   const { me } = useAuth();
   const { modal } = AntdApp.useApp();
   const [formApi] = Form.useForm<FormState>();
@@ -226,6 +237,8 @@ export function PostEditScreen({ id }: { id: string | null }) {
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [conflict, setConflict] = useState(false);
+  const comparison = useConflictSnapshot({ active: conflict, id, load: api.getPost });
+  const localSavedRef = useRef<(id: string, version: number, merged: FormState, dirty: boolean) => void>(() => {});
   /** 图片面板是否展开（编辑器内插入图片）。 */
   const [mediaOpen, setMediaOpen] = useState(false);
   /** 正文输入框：插入位置取自它的真实选区。 */
@@ -283,7 +296,9 @@ export function PostEditScreen({ id }: { id: string | null }) {
       setPostStatus(post.status);
       setPublishedAt(post.published_at);
       setConflict(false);
-      return !formEquals(merged, server);
+      const stillDirty = !formEquals(merged, server);
+      if (sent !== undefined) localSavedRef.current(post.id, post.version, merged, stillDirty);
+      return stillDirty;
     },
     [readForm, writeForm],
   );
@@ -295,7 +310,7 @@ export function PostEditScreen({ id }: { id: string | null }) {
   const applyStatus = useCallback((post: PostDetail): void => {
     setVersion(post.version);
     setPostStatus(post.status);
-      setPublishedAt(post.published_at);
+    setPublishedAt(post.published_at);
     setConflict(false);
   }, []);
 
@@ -311,6 +326,23 @@ export function PostEditScreen({ id }: { id: string | null }) {
   /** 渲染镜像与最近一次服务器同步值的差异；用于离开确认（见 src/unsaved.tsx）。 */
   const dirty = !formEquals(view, baselineRef.current);
   useUnsavedGuard(dirty, "文章有未保存的修改，离开会丢失。");
+  const localDraft = useLocalDraft({
+    owner: me?.user_id, kind: "post", id,
+    ready: !loading && !formMismatch && (id !== null || formId === null),
+    disabled: busy || commentBusy,
+    dirty, value: view, template: EMPTY_FORM, baselineVersion: version,
+    onRestore: (value, savedVersion) => {
+      writeForm(value);
+      if (id !== null && savedVersion !== version) {
+        // Restored input still belongs to its original baseline, never to the freshly loaded version.
+        setVersion(savedVersion);
+        setConflict(true);
+        comparison.refresh();
+      }
+    },
+  });
+  localSavedRef.current = localDraft.saved;
+
   const queryClient = useQueryClient();
   /** 每次提交后同步使列表、目录统计、媒体引用和评论关联信息过期。 */
   const invalidateRelated = useCallback((): void => {
@@ -321,6 +353,10 @@ export function PostEditScreen({ id }: { id: string | null }) {
 
 
   useEffect(() => {
+    setBusy(false);
+    setNotice(null);
+    setError(null);
+    setConflict(false);
     if (id === null) {
       // 编辑页后退到新建页时组件会复用；清空全部编辑状态。
       // 创建成功的 null → ID 跳转仍由 loadedIdRef 保留已合并的新输入。
@@ -401,6 +437,11 @@ export function PostEditScreen({ id }: { id: string | null }) {
   }
 
   async function save(): Promise<void> {
+    const isCurrent = beginRequest();
+    if (localDraft.blocksEditing) {
+      setError("请先恢复或丢弃当前窗口的本机副本。");
+      return;
+    }
     // 表单不属于当前地址时绝不能写入：`expected_version` 会用上一篇的版本号
     // 打到另一个 ID 上，版本相同即静默覆盖。（加载途中同样适用，故用 formMismatch 而非 unloaded。）
     if (formMismatch) {
@@ -431,8 +472,9 @@ export function PostEditScreen({ id }: { id: string | null }) {
           series: seriesPayload(sent) ?? undefined,
         });
         // 先本地同步（含创建期间的新输入），再更新地址；效果钩子会跳过重载。
-        applyServer(created, sent);
         invalidateRelated();
+        if (!isCurrent()) return;
+        applyServer(created, sent);
         navigate(paths.editPost(created.id));
         return;
       }
@@ -442,70 +484,82 @@ export function PostEditScreen({ id }: { id: string | null }) {
         expected_version: version ?? undefined,
       });
       // 合并而不是整体覆盖：请求飞行期间的新输入必须保留。
-      const stillDirty = applyServer(saved, sent);
       invalidateRelated();
+      if (!isCurrent()) return;
+      const stillDirty = applyServer(saved, sent);
 
       setNotice(
-        stillDirty ? "已保存；等待期间的新改动尚未保存。" : "已保存（已发布内容直接更新线上）。",
+        stillDirty ? "已保存；等待期间的新改动尚未保存。" : "已保存。",
       );
     } catch (e) {
+      if (!isCurrent()) return;
       if (isVersionConflict(e)) {
         setConflict(true);
+        comparison.refresh();
       } else {
         setError(permissionMessageOf(e));
       }
     } finally {
-      setBusy(false);
+      if (isCurrent()) setBusy(false);
     }
   }
 
   /** 冲突动作一：丢弃本地改动，重新加载服务器最新内容。 */
   async function reloadFromServer(): Promise<void> {
+    const isCurrent = beginRequest();
     if (id === null) return;
     setError(null);
     setBusy(true);
     try {
-      applyServer(await api.getPost(id));
+      const result = await api.getPost(id);
+      if (!isCurrent()) return;
+      applyServer(result);
       setNotice("已重新加载服务器最新内容。");
     } catch (e) {
+      if (!isCurrent()) return;
       setError(permissionMessageOf(e));
     } finally {
-      setBusy(false);
+      if (isCurrent()) setBusy(false);
     }
   }
 
-  /** 冲突动作二：二次确认后用服务器最新 version 覆盖本地内容。 */
+  /** 冲突动作二：只覆盖已展示的服务器版本，发生新提交时仍拒绝覆盖。 */
   function overwriteWithLatest(): void {
-    if (id === null) return;
+    const isCurrent = beginRequest();
+    if (id === null || comparison.snapshot === null) return;
+    const latest = comparison.snapshot;
     modal.confirm({
-      title: "用当前编辑内容覆盖服务器上的最新版本？",
-      content: "将用你当前的编辑内容覆盖服务器上的最新版本，确定继续？",
+      title: `用当前编辑内容覆盖已展示的服务器版本 v${latest.version}？`,
+      content: "请先核对差异。若服务器再次变化，本次覆盖会被拒绝，本地输入会保留。",
       okButtonProps: { danger: true },
       onOk: async () => {
+        if (!isCurrent()) return;
         setError(null);
         setBusy(true);
         try {
-          const latest = await api.getPost(id);
-          // 等待 getPost 期间的新输入也要一起提交，不能在覆盖时丢掉。
+          // 确认期间继续输入时，提交当前输入；版本始终绑定已展示的快照。
           const sent = readForm();
           const saved = await api.updatePost(id, {
             ...editPayload(),
             expected_version: latest.version,
           });
-          const stillDirty = applyServer(saved, sent);
           invalidateRelated();
+          if (!isCurrent()) return;
+          const stillDirty = applyServer(saved, sent);
 
           setNotice(
             stillDirty ? "已覆盖保存；等待期间的新改动尚未保存。" : "已用服务器最新版本覆盖保存。",
           );
         } catch (e) {
+          if (!isCurrent()) return;
           if (isVersionConflict(e)) {
             setConflict(true);
+            comparison.refresh();
           } else {
             setError(permissionMessageOf(e));
           }
         } finally {
-          setBusy(false);
+          if (isCurrent()) setBusy(false);
         }
       },
     });
@@ -514,13 +568,14 @@ export function PostEditScreen({ id }: { id: string | null }) {
   /**
    * 发布/撤回。这两个动作只改状态、不写正文：如果先把服务器返回的旧正文回填表单，
    * 本地未保存的编辑会被静默丢弃，线上发布的也仍是上一版内容。
-   * 因此有未保存改动时先保存，再用保存得到的版本发布/撤回。
+   * 发布/预约先保存；撤回/归档只改服务器状态，本地编辑继续保留。
    */
   async function changeStatus(action: ContentAction, at?: string): Promise<void> {
+    const isCurrent = beginRequest();
     // 表单不属于当前地址时不得改状态：没有可依据的版本号，等于盲写。
     if (id === null || formMismatch) return;
-    // 保存未存编辑走同一前提校验。
-    if (!validSeries(readForm())) {
+    // 撤回和归档不保存本地编辑，不能被未提交字段的校验阻止。
+    if ((action === "publish" || action === "schedule") && !validSeries(readForm())) {
       setError("系列排序权重必须是非负整数。");
       return;
     }
@@ -528,14 +583,17 @@ export function PostEditScreen({ id }: { id: string | null }) {
     setNotice(null);
     setBusy(true);
     const hadUnsavedEdits = hasUnsaved();
+    const savesContent = action === "publish" || action === "schedule";
     try {
       let expected = version ?? undefined;
-      if (hadUnsavedEdits && postStatus !== "archived") {
+      if (savesContent && hadUnsavedEdits && postStatus !== "archived") {
         const sent = readForm();
         const saved = await api.updatePost(id, {
           ...editPayload(),
           expected_version: expected,
         });
+        invalidateRelated();
+        if (!isCurrent()) return;
         expected = saved.version;
         applyServer(saved, sent);
         /**
@@ -543,7 +601,6 @@ export function PostEditScreen({ id }: { id: string | null }) {
          * 状态切换成功——那一步失败时返回列表看到的还是保存前的数据。
          * 下面那次失效仍要保留：状态列（已发布/草稿）只有状态切换成功才变。
          */
-        invalidateRelated();
       }
       // 发布/撤回不改正文：只同步状态，保留（可能还在变化的）表单。
       const result = action === "publish"
@@ -551,17 +608,20 @@ export function PostEditScreen({ id }: { id: string | null }) {
         : action === "schedule" ? await api.schedulePost(id, at!, expected)
         : action === "archive" ? await api.archivePost(id, expected)
         : await api.unpublishPost(id, expected);
-      applyStatus(result);
       invalidateRelated();
+      if (!isCurrent()) return;
+      applyStatus(result);
       setNotice(`状态已更新为${statusLabel(result.status)}。${hasUnsaved() ? "还有未保存的改动。" : ""}`);
     } catch (e) {
+      if (!isCurrent()) return;
       if (isVersionConflict(e)) {
         setConflict(true);
+        comparison.refresh();
       } else {
         setError(permissionMessageOf(e));
       }
     } finally {
-      setBusy(false);
+      if (isCurrent()) setBusy(false);
     }
   }
 
@@ -606,25 +666,12 @@ export function PostEditScreen({ id }: { id: string | null }) {
         )}
       </Flex>
 
-      {conflict && (
-        <Alert
-          type="warning"
-          showIcon
-          title="内容已在别处修改。"
-          description="你的编辑仍保留在下面，未被自动覆盖。"
-          style={{ marginBottom: 16 }}
-          action={
-            <Space>
-              <Button disabled={busy || commentBusy} onClick={() => void reloadFromServer()}>
-                重新加载（丢弃本地改动）
-              </Button>
-              <Button danger disabled={busy || commentBusy} onClick={overwriteWithLatest}>
-                仍然覆盖
-              </Button>
-            </Space>
-          }
-        />
-      )}
+      {localDraft.panel}
+      {conflict && <ContentConflict
+        fields={conflictFields(view, comparison.snapshot === null ? null : toForm(comparison.snapshot))}
+        version={comparison.snapshot?.version ?? null} busy={busy || commentBusy} loading={comparison.loading} error={comparison.error}
+        onRefresh={comparison.refresh} onReload={() => void reloadFromServer()} onOverwrite={overwriteWithLatest}
+      />}
 
       {notice !== null && (
         <Alert type="success" showIcon title={notice} style={{ marginBottom: 16 }} />
@@ -653,7 +700,7 @@ export function PostEditScreen({ id }: { id: string | null }) {
         }} />}
       <Form
         form={formApi}
-        disabled={postStatus === "archived" || formMismatch}
+        disabled={postStatus === "archived" || formMismatch || localDraft.blocksEditing}
         layout="vertical"
         initialValues={EMPTY_FORM}
         onValuesChange={(_changed, all) => setView(normalizeForm({ ...EMPTY_FORM, ...all }))}
@@ -767,6 +814,8 @@ export function PostEditScreen({ id }: { id: string | null }) {
           />
         </Form.Item>
 
+        <ContentPreview key={id ?? "new"} content={view.content} disabled={formMismatch || busy} />
+
         {canReadMedia && (
           <Flex gap={12} align="center" style={{ marginBottom: 16 }}>
             <Button
@@ -806,11 +855,11 @@ export function PostEditScreen({ id }: { id: string | null }) {
             查询更明显），其 `role="img" aria-label="loading"` 会污染按钮的无障碍名，
             让按名字定位变脆、读屏也会念出多余的 "loading"。
           */}
-          <Button type="primary" htmlType="submit" disabled={busy || commentBusy || formMismatch || postStatus === "archived"}>
-            {busy ? "处理中…" : "保存并更新线上"}
+          <Button type="primary" htmlType="submit" disabled={busy || commentBusy || formMismatch || postStatus === "archived" || localDraft.blocksEditing}>
+            {busy ? "处理中…" : postStatus === "published" ? "更新已发布内容" : postStatus === "scheduled" ? "保存预约内容" : "保存草稿"}
           </Button>
           {id !== null && <ContentLifecycleControls status={postStatus} publishedAt={publishedAt} disabled={busy || commentBusy || formMismatch}
-            canPublish={canPublish} canUnpublish={canUnpublish} canArchive={canUnpublish} onAction={changeStatus} />}
+            canPublish={canPublish && !localDraft.blocksEditing} canUnpublish={canUnpublish} canArchive={canUnpublish} onAction={changeStatus} />}
 
         </Space>
       </Form>

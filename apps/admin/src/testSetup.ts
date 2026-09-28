@@ -1,3 +1,7 @@
+import { beforeEach } from "vitest";
+
+beforeEach(() => { localStorage.clear(); sessionStorage.clear(); });
+
 /**
  * 测试环境补丁。
  *

@@ -173,7 +173,7 @@ describe("文章编辑器标签选择", () => {
     expect(essayBox.checked).toBeFalsy();
 
     fireEvent.click(essayBox);
-    fireEvent.click(screen.getByRole("button", { name: "保存并更新线上" }));
+    fireEvent.click(screen.getByRole("button", { name: /保存草稿|保存预约内容|更新已发布内容/ }));
 
     await waitFor(() => {
       expect(apiAny.updatePost).toHaveBeenCalledWith(

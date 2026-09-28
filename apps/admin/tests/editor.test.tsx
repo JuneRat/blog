@@ -95,7 +95,7 @@ describe("文章编辑器回归", () => {
     await screen.findByLabelText("标题");
     fireEvent.change(input("标题"), { target: { value: post.title } });
     fireEvent.change(input("正文（Markdown）"), { target: { value: post.content } });
-    fireEvent.click(screen.getByRole("button", { name: "保存并更新线上" }));
+    fireEvent.click(screen.getByRole("button", { name: /保存草稿|保存预约内容|更新已发布内容/ }));
     // antd Form 的 onFinish 在校验之后才触发；必须等请求真正发出，
     // 此时再输入才是「请求飞行期间」（见 PageEditScreen.test.tsx 的同名用例）。
     await waitFor(() => expect(api.createPost).toHaveBeenCalledTimes(1));
@@ -115,7 +115,7 @@ describe("文章编辑器回归", () => {
 
     // 重新创建必须从空表单开始，不能沿用旧 slug 或正文。
     fireEvent.change(input("标题"), { target: { value: "第二篇" } });
-    fireEvent.click(screen.getByRole("button", { name: "保存并更新线上" }));
+    fireEvent.click(screen.getByRole("button", { name: /保存草稿|保存预约内容|更新已发布内容/ }));
     // onFinish 是异步的：先等第二次创建真正发出，再核对载荷。
     await waitFor(() => expect(api.createPost).toHaveBeenCalledTimes(2));
     expect(api.createPost).toHaveBeenLastCalledWith({
@@ -130,7 +130,7 @@ describe("文章编辑器回归", () => {
     vi.mocked(api.updatePost).mockRejectedValue(new ApiError(409, "版本冲突", "version_conflict"));
     render(<App />);
     await screen.findByDisplayValue(post.title);
-    fireEvent.click(screen.getByRole("button", { name: "保存并更新线上" }));
+    fireEvent.click(screen.getByRole("button", { name: /保存草稿|保存预约内容|更新已发布内容/ }));
     await screen.findByText("内容已在别处修改。");
     act(() => { navigate(paths.newPost); });
     expect(input("正文（Markdown）").value).toBe("");
@@ -151,7 +151,7 @@ describe("文章编辑器回归", () => {
     expect(input("正文（Markdown）").value).toBe(post.content);
     expect(screen.getByText("v1")).toBeTruthy();
     fireEvent.change(input("标题"), { target: { value: "新的标题" } });
-    fireEvent.click(screen.getByRole("button", { name: "保存并更新线上" }));
+    fireEvent.click(screen.getByRole("button", { name: /保存草稿|保存预约内容|更新已发布内容/ }));
     await waitFor(() => expect(api.updatePost).toHaveBeenCalledWith(post.id, expect.objectContaining({
       expected_version: 1, content: post.content,
     })));
@@ -182,7 +182,7 @@ describe("文章编辑器回归", () => {
     render(<App />);
     await screen.findByDisplayValue(post.title);
     fireEvent.change(input("slug"), { target: { value: renamed.slug } });
-    fireEvent.click(screen.getByRole("button", { name: "保存并更新线上" }));
+    fireEvent.click(screen.getByRole("button", { name: /保存草稿|保存预约内容|更新已发布内容/ }));
     await screen.findByText(/已保存/);
     expect(window.location.pathname).toBe(paths.editPost(post.id));
 
@@ -199,7 +199,7 @@ describe("文章编辑器回归", () => {
 
     vi.mocked(api.updatePost).mockResolvedValueOnce({ ...renamed, title: "继续修改原文章", version: 3 });
     fireEvent.change(input("标题"), { target: { value: "继续修改原文章" } });
-    fireEvent.click(screen.getByRole("button", { name: "保存并更新线上" }));
+    fireEvent.click(screen.getByRole("button", { name: /保存草稿|保存预约内容|更新已发布内容/ }));
     await screen.findByText("v3");
     expect(api.updatePost).toHaveBeenLastCalledWith(post.id, expect.objectContaining({
       expected_version: 2, new_slug: undefined, title: "继续修改原文章",
@@ -221,7 +221,7 @@ describe("文章编辑器回归", () => {
     expect(input("正文（Markdown）").value).toBe(post.content);
     expect(screen.getByText("v1")).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "保存并更新线上" }));
+    fireEvent.click(screen.getByRole("button", { name: /保存草稿|保存预约内容|更新已发布内容/ }));
     expect(await screen.findByText(/文章未能加载/)).toBeTruthy();
     expect(api.updatePost).not.toHaveBeenCalled();
     expect(api.createPost).not.toHaveBeenCalled();
@@ -252,7 +252,7 @@ describe("文章编辑器回归", () => {
     fireEvent.change(input("标题"), { target: { value: "改过的标题" } });
     vi.mocked(api.updatePost).mockResolvedValue({ ...post, title: "改过的标题", version: 2 });
     vi.mocked(api.listPosts).mockResolvedValue(contentPage([{ ...post, title: "改过的标题", version: 2 }]));
-    fireEvent.click(screen.getByRole("button", { name: "保存并更新线上" }));
+    fireEvent.click(screen.getByRole("button", { name: /保存草稿|保存预约内容|更新已发布内容/ }));
     await waitFor(() => expect(api.updatePost).toHaveBeenCalledTimes(1));
 
     // 走侧栏返回列表（真实路径；保存后没有未保存改动，不会弹确认）。
@@ -306,7 +306,7 @@ describe("文章编辑器封面", () => {
     // 选中后预览区换成缩略图，按钮文案变为「更换封面」。
     expect(screen.getByRole("button", { name: "更换封面" })).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "保存并更新线上" }));
+    fireEvent.click(screen.getByRole("button", { name: /保存草稿|保存预约内容|更新已发布内容/ }));
     await waitFor(() =>
       expect(api.updatePost).toHaveBeenCalledWith(
         post.id,
@@ -326,7 +326,7 @@ describe("文章编辑器封面", () => {
     await screen.findByDisplayValue(post.title);
 
     fireEvent.click(screen.getByRole("button", { name: "移除封面" }));
-    fireEvent.click(screen.getByRole("button", { name: "保存并更新线上" }));
+    fireEvent.click(screen.getByRole("button", { name: /保存草稿|保存预约内容|更新已发布内容/ }));
 
     await waitFor(() =>
       expect(api.updatePost).toHaveBeenCalledWith(
@@ -359,7 +359,7 @@ describe("文章编辑器封面", () => {
     await waitFor(() => expect(mediaApi.upload).toHaveBeenCalledWith(file));
     await waitFor(() => expect(screen.getByRole("button", { name: "更换封面" })).toBeTruthy());
 
-    fireEvent.click(screen.getByRole("button", { name: "保存并更新线上" }));
+    fireEvent.click(screen.getByRole("button", { name: /保存草稿|保存预约内容|更新已发布内容/ }));
     await waitFor(() =>
       expect(api.updatePost).toHaveBeenCalledWith(
         post.id,
@@ -412,10 +412,10 @@ it("评论开关使用编辑器版本并保留未保存正文，保存后衔接�
   await waitFor(() => expect(toggle.hasAttribute("disabled")).toBe(false));
   fireEvent.click(toggle);
   await waitFor(() => expect(commentsApi.savePolicy).toHaveBeenCalledWith({enabled:false,version:1},post.id));
-  expect(screen.getByRole("button",{name:"保存并更新线上"}).hasAttribute("disabled")).toBe(true);
+  expect(screen.getByRole("button",{name:/保存草稿|保存预约内容|更新已发布内容/}).hasAttribute("disabled")).toBe(true);
   await act(async () => { pending.resolve({enabled:false,version:2}); });
   expect(input("正文（Markdown）").value).toBe("未保存正文");
-  fireEvent.click(screen.getByRole("button",{name:"保存并更新线上"}));
+  fireEvent.click(screen.getByRole("button",{name:/保存草稿|保存预约内容|更新已发布内容/}));
   await waitFor(() => expect(api.updatePost).toHaveBeenCalledWith(post.id,expect.objectContaining({content:"未保存正文",expected_version:2})));
 });
 
@@ -429,8 +429,8 @@ it("评论开关读取到更新版本时不能替编辑器接受并发正文变�
   await waitFor(() => expect(toggle.hasAttribute("disabled")).toBe(false));
   fireEvent.click(toggle);
   await waitFor(() => expect(commentsApi.savePolicy).toHaveBeenCalledWith({enabled:false,version:1},post.id));
-  await waitFor(() => expect(screen.getByRole("button",{name:"保存并更新线上"}).hasAttribute("disabled")).toBe(false));
+  await waitFor(() => expect(screen.getByRole("button",{name:/保存草稿|保存预约内容|更新已发布内容/}).hasAttribute("disabled")).toBe(false));
   fireEvent.change(input("正文（Markdown）"),{target:{value:"我的正文"}});
-  fireEvent.click(screen.getByRole("button",{name:"保存并更新线上"}));
+  fireEvent.click(screen.getByRole("button",{name:/保存草稿|保存预约内容|更新已发布内容/}));
   await waitFor(() => expect(api.updatePost).toHaveBeenCalledWith(post.id,expect.objectContaining({expected_version:1})));
 });

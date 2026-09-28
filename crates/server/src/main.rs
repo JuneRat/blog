@@ -240,7 +240,7 @@ async fn run(command: Command, mut config: config::DeploymentConfig) -> Result<(
                 &pool,
                 &site,
                 roles,
-                Arc::new(RenderingRuntime::default()),
+                Arc::new(RenderingRuntime::default().with_observer(Arc::new(telemetry.clone()))),
                 &telemetry,
             )
             .await?;
@@ -273,8 +273,14 @@ async fn serve(
         listener.local_addr().map_err(|e| e.to_string())?
     ));
     let (_pool_sender, pool_receiver) = tokio::sync::watch::channel(Some(pool.clone()));
-    let server = serve_http(listener, app, metrics_listener, telemetry, pool_receiver);
-    let scheduler = publish_scheduler(assembly::publisher(&pool));
+    let server = serve_http(
+        listener,
+        app,
+        metrics_listener,
+        telemetry.clone(),
+        pool_receiver,
+    );
+    let scheduler = publish_scheduler(assembly::publisher(&pool), telemetry);
     if recovery_mode {
         tracing::info!("恢复核验模式：预约发布任务已停用");
         return server.await;
@@ -316,12 +322,18 @@ async fn serve_http(
     }
 }
 
-async fn publish_scheduler(publisher: application::publishing::PublishDueInteractor) {
+async fn publish_scheduler(
+    publisher: application::publishing::PublishDueInteractor,
+    telemetry: interfaces::observability::Telemetry,
+) {
     let mut ticks = tokio::time::interval(std::time::Duration::from_secs(30));
     ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         ticks.tick().await;
-        if let Err(error) = publisher.run().await {
+        let started = std::time::Instant::now();
+        let result = publisher.run().await;
+        telemetry.publication_run(started.elapsed(), result.is_ok());
+        if let Err(error) = result {
             tracing::error!(%error, "到期内容发布失败，下次轮询重试");
         }
     }

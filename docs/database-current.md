@@ -31,7 +31,7 @@ SQLx 为初始迁移包事务，因此该文件没有额外的 BEGIN/COMMIT。�
 - OAuth 以 `(provider, subject)` 为主键，不存外部邮箱、access token 或 refresh token。提供商邮箱可以参与协议读取，但不作为本站身份或合并账号的依据。
 - roles 使用稳定 `code`，permissions 直接以 `code` 为主键，role_permissions 保存 `permission_code`。角色 DTO 仍用 `slug` 字段承载角色 code；权限来自当前角色并集，不保存在会话中。
 - 角色分配变更递增 users.version，保持 auth_version；同一个 Cookie 的下一次请求读取最新权限。重复分配/移除不存在的分配不增版。
-- 角色和凭据变更使用统一身份事务锁，保留最后可登录 Owner 和最后登录方式保护。可登录 Owner 必须 active、未删除，并有本地密码或外部绑定；提供商真实可用性不在计数谓词内。
+- 角色、凭据和 OAuth 配置变更使用统一身份事务锁，保留最后可登录 Owner 和最后登录方式保护。可登录 Owner 必须 active、未删除，并有本地密码或与当前提供商命名空间匹配的外部绑定；不探测外部服务在线或密钥是否有效。配置组使用独立版本做 CAS，规则见[身份与后台](identity-and-admin.md#4-oauth-与-oidc)。
 
 本人资料通过 `PUT /api/admin/v1/me/profile` 更新展示名和简介，必填 expected_version，冲突拒绝覆盖。返回同一提交的新版本，登录态不变。后台 `/admin/profile` 已接入资料表单；`/admin/users` 已提供版本控制的账号启停。状态变更与角色操作共用身份排他锁，复核当前权限和最后可登录 Owner，递增 `version/auth_version`、撤销全部会话并追加审计；启用后旧会话仍失效，软删除账号不能在此恢复。
 

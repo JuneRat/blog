@@ -149,7 +149,7 @@ describe("PageEditScreen 保存流程", () => {
     fireEvent.change(field(/slug/), { target: { value: "contact" } });
     fireEvent.change(field("标题"), { target: { value: "联系" } });
     fireEvent.change(field(/正文/), { target: { value: "# 联系" } });
-    fireEvent.click(screen.getByRole("button", { name: "保存并更新线上" }));
+    fireEvent.click(screen.getByRole("button", { name: /保存草稿|保存预约内容|更新已发布内容/ }));
 
     await waitFor(() => expect(createPage).toHaveBeenCalledTimes(1));
     expect(createPage).toHaveBeenCalledWith({
@@ -166,7 +166,7 @@ describe("PageEditScreen 保存流程", () => {
     updatePage.mockResolvedValue(pageDetail({ version: 2, content: "新正文" }));
 
     fireEvent.change(field(/正文/), { target: { value: "新正文" } });
-    fireEvent.click(screen.getByRole("button", { name: "保存并更新线上" }));
+    fireEvent.click(screen.getByRole("button", { name: /保存草稿|保存预约内容|更新已发布内容/ }));
 
     await waitFor(() => expect(updatePage).toHaveBeenCalledTimes(1));
     expect(updatePage).toHaveBeenCalledWith(
@@ -181,7 +181,7 @@ describe("PageEditScreen 保存流程", () => {
     await openExistingPage();
     updatePage.mockResolvedValueOnce(pageDetail({ slug: "about-us", version: 2 }));
     fireEvent.change(field(/slug/), { target: { value: "about-us" } });
-    fireEvent.click(screen.getByRole("button", { name: "保存并更新线上" }));
+    fireEvent.click(screen.getByRole("button", { name: /保存草稿|保存预约内容|更新已发布内容/ }));
     await screen.findByText(/已保存/);
     expect(navigate).not.toHaveBeenCalled();
     expect(updatePage).toHaveBeenLastCalledWith("p1", expect.objectContaining({
@@ -190,7 +190,7 @@ describe("PageEditScreen 保存流程", () => {
 
     updatePage.mockResolvedValueOnce(pageDetail({ slug: "about-us", title: "改名后的更新", version: 3 }));
     fireEvent.change(field("标题"), { target: { value: "改名后的更新" } });
-    fireEvent.click(screen.getByRole("button", { name: "保存并更新线上" }));
+    fireEvent.click(screen.getByRole("button", { name: /保存草稿|保存预约内容|更新已发布内容/ }));
     await screen.findByText("v3");
     expect(updatePage).toHaveBeenLastCalledWith("p1", expect.objectContaining({
       new_slug: undefined, expected_version: 2, title: "改名后的更新",
@@ -205,7 +205,7 @@ describe("PageEditScreen 保存流程", () => {
     getPage.mockImplementation(async (id) => id === original.id ? original : replacement);
     updatePage.mockRejectedValueOnce(new ApiError(409, "版本冲突", "version_conflict"));
     fireEvent.change(field("标题"), { target: { value: "尚未保存的编辑" } });
-    fireEvent.click(screen.getByRole("button", { name: "保存并更新线上" }));
+    fireEvent.click(screen.getByRole("button", { name: /保存草稿|保存预约内容|更新已发布内容/ }));
     await screen.findByText("内容已在别处修改。");
     fireEvent.click(screen.getByRole("button", { name: "重新加载（丢弃本地改动）" }));
     await screen.findByDisplayValue(original.title);
@@ -243,7 +243,7 @@ describe("PageEditScreen 保存流程", () => {
     );
 
     fireEvent.change(field(/正文/), { target: { value: "A" } });
-    fireEvent.click(screen.getByRole("button", { name: "保存并更新线上" }));
+    fireEvent.click(screen.getByRole("button", { name: /保存草稿|保存预约内容|更新已发布内容/ }));
     // antd Form 的 onFinish 在校验之后才触发；必须等请求真正发出，
     // 才是「请求飞行期间」继续输入。
     await waitFor(() => expect(updatePage).toHaveBeenCalledTimes(1));
@@ -294,7 +294,7 @@ describe("PageEditScreen 保存流程", () => {
     await screen.findByText(/页面未能加载/);
 
     // 必须拒绝写入，尤其不能把 about 的 expected_version 发到 missing。
-    fireEvent.click(screen.getByRole("button", { name: "保存并更新线上" }));
+    fireEvent.click(screen.getByRole("button", { name: /保存草稿|保存预约内容|更新已发布内容/ }));
     expect(updatePage).not.toHaveBeenCalled();
     expect(createPage).not.toHaveBeenCalled();
 
@@ -314,25 +314,27 @@ describe("PageEditScreen 保存流程", () => {
     expect(screen.queryByText(/页面未能加载/)).toBeNull();
   });
 
-  it("版本冲突显示冲突横幅；保留路径冲突按普通错误展示", async () => {
+  it("版本冲突显示冲突横幅并保留本地输入", async () => {
     await openExistingPage();
     updatePage.mockRejectedValueOnce(
       new ApiError(409, "版本冲突：内容已被并发修改，请基于最新版本重试", "version_conflict"),
     );
     fireEvent.change(field(/正文/), { target: { value: "本地编辑" } });
-    fireEvent.click(screen.getByRole("button", { name: "保存并更新线上" }));
+    fireEvent.click(screen.getByRole("button", { name: /保存草稿|保存预约内容|更新已发布内容/ }));
 
     await screen.findByText(/内容已在别处修改/);
     expect((field(/正文/) as HTMLTextAreaElement).value).toBe("本地编辑");
 
-    // 保留路径是 400 invalid_request：不得当成版本冲突给出无效的「仍然覆盖」。
-    cleanup();
+  });
+
+  it("保留路径冲突按普通错误展示，不提供无效覆盖", async () => {
+    // This is an independent edit session, not a remount that resumes the preceding local draft.
     await openExistingPage();
     updatePage.mockRejectedValueOnce(
       new ApiError(400, "slug「admin」是系统保留路径，不能用于页面", "invalid_request"),
     );
     fireEvent.change(field(/slug/), { target: { value: "admin" } });
-    fireEvent.click(screen.getByRole("button", { name: "保存并更新线上" }));
+    fireEvent.click(screen.getByRole("button", { name: /保存草稿|保存预约内容|更新已发布内容/ }));
 
     await screen.findByText(/系统保留路径/);
     expect(screen.queryByText(/内容已在别处修改/)).toBeNull();

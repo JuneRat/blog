@@ -178,7 +178,7 @@ describe("未保存离开保护", () => {
     act(() => navigate(paths.newPost));
     await screen.findByLabelText("标题");
     fireEvent.change(titleInput(), { target: { value: post.title } });
-    fireEvent.click(screen.getByRole("button", { name: "保存并更新线上" }));
+    fireEvent.click(screen.getByRole("button", { name: /保存草稿|保存预约内容|更新已发布内容/ }));
     await waitFor(() => expect(api.createPost).toHaveBeenCalledTimes(1));
     fireEvent.change(screen.getByLabelText("正文（Markdown）"), { target: { value: "保存期间的新正文" } });
     act(() => window.history.back());
@@ -246,9 +246,9 @@ describe("未保存离开保护", () => {
     vi.mocked(api.updatePost).mockResolvedValue({ ...post, title: "改过的标题", version: 2 });
     await openDirtyEditor();
 
-    fireEvent.click(screen.getByRole("button", { name: "保存并更新线上" }));
+    fireEvent.click(screen.getByRole("button", { name: /保存草稿|保存预约内容|更新已发布内容/ }));
     await waitFor(() => expect(api.updatePost).toHaveBeenCalledTimes(1));
-    await screen.findByText("已保存（已发布内容直接更新线上）。");
+    await screen.findByText("已保存。");
 
     // 服务端已接受，脏标记应清掉：这时点菜单直接走，不再弹确认。
     fireEvent.click(menuItem("标签"));

@@ -22,7 +22,7 @@ pub struct PasswordCredential {
 ///
 /// 「是否可登录」是最后 Owner 保护判定的输入（docs §3），界面据此在移除 Owner
 /// 角色前给出提示；因此它必须与 `PostgresRbacStore::active_owner_count` 用同一套
-/// 定义——active 且未软删除，并且至少一条 oauth_accounts 或已启用本地密码。
+/// 定义——active 且未软删除，并且有匹配已配置提供商的外部身份或本地密码。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AdminUserRow {
     pub id: Uuid,
@@ -34,7 +34,7 @@ pub struct AdminUserRow {
     pub deleted: bool,
     /// `users.password_hash IS NOT NULL`。
     pub password_enabled: bool,
-    /// oauth_accounts 条数。
+    /// 匹配已配置提供商命名空间的 oauth_accounts 条数；不探测外部服务在线状态。
     pub external_identities: i64,
 }
 
@@ -334,7 +334,7 @@ pub enum ProviderKind {
 }
 
 /// 提供商非敏感配置（存 settings 的 oauth 分组；秘密经 secret_ref 由部署环境提供）。
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ProviderConfig {
     /// URL 与回调路径使用的稳定 id。
     pub id: String,
@@ -351,14 +351,28 @@ pub struct ProviderConfig {
     pub scopes: Vec<String>,
 }
 
+/// 一次读取取得的完整 OAuth 设置；尚未保存时版本为 0。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OAuthConfigSnapshot {
+    pub providers: Vec<ProviderConfig>,
+    pub version: i64,
+}
+
 #[async_trait]
 pub trait OAuthConfigStore: Send + Sync {
-    async fn list(&self) -> Result<Vec<ProviderConfig>, UseCaseError>;
+    async fn read(&self) -> Result<OAuthConfigSnapshot, UseCaseError>;
+    async fn list(&self) -> Result<Vec<ProviderConfig>, UseCaseError> {
+        Ok(self.read().await?.providers)
+    }
+    /// 版本前提先于同值判断。设置变化与审计原子提交；删除身份命名空间时，
+    /// 与账号/角色/凭据变更串行化，保留至少一个配置层面可登录 Owner。
+    /// 尚未创建 Owner 的安装/CLI 引导可维护配置。返回本次提交版本。
     async fn save(
         &self,
         providers: &[ProviderConfig],
+        expected_version: i64,
         audit_actor: crate::audit::AuditContext,
-    ) -> Result<(), UseCaseError>;
+    ) -> Result<i64, UseCaseError>;
 }
 
 /// 外部身份（身份命名空间键 + 稳定用户 ID + 资料快照邮箱）。

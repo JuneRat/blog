@@ -4,6 +4,7 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::audit::{AuditEntry, append_audit_log, record_change};
+use crate::rbac::CONFIGURED_EXTERNAL_IDENTITY;
 use application::error::UseCaseError;
 use application::identity::policy::{self, StatusChangePlan};
 use application::ports::{
@@ -90,18 +91,19 @@ impl UserQuery for PostgresUserRepository {
     }
 
     async fn list_admin(&self, limit: i64, offset: i64) -> Result<Vec<AdminUserRow>, UseCaseError> {
-        // 登录方式与 RBAC 的最后 Owner 判定保持同一谓词（oauth 或 password_hash），
+        // 登录方式与 RBAC 的最后 Owner 判定保持同一谓词（已配置 OAuth 或密码），
         // 否则界面会提示「可登录」而后端拒绝，两处定义漂移。
-        let rows = sqlx::query(
+        let rows = sqlx::query(&format!(
             "SELECT u.id, u.username, u.email, u.display_name, \
                     u.status, u.version, (u.deleted_at IS NOT NULL) AS deleted, \
                     (u.password_hash IS NOT NULL) AS password_enabled, \
-                    (SELECT count(*) FROM oauth_accounts oa WHERE oa.user_id = u.id) \
+                    (SELECT count(*) FROM oauth_accounts oa WHERE oa.user_id = u.id \
+                     AND {CONFIGURED_EXTERNAL_IDENTITY}) \
                         AS external_identities \
              FROM users u \
              ORDER BY u.username \
              LIMIT $1 OFFSET $2",
-        )
+        ))
         .bind(limit)
         .bind(offset)
         .fetch_all(&self.pool)
@@ -424,12 +426,14 @@ impl PasswordCredentialStore for PostgresUserRepository {
             return Ok(ClearPasswordOutcome::NoPassword);
         }
 
-        let external_identities: i64 =
-            sqlx::query_scalar("SELECT count(*) FROM oauth_accounts WHERE user_id = $1")
-                .bind(user_id)
-                .fetch_one(&mut *tx)
-                .await
-                .map_err(map_sqlx_error)?;
+        let external_identities: i64 = sqlx::query_scalar(&format!(
+            "SELECT count(*) FROM oauth_accounts oa WHERE oa.user_id = $1 \
+                 AND {CONFIGURED_EXTERNAL_IDENTITY}"
+        ))
+        .bind(user_id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(map_sqlx_error)?;
         let methods = LoginMethods {
             password_enabled: hash.is_some(),
             external_identities,

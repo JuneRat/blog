@@ -8,6 +8,7 @@ pub mod http_audit;
 pub mod http_auth;
 pub mod http_client_ip;
 pub mod http_comments;
+pub mod http_content_preview;
 pub mod http_identity;
 pub mod http_install;
 pub mod http_media;

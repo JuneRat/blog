@@ -10,6 +10,9 @@ use std::time::{Duration, Instant};
 use application::error::UseCaseError;
 use application::ports::{CommentRenderer, ContentRenderer, RenderedContent, ThemeRenderer};
 use application::public_site::{CategoryView, PageView, PostCard, PostView, SeriesView, TagView};
+use application::rendering_observer::{
+    QueueOutcome, RenderKind as RenderPool, RenderingEvent, RenderingObserver,
+};
 use application::seo::SeoMeta;
 use application::site_info::SiteInfo;
 use async_trait::async_trait;
@@ -96,13 +99,6 @@ impl MarkdownCache {
     }
 }
 
-#[derive(Clone, Copy)]
-enum RenderPool {
-    Content,
-    Comment,
-    Theme,
-}
-
 struct RuntimeState {
     limits: RenderingLimits,
     theme_slots: Arc<Semaphore>,
@@ -115,6 +111,49 @@ struct RuntimeState {
 #[derive(Clone)]
 pub struct RenderingRuntime {
     state: Arc<RuntimeState>,
+    observer: Option<Arc<dyn RenderingObserver>>,
+}
+
+struct QueueMeasurement {
+    observer: Option<Arc<dyn RenderingObserver>>,
+    pool: RenderPool,
+    started: Instant,
+    outcome: QueueOutcome,
+}
+
+impl Drop for QueueMeasurement {
+    fn drop(&mut self) {
+        if let Some(observer) = &self.observer {
+            observer.observe(
+                self.pool,
+                RenderingEvent::QueueFinished {
+                    elapsed: self.started.elapsed(),
+                    outcome: self.outcome,
+                },
+            );
+        }
+    }
+}
+
+struct WorkerMeasurement {
+    observer: Option<Arc<dyn RenderingObserver>>,
+    pool: RenderPool,
+    started: Instant,
+    success: bool,
+}
+
+impl Drop for WorkerMeasurement {
+    fn drop(&mut self) {
+        if let Some(observer) = &self.observer {
+            observer.observe(
+                self.pool,
+                RenderingEvent::Finished {
+                    elapsed: self.started.elapsed(),
+                    success: self.success,
+                },
+            );
+        }
+    }
 }
 
 impl Default for RenderingRuntime {
@@ -124,6 +163,11 @@ impl Default for RenderingRuntime {
 }
 
 impl RenderingRuntime {
+    pub fn with_observer(mut self, observer: Arc<dyn RenderingObserver>) -> Self {
+        self.observer = Some(observer);
+        self
+    }
+
     pub fn with_limits(limits: RenderingLimits) -> Result<Self, UseCaseError> {
         if limits.concurrency == 0
             || limits.concurrency > Semaphore::MAX_PERMITS
@@ -146,6 +190,7 @@ impl RenderingRuntime {
                 limits,
                 markdown: Mutex::new(MarkdownCache::default()),
             }),
+            observer: None,
         })
     }
 
@@ -172,12 +217,22 @@ impl RenderingRuntime {
             RenderPool::Theme => &self.state.theme_slots,
         };
         let queued = Instant::now();
+        if let Some(observer) = &self.observer {
+            observer.observe(pool, RenderingEvent::Queued);
+        }
+        let mut measurement = QueueMeasurement {
+            observer: self.observer.clone(),
+            pool,
+            started: queued,
+            outcome: QueueOutcome::Cancelled,
+        };
         let permit = tokio::time::timeout(
             self.state.limits.queue_timeout,
             slots.clone().acquire_owned(),
         )
         .await
         .map_err(|_| {
+            measurement.outcome = QueueOutcome::Timeout;
             tracing::warn!(
                 kind,
                 queue_ms = queued.elapsed().as_millis() as u64,
@@ -185,15 +240,31 @@ impl RenderingRuntime {
             );
             UseCaseError::Render("渲染排队超时".into())
         })?
-        .map_err(|_| UseCaseError::Render("渲染执行器已关闭".into()))?;
+        .map_err(|_| {
+            measurement.outcome = QueueOutcome::Closed;
+            UseCaseError::Render("渲染执行器已关闭".into())
+        })?;
+        measurement.outcome = QueueOutcome::Admitted;
+        drop(measurement);
         let queue_ms = queued.elapsed().as_millis() as u64;
         let span = tracing::Span::current();
+        let observer = self.observer.clone();
         let mut worker = tokio::task::spawn_blocking(move || {
             // 此许可必须在阻塞闭包内，不能由等待它的 async future 持有。
             let _permit = permit;
             span.in_scope(|| {
                 let started = Instant::now();
+                if let Some(observer) = &observer {
+                    observer.observe(pool, RenderingEvent::Started);
+                }
+                let mut measurement = WorkerMeasurement {
+                    observer,
+                    pool,
+                    started,
+                    success: false,
+                };
                 let result = task();
+                measurement.success = result.is_ok();
                 tracing::debug!(
                     kind,
                     queue_ms,
@@ -209,6 +280,9 @@ impl RenderingRuntime {
                 result.map_err(|error| UseCaseError::Render(format!("渲染任务失败：{error}")))?
             }
             Err(_) => {
+                if let Some(observer) = &self.observer {
+                    observer.observe(pool, RenderingEvent::ExecutionTimeout);
+                }
                 // 尚未开始的 blocking job 可取消；已开始的继续持有其许可直到完成。
                 worker.abort();
                 tracing::warn!(kind, queue_ms, "渲染执行超时");
@@ -379,6 +453,102 @@ impl ThemeRenderer for ThemeExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Default)]
+    struct Observer(Mutex<Vec<RenderingEvent>>);
+
+    impl RenderingObserver for Observer {
+        fn observe(&self, _kind: RenderPool, event: RenderingEvent) {
+            self.0.lock().unwrap().push(event);
+        }
+    }
+
+    #[tokio::test]
+    async fn telemetry_tracks_cancellation_timeout_and_actual_worker_completion() {
+        let observer = Arc::new(Observer::default());
+        let runtime = limited().with_observer(observer.clone());
+        let (started, ready) = tokio::sync::oneshot::channel();
+        let (release, blocked) = std::sync::mpsc::channel();
+        let worker_runtime = runtime.clone();
+        let caller = tokio::spawn(async move {
+            worker_runtime
+                .execute(RenderPool::Content, "held", move || {
+                    let _ = started.send(());
+                    let _ = blocked.recv();
+                    Ok(())
+                })
+                .await
+        });
+        ready.await.unwrap();
+        // A queued future dropped by its caller must release only its waiting
+        // gauge; the active worker remains active after execution timeout.
+        let waiting = runtime.execute(RenderPool::Content, "cancelled", || Ok(()));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(1), waiting)
+                .await
+                .is_err()
+        );
+        assert!(caller.await.unwrap().is_err());
+        assert!(
+            runtime
+                .execute(RenderPool::Content, "overload", || Ok(()))
+                .await
+                .is_err()
+        );
+        {
+            let events = observer.0.lock().unwrap();
+            assert!(events.iter().any(|event| matches!(
+                event,
+                RenderingEvent::QueueFinished {
+                    outcome: QueueOutcome::Cancelled,
+                    ..
+                }
+            )));
+            assert!(events.iter().any(|event| matches!(
+                event,
+                RenderingEvent::QueueFinished {
+                    outcome: QueueOutcome::Timeout,
+                    ..
+                }
+            )));
+            assert!(
+                events
+                    .iter()
+                    .any(|event| matches!(event, RenderingEvent::ExecutionTimeout))
+            );
+            assert!(
+                !events
+                    .iter()
+                    .any(|event| matches!(event, RenderingEvent::Finished { .. }))
+            );
+        }
+        release.send(()).unwrap();
+        // Receiving the permit again proves the held worker and its metric
+        // guard have both completed (without relying on a scheduling sleep).
+        let _permit = runtime.state.content_slots.acquire().await.unwrap();
+        let events = observer.0.lock().unwrap();
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, RenderingEvent::Queued))
+                .count(),
+            3
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, RenderingEvent::QueueFinished { .. }))
+                .count(),
+            3
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, RenderingEvent::Finished { success: true, .. }))
+                .count(),
+            1
+        );
+    }
 
     fn limited() -> RenderingRuntime {
         RenderingRuntime::with_limits(RenderingLimits {

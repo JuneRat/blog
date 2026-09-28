@@ -495,7 +495,8 @@ pub async fn run_oauth(
             secret_ref,
             scopes,
         } => {
-            let mut providers = oauth.list_providers().await.map_err(fmt_error)?;
+            let settings = oauth.provider_settings().await.map_err(fmt_error)?;
+            let mut providers = settings.providers;
             upsert_provider(
                 &mut providers,
                 ProviderConfig {
@@ -509,7 +510,7 @@ pub async fn run_oauth(
                 },
             );
             oauth
-                .save_providers(&Actor::bootstrap_cli(), &providers)
+                .save_providers(&Actor::bootstrap_cli(), &providers, settings.version)
                 .await
                 .map_err(fmt_error)?;
             println!("已保存 OIDC 提供商配置（秘密经 secret_ref 从环境读取，不落库）。");
@@ -522,7 +523,8 @@ pub async fn run_oauth(
             secret_ref,
             scopes,
         } => {
-            let mut providers = oauth.list_providers().await.map_err(fmt_error)?;
+            let settings = oauth.provider_settings().await.map_err(fmt_error)?;
+            let mut providers = settings.providers;
             upsert_provider(
                 &mut providers,
                 ProviderConfig {
@@ -536,7 +538,7 @@ pub async fn run_oauth(
                 },
             );
             oauth
-                .save_providers(&Actor::bootstrap_cli(), &providers)
+                .save_providers(&Actor::bootstrap_cli(), &providers, settings.version)
                 .await
                 .map_err(fmt_error)?;
             println!("已保存 GitHub 提供商配置。");

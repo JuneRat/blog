@@ -34,6 +34,6 @@
 - [ADR-0010](0010-persistent-postgres-sessions.md) 增加 `sessions`。它在当时成为第 16 张业务表，替代本篇关于本站会话不建表、重启失效的选择；OAuth 尝试和密码限流仍在进程内存。
 - [ADR-0014](0014-content-commits-and-stable-admin-identity.md) 明确内容提交与管理端 UUID 身份；[ADR-0015](0015-rendered-content-runtime-and-module-boundaries.md) 明确持久化 HTML 及渲染执行边界，均未引入另一份待发布正文。
 - 原生评论后来增加三张表，当前总表数及全部迁移以 [数据库实现参考](../database-current.md) 为准。初始表清单不能用作删除或否定后续存储的依据。
-- [ADR-0016](0016-confirmed-blog-schema.md) 采纳新的 19 表设计，替代单系列、Page 物理删除及原发布/目录删除规则，加入事务审计并重整身份、媒体和评论模型。该设计已确认，应用尚未切换。
+- [ADR-0016](0016-confirmed-blog-schema.md) 采纳新的 19 表设计，替代单系列、Page 物理删除及原发布/目录删除规则，加入事务审计并重整身份、媒体和评论模型。交付与验收状态统一见[路线图](../product-roadmap.md#已采纳数据库设计的实施)。
 
 单份当前正文、Post/Page 分表和公开 slug 的基本取舍仍保留；完整现行规则以页首专项文档为准。

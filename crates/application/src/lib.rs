@@ -5,6 +5,7 @@ pub mod audit;
 pub mod auth;
 pub mod category;
 pub mod content;
+pub mod content_preview;
 pub mod content_queries;
 pub mod error;
 pub mod html_rebuild;
@@ -30,5 +31,6 @@ pub use error::UseCaseError;
 pub mod comments;
 
 pub mod rendering_budget;
+pub mod rendering_observer;
 
 pub mod retention;

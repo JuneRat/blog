@@ -154,8 +154,8 @@ describe("写入后跨屏一致性（先访问旧缓存，再提交，再返回�
     go(paths.editPage(page.id));
     await screen.findByDisplayValue(page.title);
     change("正文（Markdown）", "移除图片后只保留文字");
-    fireEvent.click(screen.getByRole("button", { name: "保存并更新线上" }));
-    await screen.findByText("已保存（已发布页面直接更新线上）。");
+    fireEvent.click(screen.getByRole("button", { name: /保存草稿|保存预约内容|更新已发布内容/ }));
+    await screen.findByText("已保存。");
     await usage();
     await waitFor(() => expect(screen.queryByRole("button", { name: /页面：关于页面/ })).toBeNull());
     expect(screen.queryByText("被 1 处引用")).toBeNull();

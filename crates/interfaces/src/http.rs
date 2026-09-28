@@ -30,6 +30,7 @@ pub struct AppState {
     pub auth: crate::http_auth::AuthState,
     pub admin: crate::http_auth::AdminState,
     pub comments: Arc<application::comments::CommentInteractor>,
+    pub content_preview: Arc<application::content_preview::ContentPreview>,
     pub retention: Arc<application::retention::RetentionInteractor>,
     pub audit: Arc<application::audit::AuditInteractor>,
 }
@@ -46,6 +47,12 @@ pub struct HttpAssets {
 
 /// 组合完整站点路由；监听地址、进程信号和关闭策略由 server 装配层负责。
 pub fn app_router(state: AppState, assets: HttpAssets, config: HttpConfig) -> Router {
+    let content_preview = crate::http_content_preview::content_preview_router(
+        crate::http_content_preview::ContentPreviewState {
+            preview: state.content_preview,
+            admin: state.admin.clone(),
+        },
+    );
     let comments = crate::http_comments::comments_router(crate::http_comments::CommentState {
         comments: state.comments,
         admin: state.admin.clone(),
@@ -77,6 +84,7 @@ pub fn app_router(state: AppState, assets: HttpAssets, config: HttpConfig) -> Ro
         .merge(crate::http_identity::identity_router(state.admin))
         .merge(crate::http_media::media_read_router(media_read))
         .merge(comments)
+        .merge(content_preview)
         .merge(retention)
         .merge(audit);
     mount_admin_spa(app, Some(assets.admin_dist))

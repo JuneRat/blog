@@ -236,6 +236,8 @@ export interface RenameTagInput {
 }
 
 export const api = {
+  previewContent: (content: string): Promise<{ content_html: string }> =>
+    request("/api/admin/v1/content-preview", { method: "POST", body: JSON.stringify({ content }) }),
   me: (): Promise<Me> => request<Me>("/api/admin/v1/me"),
 
   /**

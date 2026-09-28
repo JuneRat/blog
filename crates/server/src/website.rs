@@ -123,7 +123,7 @@ pub async fn build_router(
             pool.clone(),
             runtime.clone(),
         )),
-        runtime,
+        runtime.clone(),
     ));
     let retention = Arc::new(application::retention::RetentionInteractor::new(Arc::new(
         infrastructure::retention::PostgresRetentionStore::new(pool.clone()),
@@ -140,6 +140,7 @@ pub async fn build_router(
             auth: auth_state,
             admin,
             comments,
+            content_preview: Arc::new(application::content_preview::ContentPreview::new(runtime)),
             retention,
             audit,
         },

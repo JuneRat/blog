@@ -24,10 +24,10 @@ pub use content_queries::{AdminPageQuery, AdminPostQuery};
 pub use identity::{
     AccountAdministration, AdminUserRow, ClearPasswordOutcome, ExternalIdentity,
     ExternalIdentityClient, LoginThrottle, OAUTH_STATE_COOKIE, OAuthAccountStore, OAuthAttempt,
-    OAuthAttemptStore, OAuthConfigStore, PasswordCredential, PasswordCredentialStore,
-    PasswordHasher, ProviderConfig, ProviderKind, RbacStore, RoleDto, SESSION_COOKIE, SecretSource,
-    SecureRandom, SessionRecord, SessionStore, ThrottleDecision, ThrottleSubject, UserProfileStore,
-    UserQuery,
+    OAuthAttemptStore, OAuthConfigSnapshot, OAuthConfigStore, PasswordCredential,
+    PasswordCredentialStore, PasswordHasher, ProviderConfig, ProviderKind, RbacStore, RoleDto,
+    SESSION_COOKIE, SecretSource, SecureRandom, SessionRecord, SessionStore, ThrottleDecision,
+    ThrottleSubject, UserProfileStore, UserQuery,
 };
 pub use media::{
     ImageInspector, MediaChangeOutcome, MediaContentKind, MediaRefGuard, MediaRepository,

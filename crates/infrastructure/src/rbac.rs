@@ -14,6 +14,13 @@ use application::identity::{BuiltinRoleDef, OWNER_ROLE_SLUG, PermissionDescripto
 use application::ports::{RbacStore, RoleDto};
 use domain::identity::PermissionSet;
 
+/// SQL 谓词中的 `oa` 是 oauth_accounts 行。只匹配当前配置的身份命名空间，
+/// 不读取 secret_ref 指向的秘密，也不把第三方在线状态引入事务。
+pub(crate) const CONFIGURED_EXTERNAL_IDENTITY: &str = "EXISTS (\
+    SELECT 1 FROM settings s, jsonb_array_elements(COALESCE(s.value->'providers', '[]'::jsonb)) p \
+    WHERE s.key='oauth' AND oa.provider = CASE p->'kind'->>'type' \
+        WHEN 'oidc' THEN p->>'issuer' WHEN 'github' THEN 'github' END)";
+
 pub struct PostgresRbacStore {
     pool: PgPool,
 }
@@ -47,21 +54,22 @@ impl PostgresRbacStore {
     /// 未删除、仍持有 owner 角色、且仍有有效登录方式的用户数。
     /// docs §3：可能减少有效 Owner 的操作在排他锁下检查至少保留一个「可登录」Owner。
     ///
-    /// 「有效登录方式」= 至少一条 oauth_accounts **或** 已启用本地密码
+    /// 「有效登录方式」= 至少一条匹配当前提供商的 oauth_accounts **或** 本地密码
     /// （`users.password_hash IS NOT NULL`）。两者是对等登录方式，缺一不可，
     /// 否则只用密码的 Owner 会被判成「登不进去」而被移除，站点直接失去 Owner。
     pub(crate) async fn active_owner_count(
         executor: impl Executor<'_, Database = sqlx::Postgres>,
     ) -> Result<i64, UseCaseError> {
-        let (count,): (i64,) = sqlx::query_as(
+        let (count,): (i64,) = sqlx::query_as(&format!(
             "SELECT count(*) \
              FROM user_roles ur \
              JOIN roles r ON r.id = ur.role_id \
              JOIN users u ON u.id = ur.user_id \
              WHERE r.code = 'owner' AND u.status = 'active' AND u.deleted_at IS NULL \
                AND (u.password_hash IS NOT NULL \
-                    OR EXISTS (SELECT 1 FROM oauth_accounts oa WHERE oa.user_id = u.id))",
-        )
+                    OR EXISTS (SELECT 1 FROM oauth_accounts oa WHERE oa.user_id = u.id \
+                               AND {CONFIGURED_EXTERNAL_IDENTITY}))",
+        ))
         .fetch_one(executor)
         .await
         .map_err(Self::map_err)?;
@@ -84,7 +92,7 @@ impl PostgresRbacStore {
         Ok(row.is_some())
     }
 
-    /// 目标用户是否仍有有效登录方式（未软删除，且 oauth_accounts 或本地密码至少其一）。
+    /// 目标用户是否仍有有效登录方式（已配置的外部身份或本地密码至少其一）。
     ///
     /// 返回 false 会让 `remove_role` 跳过最后 Owner 保护——对，这是有意的：
     /// 「登不进去的 Owner」不构成有效 Owner，可以被清理。因此这个谓词必须
@@ -93,13 +101,14 @@ impl PostgresRbacStore {
         executor: impl Executor<'_, Database = sqlx::Postgres>,
         user_id: Uuid,
     ) -> Result<bool, UseCaseError> {
-        let row: Option<(i32,)> = sqlx::query_as(
+        let row: Option<(i32,)> = sqlx::query_as(&format!(
             "SELECT 1 FROM users u \
              WHERE u.id = $1 AND u.status = 'active' AND u.deleted_at IS NULL \
                AND (u.password_hash IS NOT NULL \
-                    OR EXISTS (SELECT 1 FROM oauth_accounts oa WHERE oa.user_id = u.id)) \
+                    OR EXISTS (SELECT 1 FROM oauth_accounts oa WHERE oa.user_id = u.id \
+                               AND {CONFIGURED_EXTERNAL_IDENTITY})) \
              LIMIT 1",
-        )
+        ))
         .bind(user_id)
         .fetch_optional(executor)
         .await

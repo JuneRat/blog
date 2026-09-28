@@ -154,6 +154,8 @@ blog oauth bindings --user sun
 
 `secret_ref` 是提供商密钥所在的环境变量名，需通过运行服务的环境注入。提供商回调地址为 `BLOG_PUBLIC_BASE_URL/auth/callback/{provider}`。绑定前核对稳定的 OIDC `sub` 或 GitHub 数值用户 ID，邮箱不用于自动关联账号；未绑定身份不能登录。添加配置不代表已验证提供商可用性。
 
+`add-oidc/add-github` 内部携带读取时的配置版本；并发冲突报错后需重新执行。提供商命名空间变更与最后可登录 Owner 检查在同一身份锁和事务内进行，失败不改配置或审计；该检查不探测外部服务或密钥，完整边界见[身份与后台](identity-and-admin.md#4-oauth-与-oidc)。
+
 ### 媒体维护
 
 ```bash

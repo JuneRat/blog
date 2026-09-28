@@ -39,6 +39,15 @@ async fn fresh_database() -> PgPool {
 
 /// 给用户绑定一个外部登录方式（“有效 Owner”判定要求至少一种登录方式）。
 async fn seed_binding(pool: &PgPool, user_id: uuid::Uuid) {
+    // 绑定只有匹配已配置命名空间才构成可用登录方式。
+    sqlx::query("INSERT INTO settings(key,value) VALUES ('oauth', $1) ON CONFLICT(key) DO NOTHING")
+        .bind(serde_json::json!({"providers":[{
+            "id":"idp", "kind":{"type":"oidc"}, "issuer":"https://idp.example",
+            "client_id":"client", "secret_ref":"IDP_SECRET", "scopes":[]
+        }]}))
+        .execute(pool)
+        .await
+        .unwrap();
     sqlx::query(
         "INSERT INTO oauth_accounts (user_id, provider, subject) \
          VALUES ($1, 'https://idp.example', $2)",
@@ -2779,6 +2788,7 @@ async fn settings_row_survives_new_pool_and_keeps_oauth_group_isolated() {
                 secret_ref: "IDP_SECRET".into(),
                 scopes: vec![],
             }],
+            0,
             None.into(),
         )
         .await

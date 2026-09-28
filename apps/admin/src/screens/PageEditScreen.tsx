@@ -1,3 +1,8 @@
+import { useEditorRequestGuard } from "../useEditorRequestGuard";
+import { ContentPreview } from "../components/ContentPreview";
+import { ContentConflict, conflictFields } from "../components/ContentConflict";
+import { useConflictSnapshot } from "../useConflictSnapshot";
+import { useLocalDraft } from "../localDraft";
 import { invalidateAfterWrite } from "../queryEffects";
 import { ContentLifecycleControls, statusLabel, type ContentAction } from "../components/ContentLifecycleControls";
 import {
@@ -101,6 +106,12 @@ type TextAreaHandle = { resizableTextArea?: { textArea: HTMLTextAreaElement } };
  */
 export function PageEditScreen({ id }: { id: string | null }) {
   const { me } = useAuth();
+  return <PageEditor key={me?.user_id ?? "anonymous"} id={id} />;
+}
+
+function PageEditor({ id }: { id: string | null }) {
+  const beginRequest = useEditorRequestGuard(id);
+  const { me } = useAuth();
   const { modal } = AntdApp.useApp();
   const [formApi] = Form.useForm<FormState>();
   const [view, setView] = useState<FormState>(EMPTY_FORM);
@@ -117,6 +128,8 @@ export function PageEditScreen({ id }: { id: string | null }) {
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [conflict, setConflict] = useState(false);
+  const comparison = useConflictSnapshot({ active: conflict, id, load: api.getPage });
+  const localSavedRef = useRef<(id: string, version: number, merged: FormState, dirty: boolean) => void>(() => {});
   const [deleteConflict, setDeleteConflict] = useState(false);
   const baselineRef = useRef<FormState>(EMPTY_FORM);
   const loadedIdRef = useRef<string | null>(null);
@@ -154,7 +167,9 @@ export function PageEditScreen({ id }: { id: string | null }) {
       setPublishedAt(page.published_at);
       setConflict(false);
       setDeleteConflict(false);
-      return !formEquals(merged, server);
+      const stillDirty = !formEquals(merged, server);
+      if (sent !== undefined) localSavedRef.current(page.id, page.version, merged, stillDirty);
+      return stillDirty;
     },
     [readForm, writeForm],
   );
@@ -163,7 +178,7 @@ export function PageEditScreen({ id }: { id: string | null }) {
   const applyStatus = useCallback((page: PageDetail): void => {
     setVersion(page.version);
     setPageStatus(page.status);
-      setPublishedAt(page.published_at);
+    setPublishedAt(page.published_at);
     setConflict(false);
   }, []);
 
@@ -183,6 +198,23 @@ export function PageEditScreen({ id }: { id: string | null }) {
   /** 渲染镜像与最近一次服务器同步值的差异；用于离开确认（见 src/unsaved.tsx）。 */
   const dirty = !formEquals(view, baselineRef.current);
   useUnsavedGuard(dirty, "页面有未保存的修改，离开会丢失。");
+  const localDraft = useLocalDraft({
+    owner: me?.user_id, kind: "page", id,
+    ready: !loading && !formMismatch && (id !== null || pageId === null),
+    disabled: busy,
+    dirty, value: view, template: EMPTY_FORM, baselineVersion: version,
+    onRestore: (value, savedVersion) => {
+      writeForm(value);
+      if (id !== null && savedVersion !== version) {
+        // Restored input still belongs to its original baseline, never to the freshly loaded version.
+        setVersion(savedVersion);
+        setConflict(true);
+        comparison.refresh();
+      }
+    },
+  });
+  localSavedRef.current = localDraft.saved;
+
   const queryClient = useQueryClient();
   /** 同时刷新页面、回收站与媒体使用位置；表单始终以提交响应为基线。 */
   const invalidateRelated = useCallback((): void => {
@@ -190,6 +222,10 @@ export function PageEditScreen({ id }: { id: string | null }) {
   }, [queryClient]);
 
   useEffect(() => {
+    setBusy(false);
+    setNotice(null);
+    setError(null);
+    setConflict(false);
     if (id === null) {
       // 编辑页后退到新建页时组件会复用（App 不按 ID 加 key）；清空全部编辑状态，
       // 否则会带着上一篇的 slug/标题/正文/version 与「已发布」徽标去建新页。
@@ -248,6 +284,11 @@ export function PageEditScreen({ id }: { id: string | null }) {
   }
 
   async function save(): Promise<void> {
+    const isCurrent = beginRequest();
+    if (localDraft.blocksEditing) {
+      setError("请先恢复或丢弃当前窗口的本机副本。");
+      return;
+    }
     setError(null);
     setNotice(null);
     // 用 formMismatch 而非 unloaded：加载途中也不能把上一篇的内容提交到另一个 ID。
@@ -265,8 +306,9 @@ export function PageEditScreen({ id }: { id: string | null }) {
           content: sent.content,
           visibility: sent.visibility,
         });
-        applyServer(created, sent);
         invalidateRelated();
+        if (!isCurrent()) return;
+        applyServer(created, sent);
         navigate(paths.editPage(created.id));
         return;
       }
@@ -275,90 +317,106 @@ export function PageEditScreen({ id }: { id: string | null }) {
         ...editPayload(),
         expected_version: version ?? undefined,
       });
-      const stillDirty = applyServer(saved, sent);
       invalidateRelated();
+      if (!isCurrent()) return;
+      const stillDirty = applyServer(saved, sent);
 
       setNotice(
-        stillDirty ? "已保存；等待期间的新改动尚未保存。" : "已保存（已发布页面直接更新线上）。",
+        stillDirty ? "已保存；等待期间的新改动尚未保存。" : "已保存。",
       );
     } catch (e) {
+      if (!isCurrent()) return;
       if (isVersionConflict(e)) {
         setConflict(true);
+        comparison.refresh();
       } else {
         setError(permissionMessageOf(e));
       }
     } finally {
-      setBusy(false);
+      if (isCurrent()) setBusy(false);
     }
   }
 
   /** 冲突动作一：丢弃本地改动，重新加载服务器最新内容。 */
   async function reloadFromServer(): Promise<void> {
+    const isCurrent = beginRequest();
     if (id === null) return;
     setError(null);
     setBusy(true);
     try {
-      applyServer(await api.getPage(id));
+      const result = await api.getPage(id);
+      if (!isCurrent()) return;
+      applyServer(result);
       setNotice("已重新加载服务器最新内容。");
     } catch (e) {
+      if (!isCurrent()) return;
       setError(permissionMessageOf(e));
     } finally {
-      setBusy(false);
+      if (isCurrent()) setBusy(false);
     }
   }
 
-  /** 冲突动作二：二次确认后用服务器最新 version 覆盖本地内容。 */
+  /** 冲突动作二：只覆盖已展示的服务器版本，发生新提交时仍拒绝覆盖。 */
   function overwriteWithLatest(): void {
-    if (id === null) return;
+    const isCurrent = beginRequest();
+    if (id === null || comparison.snapshot === null) return;
+    const latest = comparison.snapshot;
     modal.confirm({
-      title: "用当前编辑内容覆盖服务器上的最新版本？",
-      content: "将用你当前的编辑内容覆盖服务器上的最新版本，确定继续？",
+      title: `用当前编辑内容覆盖已展示的服务器版本 v${latest.version}？`,
+      content: "请先核对差异。若服务器再次变化，本次覆盖会被拒绝，本地输入会保留。",
       okButtonProps: { danger: true },
       onOk: async () => {
+        if (!isCurrent()) return;
         setError(null);
         setBusy(true);
         try {
-          const latest = await api.getPage(id);
           const sent = readForm();
           const saved = await api.updatePage(id, {
             ...editPayload(),
             expected_version: latest.version,
           });
-          const stillDirty = applyServer(saved, sent);
           invalidateRelated();
+          if (!isCurrent()) return;
+          const stillDirty = applyServer(saved, sent);
 
           setNotice(
             stillDirty ? "已覆盖保存；等待期间的新改动尚未保存。" : "已用服务器最新版本覆盖保存。",
           );
         } catch (e) {
+          if (!isCurrent()) return;
           if (isVersionConflict(e)) {
             setConflict(true);
+            comparison.refresh();
           } else {
             setError(permissionMessageOf(e));
           }
         } finally {
-          setBusy(false);
+          if (isCurrent()) setBusy(false);
         }
       },
     });
   }
 
-  /** 发布/撤回：有未保存改动时先保存，再用保存得到的版本改状态。 */
+  /** 发布/预约先保存；撤回/归档保留本地编辑，不将其写入线上。 */
   async function changeStatus(action: ContentAction, at?: string): Promise<void> {
+    const isCurrent = beginRequest();
     // 表单不属于当前地址时不得改状态：没有可依据的版本号，等于盲写。
     if (id === null || formMismatch) return;
     setError(null);
     setNotice(null);
     setBusy(true);
     const hadUnsavedEdits = hasUnsaved();
+    const savesContent = action === "publish" || action === "schedule";
     try {
       let expected = version ?? undefined;
-      if (hadUnsavedEdits && pageStatus !== "archived") {
+      if (savesContent && hadUnsavedEdits && pageStatus !== "archived") {
         const sent = readForm();
         const saved = await api.updatePage(id, {
           ...editPayload(),
           expected_version: expected,
         });
+        invalidateRelated();
+        if (!isCurrent()) return;
         expected = saved.version;
         applyServer(saved, sent);
         /**
@@ -366,24 +424,26 @@ export function PageEditScreen({ id }: { id: string | null }) {
          * 状态切换成功——那一步失败时返回列表看到的还是保存前的数据。
          * 下面那次失效仍要保留：状态列（已发布/草稿）只有状态切换成功才变。
          */
-        invalidateRelated();
       }
       const result = action === "publish"
         ? await api.publishPage(id, expected)
         : action === "schedule" ? await api.schedulePage(id, at!, expected)
         : action === "archive" ? await api.archivePage(id, expected)
         : await api.unpublishPage(id, expected);
-      applyStatus(result);
       invalidateRelated();
+      if (!isCurrent()) return;
+      applyStatus(result);
       setNotice(`状态已更新为${statusLabel(result.status)}。${hasUnsaved() ? "还有未保存的改动。" : ""}`);
     } catch (e) {
+      if (!isCurrent()) return;
       if (isVersionConflict(e)) {
         setConflict(true);
+        comparison.refresh();
       } else {
         setError(permissionMessageOf(e));
       }
     } finally {
-      setBusy(false);
+      if (isCurrent()) setBusy(false);
     }
   }
 
@@ -454,25 +514,12 @@ export function PageEditScreen({ id }: { id: string | null }) {
         )}
       </Flex>
 
-      {conflict && (
-        <Alert
-          type="warning"
-          showIcon
-          title="内容已在别处修改。"
-          description="你的编辑仍保留在下面，未被自动覆盖。"
-          style={{ marginBottom: 16 }}
-          action={
-            <Space>
-              <Button disabled={busy} onClick={() => void reloadFromServer()}>
-                重新加载（丢弃本地改动）
-              </Button>
-              <Button danger disabled={busy} onClick={overwriteWithLatest}>
-                仍然覆盖
-              </Button>
-            </Space>
-          }
-        />
-      )}
+      {localDraft.panel}
+      {conflict && <ContentConflict
+        fields={conflictFields(view, comparison.snapshot === null ? null : toForm(comparison.snapshot))}
+        version={comparison.snapshot?.version ?? null} busy={busy} loading={comparison.loading} error={comparison.error}
+        onRefresh={comparison.refresh} onReload={() => void reloadFromServer()} onOverwrite={overwriteWithLatest}
+      />}
 
       {notice !== null && (
         <Alert type="success" showIcon title={notice} style={{ marginBottom: 16 }} />
@@ -506,7 +553,7 @@ export function PageEditScreen({ id }: { id: string | null }) {
 
       <Form
         form={formApi}
-        disabled={pageStatus === "archived" || formMismatch}
+        disabled={pageStatus === "archived" || formMismatch || localDraft.blocksEditing}
         layout="vertical"
         initialValues={EMPTY_FORM}
         onValuesChange={(_changed, all) => setView({ ...EMPTY_FORM, ...all })}
@@ -545,6 +592,8 @@ export function PageEditScreen({ id }: { id: string | null }) {
           />
         </Form.Item>
 
+        <ContentPreview key={id ?? "new"} content={view.content} disabled={formMismatch || busy} />
+
         {canReadMedia && (
           <Flex gap={12} align="center" style={{ marginBottom: 16 }}>
             <Button
@@ -579,11 +628,11 @@ export function PageEditScreen({ id }: { id: string | null }) {
 
         <Space>
           {/* 用文案切换而不是 Button 的 loading：见 PostEditScreen 的同名说明。 */}
-          <Button type="primary" htmlType="submit" disabled={busy || formMismatch || pageStatus === "archived"}>
-            {busy ? "处理中…" : "保存并更新线上"}
+          <Button type="primary" htmlType="submit" disabled={busy || formMismatch || pageStatus === "archived" || localDraft.blocksEditing}>
+            {busy ? "处理中…" : pageStatus === "published" ? "更新已发布内容" : pageStatus === "scheduled" ? "保存预约内容" : "保存草稿"}
           </Button>
           {id !== null && <ContentLifecycleControls status={pageStatus} publishedAt={publishedAt} disabled={busy || formMismatch}
-            canPublish={canPublish} canUnpublish={canUnpublish} canArchive={canArchive} onAction={changeStatus} />}
+            canPublish={canPublish && !localDraft.blocksEditing} canUnpublish={canUnpublish} canArchive={canArchive} onAction={changeStatus} />}
 
           {canDelete && id !== null && !formMismatch && pageId !== null && (
             <Button danger disabled={busy} onClick={deletePage}>

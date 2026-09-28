@@ -326,19 +326,35 @@ impl OAuthManagementInteractor {
         self.configs.list().await
     }
 
+    pub async fn provider_settings(
+        &self,
+    ) -> Result<crate::ports::OAuthConfigSnapshot, UseCaseError> {
+        self.configs.read().await
+    }
+
     pub async fn save_providers(
         &self,
         actor: &Actor,
         providers: &[ProviderConfig],
-    ) -> Result<(), UseCaseError> {
+        expected_version: i64,
+    ) -> Result<i64, UseCaseError> {
         actor.ensure_write_channel()?;
         if !actor.has_permission("oauth.manage") {
             return Err(UseCaseError::Forbidden);
         }
+        if expected_version < 0 {
+            return Err(UseCaseError::Invalid("OAuth 设置版本不能为负数".into()));
+        }
+        let mut ids = std::collections::BTreeSet::new();
         for config in providers {
             validate_provider_config(config)?;
+            if !ids.insert(&config.id) {
+                return Err(UseCaseError::Invalid("OAuth 提供商 id 不能重复".into()));
+            }
         }
-        self.configs.save(providers, actor.audit_context()).await
+        self.configs
+            .save(providers, expected_version, actor.audit_context())
+            .await
     }
 
     /// 显式绑定外部身份（需 `oauth.manage`；操作者需核对稳定外部 ID）。

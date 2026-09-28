@@ -1,5 +1,6 @@
 //! HTTP/runtime telemetry. Labels contain only bounded methods, route templates
 //! and status codes; never request IDs, users, URLs, queries or credentials.
+mod workloads;
 use axum::{
     Extension, Json,
     http::{Method, StatusCode, header},
@@ -40,6 +41,7 @@ pub struct Telemetry {
     cancelled: IntCounterVec,
     pool: IntGaugeVec,
     installed: IntGauge,
+    workloads: workloads::WorkloadMetrics,
 }
 
 impl Telemetry {
@@ -108,6 +110,7 @@ impl Telemetry {
                 .expect("unique static metric names");
         }
         Self {
+            workloads: workloads::WorkloadMetrics::new(&registry),
             registry,
             requests,
             duration,
@@ -152,6 +155,20 @@ impl Telemetry {
         let mut output = String::new();
         TextEncoder::new().encode_utf8(&self.registry.gather(), &mut output)?;
         Ok(output)
+    }
+
+    pub fn publication_run(&self, elapsed: std::time::Duration, success: bool) {
+        self.workloads.publication_run(elapsed, success);
+    }
+}
+
+impl application::rendering_observer::RenderingObserver for Telemetry {
+    fn observe(
+        &self,
+        kind: application::rendering_observer::RenderKind,
+        event: application::rendering_observer::RenderingEvent,
+    ) {
+        self.workloads.observe(kind, event);
     }
 }
 

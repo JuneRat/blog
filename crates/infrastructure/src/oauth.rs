@@ -1,21 +1,22 @@
 //! OAuth 出站适配器：OIDC（发现文档、PKCE、ID 令牌校验）与 GitHub，
 //! 以及 settings 的 oauth 分组存取、oauth_accounts 绑定存储和环境变量秘密源。
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 use crate::audit::record_change;
+use crate::rbac::{CONFIGURED_EXTERNAL_IDENTITY, PostgresRbacStore};
 use async_trait::async_trait;
 use jsonwebtoken::jwk::Jwk;
 use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header};
 use serde::Deserialize;
-use sqlx::{PgPool, Row};
+use sqlx::{Executor, PgPool, Row};
 use uuid::Uuid;
 
 use application::error::{ConflictKind, UseCaseError};
 use application::ports::{
-    ExternalIdentity, ExternalIdentityClient, OAuthAccountStore, OAuthConfigStore, ProviderConfig,
-    ProviderKind, SecretSource,
+    ExternalIdentity, ExternalIdentityClient, OAuthAccountStore, OAuthConfigSnapshot,
+    OAuthConfigStore, ProviderConfig, ProviderKind, SecretSource,
 };
 
 /// GitHub 固定平台实例端点。
@@ -443,22 +444,44 @@ impl PostgresOAuthConfigStore {
     }
 }
 
+async fn read_oauth_settings(
+    executor: impl Executor<'_, Database = sqlx::Postgres>,
+) -> Result<OAuthConfigSnapshot, UseCaseError> {
+    let value: Option<(sqlx::types::Json<OAuthSettingsValue>, i64)> =
+        sqlx::query_as("SELECT value, version FROM settings WHERE key = 'oauth'")
+            .fetch_optional(executor)
+            .await
+            .map_err(|e| UseCaseError::Repository(e.to_string()))?;
+    Ok(value
+        .map(|(value, version)| OAuthConfigSnapshot {
+            providers: value.0.providers,
+            version,
+        })
+        .unwrap_or_default())
+}
+
+fn provider_namespaces(providers: &[ProviderConfig]) -> BTreeSet<&str> {
+    providers
+        .iter()
+        .filter_map(|provider| match provider.kind {
+            ProviderKind::GitHub => Some("github"),
+            ProviderKind::Oidc => provider.issuer.as_deref(),
+        })
+        .collect()
+}
+
 #[async_trait]
 impl OAuthConfigStore for PostgresOAuthConfigStore {
-    async fn list(&self) -> Result<Vec<ProviderConfig>, UseCaseError> {
-        let value: Option<sqlx::types::Json<OAuthSettingsValue>> =
-            sqlx::query_scalar("SELECT value FROM settings WHERE key = 'oauth'")
-                .fetch_optional(&self.pool)
-                .await
-                .map_err(|e| UseCaseError::Repository(e.to_string()))?;
-        Ok(value.map(|j| j.0.providers).unwrap_or_default())
+    async fn read(&self) -> Result<OAuthConfigSnapshot, UseCaseError> {
+        read_oauth_settings(&self.pool).await
     }
 
     async fn save(
         &self,
         providers: &[ProviderConfig],
+        expected_version: i64,
         audit_actor: application::audit::AuditContext,
-    ) -> Result<(), UseCaseError> {
+    ) -> Result<i64, UseCaseError> {
         let value = serde_json::json!({
             "schema_version": 1,
             "providers": providers,
@@ -468,30 +491,64 @@ impl OAuthConfigStore for PostgresOAuthConfigStore {
             .begin()
             .await
             .map_err(|e| UseCaseError::Repository(e.to_string()))?;
-        let version:Option<i64>=sqlx::query_scalar(
-            "INSERT INTO settings (key, value, version, updated_at) \
-             VALUES ('oauth', $1, 1, now()) \
-             ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, version = settings.version + 1, updated_at = now() WHERE settings.value IS DISTINCT FROM EXCLUDED.value RETURNING version",
-        )
-        .bind(value)
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(|e| UseCaseError::Repository(e.to_string()))?;
-        if let Some(version) = version {
-            record_change(
-                &mut tx,
-                audit_actor,
-                "settings.oauth",
-                "settings",
-                "oauth",
-                serde_json::json!({"version":version,"provider_count":providers.len()}),
-            )
-            .await?;
+        crate::persistence::acquire_identity_lock(&mut *tx)
+            .await
+            .map_err(|e| UseCaseError::Repository(e.to_string()))?;
+        let before = read_oauth_settings(&mut *tx).await?;
+        if before.version != expected_version {
+            return Err(UseCaseError::VersionConflict);
         }
+        if before.providers == providers {
+            tx.commit()
+                .await
+                .map_err(|e| UseCaseError::Repository(e.to_string()))?;
+            return Ok(before.version);
+        }
+        let removes_namespace =
+            !provider_namespaces(&before.providers).is_subset(&provider_namespaces(providers));
+        let statement = if expected_version == 0 {
+            "INSERT INTO settings (key, value, version, updated_at) \
+             VALUES ('oauth', $1, 1, now()) ON CONFLICT (key) DO NOTHING RETURNING version"
+        } else {
+            "UPDATE settings SET value=$1, version=version+1, updated_at=now() \
+             WHERE key='oauth' AND version=$2 RETURNING version"
+        };
+        let mut query = sqlx::query_scalar(statement).bind(value);
+        if expected_version != 0 {
+            query = query.bind(expected_version);
+        }
+        let version: i64 = query
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|e| UseCaseError::Repository(e.to_string()))?
+            .ok_or(UseCaseError::VersionConflict)?;
+        if removes_namespace {
+            // 已有 Owner 时，变更后的配置必须仍能对应至少一个 active Owner。
+            // 空库/分步 CLI 引导尚无 Owner 时允许维护配置，不调用外部身份服务。
+            let has_owner: bool = sqlx::query_scalar(
+                "SELECT EXISTS (SELECT 1 FROM user_roles ur JOIN roles r ON r.id=ur.role_id \
+                 WHERE r.code='owner')",
+            )
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|e| UseCaseError::Repository(e.to_string()))?;
+            if has_owner && PostgresRbacStore::active_owner_count(&mut *tx).await? == 0 {
+                return Err(UseCaseError::LastOwnerProtected);
+            }
+        }
+        record_change(
+            &mut tx,
+            audit_actor,
+            "settings.oauth",
+            "settings",
+            "oauth",
+            serde_json::json!({"version":version,"provider_count":providers.len()}),
+        )
+        .await?;
         tx.commit()
             .await
             .map_err(|e| UseCaseError::Repository(e.to_string()))?;
-        Ok(())
+        Ok(version)
     }
 }
 
@@ -621,22 +678,28 @@ impl OAuthAccountStore for PostgresOAuthAccountStore {
                 .map_err(|e| UseCaseError::Repository(e.to_string()));
         }
 
-        let (external_identities, password): (i64, Option<String>) = sqlx::query_as(
-            "SELECT \
-                (SELECT count(*) FROM oauth_accounts WHERE user_id = $1), \
-                (SELECT password_hash FROM users WHERE id = $1)",
-        )
-        .bind(user_id)
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(|e| UseCaseError::Repository(e.to_string()))?;
+        let (external_identities, password, configured): (i64, Option<String>, bool) =
+            sqlx::query_as(&format!(
+                "SELECT \
+                (SELECT count(*) FROM oauth_accounts oa WHERE oa.user_id = $1 \
+                 AND {CONFIGURED_EXTERNAL_IDENTITY}), \
+                (SELECT password_hash FROM users WHERE id = $1), \
+                EXISTS (SELECT 1 FROM oauth_accounts oa WHERE oa.user_id=$1 \
+                        AND oa.provider=$2 AND oa.subject=$3 AND {CONFIGURED_EXTERNAL_IDENTITY})",
+            ))
+            .bind(user_id)
+            .bind(provider_key)
+            .bind(provider_user_id)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|e| UseCaseError::Repository(e.to_string()))?;
 
         // 解绑必须保留另一外部身份或本地密码。
         let methods = domain::identity::LoginMethods {
             password_enabled: password.is_some(),
             external_identities,
         };
-        if !methods.can_remove(domain::identity::LoginMethod::ExternalIdentity) {
+        if configured && !methods.can_remove(domain::identity::LoginMethod::ExternalIdentity) {
             return Err(UseCaseError::Forbidden);
         }
 

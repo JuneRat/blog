@@ -79,6 +79,22 @@ async fn credential_changes_record_the_operator_and_rollback_sessions_on_audit_f
     let users = PostgresUserRepository::new(common::database(pool.clone()));
     let accounts = PostgresOAuthAccountStore::new(common::database(pool.clone()));
     let sessions = PostgresSessionStore::with_defaults(common::database(pool.clone()));
+    PostgresOAuthConfigStore::new(common::database(pool.clone()))
+        .save(
+            &[ProviderConfig {
+                id: "github".into(),
+                name: None,
+                kind: ProviderKind::GitHub,
+                issuer: None,
+                client_id: "client".into(),
+                secret_ref: "GITHUB_SECRET".into(),
+                scopes: vec![],
+            }],
+            0,
+            context(actor),
+        )
+        .await
+        .unwrap();
     users.insert(&user, context(actor)).await.unwrap();
     users
         .set_password_hash(id, "$argon2id$private-hash", context(actor))
@@ -351,7 +367,7 @@ async fn settings_and_category_audit_failures_restore_values_versions_and_logo_r
         secret_ref: "PRIVATE_SECRET".into(),
         scopes: vec![],
     }];
-    oauth.save(&providers, context(actor)).await.unwrap();
+    oauth.save(&providers, 0, context(actor)).await.unwrap();
     let snapshot = "SELECT jsonb_build_object('settings',(SELECT jsonb_agg(s ORDER BY key) FROM settings s),'categories',(SELECT jsonb_agg(c ORDER BY id) FROM categories c),'refs',(SELECT jsonb_agg(r ORDER BY media_id,source_type,source_id) FROM media_refs r))";
     let before: Value = sqlx::query_scalar(snapshot).fetch_one(&pool).await.unwrap();
     let audit_count = count(&pool).await;
@@ -388,7 +404,7 @@ async fn settings_and_category_audit_failures_restore_values_versions_and_logo_r
             .await
             .is_err()
     );
-    assert!(oauth.save(&[], context(actor)).await.is_err());
+    assert!(oauth.save(&[], 1, context(actor)).await.is_err());
     assert!(
         categories
             .update(cid, "Stale", None, None, 1, context(actor))
@@ -410,7 +426,7 @@ async fn settings_and_category_audit_failures_restore_values_versions_and_logo_r
             .unwrap(),
         SaveOutcome::StaleConflict
     );
-    oauth.save(&providers, context(actor)).await.unwrap();
+    oauth.save(&providers, 1, context(actor)).await.unwrap();
     let after: Value = sqlx::query_scalar(snapshot).fetch_one(&pool).await.unwrap();
     assert_eq!(before, after);
     assert_eq!(count(&pool).await, audit_count);

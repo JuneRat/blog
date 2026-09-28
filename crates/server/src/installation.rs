@@ -148,7 +148,10 @@ impl Installer for Setup {
             &runtime_pool,
             &site,
             crate::assembly::roles(&runtime_pool),
-            Arc::new(infrastructure::RenderingRuntime::default()),
+            Arc::new(
+                infrastructure::RenderingRuntime::default()
+                    .with_observer(Arc::new(live.telemetry.clone())),
+            ),
             &live.telemetry,
         )
         .await
@@ -237,7 +240,13 @@ pub async fn serve(
     let address = listener.local_addr().map_err(|e| e.to_string())?;
     crate::notice(format_args!("首次安装：http://{address}/install"));
     crate::notice(format_args!("安装码：{token}"));
-    let server = crate::serve_http(listener, app, metrics_listener, telemetry, metrics_pool);
+    let server = crate::serve_http(
+        listener,
+        app,
+        metrics_listener,
+        telemetry.clone(),
+        metrics_pool,
+    );
     let scheduler = async {
         let pool = receiver
             .wait_for(|pool| pool.is_some())
@@ -245,7 +254,7 @@ pub async fn serve(
             .expect("live site retains sender")
             .clone()
             .expect("ready pool");
-        crate::publish_scheduler(crate::assembly::publisher(&pool)).await
+        crate::publish_scheduler(crate::assembly::publisher(&pool), telemetry).await
     };
     tokio::select! { result = server => result, _ = scheduler => unreachable!("scheduler loops") }
 }

@@ -74,6 +74,8 @@ POST 必须带启动终端显示的 `X-Install-Token`，并执行与其他写入
 
 以下所有路径均相对于 `/api/admin/v1`。读写权限按文章作者区分 own / any；创建文章的作者取当前会话用户。
 
+正文预览使用 `POST /content-preview`，请求 `{ "content": "Markdown" }`，返回 `{ "content_html": "清洗后的 HTML" }`。需要会话、CSRF，以及 `post.create/post.update/post.update_any/page.create/page.update` 中任一权限。它复用保存时的正文渲染器、源文与 HTML 预算，不读取已有内容，不更新正文、引用或审计，响应 `Cache-Control: no-store`。预览只展示正文，不代表完整主题、发布校验或媒体引用提交已经成功。
+
 | 方法与路径 | 行为 |
 |---|---|
 | `GET /posts` | 当前用户文章摘要分页；显式 `?author=用户名` 需 `post.read_any` |
