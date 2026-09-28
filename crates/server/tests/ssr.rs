@@ -62,18 +62,24 @@ async fn stack_with_theme(theme_dir: &str) -> Stack {
     let clock = Arc::new(SystemClock);
     let rendering = Arc::new(RenderingRuntime::default());
     let user_repo: Arc<infrastructure::PostgresUserRepository> =
-        Arc::new(PostgresUserRepository::new(pool.clone()));
-    let post_repo: Arc<dyn PostRepository> =
-        Arc::new(PostgresPostRepository::new(pool.clone(), rendering.clone()));
-    let page_repo: Arc<dyn PageRepository> =
-        Arc::new(PostgresPageRepository::new(pool.clone(), rendering.clone()));
-    let rbac = Arc::new(PostgresRbacStore::new(pool.clone()));
+        Arc::new(PostgresUserRepository::new(common::database(pool.clone())));
+    let post_repo: Arc<dyn PostRepository> = Arc::new(PostgresPostRepository::new(
+        common::database(pool.clone()),
+        rendering.clone(),
+    ));
+    let page_repo: Arc<dyn PageRepository> = Arc::new(PostgresPageRepository::new(
+        common::database(pool.clone()),
+        rendering.clone(),
+    ));
+    let rbac = Arc::new(PostgresRbacStore::new(common::database(pool.clone())));
     let roles = Arc::new(RoleInteractor::new(rbac.clone(), user_repo.clone()));
     roles.sync_registry().await.expect("同步权限目录失败");
-    let public_query: Arc<dyn PublishedPostQuery> =
-        Arc::new(PostgresPublishedPostQuery::new(pool.clone()));
-    let public_page_query: Arc<dyn PublishedPageQuery> =
-        Arc::new(PostgresPublishedPageQuery::new(pool.clone()));
+    let public_query: Arc<dyn PublishedPostQuery> = Arc::new(PostgresPublishedPostQuery::new(
+        common::database(pool.clone()),
+    ));
+    let public_page_query: Arc<dyn PublishedPageQuery> = Arc::new(PostgresPublishedPageQuery::new(
+        common::database(pool.clone()),
+    ));
 
     let users = Arc::new(UserInteractor::new(
         application::identity::UserStores {
@@ -85,13 +91,17 @@ async fn stack_with_theme(theme_dir: &str) -> Stack {
         clock.clone(),
         common::media_guard(pool.clone()),
     ));
-    let tag_repo: Arc<dyn TagRepository> = Arc::new(PostgresTagRepository::new(pool.clone()));
-    let public_tag_query: Arc<dyn PublishedTagQuery> =
-        Arc::new(PostgresPublishedTagQuery::new(pool.clone()));
-    let category_repo: Arc<dyn CategoryRepository> =
-        Arc::new(PostgresCategoryRepository::new(pool.clone()));
-    let public_category_query: Arc<dyn PublishedCategoryQuery> =
-        Arc::new(PostgresPublishedCategoryQuery::new(pool.clone()));
+    let tag_repo: Arc<dyn TagRepository> =
+        Arc::new(PostgresTagRepository::new(common::database(pool.clone())));
+    let public_tag_query: Arc<dyn PublishedTagQuery> = Arc::new(PostgresPublishedTagQuery::new(
+        common::database(pool.clone()),
+    ));
+    let category_repo: Arc<dyn CategoryRepository> = Arc::new(PostgresCategoryRepository::new(
+        common::database(pool.clone()),
+    ));
+    let public_category_query: Arc<dyn PublishedCategoryQuery> = Arc::new(
+        PostgresPublishedCategoryQuery::new(common::database(pool.clone())),
+    );
     let theme = rendering.theme_renderer(
         MiniJinjaThemeRenderer::load(std::path::Path::new(theme_dir))
             .expect("模板加载失败")
@@ -101,10 +111,11 @@ async fn stack_with_theme(theme_dir: &str) -> Stack {
                 public_category_query.clone(),
             ))),
     );
-    let series_repo: Arc<dyn application::ports::SeriesRepository> =
-        Arc::new(infrastructure::PostgresSeriesRepository::new(pool.clone()));
+    let series_repo: Arc<dyn application::ports::SeriesRepository> = Arc::new(
+        infrastructure::PostgresSeriesRepository::new(common::database(pool.clone())),
+    );
     let public_series_query: Arc<dyn application::ports::PublishedSeriesQuery> = Arc::new(
-        infrastructure::PostgresPublishedSeriesQuery::new(pool.clone()),
+        infrastructure::PostgresPublishedSeriesQuery::new(common::database(pool.clone())),
     );
     let posts = Arc::new(PostInteractor::new(
         post_repo,
@@ -128,7 +139,9 @@ async fn stack_with_theme(theme_dir: &str) -> Stack {
         public_series_query,
         theme,
         // 公开渲染的站点信息经 settings 解析：site 行未配置时回退装配值。
-        Arc::new(infrastructure::PostgresSettingsStore::new(pool.clone())),
+        Arc::new(infrastructure::PostgresSettingsStore::new(
+            common::database(pool.clone()),
+        )),
         fallback,
         application::seo::PublicBaseUrl::parse("https://blog.test").unwrap(),
     ));
@@ -165,7 +178,9 @@ async fn stack_with_theme(theme_dir: &str) -> Stack {
 
     let router = public_router(PublicSiteState {
         site: public_site,
-        health: Some(Arc::new(infrastructure::PgHealthCheck::new(pool.clone()))),
+        health: Some(Arc::new(infrastructure::PgHealthCheck::new(
+            common::database(pool.clone()),
+        ))),
     });
     Stack {
         router,

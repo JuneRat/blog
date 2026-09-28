@@ -127,8 +127,8 @@ async fn fresh_stack() -> Stack {
     let pool = common::fresh_database("blog_admin_test").await;
 
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
-    let user_repo = Arc::new(PostgresUserRepository::new(pool.clone()));
-    let rbac = Arc::new(PostgresRbacStore::new(pool.clone()));
+    let user_repo = Arc::new(PostgresUserRepository::new(common::database(pool.clone())));
+    let rbac = Arc::new(PostgresRbacStore::new(common::database(pool.clone())));
     let roles = Arc::new(RoleInteractor::new(rbac.clone(), user_repo.clone()));
     roles.sync_registry().await.expect("同步权限目录失败");
     let users = Arc::new(UserInteractor::new(
@@ -173,7 +173,9 @@ async fn fresh_stack() -> Stack {
         ids.insert(username.to_string(), user.id);
     }
 
-    let configs = Arc::new(PostgresOAuthConfigStore::new(pool.clone()));
+    let configs = Arc::new(PostgresOAuthConfigStore::new(common::database(
+        pool.clone(),
+    )));
     configs
         .save(
             &[ProviderConfig {
@@ -190,8 +192,9 @@ async fn fresh_stack() -> Stack {
         .await
         .unwrap();
 
-    let accounts: Arc<dyn OAuthAccountStore> =
-        Arc::new(PostgresOAuthAccountStore::new(pool.clone()));
+    let accounts: Arc<dyn OAuthAccountStore> = Arc::new(PostgresOAuthAccountStore::new(
+        common::database(pool.clone()),
+    ));
     for (username, uid) in &ids {
         let external = format!("sub-{username}");
         accounts
@@ -203,15 +206,18 @@ async fn fresh_stack() -> Stack {
     let idp = Arc::new(FakeIdpClient {
         external_id: Mutex::new("sub-author".into()),
     });
-    let tag_repo: Arc<dyn application::ports::TagRepository> =
-        Arc::new(infrastructure::PostgresTagRepository::new(pool.clone()));
-    let category_repo: Arc<dyn application::ports::CategoryRepository> =
-        Arc::new(PostgresCategoryRepository::new(pool.clone()));
-    let series_repo: Arc<dyn application::ports::SeriesRepository> =
-        Arc::new(infrastructure::PostgresSeriesRepository::new(pool.clone()));
+    let tag_repo: Arc<dyn application::ports::TagRepository> = Arc::new(
+        infrastructure::PostgresTagRepository::new(common::database(pool.clone())),
+    );
+    let category_repo: Arc<dyn application::ports::CategoryRepository> = Arc::new(
+        PostgresCategoryRepository::new(common::database(pool.clone())),
+    );
+    let series_repo: Arc<dyn application::ports::SeriesRepository> = Arc::new(
+        infrastructure::PostgresSeriesRepository::new(common::database(pool.clone())),
+    );
     let posts = Arc::new(PostInteractor::new(
         Arc::new(PostgresPostRepository::new(
-            pool.clone(),
+            common::database(pool.clone()),
             Arc::new(infrastructure::RenderingRuntime::default()),
         )),
         tag_repo.clone(),
@@ -222,7 +228,7 @@ async fn fresh_stack() -> Stack {
     ));
     let pages = Arc::new(PageInteractor::new(
         Arc::new(PostgresPageRepository::new(
-            pool.clone(),
+            common::database(pool.clone()),
             Arc::new(infrastructure::RenderingRuntime::default()),
         )),
         clock.clone(),
@@ -241,7 +247,9 @@ async fn fresh_stack() -> Stack {
         common::media_guard(pool.clone()),
     ));
     let settings = Arc::new(application::settings::SettingsInteractor::new(
-        Arc::new(infrastructure::PostgresSettingsStore::new(pool.clone())),
+        Arc::new(infrastructure::PostgresSettingsStore::new(
+            common::database(pool.clone()),
+        )),
         clock.clone(),
         application::site_info::SiteInfo {
             title: "测试站点".into(),
@@ -305,7 +313,7 @@ async fn fresh_stack() -> Stack {
             interfaces::http_comments::CommentState {
                 comments: Arc::new(application::comments::CommentInteractor::new(
                     Arc::new(infrastructure::comments::PostgresCommentRepository::new(
-                        pool.clone(),
+                        common::database(pool.clone()),
                         Arc::new(infrastructure::RenderingRuntime::default()),
                     )),
                     Arc::new(infrastructure::RenderingRuntime::default()),

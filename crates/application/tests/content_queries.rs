@@ -1,6 +1,7 @@
 use application::UseCaseError;
 use application::content_queries::{
     AdminPageSummary, AdminPostSummary, ContentListFilter, ContentListRequest, ContentQueries,
+    PageListFilter, PostListFilter, Visibility,
 };
 use application::identity::{Actor, ActorChannel};
 use application::ports::{AdminPageQuery, AdminPostQuery};
@@ -9,15 +10,38 @@ use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
 #[derive(Default)]
-struct QuerySpy(Mutex<Vec<(Option<Uuid>, ContentListFilter)>>);
+struct QuerySpy(Mutex<Vec<(Option<Uuid>, ObservedFilter)>>);
+
+struct ObservedFilter {
+    limit: i64,
+    offset: i64,
+    status: Option<&'static str>,
+    visibility: Option<Visibility>,
+    trash: bool,
+}
+
+impl ObservedFilter {
+    fn of<S: Copy>(filter: &ContentListFilter<S>, status: impl Fn(S) -> &'static str) -> Self {
+        Self {
+            limit: filter.limit(),
+            offset: filter.offset(),
+            status: filter.status().map(status),
+            visibility: filter.visibility(),
+            trash: filter.trash(),
+        }
+    }
+}
 #[async_trait::async_trait]
 impl AdminPostQuery for QuerySpy {
     async fn list(
         &self,
         author: Uuid,
-        filter: &ContentListFilter,
+        filter: &PostListFilter,
     ) -> Result<(Vec<AdminPostSummary>, i64), UseCaseError> {
-        self.0.lock().unwrap().push((Some(author), filter.clone()));
+        self.0.lock().unwrap().push((
+            Some(author),
+            ObservedFilter::of(filter, |status| status.as_str()),
+        ));
         Ok((vec![], 41))
     }
 }
@@ -25,9 +49,12 @@ impl AdminPostQuery for QuerySpy {
 impl AdminPageQuery for QuerySpy {
     async fn list(
         &self,
-        filter: &ContentListFilter,
+        filter: &PageListFilter,
     ) -> Result<(Vec<AdminPageSummary>, i64), UseCaseError> {
-        self.0.lock().unwrap().push((None, filter.clone()));
+        self.0
+            .lock()
+            .unwrap()
+            .push((None, ObservedFilter::of(filter, |status| status.as_str())));
         Ok((vec![], 21))
     }
 }
@@ -141,9 +168,33 @@ async fn page_metadata_and_validated_filters_reach_storage() {
     assert_eq!(calls[0].0, Some(reader.user_id.0));
     assert_eq!(calls[1].0, None);
     for (_, filter) in calls.iter() {
-        assert_eq!((filter.limit(), filter.offset()), (20, 40));
-        assert_eq!(filter.status(), Some("scheduled"));
-        assert_eq!(filter.visibility(), Some("private"));
-        assert!(filter.trash());
+        assert_eq!((filter.limit, filter.offset), (20, 40));
+        assert_eq!(filter.status, Some("scheduled"));
+        assert_eq!(filter.visibility, Some(Visibility::Private));
+        assert!(filter.trash);
     }
+}
+
+#[tokio::test]
+async fn unauthorized_invalid_filters_are_rejected_before_validation() {
+    let spy = Arc::new(QuerySpy::default());
+    let queries = ContentQueries::new(spy.clone(), spy.clone());
+    let outsider = actor(&[]);
+    let request = ContentListRequest {
+        page: 0,
+        status: Some("active".into()),
+        visibility: Some("secret".into()),
+        trash: false,
+    };
+    assert!(matches!(
+        queries
+            .posts(&outsider, outsider.user_id, request.clone())
+            .await,
+        Err(UseCaseError::Forbidden)
+    ));
+    assert!(matches!(
+        queries.pages(&outsider, request).await,
+        Err(UseCaseError::Forbidden)
+    ));
+    assert!(spy.0.lock().unwrap().is_empty());
 }

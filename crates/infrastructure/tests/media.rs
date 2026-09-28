@@ -35,14 +35,14 @@ fn image(owner: Option<Uuid>) -> Media {
 }
 async fn seed(pool: &PgPool) -> (PostgresMediaRepository, Media, Uuid) {
     let owner = common::seed_user(pool, "author").await;
-    let repo = PostgresMediaRepository::new(pool.clone());
+    let repo = PostgresMediaRepository::new(common::database(pool.clone()));
     let media = image(Some(owner));
     repo.insert(&media, Some(owner).into()).await.unwrap();
     (repo, media, owner)
 }
 fn pages(pool: &PgPool) -> PostgresPageRepository {
     PostgresPageRepository::new(
-        pool.clone(),
+        common::database(pool.clone()),
         Arc::new(infrastructure::RenderingRuntime::default()),
     )
 }
@@ -213,8 +213,8 @@ async fn avatar_and_site_logo_preserve_old_trashed_refs_and_reject_new_ones() {
     let pool = common::fresh_database("blog_media_avatar_logo").await;
     let (repo, media, owner) = seed(&pool).await;
     let other = common::seed_user(&pool, "other").await;
-    let users = PostgresUserRepository::new(pool.clone());
-    let settings = PostgresSettingsStore::new(pool.clone());
+    let users = PostgresUserRepository::new(common::database(pool.clone()));
+    let settings = PostgresSettingsStore::new(common::database(pool.clone()));
     let now = OffsetDateTime::now_utc();
     let site = SiteSettingsValue {
         title: Some("Site".into()),
@@ -326,7 +326,7 @@ async fn usage_metadata_respects_publish_time_visibility_and_soft_deleted_pages(
             row.public,
             row.slug == "live",
             "{} {}",
-            row.kind.as_str(),
+            row.source.kind().as_str(),
             row.slug
         );
         assert_eq!(row.deleted, row.slug == "trash");
@@ -472,7 +472,7 @@ async fn series_cover_insert_and_update_synchronize_references_in_the_same_trans
     use application::ports::SeriesRepository;
     let pool = common::fresh_database("blog_media_series_cover").await;
     let (repo, media, owner) = seed(&pool).await;
-    let series_repo = infrastructure::PostgresSeriesRepository::new(pool.clone());
+    let series_repo = infrastructure::PostgresSeriesRepository::new(common::database(pool.clone()));
     let mut series = domain::content::Series::new(
         "Series".into(),
         Slug::new("series").unwrap(),

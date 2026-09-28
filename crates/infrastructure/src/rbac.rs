@@ -19,7 +19,8 @@ pub struct PostgresRbacStore {
 }
 
 impl PostgresRbacStore {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(database: crate::Database) -> Self {
+        let pool = database.pool;
         Self { pool }
     }
 }

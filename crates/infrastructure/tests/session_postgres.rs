@@ -8,8 +8,9 @@
 use std::sync::{Arc, Mutex};
 
 use application::ports::SessionStore;
+use common::connect;
 use infrastructure::sessions::SESSION_LOCK;
-use infrastructure::{PostgresSessionStore, SessionStoreConfig, connect};
+use infrastructure::{PostgresSessionStore, SessionStoreConfig};
 use sha2::{Digest as _, Sha256};
 use sqlx::{PgPool, Row};
 use time::OffsetDateTime;
@@ -50,7 +51,7 @@ fn session_store(
     cfg: SessionStoreConfig,
     now: &Arc<Mutex<OffsetDateTime>>,
 ) -> PostgresSessionStore {
-    PostgresSessionStore::new(pool, cfg, reader(now))
+    PostgresSessionStore::new(common::database(pool), cfg, reader(now))
 }
 
 async fn session_count(pool: &PgPool) -> i64 {

@@ -9,9 +9,10 @@ use application::ports::{Clock, HealthCheck};
 /// 从目录加载并执行迁移（sqlx 布局 `<version>_<description>.sql`，每条自动包事务）。
 /// 所有命令只在这里准备或校验结构；HTML 重建由显式维护入口执行。
 pub async fn migrate_schema(
-    pool: &PgPool,
+    database: &crate::Database,
     migrations_dir: impl AsRef<std::path::Path>,
 ) -> Result<(), UseCaseError> {
+    let pool = &database.pool;
     crate::schema_contract::SchemaContract::load(&migrations_dir)?;
     let legacy: bool = sqlx::query_scalar(
         "SELECT to_regclass('users') IS NOT NULL AND NOT EXISTS ( \
@@ -48,9 +49,10 @@ pub async fn migrate_schema(
 
 /// 只读核对迁移历史；即使连接具有建表权限也绝不执行 SQLx 迁移。
 pub async fn verify_schema(
-    pool: &PgPool,
+    database: &crate::Database,
     migrations_dir: impl AsRef<std::path::Path>,
 ) -> Result<(), UseCaseError> {
+    let pool = &database.pool;
     crate::schema_contract::SchemaContract::load(&migrations_dir)?;
     let migrator = sqlx::migrate::Migrator::new(migrations_dir.as_ref())
         .await
@@ -127,7 +129,8 @@ pub struct PgHealthCheck {
 }
 
 impl PgHealthCheck {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(database: crate::Database) -> Self {
+        let pool = database.pool;
         Self { pool }
     }
 }

@@ -85,8 +85,8 @@ async fn fresh_stack_with(secure_cookies: bool) -> Stack {
     let pool = common::fresh_database("blog_auth_test").await;
 
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
-    let user_repo = Arc::new(PostgresUserRepository::new(pool.clone()));
-    let rbac = Arc::new(PostgresRbacStore::new(pool.clone()));
+    let user_repo = Arc::new(PostgresUserRepository::new(common::database(pool.clone())));
+    let rbac = Arc::new(PostgresRbacStore::new(common::database(pool.clone())));
     let roles = Arc::new(RoleInteractor::new(rbac.clone(), user_repo.clone()));
     roles.sync_registry().await.expect("同步权限目录失败");
     let users = Arc::new(UserInteractor::new(
@@ -117,7 +117,9 @@ async fn fresh_stack_with(secure_cookies: bool) -> Stack {
         .await
         .unwrap();
 
-    let configs = Arc::new(PostgresOAuthConfigStore::new(pool.clone()));
+    let configs = Arc::new(PostgresOAuthConfigStore::new(common::database(
+        pool.clone(),
+    )));
     configs
         .save(
             &[ProviderConfig {
@@ -134,8 +136,9 @@ async fn fresh_stack_with(secure_cookies: bool) -> Stack {
         .await
         .unwrap();
 
-    let accounts: Arc<dyn OAuthAccountStore> =
-        Arc::new(PostgresOAuthAccountStore::new(pool.clone()));
+    let accounts: Arc<dyn OAuthAccountStore> = Arc::new(PostgresOAuthAccountStore::new(
+        common::database(pool.clone()),
+    ));
     accounts
         .bind(
             member.id,
@@ -154,24 +157,27 @@ async fn fresh_stack_with(secure_cookies: bool) -> Stack {
     });
     let random: Arc<dyn SecureRandom> = Arc::new(TestRandom);
 
-    let tag_repo: Arc<dyn application::ports::TagRepository> =
-        Arc::new(infrastructure::PostgresTagRepository::new(pool.clone()));
+    let tag_repo: Arc<dyn application::ports::TagRepository> = Arc::new(
+        infrastructure::PostgresTagRepository::new(common::database(pool.clone())),
+    );
     let posts = Arc::new(application::content::PostInteractor::new(
         Arc::new(infrastructure::PostgresPostRepository::new(
-            pool.clone(),
+            common::database(pool.clone()),
             Arc::new(infrastructure::RenderingRuntime::default()),
         )),
         tag_repo.clone(),
         std::sync::Arc::new(infrastructure::PostgresCategoryRepository::new(
-            pool.clone(),
+            common::database(pool.clone()),
         )),
-        std::sync::Arc::new(infrastructure::PostgresSeriesRepository::new(pool.clone())),
+        std::sync::Arc::new(infrastructure::PostgresSeriesRepository::new(
+            common::database(pool.clone()),
+        )),
         std::sync::Arc::new(infrastructure::SystemClock),
         common::media_guard(pool.clone()),
     ));
     let pages = Arc::new(application::page::PageInteractor::new(
         Arc::new(infrastructure::PostgresPageRepository::new(
-            pool.clone(),
+            common::database(pool.clone()),
             Arc::new(infrastructure::RenderingRuntime::default()),
         )),
         std::sync::Arc::new(infrastructure::SystemClock),
@@ -210,17 +216,21 @@ async fn fresh_stack_with(secure_cookies: bool) -> Stack {
         )),
         categories: Arc::new(application::category::CategoryInteractor::new(
             std::sync::Arc::new(infrastructure::PostgresCategoryRepository::new(
-                pool.clone(),
+                common::database(pool.clone()),
             )),
             std::sync::Arc::new(infrastructure::SystemClock),
         )),
         series: Arc::new(application::series::SeriesInteractor::new(
-            std::sync::Arc::new(infrastructure::PostgresSeriesRepository::new(pool.clone())),
+            std::sync::Arc::new(infrastructure::PostgresSeriesRepository::new(
+                common::database(pool.clone()),
+            )),
             std::sync::Arc::new(infrastructure::SystemClock),
             common::media_guard(pool.clone()),
         )),
         settings: Arc::new(application::settings::SettingsInteractor::new(
-            std::sync::Arc::new(infrastructure::PostgresSettingsStore::new(pool.clone())),
+            std::sync::Arc::new(infrastructure::PostgresSettingsStore::new(
+                common::database(pool.clone()),
+            )),
             std::sync::Arc::new(infrastructure::SystemClock),
             application::site_info::SiteInfo {
                 title: "测试站点".into(),

@@ -60,32 +60,50 @@ async fn stack() -> Stack {
     let rendering = Arc::new(RenderingRuntime::default());
 
     let user_repo: Arc<infrastructure::PostgresUserRepository> =
-        Arc::new(PostgresUserRepository::new(pool.clone()));
-    let post_repo: Arc<dyn PostRepository> =
-        Arc::new(PostgresPostRepository::new(pool.clone(), rendering.clone()));
-    let page_repo: Arc<dyn PageRepository> =
-        Arc::new(PostgresPageRepository::new(pool.clone(), rendering.clone()));
-    let rbac = Arc::new(PostgresRbacStore::new(pool.clone()));
+        Arc::new(PostgresUserRepository::new(common::database(pool.clone())));
+    let post_repo: Arc<dyn PostRepository> = Arc::new(PostgresPostRepository::new(
+        common::database(pool.clone()),
+        rendering.clone(),
+    ));
+    let page_repo: Arc<dyn PageRepository> = Arc::new(PostgresPageRepository::new(
+        common::database(pool.clone()),
+        rendering.clone(),
+    ));
+    let rbac = Arc::new(PostgresRbacStore::new(common::database(pool.clone())));
     let roles = Arc::new(RoleInteractor::new(rbac.clone(), user_repo.clone()));
     roles.sync_registry().await.expect("同步权限目录失败");
 
-    let tag_repo: Arc<dyn TagRepository> = Arc::new(PostgresTagRepository::new(pool.clone()));
-    let category_repo: Arc<dyn CategoryRepository> =
-        Arc::new(PostgresCategoryRepository::new(pool.clone()));
-    let series_repo: Arc<dyn SeriesRepository> =
-        Arc::new(PostgresSeriesRepository::new(pool.clone()));
-    let settings: Arc<dyn SettingsStore> = Arc::new(PostgresSettingsStore::new(pool.clone()));
+    let tag_repo: Arc<dyn TagRepository> =
+        Arc::new(PostgresTagRepository::new(common::database(pool.clone())));
+    let category_repo: Arc<dyn CategoryRepository> = Arc::new(PostgresCategoryRepository::new(
+        common::database(pool.clone()),
+    ));
+    let series_repo: Arc<dyn SeriesRepository> = Arc::new(PostgresSeriesRepository::new(
+        common::database(pool.clone()),
+    ));
+    let settings: Arc<dyn SettingsStore> =
+        Arc::new(PostgresSettingsStore::new(common::database(pool.clone())));
 
     let theme = rendering.theme_renderer(
         MiniJinjaThemeRenderer::load(std::path::Path::new("../../themes/default"))
             .expect("模板加载失败"),
     );
     let public_site = Arc::new(PublicSiteInteractor::new(
-        Arc::new(PostgresPublishedPostQuery::new(pool.clone())),
-        Arc::new(PostgresPublishedPageQuery::new(pool.clone())),
-        Arc::new(PostgresPublishedTagQuery::new(pool.clone())),
-        Arc::new(PostgresPublishedCategoryQuery::new(pool.clone())),
-        Arc::new(PostgresPublishedSeriesQuery::new(pool.clone())),
+        Arc::new(PostgresPublishedPostQuery::new(common::database(
+            pool.clone(),
+        ))),
+        Arc::new(PostgresPublishedPageQuery::new(common::database(
+            pool.clone(),
+        ))),
+        Arc::new(PostgresPublishedTagQuery::new(common::database(
+            pool.clone(),
+        ))),
+        Arc::new(PostgresPublishedCategoryQuery::new(common::database(
+            pool.clone(),
+        ))),
+        Arc::new(PostgresPublishedSeriesQuery::new(common::database(
+            pool.clone(),
+        ))),
         theme,
         settings.clone(),
         SiteInfo {
@@ -470,9 +488,9 @@ async fn directory_queries_limit_sorted_public_results() {
         post(&s, input, slug != "a-draft").await;
     }
 
-    let tags = PostgresPublishedTagQuery::new(s.pool.clone());
-    let categories = PostgresPublishedCategoryQuery::new(s.pool.clone());
-    let series = PostgresPublishedSeriesQuery::new(s.pool.clone());
+    let tags = PostgresPublishedTagQuery::new(common::database(s.pool.clone()));
+    let categories = PostgresPublishedCategoryQuery::new(common::database(s.pool.clone()));
+    let series = PostgresPublishedSeriesQuery::new(common::database(s.pool.clone()));
     for limit in [-1_i64, 0, 1, 2, 20] {
         let expected: Vec<_> = ["alpha", "middle", "zeta"]
             .into_iter()

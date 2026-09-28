@@ -25,7 +25,8 @@ pub struct PostgresTagRepository {
 }
 
 impl PostgresTagRepository {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(database: crate::Database) -> Self {
+        let pool = database.pool;
         Self { pool }
     }
 }
@@ -237,7 +238,8 @@ pub struct PostgresPublishedTagQuery {
 }
 
 impl PostgresPublishedTagQuery {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(database: crate::Database) -> Self {
+        let pool = database.pool;
         Self { pool }
     }
 }
@@ -389,7 +391,8 @@ pub struct PostgresCategoryRepository {
 }
 
 impl PostgresCategoryRepository {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(database: crate::Database) -> Self {
+        let pool = database.pool;
         Self { pool }
     }
 }
@@ -709,7 +712,8 @@ pub struct PostgresPublishedCategoryQuery {
 }
 
 impl PostgresPublishedCategoryQuery {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(database: crate::Database) -> Self {
+        let pool = database.pool;
         Self { pool }
     }
 }
@@ -856,7 +860,8 @@ pub struct PostgresSeriesRepository {
 }
 
 impl PostgresSeriesRepository {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(database: crate::Database) -> Self {
+        let pool = database.pool;
         Self { pool }
     }
 }
@@ -1108,7 +1113,7 @@ impl SeriesRepository for PostgresSeriesRepository {
             .collect()
     }
 
-    /// 关系锁内校验版本与完整成员集合；仅改变 position 的成员递增文章版本。
+    /// PostgreSQL 实现：关系锁内校验版本与完整成员集合，再按 ID 序锁成员行；仅改变 position 的成员递增文章版本。
     async fn reorder(
         &self,
         series_id: Uuid,
@@ -1215,7 +1220,8 @@ pub struct PostgresPublishedSeriesQuery {
 }
 
 impl PostgresPublishedSeriesQuery {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(database: crate::Database) -> Self {
+        let pool = database.pool;
         Self { pool }
     }
 }

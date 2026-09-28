@@ -96,14 +96,13 @@ impl From<&MediaWithUsage> for MediaDto {
 }
 
 /// 一处使用位置。
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone)]
 pub struct MediaUsageDto {
-    pub kind: &'static str,
+    pub source: crate::ports::MediaUsageSource,
     pub content_id: Uuid,
     pub slug: String,
     pub title: String,
-    pub status: String,
-    pub visibility: String,
+    pub visibility: domain::content::Visibility,
     pub deleted: bool,
     /// 来源内容是否公开，用于使用位置的权限过滤。
     pub public: bool,
@@ -112,12 +111,11 @@ pub struct MediaUsageDto {
 impl From<&MediaUsageRow> for MediaUsageDto {
     fn from(row: &MediaUsageRow) -> Self {
         Self {
-            kind: row.kind.as_str(),
+            source: row.source,
             content_id: row.content_id,
             slug: row.slug.clone(),
             title: row.title.clone(),
-            status: row.status.clone(),
-            visibility: row.visibility.clone(),
+            visibility: row.visibility,
             deleted: row.deleted,
             public: row.public,
         }
@@ -125,7 +123,7 @@ impl From<&MediaUsageRow> for MediaUsageDto {
 }
 
 /// 媒体详情与使用位置。
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone)]
 pub struct MediaUsageView {
     pub media: MediaDto,
     /// 调用者有权查看的使用位置（Post 按 own/any，Page 按站点级 `page.read`）。
@@ -363,7 +361,7 @@ fn can_see_reference(actor: &Actor, row: &MediaUsageRow) -> bool {
     if row.public {
         return true;
     }
-    match row.kind {
+    match row.source.kind() {
         crate::ports::MediaContentKind::Post => {
             if actor.has_permission("post.read_any") {
                 return true;

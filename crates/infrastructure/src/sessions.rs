@@ -264,10 +264,11 @@ pub struct PostgresSessionStore {
 
 impl PostgresSessionStore {
     pub fn new(
-        pool: PgPool,
+        database: crate::Database,
         config: SessionStoreConfig,
         clock: Box<dyn Fn() -> OffsetDateTime + Send + Sync>,
     ) -> Self {
+        let pool = database.pool;
         Self {
             pool,
             config,
@@ -276,9 +277,9 @@ impl PostgresSessionStore {
     }
 
     /// 生产默认（系统时钟、默认 TTL 与容量）。
-    pub fn with_defaults(pool: PgPool) -> Self {
+    pub fn with_defaults(database: crate::Database) -> Self {
         Self::new(
-            pool,
+            database,
             SessionStoreConfig::default(),
             Box::new(OffsetDateTime::now_utc),
         )

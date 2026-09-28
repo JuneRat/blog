@@ -45,7 +45,7 @@ async fn cursor_passes_conflicting_rows_and_next_run_revisits_remaining_old_vers
         calls: Mutex::new(vec![]),
     });
     let run = HtmlRebuildInteractor::new(Arc::new(PostgresHtmlRebuildStore::new(
-        pool.clone(),
+        common::database(pool.clone()),
         renderer.clone(),
         Arc::new(RenderingRuntime::default()),
     )));
@@ -73,7 +73,7 @@ async fn cursor_passes_conflicting_rows_and_next_run_revisits_remaining_old_vers
     assert_eq!(first, ("stale".into(), 2, 2));
     let runtime = Arc::new(RenderingRuntime::default());
     let result = HtmlRebuildInteractor::new(Arc::new(PostgresHtmlRebuildStore::new(
-        pool.clone(),
+        common::database(pool.clone()),
         runtime.clone(),
         runtime,
     )))

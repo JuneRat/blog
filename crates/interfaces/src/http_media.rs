@@ -80,12 +80,20 @@ struct MediaUsageJson {
 impl From<&MediaUsageDto> for MediaUsageJson {
     fn from(dto: &MediaUsageDto) -> Self {
         Self {
-            kind: dto.kind,
+            kind: dto.source.kind().as_str(),
             content_id: dto.content_id,
             slug: dto.slug.clone(),
             title: dto.title.clone(),
-            status: dto.status.clone(),
-            visibility: dto.visibility.clone(),
+            // Series/Site have no lifecycle status; retain their existing API display values.
+            status: match dto.source {
+                application::ports::MediaUsageSource::Post(status) => status.as_str(),
+                application::ports::MediaUsageSource::Page(status) => status.as_str(),
+                application::ports::MediaUsageSource::User(status) => status.as_str(),
+                application::ports::MediaUsageSource::Series => "published",
+                application::ports::MediaUsageSource::Site => "active",
+            }
+            .to_owned(),
+            visibility: dto.visibility.as_str().to_owned(),
             deleted: dto.deleted,
             public: dto.public,
         }

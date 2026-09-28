@@ -101,8 +101,10 @@ pub trait HtmlRebuildStore: Send + Sync {
     /// 单次只读快照，分别统计三类记录；不读取源文，不触发渲染或写入。
     async fn pending(&self) -> Result<RebuildCounts, UseCaseError>;
 
-    /// 按 ID 升序读取 after 之后至多 limit 条旧版本记录，事务外渲染，
-    /// CAS、HTML/引用与审计同事务。并发变更计入 skipped，不覆盖新内容。
+    /// 按 ID 升序检查 after 之后至多 limit 条旧版本记录；渲染期间不占用写事务。
+    /// 每条记录按读取的版本条件提交，HTML/引用与审计必须原子生效；
+    /// 并发变更计入 skipped，不覆盖新内容。这是提交与进度契约，适配器可选择
+    /// 等价的条件写入机制。游标包含已检查但跳过的记录，失败返回已确认的进度。
     async fn rebuild_batch(
         &self,
         kind: HtmlKind,

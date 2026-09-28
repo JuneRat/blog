@@ -93,7 +93,12 @@ async fn run(command: Command, mut config: config::DeploymentConfig) -> Result<(
         let pool = infrastructure::connect_with_config(&url, &config.database_pool()?)
             .await
             .map_err(|e| e.to_string())?;
-        if config.recovery_mode()? || recovery::is_isolated(&pool).await? {
+        if config.recovery_mode()?
+            || pool
+                .is_recovery_isolated()
+                .await
+                .map_err(|error| error.to_string())?
+        {
             return Err("恢复隔离期间禁止保留期清理".into());
         }
         return interfaces::cli::run_maintenance(
@@ -128,7 +133,10 @@ async fn run(command: Command, mut config: config::DeploymentConfig) -> Result<(
         .await
         .map_err(|error| format!("连接 PostgreSQL 失败：{error}"))?;
     let recovery_mode = config.recovery_mode()?;
-    let isolated = recovery::is_isolated(&pool).await?;
+    let isolated = pool
+        .is_recovery_isolated()
+        .await
+        .map_err(|error| error.to_string())?;
     if matches!(command, Command::PublishDue) && (isolated || recovery_mode) {
         return Err("恢复隔离期间禁止预约发布任务".into());
     }
@@ -252,7 +260,7 @@ async fn run(command: Command, mut config: config::DeploymentConfig) -> Result<(
 async fn serve(
     app: axum::Router,
     bind: &str,
-    pool: sqlx::PgPool,
+    pool: infrastructure::Database,
     telemetry: interfaces::observability::Telemetry,
     metrics_listener: Option<tokio::net::TcpListener>,
     recovery_mode: bool,
@@ -279,7 +287,7 @@ async fn serve_http(
     app: axum::Router,
     metrics_listener: Option<tokio::net::TcpListener>,
     telemetry: interfaces::observability::Telemetry,
-    pool: tokio::sync::watch::Receiver<Option<sqlx::PgPool>>,
+    pool: tokio::sync::watch::Receiver<Option<infrastructure::Database>>,
 ) -> Result<(), String> {
     let (shutdown, mut receiver) = tokio::sync::watch::channel(false);
     let enabled = metrics_listener.is_some();

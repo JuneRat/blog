@@ -5,7 +5,7 @@ use application::{
     media::{MediaInteractor, STAGED_GRACE_SECS, UploadMediaCmd},
     ports::{
         Clock, MediaChangeOutcome, MediaContentKind, MediaRepository, MediaStorage, MediaUsageRow,
-        MediaWithUsage,
+        MediaUsageSource, MediaWithUsage,
     },
 };
 use async_trait::async_trait;
@@ -84,13 +84,16 @@ impl FakeMediaRepo {
             .entry(media_id)
             .or_default()
             .push(MediaUsageRow {
-                kind: MediaContentKind::Post,
+                source: MediaUsageSource::Post(if public {
+                    domain::content::post::PostStatus::Published
+                } else {
+                    domain::content::post::PostStatus::Draft
+                }),
                 content_id: Uuid::now_v7(),
                 author_id: Some(owner),
                 slug: slug.into(),
                 title: format!("文章 {slug}"),
-                status: if public { "published" } else { "draft" }.into(),
-                visibility: "public".into(),
+                visibility: domain::content::Visibility::Public,
                 deleted: false,
                 public,
             });
@@ -105,13 +108,24 @@ impl FakeMediaRepo {
             .entry(media_id)
             .or_default()
             .push(MediaUsageRow {
-                kind,
+                source: match kind {
+                    MediaContentKind::Post => {
+                        MediaUsageSource::Post(domain::content::post::PostStatus::Draft)
+                    }
+                    MediaContentKind::Page => {
+                        MediaUsageSource::Page(domain::content::page::PageStatus::Draft)
+                    }
+                    MediaContentKind::User => {
+                        MediaUsageSource::User(domain::identity::UserStatus::Active)
+                    }
+                    MediaContentKind::Series => MediaUsageSource::Series,
+                    MediaContentKind::Site => MediaUsageSource::Site,
+                },
                 content_id: Uuid::now_v7(),
                 author_id: None,
                 slug: slug.into(),
                 title: format!("内容 {slug}"),
-                status: "draft".into(),
-                visibility: "public".into(),
+                visibility: domain::content::Visibility::Public,
                 deleted: false,
                 public: false,
             });
@@ -596,7 +610,9 @@ async fn usage_locations_are_filtered_by_content_permissions() {
     let view = fixture.interactor.detail(&editor, media.id).await.unwrap();
     assert_eq!(view.references.len(), 3, "三篇文章的引用都可见");
     assert!(
-        view.references.iter().all(|r| r.kind == "post"),
+        view.references
+            .iter()
+            .all(|r| r.source.kind() == MediaContentKind::Post),
         "没有 page.read 时不得看到页面使用位置"
     );
     assert_eq!(view.hidden_references, 1);

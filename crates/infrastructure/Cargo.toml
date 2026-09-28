@@ -3,6 +3,10 @@ name = "infrastructure"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+# Only integration fixtures may inject/inspect a raw pool. Not enabled at runtime.
+sqlx-test-support = []
+
 [dependencies]
 application = { path = "../application" }
 domain = { path = "../domain" }
@@ -32,3 +36,74 @@ argon2.workspace = true
 [dev-dependencies]
 # 测试用 `tokio::time` 断言「操作确实阻塞在身份锁上」。
 tokio = { workspace = true, features = ["time"] }
+
+# Standalone database tests: cargo test -p infrastructure --features sqlx-test-support.
+# Workspace tests also enable this feature through server dev-dependencies.
+
+[[test]]
+name = "admin_content_queries"
+required-features = ["sqlx-test-support"]
+
+[[test]]
+name = "audit_query"
+required-features = ["sqlx-test-support"]
+
+[[test]]
+name = "business_audit"
+required-features = ["sqlx-test-support"]
+
+[[test]]
+name = "comments"
+required-features = ["sqlx-test-support"]
+
+[[test]]
+name = "content_html"
+required-features = ["sqlx-test-support"]
+
+[[test]]
+name = "content_lifecycle"
+required-features = ["sqlx-test-support"]
+
+[[test]]
+name = "database"
+required-features = ["sqlx-test-support"]
+
+[[test]]
+name = "html_rebuild"
+required-features = ["sqlx-test-support"]
+
+[[test]]
+name = "identity_baseline"
+required-features = ["sqlx-test-support"]
+
+[[test]]
+name = "media"
+required-features = ["sqlx-test-support"]
+
+[[test]]
+name = "migration_permissions"
+required-features = ["sqlx-test-support"]
+
+[[test]]
+name = "pool_policy"
+required-features = ["sqlx-test-support"]
+
+[[test]]
+name = "postgres"
+required-features = ["sqlx-test-support"]
+
+[[test]]
+name = "retention"
+required-features = ["sqlx-test-support"]
+
+[[test]]
+name = "session_postgres"
+required-features = ["sqlx-test-support"]
+
+[[test]]
+name = "user_status"
+required-features = ["sqlx-test-support"]
+
+[[test]]
+name = "write_invariants"
+required-features = ["sqlx-test-support"]

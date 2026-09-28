@@ -10,14 +10,14 @@ use application::identity::{RoleInteractor, UserInteractor, UserStores};
 use application::media::MediaInteractor;
 use application::password::{PasswordDeps, PasswordInteractor};
 use application::ports::{ContentRenderer, SessionStore};
+use infrastructure::Database;
 use infrastructure::{
     PostgresCategoryRepository, PostgresMediaRepository, PostgresPostRepository, PostgresRbacStore,
     PostgresSeriesRepository, PostgresTagRepository, PostgresUserRepository, SystemClock,
 };
 use interfaces::cli::{PostCliDeps, UserCliDeps};
-use sqlx::PgPool;
 
-pub fn publisher(pool: &PgPool) -> application::publishing::PublishDueInteractor {
+pub fn publisher(pool: &Database) -> application::publishing::PublishDueInteractor {
     application::publishing::PublishDueInteractor::new(
         Arc::new(infrastructure::PostgresScheduledPublicationStore::new(
             pool.clone(),
@@ -26,20 +26,20 @@ pub fn publisher(pool: &PgPool) -> application::publishing::PublishDueInteractor
     )
 }
 
-pub fn retention_maintenance(pool: &PgPool) -> application::retention::RetentionMaintenance {
+pub fn retention_maintenance(pool: &Database) -> application::retention::RetentionMaintenance {
     application::retention::RetentionMaintenance::new(Arc::new(
         infrastructure::retention::PostgresRetentionCleanupStore::new(pool.clone()),
     ))
 }
 
-pub fn html_rebuilder(pool: &PgPool) -> application::html_rebuild::HtmlRebuildInteractor {
+pub fn html_rebuilder(pool: &Database) -> application::html_rebuild::HtmlRebuildInteractor {
     let runtime = Arc::new(infrastructure::RenderingRuntime::default());
     application::html_rebuild::HtmlRebuildInteractor::new(Arc::new(
         infrastructure::PostgresHtmlRebuildStore::new(pool.clone(), runtime.clone(), runtime),
     ))
 }
 
-pub fn users(pool: &PgPool) -> Arc<UserInteractor> {
+pub fn users(pool: &Database) -> Arc<UserInteractor> {
     let store = Arc::new(PostgresUserRepository::new(pool.clone()));
     Arc::new(UserInteractor::new(
         UserStores {
@@ -53,20 +53,20 @@ pub fn users(pool: &PgPool) -> Arc<UserInteractor> {
     ))
 }
 
-pub fn roles(pool: &PgPool) -> Arc<RoleInteractor> {
+pub fn roles(pool: &Database) -> Arc<RoleInteractor> {
     Arc::new(RoleInteractor::new(
         Arc::new(PostgresRbacStore::new(pool.clone())),
         Arc::new(PostgresUserRepository::new(pool.clone())),
     ))
 }
 
-pub fn sessions(pool: &PgPool) -> Arc<dyn SessionStore> {
+pub fn sessions(pool: &Database) -> Arc<dyn SessionStore> {
     Arc::new(infrastructure::PostgresSessionStore::with_defaults(
         pool.clone(),
     ))
 }
 
-pub fn passwords(pool: &PgPool, sessions: Arc<dyn SessionStore>) -> Arc<PasswordInteractor> {
+pub fn passwords(pool: &Database, sessions: Arc<dyn SessionStore>) -> Arc<PasswordInteractor> {
     let store = Arc::new(PostgresUserRepository::new(pool.clone()));
     Arc::new(PasswordInteractor::new(PasswordDeps {
         users: store.clone(),
@@ -77,14 +77,14 @@ pub fn passwords(pool: &PgPool, sessions: Arc<dyn SessionStore>) -> Arc<Password
     }))
 }
 
-pub fn user_commands(pool: &PgPool) -> UserCliDeps {
+pub fn user_commands(pool: &Database) -> UserCliDeps {
     UserCliDeps {
         users: users(pool),
         passwords: passwords(pool, sessions(pool)),
     }
 }
 
-pub fn oauth_commands(pool: &PgPool) -> OAuthManagementInteractor {
+pub fn oauth_commands(pool: &Database) -> OAuthManagementInteractor {
     OAuthManagementInteractor::new(
         Arc::new(infrastructure::PostgresOAuthConfigStore::new(pool.clone())),
         Arc::new(infrastructure::PostgresOAuthAccountStore::new(pool.clone())),
@@ -93,7 +93,7 @@ pub fn oauth_commands(pool: &PgPool) -> OAuthManagementInteractor {
     )
 }
 
-pub fn posts(pool: &PgPool, renderer: Arc<dyn ContentRenderer>) -> Arc<PostInteractor> {
+pub fn posts(pool: &Database, renderer: Arc<dyn ContentRenderer>) -> Arc<PostInteractor> {
     Arc::new(PostInteractor::new(
         Arc::new(PostgresPostRepository::new(pool.clone(), renderer)),
         Arc::new(PostgresTagRepository::new(pool.clone())),
@@ -104,7 +104,7 @@ pub fn posts(pool: &PgPool, renderer: Arc<dyn ContentRenderer>) -> Arc<PostInter
     ))
 }
 
-pub fn post_commands(pool: &PgPool, renderer: Arc<dyn ContentRenderer>) -> PostCliDeps {
+pub fn post_commands(pool: &Database, renderer: Arc<dyn ContentRenderer>) -> PostCliDeps {
     PostCliDeps {
         users: users(pool),
         posts: posts(pool, renderer),
@@ -112,7 +112,7 @@ pub fn post_commands(pool: &PgPool, renderer: Arc<dyn ContentRenderer>) -> PostC
     }
 }
 
-pub fn media(pool: &PgPool, root: PathBuf) -> Arc<MediaInteractor> {
+pub fn media(pool: &Database, root: PathBuf) -> Arc<MediaInteractor> {
     Arc::new(MediaInteractor::new(
         Arc::new(infrastructure::image_inspection::HeaderImageInspector),
         Arc::new(PostgresMediaRepository::new(pool.clone())),
@@ -124,7 +124,7 @@ pub fn media(pool: &PgPool, root: PathBuf) -> Arc<MediaInteractor> {
 /// Browser authentication is assembled only for the HTTP server. OAuth CLI
 /// maintenance uses `oauth_commands`, with no login client or callback URL.
 pub fn auth(
-    pool: &PgPool,
+    pool: &Database,
     users: Arc<UserInteractor>,
     sessions: Arc<dyn SessionStore>,
     base_url: String,
@@ -147,7 +147,7 @@ pub fn auth(
 }
 
 /// 后台与 CLI 共享只读列表用例。
-pub fn content_queries(pool: &PgPool) -> Arc<application::content_queries::ContentQueries> {
+pub fn content_queries(pool: &Database) -> Arc<application::content_queries::ContentQueries> {
     let query = Arc::new(infrastructure::PostgresAdminContentQuery::new(pool.clone()));
     Arc::new(application::content_queries::ContentQueries::new(
         query.clone(),

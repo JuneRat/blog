@@ -8,7 +8,7 @@ use infrastructure::retention::{PostgresRetentionCleanupStore, PostgresRetention
 
 fn maintenance(pool: &PgPool) -> application::retention::RetentionMaintenance {
     application::retention::RetentionMaintenance::new(std::sync::Arc::new(
-        PostgresRetentionCleanupStore::new(pool.clone()),
+        PostgresRetentionCleanupStore::new(common::database(pool.clone())),
     ))
 }
 use serde_json::{Value, json};
@@ -36,7 +36,7 @@ async fn comments_without_ip(pool: &PgPool) -> Value {
 #[tokio::test]
 async fn policy_defaults_merges_and_conflicts_are_atomic() {
     let pool = common::fresh_database("blog_retention_policy_test").await;
-    let store = PostgresRetentionStore::new(pool.clone());
+    let store = PostgresRetentionStore::new(common::database(pool.clone()));
     let actor = Uuid::now_v7();
     let default = store.read().await.unwrap();
     assert_eq!(default, RetentionSettings::default());

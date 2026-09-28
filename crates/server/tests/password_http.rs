@@ -93,8 +93,8 @@ async fn fresh_stack_with(throttle_config: ThrottleConfig) -> Stack {
     let pool = common::fresh_database("blog_password_test").await;
 
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
-    let user_repo = Arc::new(PostgresUserRepository::new(pool.clone()));
-    let rbac = Arc::new(PostgresRbacStore::new(pool.clone()));
+    let user_repo = Arc::new(PostgresUserRepository::new(common::database(pool.clone())));
+    let rbac = Arc::new(PostgresRbacStore::new(common::database(pool.clone())));
     let roles = Arc::new(RoleInteractor::new(rbac.clone(), user_repo.clone()));
     roles.sync_registry().await.expect("同步权限目录失败");
     let users = Arc::new(UserInteractor::new(
@@ -124,10 +124,12 @@ async fn fresh_stack_with(throttle_config: ThrottleConfig) -> Stack {
         .await
         .unwrap();
 
-    let sessions: Arc<dyn SessionStore> =
-        Arc::new(PostgresSessionStore::with_defaults(pool.clone()));
-    let accounts: Arc<dyn OAuthAccountStore> =
-        Arc::new(PostgresOAuthAccountStore::new(pool.clone()));
+    let sessions: Arc<dyn SessionStore> = Arc::new(PostgresSessionStore::with_defaults(
+        common::database(pool.clone()),
+    ));
+    let accounts: Arc<dyn OAuthAccountStore> = Arc::new(PostgresOAuthAccountStore::new(
+        common::database(pool.clone()),
+    ));
     let passwords = common::password_interactor_with_throttle(
         user_repo.clone(),
         sessions.clone(),
@@ -143,7 +145,9 @@ async fn fresh_stack_with(throttle_config: ThrottleConfig) -> Stack {
         .unwrap();
 
     // OAuth 侧装配保持可用（本文件不触发），避免测试栈与生产结构偏离。
-    let configs: Arc<dyn OAuthConfigStore> = Arc::new(PostgresOAuthConfigStore::new(pool.clone()));
+    let configs: Arc<dyn OAuthConfigStore> = Arc::new(PostgresOAuthConfigStore::new(
+        common::database(pool.clone()),
+    ));
     configs
         .save(
             &[ProviderConfig {
@@ -185,21 +189,25 @@ async fn fresh_stack_with(throttle_config: ThrottleConfig) -> Stack {
     ));
 
     let tag_repo: Arc<dyn application::ports::TagRepository> =
-        Arc::new(PostgresTagRepository::new(pool.clone()));
+        Arc::new(PostgresTagRepository::new(common::database(pool.clone())));
     let posts = Arc::new(application::content::PostInteractor::new(
         Arc::new(PostgresPostRepository::new(
-            pool.clone(),
+            common::database(pool.clone()),
             Arc::new(infrastructure::RenderingRuntime::default()),
         )),
         tag_repo.clone(),
-        Arc::new(PostgresCategoryRepository::new(pool.clone())),
-        Arc::new(infrastructure::PostgresSeriesRepository::new(pool.clone())),
+        Arc::new(PostgresCategoryRepository::new(common::database(
+            pool.clone(),
+        ))),
+        Arc::new(infrastructure::PostgresSeriesRepository::new(
+            common::database(pool.clone()),
+        )),
         Arc::new(SystemClock),
         common::media_guard(pool.clone()),
     ));
     let pages = Arc::new(PageInteractor::new(
         Arc::new(PostgresPageRepository::new(
-            pool.clone(),
+            common::database(pool.clone()),
             Arc::new(infrastructure::RenderingRuntime::default()),
         )),
         Arc::new(SystemClock),
@@ -222,16 +230,22 @@ async fn fresh_stack_with(throttle_config: ThrottleConfig) -> Stack {
             Arc::new(SystemClock),
         )),
         categories: Arc::new(application::category::CategoryInteractor::new(
-            Arc::new(PostgresCategoryRepository::new(pool.clone())),
+            Arc::new(PostgresCategoryRepository::new(common::database(
+                pool.clone(),
+            ))),
             Arc::new(SystemClock),
         )),
         series: Arc::new(application::series::SeriesInteractor::new(
-            Arc::new(infrastructure::PostgresSeriesRepository::new(pool.clone())),
+            Arc::new(infrastructure::PostgresSeriesRepository::new(
+                common::database(pool.clone()),
+            )),
             Arc::new(SystemClock),
             common::media_guard(pool.clone()),
         )),
         settings: Arc::new(application::settings::SettingsInteractor::new(
-            Arc::new(infrastructure::PostgresSettingsStore::new(pool.clone())),
+            Arc::new(infrastructure::PostgresSettingsStore::new(
+                common::database(pool.clone()),
+            )),
             Arc::new(SystemClock),
             application::site_info::SiteInfo {
                 title: "测试站点".into(),
@@ -1024,7 +1038,7 @@ async fn reauthentication_is_rate_limited() {
 /// 为账号管理测试建立独立操作者；目标 sun 仍通过真实密码登录。
 async fn status_operator(stack: &Stack, username: &str, role: &str) -> (String, serde_json::Value) {
     use application::ports::{AccountAdministration, PasswordCredentialStore, UserQuery};
-    let repo = PostgresUserRepository::new(stack.pool.clone());
+    let repo = PostgresUserRepository::new(common::database(stack.pool.clone()));
     let user =
         domain::identity::User::new(username, None, None, time::OffsetDateTime::now_utc()).unwrap();
     let id = user.id().0;
@@ -1038,7 +1052,7 @@ async fn status_operator(stack: &Stack, username: &str, role: &str) -> (String, 
         .await
         .unwrap();
     let version = repo.find_by_id(id).await.unwrap().unwrap().auth_version;
-    let cookie = PostgresSessionStore::with_defaults(stack.pool.clone())
+    let cookie = PostgresSessionStore::with_defaults(common::database(stack.pool.clone()))
         .create(id, version)
         .await
         .unwrap();

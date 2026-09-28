@@ -41,7 +41,7 @@ fn service(pool: &PgPool) -> CommentInteractor {
     let renderer = Arc::new(RenderingRuntime::default());
     CommentInteractor::new(
         Arc::new(PostgresCommentRepository::new(
-            pool.clone(),
+            common::database(pool.clone()),
             renderer.clone(),
         )),
         renderer,
@@ -624,7 +624,8 @@ async fn rebuild_updates_only_derived_fields_and_does_not_clobber_a_newer_source
         .await
         .unwrap();
     let runtime = Arc::new(RenderingRuntime::default());
-    let store = PostgresHtmlRebuildStore::new(pool.clone(), runtime.clone(), runtime);
+    let store =
+        PostgresHtmlRebuildStore::new(common::database(pool.clone()), runtime.clone(), runtime);
     assert_eq!(
         store
             .rebuild_batch(HtmlKind::Comment, None, 100)
@@ -653,7 +654,7 @@ async fn rebuild_updates_only_derived_fields_and_does_not_clobber_a_newer_source
         .await
         .unwrap();
     let racing = PostgresHtmlRebuildStore::new(
-        pool.clone(),
+        common::database(pool.clone()),
         Arc::new(RenderingRuntime::default()),
         Arc::new(RacingRenderer {
             pool: pool.clone(),

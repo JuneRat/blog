@@ -2,6 +2,8 @@
 
 use crate::error::UseCaseError;
 use async_trait::async_trait;
+use domain::content::{Visibility, page::PageStatus, post::PostStatus};
+use domain::identity::UserStatus;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -48,16 +50,38 @@ pub struct MediaWithUsage {
     pub reference_count: i64,
 }
 
+/// 引用来源与其状态一起表达，避免把账号状态当作发布状态。
+/// Series/Site 没有发布状态；其传输展示值由接口层决定。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MediaUsageSource {
+    Post(PostStatus),
+    Page(PageStatus),
+    User(UserStatus),
+    Series,
+    Site,
+}
+
+impl MediaUsageSource {
+    pub fn kind(self) -> MediaContentKind {
+        match self {
+            Self::Post(_) => MediaContentKind::Post,
+            Self::Page(_) => MediaContentKind::Page,
+            Self::User(_) => MediaContentKind::User,
+            Self::Series => MediaContentKind::Series,
+            Self::Site => MediaContentKind::Site,
+        }
+    }
+}
+
 /// 来源可见性仅用于过滤使用位置，不能用来授权媒体文件读取。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MediaUsageRow {
-    pub kind: MediaContentKind,
+    pub source: MediaUsageSource,
     pub content_id: Uuid,
     pub author_id: Option<Uuid>,
     pub slug: String,
     pub title: String,
-    pub status: String,
-    pub visibility: String,
+    pub visibility: Visibility,
     pub deleted: bool,
     pub public: bool,
 }

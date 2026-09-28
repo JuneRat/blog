@@ -13,6 +13,7 @@ use application::settings::SettingsInteractor;
 use application::tag::TagInteractor;
 use application::theme_data::ThemeData;
 use application::themes::ThemeRegistry;
+use infrastructure::Database;
 use infrastructure::{
     MiniJinjaThemeRenderer, PostgresCategoryRepository, PostgresPageRepository,
     PostgresPublishedCategoryQuery, PostgresPublishedPageQuery, PostgresPublishedPostQuery,
@@ -21,13 +22,12 @@ use infrastructure::{
 };
 use interfaces::http::{AppState, HttpAssets, HttpConfig, PublicSiteState};
 use interfaces::http_auth::{AdminState, AuthState};
-use sqlx::PgPool;
 
 use crate::assembly;
 use crate::config::SiteConfig;
 
 pub async fn build_router(
-    pool: &PgPool,
+    pool: &Database,
     config: &SiteConfig,
     roles: Arc<RoleInteractor>,
     runtime: Arc<RenderingRuntime>,

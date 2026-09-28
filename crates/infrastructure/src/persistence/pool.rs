@@ -81,14 +81,21 @@ impl DatabasePoolConfig {
     }
 }
 
-pub async fn connect(url: &str) -> Result<PgPool, sqlx::Error> {
+pub async fn connect(url: &str) -> Result<crate::Database, crate::DatabaseError> {
     connect_with_config(url, &DatabasePoolConfig::default()).await
 }
 
 pub async fn connect_with_config(
     url: &str,
     config: &DatabasePoolConfig,
-) -> Result<PgPool, sqlx::Error> {
+) -> Result<crate::Database, crate::DatabaseError> {
+    connect_pool(url, config)
+        .await
+        .map(|pool| crate::Database { pool })
+        .map_err(crate::DatabaseError)
+}
+
+async fn connect_pool(url: &str, config: &DatabasePoolConfig) -> Result<PgPool, sqlx::Error> {
     config
         .validate()
         .map_err(|error| sqlx::Error::Configuration(error.into()))?;

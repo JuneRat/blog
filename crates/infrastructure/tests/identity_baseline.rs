@@ -22,9 +22,12 @@ async fn legacy_schema_is_rejected_without_deleting_data() {
     .execute(&pool)
     .await
     .unwrap();
-    let error = infrastructure::migrate_schema(&pool, "../../migrations/postgres")
-        .await
-        .unwrap_err();
+    let error = infrastructure::migrate_schema(
+        &common::database(pool.clone()),
+        "../../migrations/postgres",
+    )
+    .await
+    .unwrap_err();
     assert!(
         error.to_string().contains("新初始迁移仅支持空库"),
         "{error}"
@@ -41,9 +44,9 @@ async fn authentication_changes_invalidate_even_late_stale_sessions() {
     let _g = SERIAL.lock().await;
     let pool = common::fresh_database(DB).await;
     let user = common::seed_user(&pool, "identity-changes").await;
-    let users = PostgresUserRepository::new(pool.clone());
-    let accounts = PostgresOAuthAccountStore::new(pool.clone());
-    let sessions = PostgresSessionStore::with_defaults(pool.clone());
+    let users = PostgresUserRepository::new(common::database(pool.clone()));
+    let accounts = PostgresOAuthAccountStore::new(common::database(pool.clone()));
+    let sessions = PostgresSessionStore::with_defaults(common::database(pool.clone()));
     let old = sessions.create(user, 1).await.unwrap();
     users
         .set_password_hash(user, "$argon2id$test", None.into())

@@ -531,7 +531,7 @@ async fn committed_installation_with_a_remaining_journal_is_verified_then_cleane
     let schema_contract =
         infrastructure::schema_contract::SchemaContract::load("../../migrations/postgres").unwrap();
     infrastructure::installation::initialize(
-        &pool,
+        &common::database(pool.clone()),
         &schema_contract,
         &installation_id,
         &owner,
@@ -776,9 +776,10 @@ async fn competing_bootstraps_commit_exactly_one_owner_and_marker() {
     let audit = application::audit::AuditContext::system();
     let schema_contract =
         infrastructure::schema_contract::SchemaContract::load("../../migrations/postgres").unwrap();
+    let database = common::database(pool.clone());
     let (a, b) = tokio::join!(
         infrastructure::installation::initialize(
-            &pool,
+            &database,
             &schema_contract,
             &first_id,
             &first,
@@ -786,7 +787,7 @@ async fn competing_bootstraps_commit_exactly_one_owner_and_marker() {
             audit
         ),
         infrastructure::installation::initialize(
-            &pool,
+            &database,
             &schema_contract,
             &second_id,
             &second,

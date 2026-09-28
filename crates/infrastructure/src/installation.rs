@@ -9,10 +9,10 @@ use application::{
     identity::{BUILTIN_ROLES, PERMISSION_REGISTRY},
     installation::InitialOwner,
 };
-use sqlx::{PgPool, Postgres, Transaction};
+use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
-pub async fn connect(url: &str) -> Result<PgPool, UseCaseError> {
+pub async fn connect(url: &str) -> Result<crate::Database, UseCaseError> {
     use sqlx::ConnectOptions;
     let options = url
         .parse::<sqlx::postgres::PgConnectOptions>()
@@ -24,6 +24,7 @@ pub async fn connect(url: &str) -> Result<PgPool, UseCaseError> {
         .acquire_timeout(std::time::Duration::from_secs(5))
         .connect_with(options)
         .await
+        .map(|pool| crate::Database { pool })
         .map_err(|_| {
             UseCaseError::Invalid(
                 "连接 PostgreSQL 失败，请检查地址、数据库名、账号密码和网络".into(),
@@ -41,7 +42,11 @@ fn occupied() -> UseCaseError {
     UseCaseError::Invalid("安装仅支持空数据库；该库已有数据或不属于本次安装，未作清理".into())
 }
 
-pub async fn is_complete(pool: &PgPool, installation_id: &str) -> Result<bool, UseCaseError> {
+pub async fn is_complete(
+    database: &crate::Database,
+    installation_id: &str,
+) -> Result<bool, UseCaseError> {
+    let pool = &database.pool;
     let exists: bool = sqlx::query_scalar("SELECT to_regclass('public.settings') IS NOT NULL")
         .fetch_one(pool)
         .await
@@ -65,10 +70,11 @@ pub async fn is_complete(pool: &PgPool, installation_id: &str) -> Result<bool, U
 /// A saved local journal permits resuming only our empty baseline. Arbitrary
 /// tables, schemas, views and recovery databases are never migrated by setup.
 pub async fn check_target(
-    pool: &PgPool,
+    database: &crate::Database,
     schema_contract: &SchemaContract,
     resume: bool,
 ) -> Result<(), UseCaseError> {
+    let pool = &database.pool;
     let (schema, comment): (Option<String>, Option<String>) = sqlx::query_as(
         "SELECT current_schema(), shobj_description(oid,'pg_database') FROM pg_database WHERE datname=current_database()",
     ).fetch_one(pool).await.map_err(database_error)?;
@@ -115,13 +121,14 @@ pub async fn check_target(
 /// Permission seeds, the credential, ownership, completion marker and audit are
 /// one transaction. Failed/competing installs cannot leave a partial account.
 pub async fn initialize(
-    pool: &PgPool,
+    database: &crate::Database,
     schema_contract: &SchemaContract,
     installation_id: &str,
     owner: &InitialOwner,
     site: &application::ports::SiteSettingsValue,
     audit: AuditContext,
 ) -> Result<(), UseCaseError> {
+    let pool = &database.pool;
     let mut tx = pool.begin().await.map_err(database_error)?;
     sqlx::query("SET LOCAL lock_timeout = '10s'")
         .execute(&mut *tx)

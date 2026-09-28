@@ -52,7 +52,7 @@ flowchart TD
 
 身份端口按调用能力拆成 `UserQuery`、`UserProfileStore`、`AccountAdministration` 与 `PasswordCredentialStore`。角色用例只依赖账号读取，密码用例依赖账号读取和凭据端口，用户用例通过 `UserStores` 注入读取、资料提交与账号管理；不再把全部用户存储能力交给每个调用方。`PostgresUserRepository` 实现这些窄端口，共用连接池，资料/头像与引用、账号状态与会话撤销、凭据变更与审计仍由各业务提交方法原子执行。
 
-[持久化入口](../crates/infrastructure/src/persistence/mod.rs) 同样显式导出适配器，内部拆为 `connection`、`content`、`content_queries`、`identity`、`media`、`taxonomy`、`sql`。行映射、SQL 错误映射和事务 helper 保持私有或限定可见性；媒体引用锁、身份锁按实际复用范围在基础设施内部共享。数据库连接与事务对象不进入应用端口。
+[持久化入口](../crates/infrastructure/src/persistence/mod.rs) 同样显式导出适配器，内部拆为 `connection`、`content`、`content_queries`、`identity`、`media`、`taxonomy`、`sql`。行映射、SQL 错误映射和事务 helper 保持私有或限定可见性；媒体引用锁、身份锁按实际复用范围在基础设施内部共享。数据库连接与事务对象不进入应用端口。装配根使用不透明的 `Database` 句柄：连接、迁移、安装、恢复隔离标记及连接池指标都通过 infrastructure 的接口访问，生产 API 不公开 `PgPool` 或 `sqlx::Error`。SQLx 仅作为 server 的测试依赖；`sqlx-test-support` feature 只供集成测试注入/观察同一个真实池，默认运行构建不启用。
 
 身份规则分为纯判断与事务执行：`application::identity::policy` 负责账号状态变更的权限/版本/幂等顺序及最后可登录 Owner 阈值；`domain::identity::LoginMethods` 负责登录方式保留规则。基础设施在统一身份排他锁内重新读取事实后调用规则，继续在同一事务撤销会话、维护版本与追加审计。后台账号提示复用相同规则，展示数据不能作为写入授权凭据。
 
@@ -71,11 +71,11 @@ flowchart TD
 5. 仓储执行版本条件更新，将源文、`content_html`、渲染规则版本、标签和媒体引用一起提交；系列成员变化同时维护相关系列版本。
 6. 返回本次提交的记录。文章响应不在提交后另查标签拼装，也不由应用修改快照字段模拟提交结果。
 
-Post/Page 的写端口接收领域聚合，快照用于读取和重建。事务规则由具体业务提交端口定义，SQL 事务由基础设施持有；当前不引入任意仓储拼接的通用工作单元。文件操作不能与 PostgreSQL 原子提交；媒体先完成暂存与文件就位，再提交元数据及审计。软删除只改变数据库状态，暂存维护只清理超期暂存。正式媒体按显式计划清理：先事务提交删除与审计凭据，再按凭据删除文件；提交结果不确定时保留文件，用原计划重试。细节见[运维](operations-and-recovery.md#正式媒体物理清理)。
+Post/Page 的写端口接收领域聚合，快照用于读取和重建。端口中的原子性、并发校验、读取快照和批次游标是业务事务语义要求，不是实现细节：替代适配器必须避免登录方式清空、重排丢失更新及重建覆盖新内容，并保持失败后的进度语义。具体锁类型、锁顺序及 SQL 放在 PostgreSQL 适配器中；其他实现可以使用等价的串行化事务或条件写入。事务规则由具体业务提交端口定义，SQL 事务由基础设施持有；当前不引入任意仓储拼接的通用工作单元。文件操作不能与 PostgreSQL 原子提交；媒体先完成暂存与文件就位，再提交元数据及审计。软删除只改变数据库状态，暂存维护只清理超期暂存。正式媒体按显式计划清理：先事务提交删除与审计凭据，再按凭据删除文件；提交结果不确定时保留文件，用原计划重试。细节见[运维](operations-and-recovery.md#正式媒体物理清理)。
 
 Post/Page 管理 API 及 Post CLI 通过稳定 UUID 定位资源，公开 URL 使用 slug；当前没有 Page CLI。草稿改名不改变管理身份，Post/Page 没有旧 slug 管理接口的兼容分支。具体版本、删除和路径规则见[内容生命周期](content-lifecycle.md)与[管理 API](admin-api.md)。
 
-后台普通列表及回收站统一由 `ContentQueries` 授权，依赖 `AdminPostQuery` / `AdminPageQuery` 窄端口；Post CLI 也走这条路径。Post/Page 写仓储只保留聚合加载与提交，不承担列表查询。独立查询适配器只投影列表展示字段，不读取 Markdown、HTML 或关联集合；固定每页 20 条，支持状态/可见性筛选，同一个只读 REPEATABLE READ 事务读取总数和分页。稳定排序以 UUID 打破时间戳并列；跨请求不承诺冻结快照。
+后台普通列表及回收站统一由 `ContentQueries` 授权，依赖 `AdminPostQuery` / `AdminPageQuery` 窄端口；Post CLI 也走这条路径。Post/Page 写仓储只保留聚合加载与提交，不承担列表查询。独立查询适配器只投影列表展示字段，不读取 Markdown、HTML 或关联集合；原始请求在授权后用领域枚举解析，验证后的 Post/Page 筛选和摘要使用各自的状态类型及 `Visibility`，接口层再转换为稳定的字符串响应。媒体引用按文章、页面、账号及无发布状态的系列/站点分别建模，不混用状态枚举。固定每页 20 条，支持状态/可见性筛选，同一个只读 REPEATABLE READ 事务读取总数和分页。稳定排序以 UUID 打破时间戳并列；跨请求不承诺冻结快照。
 
 公开读取采用面向页面的查询 DTO，共用同一个数据库，不为公开读取重建聚合。公开 Post/Page 查询只返回 `published + public + 未软删除 + 发布时间已到` 内容；公开详情直接使用持久化 `content_html`。sitemap 按剩余额度限制文章、Page 和三类目录的 SQL 查询，所有来源共用 50,000 条上限，耗尽后跳过后续查询。当前没有公开页面缓存或跨请求主题查询缓存，每次请求重新读取公开状态。运行池大小、获取/空闲/查询超时和建连退避可部署配置，容量测试见[公开读取容量验证](public-read-capacity.md)。浏览器和代理的缓存行为仍取决于部署配置，应用内部无缓存不等于能够撤回已发送的响应。
 

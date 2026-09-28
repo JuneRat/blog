@@ -7,8 +7,11 @@ use super::sql::{map_row_error, map_sqlx_error};
 use crate::audit::{AuditEntry, append_audit_log};
 use application::error::UseCaseError;
 use application::ports::{
-    MediaChangeOutcome, MediaContentKind, MediaRepository, MediaUsageRow, MediaWithUsage,
+    MediaChangeOutcome, MediaContentKind, MediaRepository, MediaUsageRow, MediaUsageSource,
+    MediaWithUsage,
 };
+use domain::content::{Visibility, page::PageStatus, post::PostStatus};
+use domain::identity::UserStatus;
 use domain::media::{Media, MediaSnapshot};
 
 /// 同一来源的正文和封面取并集，固定锁序。
@@ -91,7 +94,8 @@ pub struct PostgresMediaRepository {
     pool: PgPool,
 }
 impl PostgresMediaRepository {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(database: crate::Database) -> Self {
+        let pool = database.pool;
         Self { pool }
     }
 }
@@ -199,7 +203,7 @@ impl MediaRepository for PostgresMediaRepository {
         let rows = sqlx::query(&format!("SELECT refs.source_type, refs.source_id, mp.author_id, \
             COALESCE(mp.slug,gp.slug,sp.slug,au.username,'') AS slug, \
             COALESCE(mp.title,gp.title,sp.name,NULLIF(au.display_name,''),au.username,CASE WHEN refs.source_type='site' THEN '站点设置' END,'') AS title, \
-            COALESCE(mp.status,gp.status,au.status,CASE WHEN sp.id IS NOT NULL THEN 'published' ELSE 'active' END) AS content_status, \
+            COALESCE(mp.status,gp.status,au.status) AS content_status, \
             COALESCE(mp.visibility,gp.visibility,'public') AS content_visibility, \
             CASE refs.source_type WHEN 'post' THEN mp.deleted_at IS NOT NULL WHEN 'page' THEN gp.deleted_at IS NOT NULL WHEN 'user' THEN au.deleted_at IS NOT NULL ELSE false END AS content_deleted, \
             COALESCE({SOURCE_IS_PUBLIC},false) AS is_public \
@@ -213,15 +217,18 @@ impl MediaRepository for PostgresMediaRepository {
         rows.iter()
             .map(|row| {
                 let kind: &str = row.try_get("source_type").map_err(map_row_error)?;
+                let source =
+                    usage_source(kind, row.try_get("content_status").map_err(map_row_error)?)?;
                 Ok(MediaUsageRow {
-                    kind: MediaContentKind::parse(kind)
-                        .ok_or_else(|| UseCaseError::Repository("无效引用来源".into()))?,
+                    source,
                     content_id: row.try_get("source_id").map_err(map_row_error)?,
                     author_id: row.try_get("author_id").map_err(map_row_error)?,
                     slug: row.try_get("slug").map_err(map_row_error)?,
                     title: row.try_get("title").map_err(map_row_error)?,
-                    status: row.try_get("content_status").map_err(map_row_error)?,
-                    visibility: row.try_get("content_visibility").map_err(map_row_error)?,
+                    visibility: Visibility::parse(
+                        row.try_get("content_visibility").map_err(map_row_error)?,
+                    )
+                    .ok_or_else(|| UseCaseError::Repository("无效引用可见性".into()))?,
                     deleted: row.try_get("content_deleted").map_err(map_row_error)?,
                     public: row.try_get("is_public").map_err(map_row_error)?,
                 })
@@ -294,4 +301,22 @@ impl application::ports::MediaRefGuard for PostgresMediaRepository {
             .await
             .map_err(map_sqlx_error)
     }
+}
+
+fn usage_source(kind: &str, status: Option<&str>) -> Result<MediaUsageSource, UseCaseError> {
+    let source = match MediaContentKind::parse(kind) {
+        Some(MediaContentKind::Post) => status
+            .and_then(PostStatus::parse)
+            .map(MediaUsageSource::Post),
+        Some(MediaContentKind::Page) => status
+            .and_then(PageStatus::parse)
+            .map(MediaUsageSource::Page),
+        Some(MediaContentKind::User) => status
+            .and_then(UserStatus::parse)
+            .map(MediaUsageSource::User),
+        Some(MediaContentKind::Series) => Some(MediaUsageSource::Series),
+        Some(MediaContentKind::Site) => Some(MediaUsageSource::Site),
+        None => None,
+    };
+    source.ok_or_else(|| UseCaseError::Repository("无效引用来源或状态".into()))
 }

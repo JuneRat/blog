@@ -27,9 +27,12 @@ async fn multiple_series_allow_tied_weights_and_directory_deletion_keeps_posts()
     let _guard = SERIAL.lock().await;
     let pool = common::fresh_database("blog_content_lifecycle_test").await;
     let author = common::seed_user(&pool, "author").await;
-    let posts = PostgresPostRepository::new(pool.clone(), Arc::new(RenderingRuntime::default()));
-    let series = PostgresSeriesRepository::new(pool.clone());
-    let tags = PostgresTagRepository::new(pool.clone());
+    let posts = PostgresPostRepository::new(
+        common::database(pool.clone()),
+        Arc::new(RenderingRuntime::default()),
+    );
+    let series = PostgresSeriesRepository::new(common::database(pool.clone()));
+    let tags = PostgresTagRepository::new(common::database(pool.clone()));
     let now = OffsetDateTime::now_utc();
     let a = Series::new("甲".into(), Slug::new("a").unwrap(), None, now).unwrap();
     let b = Series::new("乙".into(), Slug::new("b").unwrap(), None, now).unwrap();
@@ -64,7 +67,7 @@ async fn multiple_series_allow_tied_weights_and_directory_deletion_keeps_posts()
         assert_eq!(record.snapshot.series.len(), 2);
         ids.push(record.snapshot.id);
     }
-    let public = PostgresPublishedPostQuery::new(pool.clone());
+    let public = PostgresPublishedPostQuery::new(common::database(pool.clone()));
     assert_eq!(
         public
             .find_public_by_slug("one")
@@ -75,7 +78,7 @@ async fn multiple_series_allow_tied_weights_and_directory_deletion_keeps_posts()
             .len(),
         2
     );
-    let (ordered, total) = PostgresPublishedSeriesQuery::new(pool.clone())
+    let (ordered, total) = PostgresPublishedSeriesQuery::new(common::database(pool.clone()))
         .list_public_posts_by_series("a", 20, 0)
         .await
         .unwrap();
@@ -150,10 +153,16 @@ async fn due_publishing_is_atomic_idempotent_and_does_not_revive_cancelled_or_tr
     let _guard = SERIAL.lock().await;
     let pool = common::fresh_database("blog_content_lifecycle_test").await;
     let author = common::seed_user(&pool, "author").await;
-    let posts = PostgresPostRepository::new(pool.clone(), Arc::new(RenderingRuntime::default()));
-    let pages = PostgresPageRepository::new(pool.clone(), Arc::new(RenderingRuntime::default()));
-    let public_posts = PostgresPublishedPostQuery::new(pool.clone());
-    let public_pages = PostgresPublishedPageQuery::new(pool.clone());
+    let posts = PostgresPostRepository::new(
+        common::database(pool.clone()),
+        Arc::new(RenderingRuntime::default()),
+    );
+    let pages = PostgresPageRepository::new(
+        common::database(pool.clone()),
+        Arc::new(RenderingRuntime::default()),
+    );
+    let public_posts = PostgresPublishedPostQuery::new(common::database(pool.clone()));
+    let public_pages = PostgresPublishedPageQuery::new(common::database(pool.clone()));
     let now = OffsetDateTime::now_utc() - Duration::hours(2);
     let at = now + Duration::hours(1);
     let mut scheduled_ids = Vec::new();
@@ -225,7 +234,8 @@ async fn due_publishing_is_atomic_idempotent_and_does_not_revive_cancelled_or_tr
             .unwrap()
             .is_none()
     );
-    let publisher = infrastructure::PostgresScheduledPublicationStore::new(pool.clone());
+    let publisher =
+        infrastructure::PostgresScheduledPublicationStore::new(common::database(pool.clone()));
     assert_eq!(
         publisher
             .publish_batch(at - Duration::seconds(1), 100)
@@ -308,7 +318,10 @@ async fn purge_deletes_entire_comment_tree_and_audit_failure_rolls_back_content(
     let _guard = SERIAL.lock().await;
     let pool = common::fresh_database("blog_content_lifecycle_test").await;
     let author = common::seed_user(&pool, "author").await;
-    let repo = PostgresPostRepository::new(pool.clone(), Arc::new(RenderingRuntime::default()));
+    let repo = PostgresPostRepository::new(
+        common::database(pool.clone()),
+        Arc::new(RenderingRuntime::default()),
+    );
     let now = OffsetDateTime::now_utc();
     let post = Post::create_draft(
         UserId(author),
@@ -378,7 +391,7 @@ async fn admin_posts(
     trash: bool,
 ) -> (Vec<application::content_queries::AdminPostSummary>, i64) {
     application::ports::AdminPostQuery::list(
-        &infrastructure::PostgresAdminContentQuery::new(pool.clone()),
+        &infrastructure::PostgresAdminContentQuery::new(common::database(pool.clone())),
         author,
         &application::content_queries::ContentListRequest {
             trash,
@@ -395,7 +408,7 @@ async fn admin_pages(
     trash: bool,
 ) -> (Vec<application::content_queries::AdminPageSummary>, i64) {
     application::ports::AdminPageQuery::list(
-        &infrastructure::PostgresAdminContentQuery::new(pool.clone()),
+        &infrastructure::PostgresAdminContentQuery::new(common::database(pool.clone())),
         &application::content_queries::ContentListRequest {
             trash,
             ..Default::default()

@@ -32,7 +32,8 @@ pub struct PostgresPostRepository {
 }
 
 impl PostgresPostRepository {
-    pub fn new(pool: PgPool, renderer: Arc<dyn ContentRenderer>) -> Self {
+    pub fn new(database: crate::Database, renderer: Arc<dyn ContentRenderer>) -> Self {
+        let pool = database.pool;
         Self { pool, renderer }
     }
 
@@ -481,7 +482,8 @@ pub struct PostgresPublishedPostQuery {
 }
 
 impl PostgresPublishedPostQuery {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(database: crate::Database) -> Self {
+        let pool = database.pool;
         Self { pool }
     }
 }
@@ -639,7 +641,8 @@ pub struct PostgresPageRepository {
 }
 
 impl PostgresPageRepository {
-    pub fn new(pool: PgPool, renderer: Arc<dyn ContentRenderer>) -> Self {
+    pub fn new(database: crate::Database, renderer: Arc<dyn ContentRenderer>) -> Self {
+        let pool = database.pool;
         Self { pool, renderer }
     }
 
@@ -840,7 +843,8 @@ pub struct PostgresScheduledPublicationStore {
     pool: PgPool,
 }
 impl PostgresScheduledPublicationStore {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(database: crate::Database) -> Self {
+        let pool = database.pool;
         Self { pool }
     }
 }
@@ -891,7 +895,8 @@ pub struct PostgresPublishedPageQuery {
 }
 
 impl PostgresPublishedPageQuery {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(database: crate::Database) -> Self {
+        let pool = database.pool;
         Self { pool }
     }
 }

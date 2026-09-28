@@ -1,11 +1,4 @@
 //! A restored database stays guarded until the operator releases it.
-pub async fn is_isolated(pool: &sqlx::PgPool) -> Result<bool, String> {
-    let comment: Option<String> = sqlx::query_scalar(
-        "SELECT shobj_description(oid,'pg_database') FROM pg_database WHERE datname=current_database()",
-    ).fetch_one(pool).await.map_err(|e| format!("读取恢复隔离标记失败：{e}"))?;
-    Ok(comment.is_some_and(|s| s.starts_with("blog:recovery-isolated:")))
-}
-
 pub fn check_bind(bind: &str) -> Result<(), String> {
     let address: std::net::SocketAddr = bind
         .parse()

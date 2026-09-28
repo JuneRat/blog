@@ -66,7 +66,8 @@ pub struct PostgresRetentionStore {
     pool: PgPool,
 }
 impl PostgresRetentionStore {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(database: crate::Database) -> Self {
+        let pool = database.pool;
         Self { pool }
     }
 }
@@ -145,7 +146,8 @@ pub struct PostgresRetentionCleanupStore {
     pool: PgPool,
 }
 impl PostgresRetentionCleanupStore {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(database: crate::Database) -> Self {
+        let pool = database.pool;
         Self { pool }
     }
 }

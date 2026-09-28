@@ -15,7 +15,8 @@ pub struct PostgresCommentRepository {
     renderer: Arc<dyn CommentRenderer>,
 }
 impl PostgresCommentRepository {
-    pub fn new(pool: PgPool, renderer: Arc<dyn CommentRenderer>) -> Self {
+    pub fn new(database: crate::Database, renderer: Arc<dyn CommentRenderer>) -> Self {
+        let pool = database.pool;
         Self { pool, renderer }
     }
 }

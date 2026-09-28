@@ -1,4 +1,4 @@
-use crate::content_queries::{AdminPageSummary, AdminPostSummary, ContentListFilter};
+use crate::content_queries::{AdminPageSummary, AdminPostSummary, PageListFilter, PostListFilter};
 use crate::error::UseCaseError;
 use async_trait::async_trait;
 use uuid::Uuid;
@@ -10,7 +10,7 @@ pub trait AdminPostQuery: Send + Sync {
     async fn list(
         &self,
         author_id: Uuid,
-        filter: &ContentListFilter,
+        filter: &PostListFilter,
     ) -> Result<(Vec<AdminPostSummary>, i64), UseCaseError>;
 }
 
@@ -19,6 +19,6 @@ pub trait AdminPostQuery: Send + Sync {
 pub trait AdminPageQuery: Send + Sync {
     async fn list(
         &self,
-        filter: &ContentListFilter,
+        filter: &PageListFilter,
     ) -> Result<(Vec<AdminPageSummary>, i64), UseCaseError>;
 }

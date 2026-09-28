@@ -7,6 +7,7 @@ use uuid::Uuid;
 use crate::error::UseCaseError;
 use crate::identity::{Actor, authorize_own_or_any};
 use crate::ports::{AdminPageQuery, AdminPostQuery};
+pub use domain::content::{Visibility, page::PageStatus, post::PostStatus};
 use domain::identity::UserId;
 
 pub const CONTENT_PER_PAGE: i64 = 20;
@@ -16,8 +17,8 @@ pub struct AdminPostSummary {
     pub id: Uuid,
     pub slug: String,
     pub title: String,
-    pub status: String,
-    pub visibility: String,
+    pub status: PostStatus,
+    pub visibility: Visibility,
     pub version: i64,
     pub published_at: Option<OffsetDateTime>,
     pub updated_at: OffsetDateTime,
@@ -29,8 +30,8 @@ pub struct AdminPageSummary {
     pub id: Uuid,
     pub slug: String,
     pub title: String,
-    pub status: String,
-    pub visibility: String,
+    pub status: PageStatus,
+    pub visibility: Visibility,
     pub version: i64,
     pub published_at: Option<OffsetDateTime>,
     pub updated_at: OffsetDateTime,
@@ -77,53 +78,77 @@ impl Default for ContentListRequest {
 
 /// 应用层验证后的查询条件；适配器以绑定参数应用筛选，行与总数来自同一快照。
 #[derive(Debug, Clone)]
-pub struct ContentListFilter {
-    request: ContentListRequest,
+pub struct ContentListFilter<S> {
+    page: i64,
+    status: Option<S>,
+    visibility: Option<Visibility>,
+    trash: bool,
 }
 
-impl TryFrom<ContentListRequest> for ContentListFilter {
-    type Error = UseCaseError;
+pub type PostListFilter = ContentListFilter<PostStatus>;
+pub type PageListFilter = ContentListFilter<PageStatus>;
 
-    fn try_from(request: ContentListRequest) -> Result<Self, Self::Error> {
+impl<S: Copy> ContentListFilter<S> {
+    fn parse(
+        request: ContentListRequest,
+        parse_status: fn(&str) -> Option<S>,
+    ) -> Result<Self, UseCaseError> {
         if !(1..=i64::MAX / CONTENT_PER_PAGE).contains(&request.page) {
             return Err(UseCaseError::Invalid("页码超出范围".into()));
         }
-        if request
+        let status = request
             .status
             .as_deref()
-            .is_some_and(|s| !matches!(s, "draft" | "scheduled" | "published" | "archived"))
-        {
-            return Err(UseCaseError::Invalid("无效的发布状态".into()));
-        }
-        if request
+            .map(|value| {
+                parse_status(value).ok_or_else(|| UseCaseError::Invalid("无效的发布状态".into()))
+            })
+            .transpose()?;
+        let visibility = request
             .visibility
             .as_deref()
-            .is_some_and(|s| !matches!(s, "public" | "private"))
-        {
-            return Err(UseCaseError::Invalid("无效的可见性".into()));
-        }
-        Ok(Self { request })
+            .map(|value| {
+                Visibility::parse(value).ok_or_else(|| UseCaseError::Invalid("无效的可见性".into()))
+            })
+            .transpose()?;
+        Ok(Self {
+            page: request.page,
+            status,
+            visibility,
+            trash: request.trash,
+        })
     }
-}
 
-impl ContentListFilter {
     pub fn page(&self) -> i64 {
-        self.request.page
+        self.page
     }
     pub fn limit(&self) -> i64 {
         CONTENT_PER_PAGE
     }
     pub fn offset(&self) -> i64 {
-        (self.request.page - 1) * CONTENT_PER_PAGE
+        (self.page - 1) * CONTENT_PER_PAGE
     }
-    pub fn status(&self) -> Option<&str> {
-        self.request.status.as_deref()
+    pub fn status(&self) -> Option<S> {
+        self.status
     }
-    pub fn visibility(&self) -> Option<&str> {
-        self.request.visibility.as_deref()
+    pub fn visibility(&self) -> Option<Visibility> {
+        self.visibility
     }
     pub fn trash(&self) -> bool {
-        self.request.trash
+        self.trash
+    }
+}
+
+impl TryFrom<ContentListRequest> for PostListFilter {
+    type Error = UseCaseError;
+    fn try_from(request: ContentListRequest) -> Result<Self, Self::Error> {
+        Self::parse(request, PostStatus::parse)
+    }
+}
+
+impl TryFrom<ContentListRequest> for PageListFilter {
+    type Error = UseCaseError;
+    fn try_from(request: ContentListRequest) -> Result<Self, Self::Error> {
+        Self::parse(request, PageStatus::parse)
     }
 }
 
@@ -145,7 +170,7 @@ impl ContentQueries {
         request: ContentListRequest,
     ) -> Result<ContentPage<AdminPostSummary>, UseCaseError> {
         authorize_own_or_any(actor, "post.read", "post.read_any", author)?;
-        let filter = ContentListFilter::try_from(request)?;
+        let filter = PostListFilter::try_from(request)?;
         let (items, total) = self.posts.list(author.0, &filter).await?;
         Ok(ContentPage {
             items,
@@ -163,7 +188,7 @@ impl ContentQueries {
         if !actor.has_permission("page.read") {
             return Err(UseCaseError::Forbidden);
         }
-        let filter = ContentListFilter::try_from(request)?;
+        let filter = PageListFilter::try_from(request)?;
         let (items, total) = self.pages.list(&filter).await?;
         Ok(ContentPage {
             items,

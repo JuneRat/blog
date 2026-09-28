@@ -43,18 +43,20 @@ cargo run -p server -- role assign --user sun --role owner
 第一批数据库验证使用以下测试；`BLOG_TEST_ADMIN_URL` 应指向独立 PostgreSQL 实例的管理库，测试会重建固定名称的测试库，不要指向业务库：
 
 ```bash
-cargo test -p infrastructure --test identity_baseline --test session_postgres
+cargo test -p infrastructure --features sqlx-test-support --test identity_baseline --test session_postgres
 cargo test -p server --test password_http
 cargo test -p server --test command_assembly owner_bootstrap_uses_new_identity_baseline
 ```
+
+`sqlx-test-support` 仅为数据库集成测试提供原始连接池访问，不进入默认生产构建；单独运行 infrastructure 的数据库测试时须显式启用，`cargo test --workspace` 由 server 测试依赖启用。
 
 验收链路为：空库迁移、权限初始化、CLI 创建 Owner、密码登录、资料更新保持登录、改密撤销旧会话。`PUT /api/admin/v1/me/profile` 提交展示名、纯文本简介和必填 `expected_version`，详见[管理 API](admin-api.md)。资料表单与账号启停已接入后台。`cargo test -p server --test installation_http` 另验证真实进程的首次安装、登录、重启续装、配置文件与原子 Owner 保护。新库恢复会撤销全部会话；各批次定向测试不能替代 `check.sh` 的全量检查。
 
 媒体批次在同一独立实例验证：
 
 ```bash
-cargo test -p infrastructure --test media
-cargo test -p infrastructure --test write_invariants media_trash_restore
+cargo test -p infrastructure --features sqlx-test-support --test media
+cargo test -p infrastructure --features sqlx-test-support --test write_invariants media_trash_restore
 cargo test -p server --test media_http
 cargo test -p server --test command_assembly media_cleanup_staging
 (cd apps/admin && pnpm typecheck && pnpm test)
@@ -65,7 +67,7 @@ cargo test -p server --test command_assembly media_cleanup_staging
 内容与目录批次在独立实例验证：
 
 ```bash
-cargo test -p infrastructure --test postgres --test content_lifecycle --test content_html --test write_invariants
+cargo test -p infrastructure --features sqlx-test-support --test postgres --test content_lifecycle --test content_html --test write_invariants
 cargo test -p server --test admin_api
 cargo test -p server --test ssr --test syndication --test command_assembly
 (cd apps/admin && pnpm test && pnpm build)
@@ -76,7 +78,7 @@ cargo test -p server --test ssr --test syndication --test command_assembly
 评论批次在同一独立实例验证：
 
 ```bash
-cargo test -p infrastructure --test comments
+cargo test -p infrastructure --features sqlx-test-support --test comments
 cargo test -p infrastructure --lib comment_rendering
 cargo test -p server --test admin_api native_comments_
 (cd apps/admin && pnpm test && pnpm build)

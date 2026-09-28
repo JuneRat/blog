@@ -42,7 +42,8 @@ pub struct PostgresUserRepository {
 }
 
 impl PostgresUserRepository {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(database: crate::Database) -> Self {
+        let pool = database.pool;
         Self { pool }
     }
 }
@@ -500,11 +501,7 @@ impl PasswordCredentialStore for PostgresUserRepository {
 }
 
 fn user_status(value: &str) -> Result<UserStatus, UseCaseError> {
-    match value {
-        "active" => Ok(UserStatus::Active),
-        "disabled" => Ok(UserStatus::Disabled),
-        _ => Err(UseCaseError::Repository("无效用户状态".into())),
-    }
+    UserStatus::parse(value).ok_or_else(|| UseCaseError::Repository("无效用户状态".into()))
 }
 
 impl PostgresUserRepository {

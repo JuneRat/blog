@@ -15,7 +15,7 @@ use tower::ServiceExt;
 
 struct LiveSite {
     router: RwLock<Router>,
-    pool: watch::Sender<Option<sqlx::PgPool>>,
+    pool: watch::Sender<Option<infrastructure::Database>>,
     telemetry: interfaces::observability::Telemetry,
 }
 

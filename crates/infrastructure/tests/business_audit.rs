@@ -76,9 +76,9 @@ async fn credential_changes_record_the_operator_and_rollback_sessions_on_audit_f
     .unwrap();
     let id = user.snapshot().id;
     let target = id.to_string();
-    let users = PostgresUserRepository::new(pool.clone());
-    let accounts = PostgresOAuthAccountStore::new(pool.clone());
-    let sessions = PostgresSessionStore::with_defaults(pool.clone());
+    let users = PostgresUserRepository::new(common::database(pool.clone()));
+    let accounts = PostgresOAuthAccountStore::new(common::database(pool.clone()));
+    let sessions = PostgresSessionStore::with_defaults(common::database(pool.clone()));
     users.insert(&user, context(actor)).await.unwrap();
     users
         .set_password_hash(id, "$argon2id$private-hash", context(actor))
@@ -225,7 +225,7 @@ async fn role_and_registry_audits_are_atomic_and_idempotent() {
     let pool = common::fresh_database("blog_business_audit_test").await;
     let actor = common::seed_user(&pool, "role-operator").await;
     let target = common::seed_user(&pool, "role-target").await;
-    let rbac = PostgresRbacStore::new(pool.clone());
+    let rbac = PostgresRbacStore::new(common::database(pool.clone()));
     rbac.sync_permission_registry(PERMISSION_REGISTRY)
         .await
         .unwrap();
@@ -308,9 +308,9 @@ async fn settings_and_category_audit_failures_restore_values_versions_and_logo_r
     let _guard = SERIAL.lock().await;
     let pool = common::fresh_database("blog_business_audit_test").await;
     let actor = common::seed_user(&pool, "settings-operator").await;
-    let categories = PostgresCategoryRepository::new(pool.clone());
-    let settings = PostgresSettingsStore::new(pool.clone());
-    let oauth = PostgresOAuthConfigStore::new(pool.clone());
+    let categories = PostgresCategoryRepository::new(common::database(pool.clone()));
+    let settings = PostgresSettingsStore::new(common::database(pool.clone()));
+    let oauth = PostgresOAuthConfigStore::new(common::database(pool.clone()));
     let now = OffsetDateTime::now_utc();
     let category = Category::new(
         "Category".into(),
@@ -446,8 +446,11 @@ async fn html_rebuild_audits_roll_back_derived_content_and_references() {
         .bind(comment).bind(post).execute(&pool).await.unwrap();
     use application::html_rebuild::{HtmlKind, HtmlRebuildStore};
     let renderer = std::sync::Arc::new(infrastructure::RenderingRuntime::default());
-    let store =
-        infrastructure::PostgresHtmlRebuildStore::new(pool.clone(), renderer.clone(), renderer);
+    let store = infrastructure::PostgresHtmlRebuildStore::new(
+        common::database(pool.clone()),
+        renderer.clone(),
+        renderer,
+    );
     let snapshot = "SELECT jsonb_build_array((SELECT to_jsonb(p) FROM posts p),(SELECT to_jsonb(p) FROM pages p),(SELECT to_jsonb(c) FROM comments c))";
     let before: Value = sqlx::query_scalar(snapshot).fetch_one(&pool).await.unwrap();
     block_audit(&pool).await;

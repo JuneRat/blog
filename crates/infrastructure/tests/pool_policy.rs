@@ -1,6 +1,7 @@
 mod common;
 
-use infrastructure::{DatabasePoolConfig, connect_with_config};
+use common::connect_with_config;
+use infrastructure::DatabasePoolConfig;
 use std::time::{Duration, Instant};
 
 #[tokio::test]

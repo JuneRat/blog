@@ -98,7 +98,7 @@ pub trait AccountAdministration: Send + Sync {
         audit_actor: crate::audit::AuditContext,
     ) -> Result<(), UseCaseError>;
 
-    /// 身份排他锁内取得当前权限、目标版本及全局 Owner 事实，调用 identity::policy 复核。
+    /// 原子校验当前权限、目标版本及全局 Owner 事实，调用 identity::policy 复核；并发身份变更不能绕过最后 Owner 保护。
     /// 需 user.manage；目标持有 owner 时另需 ownership.manage。
     /// 实际变更同事务递增 version/auth_version、撤销会话并记录审计；
     /// 相同状态且版本匹配时不写入，软删除账号不能通过此入口恢复。
@@ -163,11 +163,11 @@ pub trait PasswordCredentialStore: Send + Sync {
         audit_actor: crate::audit::AuditContext,
     ) -> Result<(), UseCaseError>;
 
-    /// 在身份排他锁内清除密码，并原子校验该用户仍有其他登录方式。
+    /// 原子校验仍有其他登录方式后清除密码，并提交版本、会话撤销及审计变化。
     ///
-    /// 「检查是否还有别的登录方式」与「清除密码」必须与解绑外部身份用**同一把锁、
-    /// 同一事务**：分开做会让两条路径各自看到「对方还在」而同时通过，最终把账号的
-    /// 登录方式清空（write skew）。
+    /// 这是跨凭据端口的事务语义要求：与外部身份解绑并发执行时，不能各自基于
+    /// 过期事实通过检查，最终清空登录方式（write skew）。替代实现必须保持这个
+    /// 不变量；使用何种事务隔离、锁或条件写入由适配器决定。
     async fn clear_password_hash_guarded(
         &self,
         user_id: Uuid,
@@ -238,7 +238,7 @@ pub trait RbacStore: Send + Sync {
         audit_actor: crate::audit::AuditContext,
     ) -> Result<(), UseCaseError>;
 
-    /// 移除角色分配；实现须在身份锁内调用 identity::policy 保护最后可登录 Owner。
+    /// 移除角色分配；调用 identity::policy 并原子复核最后可登录 Owner，不能被并发身份变更绕过。
     async fn remove_role(
         &self,
         user_id: Uuid,
@@ -387,6 +387,8 @@ pub trait OAuthAccountStore: Send + Sync {
         audit_actor: crate::audit::AuditContext,
     ) -> Result<(), UseCaseError>;
     /// 解绑；当它是该用户最后一种有效登录方式时返回 Err 拒绝。
+    /// 与其他解绑及清除密码并发时也必须保留至少一种有效登录方式；
+    /// 检查、解绑、认证撤销和审计须原子提交。见 clear_password_hash_guarded。
     async fn unbind(
         &self,
         user_id: Uuid,

@@ -6,8 +6,8 @@ use axum::{
     response::IntoResponse,
     routing::get,
 };
+use infrastructure::Database;
 use interfaces::observability::{BuildInfo, Telemetry};
-use sqlx::PgPool;
 use std::net::SocketAddr;
 use tokio::{net::TcpListener, sync::watch};
 
@@ -31,7 +31,7 @@ pub async fn bind(address: Option<SocketAddr>) -> Result<Option<TcpListener>, St
 pub async fn serve(
     listener: Option<TcpListener>,
     telemetry: Telemetry,
-    pool: watch::Receiver<Option<PgPool>>,
+    pool: watch::Receiver<Option<Database>>,
     mut shutdown: watch::Receiver<bool>,
 ) -> Result<(), String> {
     let Some(listener) = listener else {
@@ -45,10 +45,11 @@ pub async fn serve(
             let current = pool.borrow().clone();
             async move {
                 telemetry.pool_snapshot(current.as_ref().map(|pool| {
+                    let snapshot = pool.pool_snapshot();
                     (
-                        pool.size(),
-                        pool.num_idle(),
-                        pool.options().get_max_connections(),
+                        snapshot.connections,
+                        snapshot.idle_connections,
+                        snapshot.max_connections,
                     )
                 }));
                 match telemetry.encode() {

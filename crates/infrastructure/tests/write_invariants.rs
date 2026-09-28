@@ -16,8 +16,8 @@ async fn body_budget_rejects_create_edit_and_publish_before_database_changes() {
     let pool = common::fresh_database("blog_test_write_budget").await;
     let author = UserId(common::seed_user(&pool, "budget_author").await);
     let runtime = Arc::new(infrastructure::rendering::RenderingRuntime::default());
-    let posts = PostgresPostRepository::new(pool.clone(), runtime.clone());
-    let pages = PostgresPageRepository::new(pool.clone(), runtime);
+    let posts = PostgresPostRepository::new(common::database(pool.clone()), runtime.clone());
+    let pages = PostgresPageRepository::new(common::database(pool.clone()), runtime);
     let now = OffsetDateTime::now_utc();
     // Source fits, but entity escaping makes the HTML larger than the budget.
     let expanded = format!("{}& ", "a".repeat(1024)).repeat(765);
@@ -171,7 +171,7 @@ async fn body_budget_rejects_create_edit_and_publish_before_database_changes() {
 async fn media_trash_restore_matches_aggregate_and_version_checks() {
     let pool = common::fresh_database("blog_test_media_transitions").await;
     let owner = common::seed_user(&pool, "media_rules").await;
-    let repo = PostgresMediaRepository::new(pool.clone());
+    let repo = PostgresMediaRepository::new(common::database(pool.clone()));
     let now = OffsetDateTime::now_utc();
     let id = Uuid::now_v7();
     let mut media = Media::uploaded(

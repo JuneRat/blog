@@ -218,8 +218,9 @@ pub trait SeriesRepository: Send + Sync {
     /// 系列当前成员（按 position、post_id 升序；重排授权与目录展示共用）。
     async fn members_of(&self, series_id: Uuid) -> Result<Vec<SeriesMember>, UseCaseError>;
 
-    /// 并发安全重排：关系锁、系列版本与完整成员集合校验、成员行锁（按 id 序）。
-    /// 依次写入 0..n-1 权重；实际变化时递增系列及权重变化的文章版本。
+    /// 原子校验系列版本及完整成员集合后重排；并发成员变更不能造成遗漏或覆盖。
+    /// 依次写入 0..n-1 权重；实际变化时递增系列及权重变化的文章版本，连同审计
+    /// 一起提交。版本/成员校验失败时不得部分更新。这是事务语义，不指定锁机制。
     async fn reorder(
         &self,
         series_id: Uuid,

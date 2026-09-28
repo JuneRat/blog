@@ -1,5 +1,20 @@
 //! 基础设施层：持久化、渲染等出站适配器。
-//! 实现应用层端口并隐藏具体库类型；数据库事务对象不暴露给 application。
+//! 实现应用层端口；默认生产 API 封装数据库连接和错误类型，事务对象不暴露给 application。
+
+mod database;
+pub use database::{Database, DatabaseError, PoolSnapshot};
+
+/// Raw-pool access for database integration fixtures, excluded from default builds.
+#[cfg(feature = "sqlx-test-support")]
+pub mod test_support {
+    pub fn database(pool: sqlx::PgPool) -> crate::Database {
+        crate::Database { pool }
+    }
+
+    pub fn pool(database: crate::Database) -> sqlx::PgPool {
+        database.pool
+    }
+}
 
 pub mod audit;
 pub mod installation;

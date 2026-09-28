@@ -98,8 +98,8 @@ async fn fresh_stack() -> Stack {
     let pool = common::fresh_database("blog_media_http_test").await;
 
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
-    let user_repo = Arc::new(PostgresUserRepository::new(pool.clone()));
-    let rbac = Arc::new(PostgresRbacStore::new(pool.clone()));
+    let user_repo = Arc::new(PostgresUserRepository::new(common::database(pool.clone())));
+    let rbac = Arc::new(PostgresRbacStore::new(common::database(pool.clone())));
     let roles = Arc::new(RoleInteractor::new(rbac.clone(), user_repo.clone()));
     roles.sync_registry().await.expect("同步权限目录失败");
     let users = Arc::new(UserInteractor::new(
@@ -145,7 +145,9 @@ async fn fresh_stack() -> Stack {
         .await
         .unwrap();
 
-    let configs = Arc::new(PostgresOAuthConfigStore::new(pool.clone()));
+    let configs = Arc::new(PostgresOAuthConfigStore::new(common::database(
+        pool.clone(),
+    )));
     configs
         .save(
             &[ProviderConfig {
@@ -162,8 +164,9 @@ async fn fresh_stack() -> Stack {
         .await
         .unwrap();
 
-    let accounts: Arc<dyn OAuthAccountStore> =
-        Arc::new(PostgresOAuthAccountStore::new(pool.clone()));
+    let accounts: Arc<dyn OAuthAccountStore> = Arc::new(PostgresOAuthAccountStore::new(
+        common::database(pool.clone()),
+    ));
     for username in ["author", "author2", "editor", "stranger"] {
         let user = users.actor_for_username(username).await.unwrap().user_id.0;
         accounts
@@ -182,14 +185,16 @@ async fn fresh_stack() -> Stack {
         external_id: Mutex::new("sub-author".into()),
     });
     let tag_repo: Arc<dyn application::ports::TagRepository> =
-        Arc::new(PostgresTagRepository::new(pool.clone()));
-    let category_repo: Arc<dyn application::ports::CategoryRepository> =
-        Arc::new(PostgresCategoryRepository::new(pool.clone()));
-    let series_repo: Arc<dyn application::ports::SeriesRepository> =
-        Arc::new(PostgresSeriesRepository::new(pool.clone()));
+        Arc::new(PostgresTagRepository::new(common::database(pool.clone())));
+    let category_repo: Arc<dyn application::ports::CategoryRepository> = Arc::new(
+        PostgresCategoryRepository::new(common::database(pool.clone())),
+    );
+    let series_repo: Arc<dyn application::ports::SeriesRepository> = Arc::new(
+        PostgresSeriesRepository::new(common::database(pool.clone())),
+    );
     let posts = Arc::new(PostInteractor::new(
         Arc::new(PostgresPostRepository::new(
-            pool.clone(),
+            common::database(pool.clone()),
             Arc::new(infrastructure::RenderingRuntime::default()),
         )),
         tag_repo,
@@ -200,14 +205,15 @@ async fn fresh_stack() -> Stack {
     ));
     let pages = Arc::new(application::page::PageInteractor::new(
         Arc::new(PostgresPageRepository::new(
-            pool.clone(),
+            common::database(pool.clone()),
             Arc::new(infrastructure::RenderingRuntime::default()),
         )),
         clock.clone(),
     ));
 
-    let sessions: Arc<dyn application::ports::SessionStore> =
-        Arc::new(PostgresSessionStore::with_defaults(pool.clone()));
+    let sessions: Arc<dyn application::ports::SessionStore> = Arc::new(
+        PostgresSessionStore::with_defaults(common::database(pool.clone())),
+    );
     let auth = Arc::new(AuthInteractor::new(
         AuthDeps {
             sessions: sessions.clone(),
@@ -237,20 +243,26 @@ async fn fresh_stack() -> Stack {
         posts,
         pages,
         tags: Arc::new(application::tag::TagInteractor::new(
-            Arc::new(PostgresTagRepository::new(pool.clone())),
+            Arc::new(PostgresTagRepository::new(common::database(pool.clone()))),
             Arc::new(SystemClock),
         )),
         categories: Arc::new(application::category::CategoryInteractor::new(
-            Arc::new(PostgresCategoryRepository::new(pool.clone())),
+            Arc::new(PostgresCategoryRepository::new(common::database(
+                pool.clone(),
+            ))),
             Arc::new(SystemClock),
         )),
         series: Arc::new(application::series::SeriesInteractor::new(
-            Arc::new(PostgresSeriesRepository::new(pool.clone())),
+            Arc::new(PostgresSeriesRepository::new(common::database(
+                pool.clone(),
+            ))),
             Arc::new(SystemClock),
             common::media_guard(pool.clone()),
         )),
         settings: Arc::new(application::settings::SettingsInteractor::new(
-            Arc::new(infrastructure::PostgresSettingsStore::new(pool.clone())),
+            Arc::new(infrastructure::PostgresSettingsStore::new(
+                common::database(pool.clone()),
+            )),
             Arc::new(SystemClock),
             application::site_info::SiteInfo {
                 title: "测试站点".into(),
@@ -905,5 +917,71 @@ async fn publicly_readable_media_does_not_expose_private_usage_titles() {
         .0,
         StatusCode::OK
     );
+    stack.pool.close().await;
+}
+
+#[tokio::test]
+async fn usage_states_preserve_wire_values_for_all_source_kinds() {
+    let _serial = SERIAL.lock().await;
+    let stack = fresh_stack().await;
+    let (author, csrf) = login_as(&stack.router, &stack.idp, "author").await;
+    let (id, _) = upload(&stack, &author, &csrf, 8).await;
+    let media = Uuid::parse_str(&id).unwrap();
+    let user: Uuid = sqlx::query_scalar("SELECT id FROM users WHERE username='author'")
+        .fetch_one(&stack.pool)
+        .await
+        .unwrap();
+    let post = Uuid::now_v7();
+    let page = Uuid::now_v7();
+    let series = Uuid::now_v7();
+    sqlx::query("INSERT INTO posts(id,author_id,slug,status,visibility,content_html,content_render_version) VALUES($1,$2,'typed-post','draft','private','',1)")
+        .bind(post).bind(user).execute(&stack.pool).await.unwrap();
+    sqlx::query("INSERT INTO pages(id,slug,status,visibility,published_at,title,content,content_html,content_render_version) VALUES($1,'typed-page','published','public',now(),'Page','body','<p>body</p>',1)")
+        .bind(page).execute(&stack.pool).await.unwrap();
+    sqlx::query("INSERT INTO series(id,slug,name) VALUES($1,'typed-series','Series')")
+        .bind(series)
+        .execute(&stack.pool)
+        .await
+        .unwrap();
+    for (kind, source) in [
+        ("post", post),
+        ("page", page),
+        ("series", series),
+        ("user", user),
+        ("site", Uuid::nil()),
+    ] {
+        sqlx::query("INSERT INTO media_refs(media_id,source_type,source_id) VALUES($1,$2,$3)")
+            .bind(media)
+            .bind(kind)
+            .bind(source)
+            .execute(&stack.pool)
+            .await
+            .unwrap();
+    }
+    let (status, _, body) = send(
+        &stack.router,
+        "GET",
+        &format!("/api/admin/v1/media/{id}"),
+        Some(&author),
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["hidden_references"], 0);
+    let references = body["references"].as_array().unwrap();
+    assert_eq!(references.len(), 5);
+    for (kind, status, visibility) in [
+        ("post", "draft", "private"),
+        ("page", "published", "public"),
+        ("series", "published", "public"),
+        ("user", "active", "public"),
+        ("site", "active", "public"),
+    ] {
+        let reference = references.iter().find(|r| r["kind"] == kind).unwrap();
+        assert_eq!(reference["status"], status);
+        assert_eq!(reference["visibility"], visibility);
+    }
     stack.pool.close().await;
 }

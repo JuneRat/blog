@@ -25,10 +25,11 @@ pub struct PostgresHtmlRebuildStore {
 
 impl PostgresHtmlRebuildStore {
     pub fn new(
-        pool: PgPool,
+        database: crate::Database,
         content_renderer: Arc<dyn ContentRenderer>,
         comment_renderer: Arc<dyn CommentRenderer>,
     ) -> Self {
+        let pool = database.pool;
         Self {
             pool,
             content_renderer,

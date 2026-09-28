@@ -14,13 +14,14 @@ use application::ports::{
     PublishedPostQuery, PublishedSeriesQuery, PublishedTagQuery, RbacStore, SaveOutcome,
     SeriesRepository, SettingsStore, TagRepository, UserQuery,
 };
+use common::connect;
 use domain::content::{Page, PagePatch};
 use domain::content::{Post, PostPatch, PostSnapshot, PostStatus, Slug, Visibility};
 use domain::identity::{User, UserId};
 use infrastructure::{
     PostgresOAuthAccountStore, PostgresPageRepository, PostgresPostRepository,
     PostgresPublishedPageQuery, PostgresPublishedPostQuery, PostgresRbacStore,
-    PostgresUserRepository, SanitizingMarkdownRenderer, connect,
+    PostgresUserRepository, SanitizingMarkdownRenderer,
 };
 use sqlx::PgPool;
 use time::OffsetDateTime;
@@ -117,7 +118,7 @@ async fn migrations_create_core_tables() {
     for t in expected {
         assert!(tables.iter().any(|x| x == t), "缺少表 {t}");
     }
-    infrastructure::migrate_schema(&pool, "../../migrations/postgres")
+    infrastructure::migrate_schema(&common::database(pool.clone()), "../../migrations/postgres")
         .await
         .unwrap();
     let applied: Vec<i64> =
@@ -134,7 +135,7 @@ async fn duplicate_slug_is_rejected_as_conflict() {
     let pool = fresh_database().await;
     let author = seed_user(&pool, "author").await;
     let repo = PostgresPostRepository::new(
-        pool.clone(),
+        common::database(pool.clone()),
         Arc::new(infrastructure::RenderingRuntime::default()),
     );
 
@@ -164,7 +165,7 @@ async fn foreign_key_protects_author_reference() {
     let _g = SERIAL.lock().await;
     let pool = fresh_database().await;
     let repo = PostgresPostRepository::new(
-        pool.clone(),
+        common::database(pool.clone()),
         Arc::new(infrastructure::RenderingRuntime::default()),
     );
 
@@ -217,7 +218,7 @@ async fn save_returns_three_states_and_new_version() {
     let pool = fresh_database().await;
     let author = seed_user(&pool, "author").await;
     let repo = PostgresPostRepository::new(
-        pool.clone(),
+        common::database(pool.clone()),
         Arc::new(infrastructure::RenderingRuntime::default()),
     );
 
@@ -296,14 +297,14 @@ async fn truly_concurrent_saves_exactly_one_wins() {
     let author = seed_user(&pool, "author").await;
 
     let repo_a = PostgresPostRepository::new(
-        pool.clone(),
+        common::database(pool.clone()),
         Arc::new(infrastructure::RenderingRuntime::default()),
     );
     let pool_b = connect(&test_db_url(&admin_url(), "blog_test"))
         .await
         .unwrap();
     let repo_b = PostgresPostRepository::new(
-        pool_b,
+        common::database(pool_b),
         Arc::new(infrastructure::RenderingRuntime::default()),
     );
 
@@ -357,10 +358,10 @@ async fn public_query_filters_draft_private_and_deleted() {
     let pool = fresh_database().await;
     let author = seed_user(&pool, "author").await;
     let repo = PostgresPostRepository::new(
-        pool.clone(),
+        common::database(pool.clone()),
         Arc::new(infrastructure::RenderingRuntime::default()),
     );
-    let query = PostgresPublishedPostQuery::new(pool.clone());
+    let query = PostgresPublishedPostQuery::new(common::database(pool.clone()));
 
     // 1. 公开发布
     let mut published = draft_snapshot(author, "public-one");
@@ -442,7 +443,7 @@ async fn status_transitions_persisted_correctly() {
     let pool = fresh_database().await;
     let author = seed_user(&pool, "author").await;
     let repo = PostgresPostRepository::new(
-        pool.clone(),
+        common::database(pool.clone()),
         Arc::new(infrastructure::RenderingRuntime::default()),
     );
 
@@ -500,7 +501,7 @@ async fn markdown_renderer_sanitizes_unsafe_html() {
 // ---------------------------------------------------------------------------
 
 fn rbac_of(pool: &PgPool) -> PostgresRbacStore {
-    PostgresRbacStore::new(pool.clone())
+    PostgresRbacStore::new(common::database(pool.clone()))
 }
 
 #[tokio::test]
@@ -891,7 +892,7 @@ async fn removing_role_the_user_does_not_hold_is_noop() {
 async fn concurrent_last_owner_removal_keeps_at_least_one_loginable_owner() {
     let _g = SERIAL.lock().await;
     let pool = fresh_database().await;
-    let rbac = Arc::new(PostgresRbacStore::new(pool.clone()));
+    let rbac = Arc::new(PostgresRbacStore::new(common::database(pool.clone())));
     rbac.sync_permission_registry(application::identity::PERMISSION_REGISTRY)
         .await
         .unwrap();
@@ -932,11 +933,12 @@ async fn page_repository_crud_version_and_public_query() {
     let _g = SERIAL.lock().await;
     let pool = fresh_database().await;
     let pages: Arc<dyn PageRepository> = Arc::new(PostgresPageRepository::new(
-        pool.clone(),
+        common::database(pool.clone()),
         Arc::new(infrastructure::RenderingRuntime::default()),
     ));
-    let public: Arc<dyn PublishedPageQuery> =
-        Arc::new(PostgresPublishedPageQuery::new(pool.clone()));
+    let public: Arc<dyn PublishedPageQuery> = Arc::new(PostgresPublishedPageQuery::new(
+        common::database(pool.clone()),
+    ));
 
     let now = OffsetDateTime::now_utc();
     let mut page = Page::create_draft(
@@ -1089,7 +1091,7 @@ async fn page_repository_crud_version_and_public_query() {
 async fn password_credentials_are_stored_and_scoped_to_active_users() {
     let _g = SERIAL.lock().await;
     let pool = fresh_database().await;
-    let users = PostgresUserRepository::new(pool.clone());
+    let users = PostgresUserRepository::new(common::database(pool.clone()));
 
     let user_id = seed_user(&pool, "sun").await;
     // 未设置密码：登录查询返回 None。
@@ -1238,7 +1240,7 @@ async fn password_credentials_are_stored_and_scoped_to_active_users() {
 async fn guarded_password_clear_requires_another_login_method() {
     let _g = SERIAL.lock().await;
     let pool = fresh_database().await;
-    let users = PostgresUserRepository::new(pool.clone());
+    let users = PostgresUserRepository::new(common::database(pool.clone()));
 
     let user_id = seed_user(&pool, "solo").await;
     // 未启用密码。
@@ -1294,8 +1296,8 @@ async fn guarded_password_clear_requires_another_login_method() {
 async fn clear_password_and_unbind_cannot_both_remove_the_last_login_method() {
     let _g = SERIAL.lock().await;
     let pool = fresh_database().await;
-    let users = PostgresUserRepository::new(pool.clone());
-    let accounts = PostgresOAuthAccountStore::new(pool.clone());
+    let users = PostgresUserRepository::new(common::database(pool.clone()));
+    let accounts = PostgresOAuthAccountStore::new(common::database(pool.clone()));
 
     let user_id = seed_user(&pool, "dual").await;
     seed_binding(&pool, user_id).await;
@@ -1339,8 +1341,8 @@ async fn clear_password_and_unbind_cannot_both_remove_the_last_login_method() {
 async fn password_clear_and_unbind_both_block_on_the_identity_lock() {
     let _g = SERIAL.lock().await;
     let pool = fresh_database().await;
-    let users = PostgresUserRepository::new(pool.clone());
-    let accounts = PostgresOAuthAccountStore::new(pool.clone());
+    let users = PostgresUserRepository::new(common::database(pool.clone()));
+    let accounts = PostgresOAuthAccountStore::new(common::database(pool.clone()));
 
     let user_id = seed_user(&pool, "locked").await;
     seed_binding(&pool, user_id).await;
@@ -1429,7 +1431,7 @@ async fn password_clear_and_unbind_both_block_on_the_identity_lock() {
 async fn duplicate_username_and_email_map_to_structured_conflicts() {
     let _g = SERIAL.lock().await;
     let pool = fresh_database().await;
-    let users = PostgresUserRepository::new(pool.clone());
+    let users = PostgresUserRepository::new(common::database(pool.clone()));
     let now = OffsetDateTime::now_utc();
 
     let first = User::new("alice", Some("alice@example.com".into()), None, now)
@@ -1500,7 +1502,7 @@ async fn admin_listing_reports_login_methods_and_roles_in_bulk() {
         .await
         .unwrap();
 
-    let users = PostgresUserRepository::new(pool.clone());
+    let users = PostgresUserRepository::new(common::database(pool.clone()));
     let rows = users.list_admin(50, 0).await.unwrap();
     assert_eq!(rows.len(), 4);
     let row = |name: &str| rows.iter().find(|r| r.username == name).unwrap();
@@ -1530,7 +1532,7 @@ async fn admin_listing_paginates_in_stable_username_order() {
         seed_user(&pool, username).await;
     }
 
-    let users = PostgresUserRepository::new(pool.clone());
+    let users = PostgresUserRepository::new(common::database(pool.clone()));
     let first = users.list_admin(2, 0).await.unwrap();
     let rest = users.list_admin(2, 2).await.unwrap();
     let names: Vec<&str> = first
@@ -1547,7 +1549,7 @@ async fn admin_listing_paginates_in_stable_username_order() {
 
 /// 预置一个标签，返回快照。
 async fn seed_tag(pool: &sqlx::PgPool, name: &str, slug: &str) -> domain::content::TagSnapshot {
-    let tags = infrastructure::PostgresTagRepository::new(pool.clone());
+    let tags = infrastructure::PostgresTagRepository::new(common::database(pool.clone()));
     let tag = domain::content::Tag::new(
         name.into(),
         domain::content::Slug::new(slug).unwrap(),
@@ -1563,7 +1565,7 @@ async fn seed_tag(pool: &sqlx::PgPool, name: &str, slug: &str) -> domain::conten
 async fn tag_slug_unique_conflict_maps_to_slug_conflict() {
     let _g = SERIAL.lock().await;
     let pool = fresh_database().await;
-    let repo = infrastructure::PostgresTagRepository::new(pool.clone());
+    let repo = infrastructure::PostgresTagRepository::new(common::database(pool.clone()));
     seed_tag(&pool, "Rust", "rust").await;
 
     let dup = domain::content::Tag::new(
@@ -1582,7 +1584,7 @@ async fn tag_slug_unique_conflict_maps_to_slug_conflict() {
 async fn tag_rename_is_versioned_and_slug_immutable() {
     let _g = SERIAL.lock().await;
     let pool = fresh_database().await;
-    let repo = infrastructure::PostgresTagRepository::new(pool.clone());
+    let repo = infrastructure::PostgresTagRepository::new(common::database(pool.clone()));
     let tag = seed_tag(&pool, "Rust", "rust").await;
 
     // 版本不匹配：CAS 未命中。
@@ -1609,9 +1611,9 @@ async fn tag_delete_removes_references_and_keeps_drafts() {
     let _g = SERIAL.lock().await;
     let pool = fresh_database().await;
     let author = seed_user(&pool, "author").await;
-    let repo = infrastructure::PostgresTagRepository::new(pool.clone());
+    let repo = infrastructure::PostgresTagRepository::new(common::database(pool.clone()));
     let posts = PostgresPostRepository::new(
-        pool.clone(),
+        common::database(pool.clone()),
         Arc::new(infrastructure::RenderingRuntime::default()),
     );
     let tag = seed_tag(&pool, "Rust", "rust").await;
@@ -1643,7 +1645,7 @@ async fn post_tags_saved_in_same_transaction_as_content() {
     let pool = fresh_database().await;
     let author = seed_user(&pool, "author").await;
     let posts = PostgresPostRepository::new(
-        pool.clone(),
+        common::database(pool.clone()),
         Arc::new(infrastructure::RenderingRuntime::default()),
     );
     let rust = seed_tag(&pool, "Rust", "rust").await;
@@ -1739,7 +1741,7 @@ async fn post_tag_association_rejects_unknown_tag_via_fk() {
     let pool = fresh_database().await;
     let author = seed_user(&pool, "author").await;
     let posts = PostgresPostRepository::new(
-        pool.clone(),
+        common::database(pool.clone()),
         Arc::new(infrastructure::RenderingRuntime::default()),
     );
     let ghost = uuid::Uuid::now_v7();
@@ -1769,9 +1771,9 @@ async fn tag_directory_listing_counts_only_public_posts() {
     let _g = SERIAL.lock().await;
     let pool = fresh_database().await;
     let author = seed_user(&pool, "author").await;
-    let repo = infrastructure::PostgresTagRepository::new(pool.clone());
+    let repo = infrastructure::PostgresTagRepository::new(common::database(pool.clone()));
     let posts = PostgresPostRepository::new(
-        pool.clone(),
+        common::database(pool.clone()),
         Arc::new(infrastructure::RenderingRuntime::default()),
     );
     let tag = seed_tag(&pool, "Rust", "rust").await;
@@ -1837,11 +1839,11 @@ async fn public_tag_page_lists_only_public_posts_and_paginates() {
         .unwrap();
     let author = seed_user(&pool, "author").await;
     let posts = PostgresPostRepository::new(
-        pool.clone(),
+        common::database(pool.clone()),
         Arc::new(infrastructure::RenderingRuntime::default()),
     );
-    let tag_query = infrastructure::PostgresPublishedTagQuery::new(pool.clone());
-    let post_query = PostgresPublishedPostQuery::new(pool.clone());
+    let tag_query = infrastructure::PostgresPublishedTagQuery::new(common::database(pool.clone()));
+    let post_query = PostgresPublishedPostQuery::new(common::database(pool.clone()));
     let tag = seed_tag(&pool, "Rust", "rust").await;
 
     // 3 篇公开 + 1 草稿（挂同标签）。
@@ -1938,7 +1940,7 @@ async fn seed_category(
     slug: &str,
     parent: Option<uuid::Uuid>,
 ) -> domain::content::CategorySnapshot {
-    let repo = infrastructure::PostgresCategoryRepository::new(pool.clone());
+    let repo = infrastructure::PostgresCategoryRepository::new(common::database(pool.clone()));
     let category = domain::content::Category::new(
         name.into(),
         domain::content::Slug::new(slug).unwrap(),
@@ -1956,7 +1958,7 @@ async fn seed_category(
 async fn category_move_rejects_cycles_even_indirect() {
     let _g = SERIAL.lock().await;
     let pool = fresh_database().await;
-    let repo = infrastructure::PostgresCategoryRepository::new(pool.clone());
+    let repo = infrastructure::PostgresCategoryRepository::new(common::database(pool.clone()));
     let a = seed_category(&pool, "A", "a", None).await;
     let b = seed_category(&pool, "B", "b", Some(a.id)).await;
 
@@ -2001,7 +2003,7 @@ async fn category_move_rejects_cycles_even_indirect() {
 async fn category_move_rejects_missing_parent_and_checks_version() {
     let _g = SERIAL.lock().await;
     let pool = fresh_database().await;
-    let repo = infrastructure::PostgresCategoryRepository::new(pool.clone());
+    let repo = infrastructure::PostgresCategoryRepository::new(common::database(pool.clone()));
     let a = seed_category(&pool, "A", "a", None).await;
 
     let ghost = uuid::Uuid::now_v7();
@@ -2026,10 +2028,10 @@ async fn category_delete_protects_posts_and_children() {
     let pool = fresh_database().await;
     let author = seed_user(&pool, "author").await;
     let posts = PostgresPostRepository::new(
-        pool.clone(),
+        common::database(pool.clone()),
         Arc::new(infrastructure::RenderingRuntime::default()),
     );
-    let repo = infrastructure::PostgresCategoryRepository::new(pool.clone());
+    let repo = infrastructure::PostgresCategoryRepository::new(common::database(pool.clone()));
     let parent = seed_category(&pool, "父", "parent", None).await;
     let child = seed_category(&pool, "子", "child", Some(parent.id)).await;
 
@@ -2103,11 +2105,12 @@ async fn post_category_saved_in_same_transaction_and_public_page_filters() {
         .unwrap();
     let author = seed_user(&pool, "author").await;
     let posts = PostgresPostRepository::new(
-        pool.clone(),
+        common::database(pool.clone()),
         Arc::new(infrastructure::RenderingRuntime::default()),
     );
-    let query = PostgresPublishedPostQuery::new(pool.clone());
-    let cat_query = infrastructure::PostgresPublishedCategoryQuery::new(pool.clone());
+    let query = PostgresPublishedPostQuery::new(common::database(pool.clone()));
+    let cat_query =
+        infrastructure::PostgresPublishedCategoryQuery::new(common::database(pool.clone()));
     let cat = seed_category(&pool, "技术", "tech", None).await;
 
     // 创建即带分类；仅改分类也递增 version。
@@ -2224,7 +2227,7 @@ async fn seed_series(
     name: &str,
     slug: &str,
 ) -> domain::content::SeriesSnapshot {
-    let repo = infrastructure::PostgresSeriesRepository::new(pool.clone());
+    let repo = infrastructure::PostgresSeriesRepository::new(common::database(pool.clone()));
     let series = domain::content::Series::new(
         name.into(),
         domain::content::Slug::new(slug).unwrap(),
@@ -2246,7 +2249,7 @@ async fn post_in_series(
     order: i32,
 ) -> PostSnapshot {
     let repo = PostgresPostRepository::new(
-        pool.clone(),
+        common::database(pool.clone()),
         Arc::new(infrastructure::RenderingRuntime::default()),
     );
     let mut snapshot = draft_snapshot(author, slug);
@@ -2310,7 +2313,7 @@ async fn series_reorder_rewrites_orders_and_bumps_versions() {
 }
 
 fn repo_of(pool: &sqlx::PgPool) -> infrastructure::PostgresSeriesRepository {
-    infrastructure::PostgresSeriesRepository::new(pool.clone())
+    infrastructure::PostgresSeriesRepository::new(common::database(pool.clone()))
 }
 
 #[tokio::test]
@@ -2418,7 +2421,7 @@ async fn post_series_accepts_duplicate_positions_on_edit() {
     let author = seed_user(&pool, "author").await;
     let s = seed_series(&pool, "指南", "guide").await;
     let repo = PostgresPostRepository::new(
-        pool.clone(),
+        common::database(pool.clone()),
         Arc::new(infrastructure::RenderingRuntime::default()),
     );
     post_in_series(&pool, author, s.id, "occ-1", 1).await;
@@ -2466,7 +2469,7 @@ async fn public_series_empty_page_keeps_total() {
     let author = seed_user(&pool, "author").await;
     let series = seed_series(&pool, "Guide", "guide").await;
     let repo = PostgresPostRepository::new(
-        pool.clone(),
+        common::database(pool.clone()),
         Arc::new(infrastructure::RenderingRuntime::default()),
     );
     for i in 1..=3 {
@@ -2479,7 +2482,7 @@ async fn public_series_empty_page_keeps_total() {
         post.publish(published_at).unwrap();
         repo.insert_post(&post, &[], None.into()).await.unwrap();
     }
-    let query = infrastructure::PostgresPublishedSeriesQuery::new(pool.clone());
+    let query = infrastructure::PostgresPublishedSeriesQuery::new(common::database(pool.clone()));
     let (page, total) = query
         .list_public_posts_by_series("guide", 2, 0)
         .await
@@ -2504,7 +2507,7 @@ async fn post_series_edit_participates_in_series_version_protocol() {
     let author = seed_user(&pool, "author").await;
     let s = seed_series(&pool, "协议", "protocol").await;
     let repo = PostgresPostRepository::new(
-        pool.clone(),
+        common::database(pool.clone()),
         Arc::new(infrastructure::RenderingRuntime::default()),
     );
     let series_repo = repo_of(&pool);
@@ -2621,7 +2624,7 @@ fn site_value(title: &str, description: &str) -> application::ports::SiteSetting
 async fn settings_site_upsert_and_version_cas() {
     let _g = SERIAL.lock().await;
     let pool = fresh_database().await;
-    let store = infrastructure::PostgresSettingsStore::new(pool.clone());
+    let store = infrastructure::PostgresSettingsStore::new(common::database(pool.clone()));
 
     // 未配置：find 返回 None。
     assert!(store.find_site().await.unwrap().is_none());
@@ -2731,7 +2734,7 @@ async fn settings_partial_row_reads_missing_fields_as_none() {
     .await
     .unwrap();
 
-    let store = infrastructure::PostgresSettingsStore::new(pool);
+    let store = infrastructure::PostgresSettingsStore::new(common::database(pool));
     let record = store.find_site().await.unwrap().unwrap();
     assert_eq!(record.value.title.as_deref(), Some("手工标题"));
     assert_eq!(record.value.description, None);
@@ -2744,7 +2747,7 @@ async fn settings_row_survives_new_pool_and_keeps_oauth_group_isolated() {
     let dsn = admin_url();
     let test_dsn = test_db_url(&dsn, "blog_test");
 
-    let first = infrastructure::PostgresSettingsStore::new(pool);
+    let first = infrastructure::PostgresSettingsStore::new(common::database(pool));
     first
         .save_site(
             &site_value("持久标题", "持久描述"),
@@ -2757,14 +2760,14 @@ async fn settings_row_survives_new_pool_and_keeps_oauth_group_isolated() {
 
     // 「重启」：丢弃原连接池，用全新连接读同一数据库，配置仍在。
     let pool2 = connect(&test_dsn).await.unwrap();
-    let second = infrastructure::PostgresSettingsStore::new(pool2.clone());
+    let second = infrastructure::PostgresSettingsStore::new(common::database(pool2.clone()));
     let record = second.find_site().await.unwrap().unwrap();
     assert_eq!(record.value.title.as_deref(), Some("持久标题"));
     assert_eq!(record.version, 1);
 
     // oauth 分组与 site 分组物理隔离：互不触碰对方的行。
     use application::ports::OAuthConfigStore;
-    let oauth = infrastructure::PostgresOAuthConfigStore::new(pool2.clone());
+    let oauth = infrastructure::PostgresOAuthConfigStore::new(common::database(pool2.clone()));
     oauth
         .save(
             &[application::ports::ProviderConfig {
@@ -2809,8 +2812,8 @@ async fn settings_concurrent_saves_on_two_connections_exactly_one_wins() {
         .await
         .unwrap();
 
-    let a = infrastructure::PostgresSettingsStore::new(pool);
-    let b = infrastructure::PostgresSettingsStore::new(pool2);
+    let a = infrastructure::PostgresSettingsStore::new(common::database(pool));
+    let b = infrastructure::PostgresSettingsStore::new(common::database(pool2));
     a.save_site(
         &site_value("初版", "描述"),
         0,
@@ -2855,10 +2858,10 @@ async fn trash_restore_purge_and_series_reorder_obey_versions() {
     let pool = fresh_database().await;
     let author = seed_user(&pool, "trash_author").await;
     let posts = PostgresPostRepository::new(
-        pool.clone(),
+        common::database(pool.clone()),
         Arc::new(infrastructure::RenderingRuntime::default()),
     );
-    let series = infrastructure::PostgresSeriesRepository::new(pool.clone());
+    let series = infrastructure::PostgresSeriesRepository::new(common::database(pool.clone()));
     let series_id = uuid::Uuid::now_v7();
     sqlx::query(
         "INSERT INTO series (id, name, slug, version) VALUES ($1, '回收测试', 'trash-series', 1)",
@@ -2903,13 +2906,13 @@ async fn trash_restore_purge_and_series_reorder_obey_versions() {
     );
     assert_eq!(admin_posts(&pool, author, true).await.1, 1);
     assert!(
-        PostgresPublishedPostQuery::new(pool.clone())
+        PostgresPublishedPostQuery::new(common::database(pool.clone()))
             .find_public_by_slug("trash-a")
             .await
             .unwrap()
             .is_none()
     );
-    let public = PostgresPublishedPostQuery::new(pool.clone());
+    let public = PostgresPublishedPostQuery::new(common::database(pool.clone()));
     assert!(
         public
             .list_public(20, 0)
@@ -2977,7 +2980,7 @@ async fn purge_releases_slug_and_cascades_tags_only_after_trash() {
     let pool = fresh_database().await;
     let author = seed_user(&pool, "purge_author").await;
     let posts = PostgresPostRepository::new(
-        pool.clone(),
+        common::database(pool.clone()),
         Arc::new(infrastructure::RenderingRuntime::default()),
     );
     let tag_id = uuid::Uuid::now_v7();
@@ -3074,7 +3077,7 @@ async fn content_commit_returns_complete_record_and_rolls_back_failed_references
         seed_tag(&pool, "标签 B", "record-b").await.id,
     ];
     let repo = PostgresPostRepository::new(
-        pool.clone(),
+        common::database(pool.clone()),
         Arc::new(infrastructure::RenderingRuntime::default()),
     );
     let post = Post::reconstitute(draft_snapshot(author, "commit-record")).unwrap();
@@ -3160,7 +3163,7 @@ async fn content_commit_reads_never_mix_body_and_tags_during_concurrent_edits() 
     let a = seed_tag(&pool, "A", "snapshot-a").await.id;
     let b = seed_tag(&pool, "B", "snapshot-b").await.id;
     let repo = Arc::new(PostgresPostRepository::new(
-        pool,
+        common::database(pool),
         Arc::new(infrastructure::RenderingRuntime::default()),
     ));
     let mut post = Post::reconstitute(draft_snapshot(author, "coherent-record")).unwrap();
@@ -3224,8 +3227,10 @@ async fn content_commit_lifecycle_preserves_relations_and_checks_original_state(
     let pool = fresh_database().await;
     let author = seed_user(&pool, "lifecycle-record-author").await;
     let tag = seed_tag(&pool, "保留标签", "lifecycle-record-tag").await.id;
-    let repo =
-        PostgresPostRepository::new(pool, Arc::new(infrastructure::RenderingRuntime::default()));
+    let repo = PostgresPostRepository::new(
+        common::database(pool),
+        Arc::new(infrastructure::RenderingRuntime::default()),
+    );
     let mut post = Post::reconstitute(draft_snapshot(author, "lifecycle-record")).unwrap();
     let now = OffsetDateTime::now_utc();
     post.publish(now).unwrap();
@@ -3283,7 +3288,7 @@ async fn admin_posts(
     trash: bool,
 ) -> (Vec<application::content_queries::AdminPostSummary>, i64) {
     application::ports::AdminPostQuery::list(
-        &infrastructure::PostgresAdminContentQuery::new(pool.clone()),
+        &infrastructure::PostgresAdminContentQuery::new(common::database(pool.clone())),
         author,
         &application::content_queries::ContentListRequest {
             trash,
@@ -3300,7 +3305,7 @@ async fn admin_pages(
     trash: bool,
 ) -> (Vec<application::content_queries::AdminPageSummary>, i64) {
     application::ports::AdminPageQuery::list(
-        &infrastructure::PostgresAdminContentQuery::new(pool.clone()),
+        &infrastructure::PostgresAdminContentQuery::new(common::database(pool.clone())),
         &application::content_queries::ContentListRequest {
             trash,
             ..Default::default()

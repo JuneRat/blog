@@ -13,7 +13,6 @@ infrastructure = { path = "../infrastructure" }
 interfaces = { path = "../interfaces" }
 tokio.workspace = true
 axum.workspace = true
-sqlx.workspace = true
 time.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
@@ -26,6 +25,8 @@ tower = { version = "0.5", features = ["util"] }
 serde_json.workspace = true
 
 [dev-dependencies]
+infrastructure = { path = "../infrastructure", features = ["sqlx-test-support"] }
+sqlx.workspace = true
 http-body-util = "0.1"
 reqwest.workspace = true
 uuid.workspace = true

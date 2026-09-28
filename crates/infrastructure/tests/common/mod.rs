@@ -6,6 +6,8 @@
 //! 同名库会被另一个进程的 DROP/CREATE 打断。
 #![allow(dead_code)]
 
+pub use infrastructure::test_support::database;
+
 use sqlx::PgPool;
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -44,9 +46,7 @@ pub async fn fresh_database(db_name: &str) -> PgPool {
     assert_loopback(&admin_dsn);
     let test_dsn = test_db_url(&admin_dsn, db_name);
 
-    let admin = infrastructure::connect(&admin_dsn)
-        .await
-        .expect("连接管理库失败");
+    let admin = connect(&admin_dsn).await.expect("连接管理库失败");
     // raw_sql 走简单协议且不包事务；CREATE/DROP DATABASE 不能在事务块内执行。
     sqlx::raw_sql(&format!("DROP DATABASE IF EXISTS {db_name} WITH (FORCE)"))
         .execute(&admin)
@@ -58,10 +58,8 @@ pub async fn fresh_database(db_name: &str) -> PgPool {
         .expect("创建测试库失败");
     admin.close().await;
 
-    let pool = infrastructure::connect(&test_dsn)
-        .await
-        .expect("连接测试库失败");
-    infrastructure::migrate_schema(&pool, "../../migrations/postgres")
+    let pool = connect(&test_dsn).await.expect("连接测试库失败");
+    infrastructure::migrate_schema(&database(pool.clone()), "../../migrations/postgres")
         .await
         .expect("迁移失败");
     pool
@@ -83,4 +81,20 @@ pub async fn seed_user(pool: &PgPool, username: &str) -> Uuid {
     .await
     .expect("写入测试用户失败");
     id
+}
+
+/// Expose the production pool only inside integration fixtures.
+pub async fn connect(url: &str) -> Result<sqlx::PgPool, infrastructure::DatabaseError> {
+    infrastructure::connect(url)
+        .await
+        .map(infrastructure::test_support::pool)
+}
+
+pub async fn connect_with_config(
+    url: &str,
+    config: &infrastructure::DatabasePoolConfig,
+) -> Result<sqlx::PgPool, infrastructure::DatabaseError> {
+    infrastructure::connect_with_config(url, config)
+        .await
+        .map(infrastructure::test_support::pool)
 }

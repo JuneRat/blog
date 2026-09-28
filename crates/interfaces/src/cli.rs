@@ -859,7 +859,12 @@ pub async fn run_post(deps: PostCliDeps, action: PostAction) -> Result<(), Strin
             for dto in list.items {
                 println!(
                     "{} v{:<5} {:<10} {:<8} {:<14} {}",
-                    dto.id, dto.version, dto.status, dto.visibility, dto.slug, dto.title
+                    dto.id,
+                    dto.version,
+                    dto.status.as_str(),
+                    dto.visibility.as_str(),
+                    dto.slug,
+                    dto.title
                 );
             }
             Ok(())

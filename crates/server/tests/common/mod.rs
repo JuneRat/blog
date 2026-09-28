@@ -4,6 +4,8 @@
 //! `BLOG_TEST_ADMIN_URL`（默认 loopback 的 postgres 库），与 README/.env.example 一致。
 #![allow(dead_code)]
 
+pub use infrastructure::test_support::database;
+
 use std::sync::Arc;
 
 use application::password::{PasswordDeps, PasswordInteractor};
@@ -26,7 +28,7 @@ pub fn media_interactor(
 ) -> Arc<application::media::MediaInteractor> {
     Arc::new(application::media::MediaInteractor::new(
         Arc::new(infrastructure::image_inspection::HeaderImageInspector),
-        Arc::new(infrastructure::PostgresMediaRepository::new(pool)),
+        Arc::new(infrastructure::PostgresMediaRepository::new(database(pool))),
         Arc::new(infrastructure::LocalMediaStorage::new(root)),
         Arc::new(infrastructure::SystemClock),
     ))
@@ -34,7 +36,7 @@ pub fn media_interactor(
 
 /// 测试装配的媒体附着授权：与生产同构（Postgres 仓储实现窄端口）。
 pub fn media_guard(pool: sqlx::PgPool) -> Arc<dyn application::ports::MediaRefGuard> {
-    Arc::new(infrastructure::PostgresMediaRepository::new(pool))
+    Arc::new(infrastructure::PostgresMediaRepository::new(database(pool)))
 }
 
 /// 测试装配的本地密码用例：真实 Argon2id（生产参数）+ 默认限流。
@@ -102,9 +104,7 @@ pub async fn fresh_database(db_name: &str) -> sqlx::PgPool {
     assert_loopback(&admin_dsn);
     let test_dsn = test_db_url(&admin_dsn, db_name);
 
-    let admin = infrastructure::connect(&admin_dsn)
-        .await
-        .expect("连接管理库失败");
+    let admin = connect(&admin_dsn).await.expect("连接管理库失败");
     // raw_sql 走简单协议且不包事务；CREATE/DROP DATABASE 不能在事务块内执行。
     sqlx::raw_sql(&format!("DROP DATABASE IF EXISTS {db_name} WITH (FORCE)"))
         .execute(&admin)
@@ -116,19 +116,35 @@ pub async fn fresh_database(db_name: &str) -> sqlx::PgPool {
         .unwrap();
     admin.close().await;
 
-    let pool = infrastructure::connect(&test_dsn)
-        .await
-        .expect("连接测试库失败");
-    infrastructure::migrate_schema(&pool, "../../migrations/postgres")
+    let pool = connect(&test_dsn).await.expect("连接测试库失败");
+    infrastructure::migrate_schema(&database(pool.clone()), "../../migrations/postgres")
         .await
         .expect("迁移失败");
     pool
 }
 
 pub fn content_queries(pool: &sqlx::PgPool) -> Arc<application::content_queries::ContentQueries> {
-    let query = Arc::new(infrastructure::PostgresAdminContentQuery::new(pool.clone()));
+    let query = Arc::new(infrastructure::PostgresAdminContentQuery::new(database(
+        pool.clone(),
+    )));
     Arc::new(application::content_queries::ContentQueries::new(
         query.clone(),
         query,
     ))
+}
+
+/// Expose the production pool only inside integration fixtures.
+pub async fn connect(url: &str) -> Result<sqlx::PgPool, infrastructure::DatabaseError> {
+    infrastructure::connect(url)
+        .await
+        .map(infrastructure::test_support::pool)
+}
+
+pub async fn connect_with_config(
+    url: &str,
+    config: &infrastructure::DatabasePoolConfig,
+) -> Result<sqlx::PgPool, infrastructure::DatabaseError> {
+    infrastructure::connect_with_config(url, config)
+        .await
+        .map(infrastructure::test_support::pool)
 }

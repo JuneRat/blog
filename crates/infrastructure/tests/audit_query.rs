@@ -16,7 +16,7 @@ async fn audit_filters_and_cursor_survive_new_writes_and_deleted_anchor() {
             .bind(json!({"version":n as i64,"changed":["title"],"note":"<img src=x onerror=alert(1)>"}))
             .execute(&pool).await.unwrap();
     }
-    let store = PostgresAuditQuery::new(pool.clone());
+    let store = PostgresAuditQuery::new(common::database(pool.clone()));
     let query = |cursor| {
         AuditFilter::try_from(AuditQuery {
             limit: Some(2),

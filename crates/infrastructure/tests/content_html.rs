@@ -60,8 +60,8 @@ async fn post_and_page_commit_sanitized_html_and_public_reads_use_it() {
     let pool = database().await;
     let author = common::seed_user(&pool, "writer").await;
     let runtime = Arc::new(RenderingRuntime::default());
-    let posts = PostgresPostRepository::new(pool.clone(), runtime.clone());
-    let pages = PostgresPageRepository::new(pool.clone(), runtime);
+    let posts = PostgresPostRepository::new(common::database(pool.clone()), runtime.clone());
+    let pages = PostgresPageRepository::new(common::database(pool.clone()), runtime);
     let source = "# 标题\n\n<script>alert(1)</script>\n\n**正文** [bad](javascript:alert(1))";
     let expected = SanitizingMarkdownRenderer::new().render_markdown(source);
     assert!(!expected.contains("<script"));
@@ -89,7 +89,7 @@ async fn post_and_page_commit_sanitized_html_and_public_reads_use_it() {
         assert_eq!(version, 1);
     }
     assert_eq!(
-        PostgresPublishedPostQuery::new(pool.clone())
+        PostgresPublishedPostQuery::new(common::database(pool.clone()))
             .find_public_by_slug("rendered-post")
             .await
             .unwrap()
@@ -98,7 +98,7 @@ async fn post_and_page_commit_sanitized_html_and_public_reads_use_it() {
         expected
     );
     assert_eq!(
-        PostgresPublishedPageQuery::new(pool.clone())
+        PostgresPublishedPageQuery::new(common::database(pool.clone()))
             .find_public_by_slug("rendered-page")
             .await
             .unwrap()
@@ -146,7 +146,7 @@ async fn post_and_page_commit_sanitized_html_and_public_reads_use_it() {
         .await
         .unwrap();
     assert_eq!(
-        PostgresPublishedPostQuery::new(pool.clone())
+        PostgresPublishedPostQuery::new(common::database(pool.clone()))
             .find_public_by_slug("rendered-post")
             .await
             .unwrap()
@@ -165,7 +165,10 @@ async fn media_failure_and_stale_version_leave_source_html_and_refs_unchanged() 
     sqlx::query("INSERT INTO media(id,uploaded_by,path,filename,mime_type,size,width,height,checksum_sha256) VALUES($1,$2,$3,'image.png','image/png',1,1,1,$4)")
         .bind(media_id).bind(author).bind(media_id.to_string()).bind("a".repeat(64))
         .execute(&pool).await.unwrap();
-    let repo = PostgresPostRepository::new(pool.clone(), Arc::new(RenderingRuntime::default()));
+    let repo = PostgresPostRepository::new(
+        common::database(pool.clone()),
+        Arc::new(RenderingRuntime::default()),
+    );
     let source = format!(
         "![图](/media/{media_id})\n<!-- <img src='/media/{}'> -->",
         Uuid::now_v7()
@@ -215,12 +218,18 @@ async fn schema_migration_leaves_html_for_explicit_rebuild_without_editing_busin
     let _guard = SERIAL.lock().await;
     let pool = database().await;
     let author = common::seed_user(&pool, "writer").await;
-    let posts = PostgresPostRepository::new(pool.clone(), Arc::new(RenderingRuntime::default()));
+    let posts = PostgresPostRepository::new(
+        common::database(pool.clone()),
+        Arc::new(RenderingRuntime::default()),
+    );
     let record = posts
         .insert_post(&draft(author, "# 既有文章"), &[], None.into())
         .await
         .unwrap();
-    let pages = PostgresPageRepository::new(pool.clone(), Arc::new(RenderingRuntime::default()));
+    let pages = PostgresPageRepository::new(
+        common::database(pool.clone()),
+        Arc::new(RenderingRuntime::default()),
+    );
     let page = Page::create_draft(
         Slug::new("old-page").unwrap(),
         "既有页面".into(),
@@ -235,7 +244,7 @@ async fn schema_migration_leaves_html_for_explicit_rebuild_without_editing_busin
     // 结构就绪不会隐式重建派生物；显式重建才刷新 HTML，且不改业务版本。
     sqlx::raw_sql("UPDATE posts SET content_html='',content_render_version=2; UPDATE pages SET content_html='',content_render_version=2;")
         .execute(&pool).await.unwrap();
-    infrastructure::migrate_schema(&pool, "../../migrations/postgres")
+    infrastructure::migrate_schema(&common::database(pool.clone()), "../../migrations/postgres")
         .await
         .unwrap();
     for (table, id) in [("posts", record.snapshot.id), ("pages", page_record.id)] {
@@ -245,7 +254,7 @@ async fn schema_migration_leaves_html_for_explicit_rebuild_without_editing_busin
     }
     let runtime = Arc::new(RenderingRuntime::default());
     let rebuilder = HtmlRebuildInteractor::new(Arc::new(PostgresHtmlRebuildStore::new(
-        pool.clone(),
+        common::database(pool.clone()),
         runtime.clone(),
         runtime,
     )));
@@ -285,7 +294,10 @@ async fn rebuild_cannot_overwrite_a_concurrent_editor_commit() {
     let _guard = SERIAL.lock().await;
     let pool = database().await;
     let author = common::seed_user(&pool, "writer").await;
-    let repo = PostgresPostRepository::new(pool.clone(), Arc::new(RenderingRuntime::default()));
+    let repo = PostgresPostRepository::new(
+        common::database(pool.clone()),
+        Arc::new(RenderingRuntime::default()),
+    );
     let record = repo
         .insert_post(&draft(author, "旧正文"), &[], None.into())
         .await
@@ -305,7 +317,7 @@ async fn rebuild_cannot_overwrite_a_concurrent_editor_commit() {
     let rebuilding_pool = pool.clone();
     let rebuild = tokio::spawn(async move {
         PostgresHtmlRebuildStore::new(
-            rebuilding_pool,
+            common::database(rebuilding_pool),
             Arc::new(renderer),
             Arc::new(RenderingRuntime::default()),
         )

@@ -11,6 +11,14 @@ pub enum UserStatus {
 }
 
 impl UserStatus {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "active" => Some(Self::Active),
+            "disabled" => Some(Self::Disabled),
+            _ => None,
+        }
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Active => "active",

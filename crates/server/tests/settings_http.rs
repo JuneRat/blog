@@ -114,8 +114,8 @@ struct Stack {
 async fn build(pool: PgPool) -> Stack {
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
     let rendering = Arc::new(RenderingRuntime::default());
-    let user_repo = Arc::new(PostgresUserRepository::new(pool.clone()));
-    let rbac = Arc::new(PostgresRbacStore::new(pool.clone()));
+    let user_repo = Arc::new(PostgresUserRepository::new(common::database(pool.clone())));
+    let rbac = Arc::new(PostgresRbacStore::new(common::database(pool.clone())));
     let roles = Arc::new(RoleInteractor::new(rbac.clone(), user_repo.clone()));
     roles.sync_registry().await.expect("同步权限目录失败");
     let users = Arc::new(UserInteractor::new(
@@ -157,7 +157,9 @@ async fn build(pool: PgPool) -> Stack {
         ids.insert(username.to_string(), user.id);
     }
 
-    let configs = Arc::new(PostgresOAuthConfigStore::new(pool.clone()));
+    let configs = Arc::new(PostgresOAuthConfigStore::new(common::database(
+        pool.clone(),
+    )));
     configs
         .save(
             &[ProviderConfig {
@@ -173,8 +175,9 @@ async fn build(pool: PgPool) -> Stack {
         )
         .await
         .unwrap();
-    let accounts: Arc<dyn OAuthAccountStore> =
-        Arc::new(PostgresOAuthAccountStore::new(pool.clone()));
+    let accounts: Arc<dyn OAuthAccountStore> = Arc::new(PostgresOAuthAccountStore::new(
+        common::database(pool.clone()),
+    ));
     for (username, uid) in &ids {
         accounts
             .bind(
@@ -208,11 +211,18 @@ async fn build(pool: PgPool) -> Stack {
     ));
     let passwords = common::password_interactor(user_repo.clone(), sessions);
 
-    let tag_repo = Arc::new(PostgresTagRepository::new(pool.clone()));
-    let category_repo = Arc::new(PostgresCategoryRepository::new(pool.clone()));
-    let series_repo = Arc::new(PostgresSeriesRepository::new(pool.clone()));
+    let tag_repo = Arc::new(PostgresTagRepository::new(common::database(pool.clone())));
+    let category_repo = Arc::new(PostgresCategoryRepository::new(common::database(
+        pool.clone(),
+    )));
+    let series_repo = Arc::new(PostgresSeriesRepository::new(common::database(
+        pool.clone(),
+    )));
     let posts = Arc::new(PostInteractor::new(
-        Arc::new(PostgresPostRepository::new(pool.clone(), rendering.clone())),
+        Arc::new(PostgresPostRepository::new(
+            common::database(pool.clone()),
+            rendering.clone(),
+        )),
         tag_repo.clone(),
         category_repo.clone(),
         series_repo.clone(),
@@ -220,7 +230,10 @@ async fn build(pool: PgPool) -> Stack {
         common::media_guard(pool.clone()),
     ));
     let pages = Arc::new(PageInteractor::new(
-        Arc::new(PostgresPageRepository::new(pool.clone(), rendering.clone())),
+        Arc::new(PostgresPageRepository::new(
+            common::database(pool.clone()),
+            rendering.clone(),
+        )),
         clock.clone(),
     ));
     let tags = Arc::new(application::tag::TagInteractor::new(
@@ -237,13 +250,20 @@ async fn build(pool: PgPool) -> Stack {
         common::media_guard(pool.clone()),
     ));
 
-    let settings_store: Arc<dyn SettingsStore> = Arc::new(PostgresSettingsStore::new(pool.clone()));
+    let settings_store: Arc<dyn SettingsStore> =
+        Arc::new(PostgresSettingsStore::new(common::database(pool.clone())));
     let theme_store: Arc<dyn ThemeSettingsStore> =
-        Arc::new(PostgresSettingsStore::new(pool.clone()));
+        Arc::new(PostgresSettingsStore::new(common::database(pool.clone())));
     let theme_data = Arc::new(application::theme_data::ThemeData::new(
-        Arc::new(PostgresPublishedPostQuery::new(pool.clone())),
-        Arc::new(PostgresPublishedTagQuery::new(pool.clone())),
-        Arc::new(PostgresPublishedCategoryQuery::new(pool.clone())),
+        Arc::new(PostgresPublishedPostQuery::new(common::database(
+            pool.clone(),
+        ))),
+        Arc::new(PostgresPublishedTagQuery::new(common::database(
+            pool.clone(),
+        ))),
+        Arc::new(PostgresPublishedCategoryQuery::new(common::database(
+            pool.clone(),
+        ))),
     ));
     let default_theme = MiniJinjaThemeRenderer::load(std::path::Path::new("../../themes/default"))
         .expect("默认主题加载失败")
@@ -282,11 +302,21 @@ async fn build(pool: PgPool) -> Stack {
     let theme = registry.renderer("default").unwrap();
     let public_site = Arc::new(
         PublicSiteInteractor::new(
-            Arc::new(PostgresPublishedPostQuery::new(pool.clone())),
-            Arc::new(PostgresPublishedPageQuery::new(pool.clone())),
-            Arc::new(PostgresPublishedTagQuery::new(pool.clone())),
-            Arc::new(PostgresPublishedCategoryQuery::new(pool.clone())),
-            Arc::new(PostgresPublishedSeriesQuery::new(pool.clone())),
+            Arc::new(PostgresPublishedPostQuery::new(common::database(
+                pool.clone(),
+            ))),
+            Arc::new(PostgresPublishedPageQuery::new(common::database(
+                pool.clone(),
+            ))),
+            Arc::new(PostgresPublishedTagQuery::new(common::database(
+                pool.clone(),
+            ))),
+            Arc::new(PostgresPublishedCategoryQuery::new(common::database(
+                pool.clone(),
+            ))),
+            Arc::new(PostgresPublishedSeriesQuery::new(common::database(
+                pool.clone(),
+            ))),
             theme,
             settings_store,
             site_fallback(),
@@ -330,7 +360,7 @@ async fn build(pool: PgPool) -> Stack {
     .merge(interfaces::http_audit::audit_router(
         interfaces::http_audit::AuditState {
             audit: Arc::new(application::audit::AuditInteractor::new(Arc::new(
-                infrastructure::audit::PostgresAuditQuery::new(pool.clone()),
+                infrastructure::audit::PostgresAuditQuery::new(common::database(pool.clone())),
             ))),
             admin: admin_state.clone(),
         },
@@ -338,7 +368,9 @@ async fn build(pool: PgPool) -> Stack {
     .merge(interfaces::http_retention::retention_router(
         interfaces::http_retention::RetentionState {
             retention: Arc::new(application::retention::RetentionInteractor::new(Arc::new(
-                infrastructure::retention::PostgresRetentionStore::new(pool.clone()),
+                infrastructure::retention::PostgresRetentionStore::new(common::database(
+                    pool.clone(),
+                )),
             ))),
             admin: admin_state,
         },
@@ -514,13 +546,23 @@ async fn revived_public_router(pool: &PgPool) -> axum::Router {
             .expect("模板加载失败"),
     );
     let public_site = Arc::new(PublicSiteInteractor::new(
-        Arc::new(PostgresPublishedPostQuery::new(pool.clone())),
-        Arc::new(PostgresPublishedPageQuery::new(pool.clone())),
-        Arc::new(PostgresPublishedTagQuery::new(pool.clone())),
-        Arc::new(PostgresPublishedCategoryQuery::new(pool.clone())),
-        Arc::new(PostgresPublishedSeriesQuery::new(pool.clone())),
+        Arc::new(PostgresPublishedPostQuery::new(common::database(
+            pool.clone(),
+        ))),
+        Arc::new(PostgresPublishedPageQuery::new(common::database(
+            pool.clone(),
+        ))),
+        Arc::new(PostgresPublishedTagQuery::new(common::database(
+            pool.clone(),
+        ))),
+        Arc::new(PostgresPublishedCategoryQuery::new(common::database(
+            pool.clone(),
+        ))),
+        Arc::new(PostgresPublishedSeriesQuery::new(common::database(
+            pool.clone(),
+        ))),
         theme,
-        Arc::new(PostgresSettingsStore::new(pool.clone())),
+        Arc::new(PostgresSettingsStore::new(common::database(pool.clone()))),
         site_fallback(),
         test_base_url(),
     ));
