@@ -1,0 +1,115 @@
+import type * as Wire from "./generated";
+import * as s from "./schemas";
+import { json, request, requestEmpty, requestLogout } from "./client";
+import type {
+  AdminUser,
+  CreatedUser,
+  Me,
+  PasswordLoginResult,
+  Profile,
+  ProviderSummary,
+  RoleSummary,
+} from "../types";
+import type {
+  PasswordLoginInput,
+  CreateUserInput,
+  UpdateProfileInput,
+  ChangePasswordInput,
+} from "./generated";
+
+export const identityApi = {
+  me: (): Promise<Me> => request(s.me, "/api/admin/v1/me"),
+
+  setOwnAvatar: (avatarMediaId: string | null): Promise<Profile> =>
+    request(s.profile, "/api/admin/v1/me/avatar", {
+      method: "PUT",
+      body: json<Wire.SetAvatarInput>({ avatar_media_id: avatarMediaId }),
+    }),
+
+  updateOwnProfile: (input: UpdateProfileInput): Promise<Profile> =>
+    request(s.profile, "/api/admin/v1/me/profile", {
+      method: "PUT",
+      body: JSON.stringify(input),
+    }),
+
+  changeOwnPassword: (
+    input: ChangePasswordInput,
+  ): Promise<{ user_id: string; csrf_token: string }> =>
+    request(s.passwordChangeResult, "/api/admin/v1/me/password", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+
+  providers: (): Promise<ProviderSummary[]> =>
+    request(s.array(s.providerSummary), "/auth/providers"),
+
+  loginWithPassword: (
+    input: PasswordLoginInput,
+  ): Promise<PasswordLoginResult> =>
+    request(s.passwordLoginResult, "/auth/login/password", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+
+  listUsers: (limit?: number, offset?: number): Promise<AdminUser[]> => {
+    const query = new URLSearchParams();
+    if (limit !== undefined) query.set("limit", String(limit));
+    if (offset !== undefined) query.set("offset", String(offset));
+    const encoded = query.toString();
+    const suffix = encoded.length > 0 ? `?${encoded}` : "";
+    return request(s.array(s.adminUser), `/api/admin/v1/users${suffix}`);
+  },
+
+  createUser: (input: CreateUserInput): Promise<CreatedUser> =>
+    request(s.createdUser, "/api/admin/v1/users", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+
+  changeUserStatus: (
+    id: string,
+    status: AdminUser["status"],
+    expectedVersion: number,
+  ): Promise<{ id: string; status: AdminUser["status"]; version: number }> =>
+    request(
+      s.userStatusResult,
+      `/api/admin/v1/users/${encodeURIComponent(id)}/status`,
+      {
+        method: "PUT",
+        body: json<Wire.ChangeStatusInput>({
+          status,
+          expected_version: expectedVersion,
+        }),
+      },
+    ),
+
+  listRoles: (): Promise<RoleSummary[]> =>
+    request(s.array(s.roleSummary), "/api/admin/v1/roles"),
+
+  assignRole: (username: string, role: string): Promise<unknown> =>
+    requestEmpty(rolePath(username, role), { method: "PUT" }),
+
+  removeRole: (username: string, role: string): Promise<unknown> =>
+    requestEmpty(rolePath(username, role), { method: "DELETE" }),
+
+  logout: (): Promise<unknown> => requestLogout(),
+};
+
+function rolePath(username: string, role: string): string {
+  return `/api/admin/v1/users/${encodeURIComponent(username)}/roles/${encodeURIComponent(role)}`;
+}
+
+/**
+ * 构造登录 URL。`provider` 必须来自 `/auth/providers`（后端不接受缺失 provider）；
+ * 无可用提供商时返回 null，由界面提示运维先配置。
+ */
+export async function loginUrl(next: string): Promise<string | null> {
+  try {
+    const providers = await identityApi.providers();
+    const first = providers[0];
+    if (first === undefined) return null;
+    return `/auth/login?provider=${encodeURIComponent(first.id)}&next=${encodeURIComponent(next)}`;
+  } catch {
+    return null;
+  }
+}

@@ -300,11 +300,11 @@ describe("文章编辑器封面", () => {
     await screen.findByDisplayValue(post.title);
 
     fireEvent.click(screen.getByRole("button", { name: "选择封面" }));
-    await waitFor(() => expect(mediaApi.list).toHaveBeenCalledWith(1));
+    await waitFor(() => expect(mediaApi.list).toHaveBeenCalledWith(1, false, expect.any(AbortSignal)));
     fireEvent.click(await screen.findByRole("button", { name: "选择" }));
 
     // 选中后预览区换成缩略图，按钮文案变为「更换封面」。
-    expect(screen.getByRole("button", { name: "更换封面" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "更换封面" })).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: /保存草稿|保存预约内容|更新已发布内容/ }));
     await waitFor(() =>
@@ -349,7 +349,7 @@ describe("文章编辑器封面", () => {
     await screen.findByDisplayValue(post.title);
 
     fireEvent.click(screen.getByRole("button", { name: "选择封面" }));
-    await waitFor(() => expect(mediaApi.list).toHaveBeenCalledWith(1));
+    await waitFor(() => expect(mediaApi.list).toHaveBeenCalledWith(1, false, expect.any(AbortSignal)));
 
     // 此时页面上只有选择器弹窗里的隐藏文件输入（正文图片面板未打开）。
     const input = document.querySelector<HTMLInputElement>('input[type="file"]')!;
@@ -374,7 +374,7 @@ describe("文章编辑器封面", () => {
     await screen.findByDisplayValue(post.title);
 
     fireEvent.click(screen.getByRole("button", { name: "选择封面" }));
-    await waitFor(() => expect(mediaApi.list).toHaveBeenCalledWith(1));
+    await waitFor(() => expect(mediaApi.list).toHaveBeenCalledWith(1, false, expect.any(AbortSignal)));
 
     const input = document.querySelector<HTMLInputElement>('input[type="file"]')!;
     const svg = new File([new Uint8Array(16)], "evil.svg", { type: "image/svg+xml" });
@@ -391,7 +391,7 @@ describe("文章编辑器封面", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "选择封面" }));
     fireEvent.click(await screen.findByRole("button", { name: "选择" }));
-    expect(screen.getByRole("button", { name: "更换封面" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "更换封面" })).toBeTruthy();
 
     // 封面进入 FormState 的脏判断：点侧栏离开必须先确认，否则改动会静默丢失。
     // 按 dialog 的无障碍名断言（标题是 span 套 span，按文本查会命中两层）。

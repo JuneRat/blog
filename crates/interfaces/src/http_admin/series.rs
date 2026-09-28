@@ -13,7 +13,8 @@ use axum::{Json, Router, middleware};
 use serde::Deserialize;
 use uuid::Uuid;
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, ts_rs::TS)]
+#[ts(rename = "SeriesSummary")]
 struct SeriesJson {
     id: Uuid,
     slug: String,
@@ -45,24 +46,28 @@ impl From<&SeriesDto> for SeriesJson {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ts_rs::TS)]
+#[ts(rename = "CreateSeriesInput", optional_fields = nullable)]
 pub struct CreateSeriesBody {
     pub name: String,
     pub slug: String,
     pub description: Option<String>,
 }
 
-#[derive(Deserialize, Default)]
+#[derive(Deserialize, Default, ts_rs::TS)]
+#[ts(rename = "UpdateSeriesInput", optional_fields = nullable)]
 pub struct UpdateSeriesBody {
     pub name: String,
     pub description: Option<String>,
     /// 封面三态：缺省不修改；null 移除封面；id 设置封面。
     #[serde(default, deserialize_with = "deserialize_double_option")]
+    #[ts(as = "Option<Uuid>", optional = nullable)]
     pub cover_media_id: Option<Option<Uuid>>,
     pub expected_version: Option<i64>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ts_rs::TS)]
+#[ts(rename = "ReorderSeriesInput", optional_fields = nullable)]
 pub struct ReorderBody {
     /// 系列内全部文章 id 按目标顺序（完整排列）。
     pub ordered_post_ids: Vec<Uuid>,
@@ -164,7 +169,8 @@ async fn delete_series(
 /// 管理目录：系列全部成员（含他人草稿/私密——重排会改动它们的位置）。
 /// 需 series.manage，且**逐篇核验读取权限**（post.read own / post.read_any）：
 /// 目录携带他人草稿的标题与状态；任一成员不可读即整次 403，不回残缺目录。
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, ts_rs::TS)]
+#[ts(rename = "SeriesMemberRow")]
 struct SeriesMemberJson {
     id: Uuid,
     slug: String,
@@ -226,7 +232,19 @@ async fn reorder_series(
         )
         .await
     {
-        Ok(dto) => (StatusCode::OK, Json(dto)).into_response(),
+        Ok(dto) => (
+            StatusCode::OK,
+            Json(crate::http_contract::ReorderSeriesResult::from(dto)),
+        )
+            .into_response(),
         Err(e) => admin_error(e, &request_id),
     }
+}
+
+pub(crate) fn export_contract(out: &mut Vec<String>) {
+    crate::http_contract::declare::<SeriesJson>(out);
+    crate::http_contract::declare::<SeriesMemberJson>(out);
+    crate::http_contract::declare::<CreateSeriesBody>(out);
+    crate::http_contract::declare::<UpdateSeriesBody>(out);
+    crate::http_contract::declare::<ReorderBody>(out);
 }

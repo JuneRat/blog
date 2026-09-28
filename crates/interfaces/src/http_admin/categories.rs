@@ -13,7 +13,8 @@ use axum::{Json, Router, middleware};
 use serde::Deserialize;
 use uuid::Uuid;
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, ts_rs::TS)]
+#[ts(rename = "CategorySummary")]
 struct CategoryJson {
     id: Uuid,
     slug: String,
@@ -39,7 +40,8 @@ impl From<&CategoryDto> for CategoryJson {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ts_rs::TS)]
+#[ts(rename = "CreateCategoryInput", optional_fields = nullable)]
 pub struct CreateCategoryBody {
     pub name: String,
     pub slug: String,
@@ -48,12 +50,14 @@ pub struct CreateCategoryBody {
     pub description: Option<String>,
 }
 
-#[derive(Deserialize, Default)]
+#[derive(Deserialize, Default, ts_rs::TS)]
+#[ts(rename = "UpdateCategoryInput", optional_fields = nullable)]
 pub struct UpdateCategoryBody {
     pub name: String,
     pub description: Option<String>,
     /// 三态：缺省保持现状；null 移到根；slug 移到指定父。
     #[serde(default, deserialize_with = "deserialize_double_option")]
+    #[ts(as = "Option<String>", optional = nullable)]
     pub parent: Option<Option<String>>,
     pub expected_version: Option<i64>,
 }
@@ -151,4 +155,10 @@ async fn delete_category(
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => admin_error(e, &request_id),
     }
+}
+
+pub(crate) fn export_contract(out: &mut Vec<String>) {
+    crate::http_contract::declare::<CategoryJson>(out);
+    crate::http_contract::declare::<CreateCategoryBody>(out);
+    crate::http_contract::declare::<UpdateCategoryBody>(out);
 }

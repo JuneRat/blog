@@ -11,9 +11,9 @@ import {
   Typography,
   theme,
 } from "antd";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { mediaApi } from "../api";
-import type { MediaAsset } from "../types";
+import { useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { mediaPageQuery } from "../mediaQueries";
 import { MEDIA_ACCEPT, formatBytes } from "../media";
 import { permissionMessageOf } from "../apiError";
 import type { ImageInsertion } from "./useImageInsertion";
@@ -39,31 +39,17 @@ export function MediaInsertPanel({
   onClose: () => void;
 }) {
   const { token } = theme.useToken();
-  const [assets, setAssets] = useState<MediaAsset[] | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
   const [alt, setAlt] = useState("");
   const [dragActive, setDragActive] = useState(false);
   const fileInput = useRef<HTMLInputElement | null>(null);
 
-  const load = useCallback(async () => {
-    setLoadError(null);
-    try {
-      const page = await mediaApi.list(1);
-      setAssets(page.items);
-    } catch (e) {
-      setAssets([]);
-      setLoadError(permissionMessageOf(e));
-    }
-  }, []);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
+  const query = useQuery({ ...mediaPageQuery(1), staleTime: 0 });
+  const assets = query.data?.items ?? (query.isError ? [] : null);
+  const loadError = query.error ? permissionMessageOf(query.error) : null;
 
   /** 上传：面板内选择文件，成功后直接插入光标处并刷新列表。 */
   async function upload(files: File[]): Promise<void> {
     await insertion.insertFiles(files);
-    await load();
   }
 
   return (

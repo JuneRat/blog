@@ -12,7 +12,7 @@
 
 ## 输入与展示
 
-游客填写 1–64 字昵称、1–2,000 字正文和可选邮箱；服务端按 Unicode 字符计数。登录用户使用服务端账号名称快照，去除控制字符并截取前 64 字，忽略客户端昵称和邮箱。只有文章作者的登录账号获得独立「作者」徽标。
+游客填写 1–64 字昵称、1–2,000 字正文和可选邮箱；服务端按 Unicode 字符计数。登录用户使用服务端账号名称快照，去除控制字符并截取前 64 字，忽略客户端昵称和邮箱；后台回复可省略这两个字段，游客省略昵称仍会被拒绝。只有文章作者的登录账号获得独立「作者」徽标。
 
 正文支持分段、换行、粗体、斜体、删除线、行内/围栏代码、引用、列表、HTTP(S) 链接、网址自动链接与 Unicode Emoji。不支持标题样式、表格和媒体嵌入；原始 HTML 按文字转义。链接只允许 HTTP(S)，附加 `nofollow ugc noopener noreferrer`。前台和后台均提供精简工具栏与服务端预览，预览与入库共用同一渲染器。
 
@@ -55,7 +55,7 @@ IP 以可空 inet 保存主机地址，审核不覆盖提交 IP。默认保留 1
 | 方法与路径 | 参数与行为 |
 |---|---|
 | `GET /api/v1/posts/{slug}/comments` | `page=1`；`root_id=UUID` 读取某根全部后代；返回 `{items,total,enabled}`，total 含必要占位 |
-| `POST /api/v1/posts/{slug}/comments` | `{nickname,body,email?,parent_id?}`；202 待审核回执；登录身份由会话决定 |
+| `POST /api/v1/posts/{slug}/comments` | `{body,nickname?,email?,parent_id?}`；游客必须提供昵称；202 待审核回执；登录身份由会话决定 |
 | `POST /api/v1/comments/preview` | `{body}`；返回 `{content_html}`，不写数据库 |
 | `GET /api/admin/v1/comments` | `page=1&status=pending&post_id=UUID`；状态和文章筛选可省略 |
 | `POST /api/admin/v1/comments/{id}` | `{version,status}`，status 为 pending/approved/spam/trash；204 |

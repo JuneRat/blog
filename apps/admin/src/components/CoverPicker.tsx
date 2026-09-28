@@ -12,11 +12,12 @@ import {
   Typography,
   theme,
 } from "antd";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useEffect, useRef, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { mediaApi } from "../api";
 import { permissionMessageOf } from "../apiError";
 import { MEDIA_ACCEPT, MEDIA_MAX_BYTES, formatBytes, mediaUrl, uploadRejection } from "../media";
+import { mediaPageQuery } from "../mediaQueries";
 import type { MediaAsset } from "../types";
 
 /** 弹窗一次展示的资产数（与 MediaInsertPanel 相同的「第一页就够用」口径）。 */
@@ -58,8 +59,7 @@ export function CoverPicker({
   const { token } = theme.useToken();
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
-  const [assets, setAssets] = useState<MediaAsset[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [uploadError, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const fileInput = useRef<HTMLInputElement | null>(null);
   /**
@@ -69,27 +69,10 @@ export function CoverPicker({
   const [known, setKnown] = useState<{ id: string; name: string } | null>(null);
   const knownName = known !== null && known.id === value ? known.name : null;
 
-  const load = useCallback(async (): Promise<void> => {
-    setError(null);
-    try {
-      const page = await mediaApi.list(1);
-      setAssets(page.items);
-    } catch (e) {
-      setAssets([]);
-      setError(permissionMessageOf(e));
-    }
-  }, []);
-
-  // 打开才取数、关闭即清空：选择器常驻在表单里，不该在关闭状态下发无谓请求；
-  // 清空还能保证关闭后不残留上一次的列表内容。
-  useEffect(() => {
-    if (open) {
-      void load();
-    } else {
-      setAssets(null);
-      setError(null);
-    }
-  }, [open, load]);
+  const query = useQuery({ ...mediaPageQuery(1), enabled: open && canReadMedia, staleTime: 0 });
+  const assets = query.data?.items ?? (query.isError ? [] : null);
+  const error = uploadError ?? (query.error ? permissionMessageOf(query.error) : null);
+  useEffect(() => { setError(null); }, [open]);
 
   /** 选中一个资产：记下文件名（如已知）并上报 id，随后收起弹窗。 */
   function choose(asset: MediaAsset): void {

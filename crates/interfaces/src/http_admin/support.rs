@@ -16,7 +16,8 @@ where
     Ok(Some(Option::<T>::deserialize(deserializer)?))
 }
 
-#[derive(Deserialize, Default)]
+#[derive(Deserialize, Default, ts_rs::TS)]
+#[ts(rename = "VersionInput", optional_fields = nullable)]
 pub struct VersionBody {
     pub expected_version: Option<i64>,
 }
@@ -49,7 +50,8 @@ pub(super) fn parse_visibility(value: Option<&str>) -> Result<PostVisibility, Us
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ts_rs::TS)]
+#[ts(rename = "ScheduleInput", optional_fields = nullable)]
 pub(super) struct ScheduleBody {
     pub(super) published_at: String,
     pub(super) expected_version: Option<i64>,
@@ -57,4 +59,9 @@ pub(super) struct ScheduleBody {
 pub(super) fn api_datetime(at: time::OffsetDateTime) -> String {
     at.format(&time::format_description::well_known::Rfc3339)
         .unwrap_or_else(|_| at.to_string())
+}
+
+pub(crate) fn export_contract(out: &mut Vec<String>) {
+    crate::http_contract::declare::<VersionBody>(out);
+    crate::http_contract::declare::<ScheduleBody>(out);
 }

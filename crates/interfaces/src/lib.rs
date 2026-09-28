@@ -19,3 +19,5 @@ pub mod http_retention;
 mod syndication;
 
 pub mod observability;
+
+pub mod http_contract;

@@ -1,12 +1,21 @@
 import { App as AntdApp } from "antd";
-import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useState } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type { ReactNode } from "react";
 import { blockHistoryNavigation } from "./router";
 
 interface UnsavedValue {
   /** 当前屏幕声明的未保存提示；null 表示没有未保存改动。 */
-  message: string | null;
-  setMessage: (message: string | null) => void;
+  readMessage: (() => string | null) | null;
+  setGuard: (read: (() => string | null) | null) => void;
 }
 
 const UnsavedContext = createContext<UnsavedValue | null>(null);
@@ -18,11 +27,23 @@ const UnsavedContext = createContext<UnsavedValue | null>(null);
  * 所以由 Provider 做这一格：屏幕登记提示，外壳在导航前据此确认。
  */
 export function UnsavedChangesProvider({ children }: { children: ReactNode }) {
-  const [message, setMessage] = useState<string | null>(null);
+  const [guard, setGuardState] = useState<{
+    read: (() => string | null) | null;
+  }>({ read: null });
+  const setGuard = useCallback(
+    (read: (() => string | null) | null) => setGuardState({ read }),
+    [],
+  );
+  const readMessage = guard.read;
   const { modal } = AntdApp.useApp();
   useLayoutEffect(() => {
-    if (message === null) return;
-    return blockHistoryNavigation(decide => {
+    if (readMessage === null) return;
+    return blockHistoryNavigation((decide) => {
+      const message = readMessage();
+      if (message === null) {
+        decide(true);
+        return () => {};
+      }
       const dialog = modal.confirm({
         title: "有未保存的修改",
         content: message,
@@ -34,14 +55,20 @@ export function UnsavedChangesProvider({ children }: { children: ReactNode }) {
       });
       return () => dialog.destroy();
     });
-  }, [message, modal]);
-  const value = useMemo(() => ({ message, setMessage }), [message]);
-  return <UnsavedContext.Provider value={value}>{children}</UnsavedContext.Provider>;
+  }, [readMessage, modal]);
+  const value = useMemo(
+    () => ({ readMessage, setGuard }),
+    [readMessage, setGuard],
+  );
+  return (
+    <UnsavedContext.Provider value={value}>{children}</UnsavedContext.Provider>
+  );
 }
 
 /** 外壳读取当前登记。没有 Provider 时退化为「无未保存改动」，而不是抛错。 */
+const NO_GUARD: UnsavedValue = { readMessage: null, setGuard: () => undefined };
 export function useUnsavedChanges(): UnsavedValue {
-  return useContext(UnsavedContext) ?? { message: null, setMessage: () => undefined };
+  return useContext(UnsavedContext) ?? NO_GUARD;
 }
 
 /**
@@ -53,11 +80,15 @@ export function useUnsavedChanges(): UnsavedValue {
  * 反面同样重要：程序自身的跳转**不要**用它。保存成功后 `replace` 到新 slug、
  * 删除成功后回列表，那些时刻内容已经落盘或本来就该丢弃，多一次确认是打扰。
  */
-export function useLeaveConfirmation(): (action: () => void, okText?: string) => void {
+export function useLeaveConfirmation(): (
+  action: () => void,
+  okText?: string,
+) => void {
   const { modal } = AntdApp.useApp();
-  const { message } = useUnsavedChanges();
+  const { readMessage } = useUnsavedChanges();
   return useCallback(
     (action: () => void, okText = "放弃修改并离开") => {
+      const message = readMessage?.() ?? null;
       if (message === null) {
         action();
         return;
@@ -71,7 +102,7 @@ export function useLeaveConfirmation(): (action: () => void, okText?: string) =>
         onOk: action,
       });
     },
-    [message, modal],
+    [readMessage, modal],
   );
 }
 
@@ -83,23 +114,30 @@ export function useLeaveConfirmation(): (action: () => void, okText?: string) =>
  * - 后台历史前进/后退：Provider 注册统一拦截，确认前不发布新路由，保留编辑组件；
  * - 跨文档离开后台：同样由 beforeunload 请求浏览器原生确认。
  */
-export function useUnsavedGuard(dirty: boolean, message: string): void {
-  const { setMessage } = useUnsavedChanges();
-
+/** A getter protects immediate navigation before a batched form subscription renders. */
+export function useUnsavedGuard(
+  dirty: boolean | (() => boolean),
+  message: string,
+): void {
+  const { setGuard } = useUnsavedChanges();
+  const current = useRef(dirty);
+  current.current = dirty;
+  const readMessage = useCallback(() => {
+    const value = current.current;
+    return (typeof value === "function" ? value() : value) ? message : null;
+  }, [message]);
   useLayoutEffect(() => {
-    if (!dirty) return;
-    setMessage(message);
-    return () => setMessage(null);
-  }, [dirty, message, setMessage]);
-
+    setGuard(readMessage);
+    return () => setGuard(null);
+  }, [readMessage, setGuard]);
   useEffect(() => {
-    if (!dirty) return;
     const onBeforeUnload = (event: BeforeUnloadEvent): void => {
-      // 现代浏览器只需要 preventDefault；returnValue 仍被部分实现要求。
+      const pending = readMessage();
+      if (pending === null) return;
       event.preventDefault();
-      event.returnValue = message;
+      event.returnValue = pending;
     };
     window.addEventListener("beforeunload", onBeforeUnload);
     return () => window.removeEventListener("beforeunload", onBeforeUnload);
-  }, [dirty, message]);
+  }, [readMessage]);
 }

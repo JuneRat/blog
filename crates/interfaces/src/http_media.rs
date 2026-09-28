@@ -25,7 +25,8 @@ pub const MEDIA_BODY_LIMIT: usize = 12 * 1024 * 1024;
 // 响应 DTO
 // ---------------------------------------------------------------------------
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, ts_rs::TS)]
+#[ts(rename = "MediaAsset")]
 struct MediaJson {
     id: Uuid,
     original_name: String,
@@ -63,7 +64,8 @@ impl From<&MediaDto> for MediaJson {
     }
 }
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, ts_rs::TS)]
+#[ts(rename = "MediaReference")]
 struct MediaUsageJson {
     kind: &'static str,
     content_id: Uuid,
@@ -98,7 +100,8 @@ impl From<&MediaUsageDto> for MediaUsageJson {
     }
 }
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, ts_rs::TS)]
+#[ts(rename = "MediaPage")]
 struct MediaPageJson {
     items: Vec<MediaJson>,
     total: i64,
@@ -106,7 +109,8 @@ struct MediaPageJson {
     per_page: i64,
 }
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, ts_rs::TS)]
+#[ts(rename = "MediaUsageView")]
 struct MediaUsageViewJson {
     media: MediaJson,
     /// 调用者有权查看的使用位置（按 Post own/any 与 Page 站点权限过滤）。
@@ -129,7 +133,8 @@ struct UploadQuery {
     filename: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ts_rs::TS)]
+#[ts(rename = "MediaVersionInput", optional_fields = nullable)]
 struct MediaVersionBody {
     expected_version: i64,
 }
@@ -340,4 +345,12 @@ fn insert_media_headers(headers: &mut HeaderMap, content: &MediaContent, etag: &
 
 fn media_not_found() -> Response {
     (StatusCode::NOT_FOUND, "图片不存在").into_response()
+}
+
+pub(crate) fn export_contract(out: &mut Vec<String>) {
+    crate::http_contract::declare::<MediaJson>(out);
+    crate::http_contract::declare::<MediaUsageJson>(out);
+    crate::http_contract::declare::<MediaPageJson>(out);
+    crate::http_contract::declare::<MediaUsageViewJson>(out);
+    crate::http_contract::declare::<MediaVersionBody>(out);
 }

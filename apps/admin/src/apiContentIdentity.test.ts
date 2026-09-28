@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "./api";
+import { jsonResponse, postResponse } from "../tests/httpFixtures";
 
 const id = "0195c98a-6430-7000-8000-000000000001";
 
@@ -23,7 +24,7 @@ describe("内容管理 API 的稳定身份契约", () => {
   ];
 
   it.each(calls)("$method v1/$resource/{id}$action", async ({ resource, action, method, run }) => {
-    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ id }), { status: 200 }));
+    const fetch = vi.fn().mockResolvedValue(action === "/purge" ? new Response(null, { status: 204 }) : jsonResponse(postResponse()));
     vi.stubGlobal("fetch", fetch);
     await run();
     const [path, init] = fetch.mock.calls[0] as [string, RequestInit];
@@ -45,7 +46,7 @@ describe("内容管理 API 的稳定身份契约", () => {
     { path: "/posts", method: "POST", run: () => api.createPost({ title: "新文章", content: "正文", visibility: "public" }) },
     { path: "/pages", method: "POST", run: () => api.createPage({ title: "新页面", content: "正文", visibility: "public" }) },
   ])("列表和新建使用 v1 的 ID 契约：$method $path", async ({ path, method, run }) => {
-    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ id }), { status: 200 }));
+    const fetch = vi.fn().mockResolvedValue(jsonResponse(method === "GET" ? { items: [postResponse()], total: 1, page: 1, per_page: 20 } : postResponse()));
     vi.stubGlobal("fetch", fetch);
     await run();
     const [url, init] = fetch.mock.calls[0] as [string, RequestInit];

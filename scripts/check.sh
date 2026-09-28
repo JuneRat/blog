@@ -16,6 +16,9 @@ cargo fmt --all --check
 echo "==> cargo clippy -D warnings"
 cargo clippy --workspace --all-targets -- -D warnings
 
+echo "==> Generated admin HTTP contract"
+cargo run -p interfaces --example export_admin_contract -- --check
+
 echo "==> cargo test --workspace"
 cargo test --workspace
 

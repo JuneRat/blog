@@ -1,12 +1,13 @@
 //! Comment HTTP boundaries: no cached visibility, session writes reuse AdminAuth.
 use crate::http_client_ip::client_ip;
+use crate::http_contract::{CommentPolicy, MessageResult, PreviewResult, SubmitCommentBody};
 use crate::{
     http_admin::AdminAuth,
     http_auth::AdminState,
     http_support::{RequestId, admin_error, cookie_value, no_store},
 };
 use application::{
-    comments::{CommentDto, CommentInteractor, CommentPage, CommentPolicy, SubmitComment},
+    comments::{CommentDto, CommentInteractor, CommentPage},
     error::UseCaseError,
     ports::SESSION_COOKIE,
 };
@@ -151,7 +152,7 @@ async fn submit(
     auth: CommentAuth,
     peer: Option<axum::Extension<ConnectInfo<SocketAddr>>>,
     headers: HeaderMap,
-    Json(cmd): Json<SubmitComment>,
+    Json(cmd): Json<SubmitCommentBody>,
 ) -> Response {
     match s
         .comments
@@ -159,13 +160,15 @@ async fn submit(
             &slug,
             auth.0.as_ref(),
             client_ip(peer.map(|p| p.0.0.ip()), &headers, &s.trusted_proxies),
-            cmd,
+            cmd.into(),
         )
         .await
     {
         Ok(()) => (
             axum::http::StatusCode::ACCEPTED,
-            Json(serde_json::json!({"message":"已提交，等待审核"})),
+            Json(MessageResult {
+                message: "已提交，等待审核".into(),
+            }),
         )
             .into_response(),
         Err(e) => admin_error(e, &id),
@@ -186,7 +189,8 @@ async fn list(
         Err(e) => admin_error(e, &id),
     }
 }
-#[derive(Serialize)]
+#[derive(Serialize, ts_rs::TS)]
+#[ts(rename = "CommentPage")]
 struct CommentPageJson {
     items: Vec<CommentJson>,
     total: i64,
@@ -201,7 +205,8 @@ impl From<CommentPage> for CommentPageJson {
         }
     }
 }
-#[derive(Serialize)]
+#[derive(Serialize, ts_rs::TS)]
+#[ts(rename = "CommentItem")]
 struct CommentJson {
     id: Uuid,
     post_id: Uuid,
@@ -242,8 +247,9 @@ impl From<CommentDto> for CommentJson {
         }
     }
 }
-#[derive(Deserialize)]
+#[derive(Deserialize, ts_rs::TS)]
 #[serde(deny_unknown_fields)]
+#[ts(rename = "ModerateCommentInput", optional_fields = nullable)]
 struct Moderate {
     version: i64,
     status: String,
@@ -286,10 +292,10 @@ async fn policy(
 ) -> Response {
     match s
         .comments
-        .policy(&auth.actor, post, update, ip_address)
+        .policy(&auth.actor, post, update.map(Into::into), ip_address)
         .await
     {
-        Ok(v) => Json(v).into_response(),
+        Ok(v) => Json(CommentPolicy::from(v)).into_response(),
         Err(e) => admin_error(e, &id),
     }
 }
@@ -327,8 +333,9 @@ async fn set_post_policy(
     let ip = client_ip(peer.map(|p| p.0.0.ip()), &headers, &s.trusted_proxies);
     policy(s, auth, Some(post), Some(update), ip, id).await
 }
-#[derive(Deserialize)]
+#[derive(Deserialize, ts_rs::TS)]
 #[serde(deny_unknown_fields)]
+#[ts(rename = "CommentPreviewInput", optional_fields = nullable)]
 struct Preview {
     body: String,
 }
@@ -339,9 +346,16 @@ async fn preview(
     Json(cmd): Json<Preview>,
 ) -> Response {
     match s.comments.preview(&cmd.body).await {
-        Ok(html) => Json(serde_json::json!({"content_html": html})).into_response(),
+        Ok(html) => Json(PreviewResult { content_html: html }).into_response(),
         Err(e) => admin_error(e, &id),
     }
+}
+
+pub(crate) fn export_contract(out: &mut Vec<String>) {
+    crate::http_contract::declare::<CommentPageJson>(out);
+    crate::http_contract::declare::<CommentJson>(out);
+    crate::http_contract::declare::<Moderate>(out);
+    crate::http_contract::declare::<Preview>(out);
 }
 
 #[cfg(test)]

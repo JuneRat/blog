@@ -15,6 +15,7 @@ import {
   Typography,
   Upload,
 } from "antd";
+import { mediaPageQuery } from "../mediaQueries";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
 import { mediaApi } from "../api";
@@ -86,10 +87,7 @@ export function MediaLibraryScreen() {
    * 错误分两处：`media.error` 是**取数失败**（含权限口径文案），
    * `actionError` 是上传/删除等写操作失败；展示时动作错误优先。
    */
-  const media = useQuery({
-    queryKey: queryKeys.media(page, trash),
-    queryFn: () => mediaApi.list(page, trash),
-  });
+  const media = useQuery(mediaPageQuery(page, trash));
   const [actionError, setActionError] = useState<string | null>(null);
   const errorText =
     actionError ?? (media.error === null ? null : permissionMessageOf(media.error));

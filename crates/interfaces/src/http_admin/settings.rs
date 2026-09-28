@@ -15,7 +15,8 @@ use uuid::Uuid;
 /// 站点与主题设置的请求体限制。
 const SETTINGS_BODY_LIMIT: usize = 16 * 1024;
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, ts_rs::TS)]
+#[ts(rename = "SiteSettings")]
 struct SiteSettingsJson {
     time_zone: String,
     time_zones: Vec<String>,
@@ -48,7 +49,8 @@ impl From<&SiteSettingsView> for SiteSettingsJson {
     }
 }
 
-#[derive(Deserialize, Default)]
+#[derive(Deserialize, Default, ts_rs::TS)]
+#[ts(rename = "SaveSiteSettingsInput", optional_fields = nullable)]
 pub struct SaveSiteSettingsBody {
     pub time_zone: Option<String>,
     #[serde(default)]
@@ -79,7 +81,8 @@ pub fn settings_router(state: AdminState) -> Router {
         .with_state(state)
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ts_rs::TS)]
+#[ts(rename = "SaveThemeSettingsInput", optional_fields = nullable)]
 pub struct SaveThemeSettingsBody {
     pub slug: String,
     pub expected_version: Option<i64>,
@@ -91,7 +94,11 @@ async fn get_theme_settings(
     State(state): State<AdminState>,
 ) -> Response {
     match state.settings.theme_view(&actor).await {
-        Ok(view) => (StatusCode::OK, Json(view)).into_response(),
+        Ok(view) => (
+            StatusCode::OK,
+            Json(crate::http_contract::ThemeSettings::from(view)),
+        )
+            .into_response(),
         Err(e) => admin_error(e, &request_id),
     }
 }
@@ -113,7 +120,11 @@ async fn put_theme_settings(
         )
         .await
     {
-        Ok(view) => (StatusCode::OK, Json(view)).into_response(),
+        Ok(view) => (
+            StatusCode::OK,
+            Json(crate::http_contract::ThemeSettings::from(view)),
+        )
+            .into_response(),
         Err(e) => admin_error(e, &request_id),
     }
 }
@@ -154,4 +165,10 @@ async fn put_site_settings(
         Ok(view) => (StatusCode::OK, Json(SiteSettingsJson::from(&view))).into_response(),
         Err(e) => admin_error(e, &request_id),
     }
+}
+
+pub(crate) fn export_contract(out: &mut Vec<String>) {
+    crate::http_contract::declare::<SiteSettingsJson>(out);
+    crate::http_contract::declare::<SaveSiteSettingsBody>(out);
+    crate::http_contract::declare::<SaveThemeSettingsBody>(out);
 }

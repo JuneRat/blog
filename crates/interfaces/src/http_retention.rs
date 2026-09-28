@@ -1,10 +1,11 @@
 //! Authenticated settings; maintenance execution is deliberately not an HTTP API.
+use crate::http_contract::RetentionSettings;
 use crate::{
     http_admin::AdminAuth,
     http_auth::AdminState,
     http_support::{RequestId, admin_error, no_store},
 };
-use application::retention::{RetentionInteractor, RetentionSettings};
+use application::retention::RetentionInteractor;
 use axum::{
     Json, Router,
     extract::{DefaultBodyLimit, FromRef, State},
@@ -32,7 +33,7 @@ pub fn retention_router(state: RetentionState) -> Router {
 }
 async fn read(State(s): State<RetentionState>, auth: AdminAuth, id: RequestId) -> Response {
     match s.retention.read(&auth.actor).await {
-        Ok(v) => Json(v).into_response(),
+        Ok(v) => Json(RetentionSettings::from(v)).into_response(),
         Err(e) => admin_error(e, &id),
     }
 }
@@ -42,8 +43,8 @@ async fn save(
     id: RequestId,
     Json(value): Json<RetentionSettings>,
 ) -> Response {
-    match s.retention.save(&auth.actor, value).await {
-        Ok(v) => Json(v).into_response(),
+    match s.retention.save(&auth.actor, value.into()).await {
+        Ok(v) => Json(RetentionSettings::from(v)).into_response(),
         Err(e) => admin_error(e, &id),
     }
 }

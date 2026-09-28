@@ -58,6 +58,9 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+      - name: Generated admin HTTP contract
+        run: cargo run -p interfaces --example export_admin_contract -- --check
+
       - name: Tests
         run: cargo test --workspace
 

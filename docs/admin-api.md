@@ -1,6 +1,6 @@
 # 管理 API 参考
 
-本文描述当前 HTTP 路由与通用请求约定。业务状态和可见性见[内容生命周期](content-lifecycle.md)，权限和会话见[身份、权限与后台](identity-and-admin.md)。项目仍在开发阶段，客户端应随接口变更同步更新。
+本文描述当前 HTTP 路由与通用请求约定。业务状态和可见性见[内容生命周期](content-lifecycle.md)，权限和会话见[身份、权限与后台](identity-and-admin.md)。项目仍在开发阶段，客户端应随接口变更同步更新。后台请求类型与响应校验流程见[HTTP 契约与客户端](admin-development.md#http-契约与客户端)。
 
 [新建库基线](database-current.md)已接入，身份、sessions、媒体、内容、目录、评论及保留期设置已适配。
 
@@ -160,6 +160,8 @@ Page 没有作者，使用站点级 `page.*` 权限。
 | `GET /roles` | 角色列表，`user.manage` 或 `role.manage` |
 | `PUT /users/{username}/roles/{role}` | 分配角色，成功 204 |
 | `DELETE /users/{username}/roles/{role}` | 移除角色，成功 204 |
+
+创建用户响应的 `created_at` 使用 RFC 3339 字符串，与其它 HTTP 时间字段一致。
 
 用户查询默认取 50 条，最多 200 条，负 offset 收敛为 0。角色变更需要 `role.manage`，授予范围不能超出操作者权限，Owner 变更额外需要 `ownership.manage`，最后 Owner 保护仍生效。用户与角色请求体上限为 4 KiB。当前 API 不提供自定义角色编辑、OAuth 提供商配置或管理员强制重置密码；后两者使用受控 CLI。
 

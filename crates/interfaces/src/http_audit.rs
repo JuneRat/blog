@@ -47,7 +47,7 @@ async fn list(
         Err(_) => return admin_error(UseCaseError::Invalid("审计筛选参数无效".into()), &id),
     };
     match s.audit.list(&auth.actor, query).await {
-        Ok(page) => Json(page).into_response(),
+        Ok(page) => Json(crate::http_contract::AuditPage::from(page)).into_response(),
         Err(e) => admin_error(e, &id),
     }
 }

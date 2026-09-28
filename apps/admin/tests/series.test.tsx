@@ -150,7 +150,7 @@ describe("系列屏：封面", () => {
     fireEvent.click(screen.getByRole("button", { name: "封面" }));
     fireEvent.click(await screen.findByRole("button", { name: "选择封面" }));
     // 弹窗打开才拉媒体库第一页。
-    await waitFor(() => expect(mediaApi.list).toHaveBeenCalledWith(1));
+    await waitFor(() => expect(mediaApi.list).toHaveBeenCalledWith(1, false, expect.any(AbortSignal)));
     fireEvent.click(await screen.findByRole("button", { name: "选择" }));
 
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
@@ -262,7 +262,7 @@ describe("文章编辑器系列校验", () => {
     const title = await screen.findByLabelText("标题");
     fireEvent.change(title, { target: { value: "新篇" } });
     await selectOption("系列", "指南");
-    fireEvent.change(screen.getByLabelText("指南 · 排序权重"), { target: { value: "" } });
+    fireEvent.change(await screen.findByLabelText("指南 · 排序权重"), { target: { value: "" } });
     fireEvent.click(screen.getByRole("button", { name: /保存草稿|保存预约内容|更新已发布内容/ }));
 
     // antd Form 的 onFinish 是异步的，校验错误要等文案出现。
@@ -277,7 +277,7 @@ describe("文章编辑器系列校验", () => {
     render(<App />);
     fireEvent.change(await screen.findByLabelText("标题"), { target: { value: "新篇" } });
     await selectOption("系列", "指南");
-    fireEvent.change(screen.getByLabelText("指南 · 排序权重"), { target: { value: "1.5" } });
+    fireEvent.change(await screen.findByLabelText("指南 · 排序权重"), { target: { value: "1.5" } });
     fireEvent.click(screen.getByRole("button", { name: /保存草稿|保存预约内容|更新已发布内容/ }));
 
     expect(await screen.findByText(/非负整数/)).toBeTruthy();
@@ -289,7 +289,7 @@ describe("文章编辑器系列校验", () => {
     render(<App />);
     fireEvent.change(await screen.findByLabelText("标题"), { target: { value: "新篇" } });
     await selectOption("系列", "指南");
-    fireEvent.change(screen.getByLabelText("指南 · 排序权重"), { target: { value: "3" } });
+    fireEvent.change(await screen.findByLabelText("指南 · 排序权重"), { target: { value: "3" } });
     fireEvent.click(screen.getByRole("button", { name: /保存草稿|保存预约内容|更新已发布内容/ }));
 
     const apiAny = api as unknown as Record<string, ReturnType<typeof vi.fn>>;
@@ -308,7 +308,7 @@ describe("文章编辑器系列校验", () => {
     render(<App />);
     fireEvent.change(await screen.findByLabelText("标题"), { target: { value: "跨系列文章" } });
     await selectOption("系列", "指南");
-    fireEvent.change(screen.getByLabelText("指南 · 排序权重"), { target: { value: "7" } });
+    fireEvent.change(await screen.findByLabelText("指南 · 排序权重"), { target: { value: "7" } });
     await selectOption("系列", "笔记");
     fireEvent.click(screen.getByRole("button", { name: /保存草稿|保存预约内容|更新已发布内容/ }));
 

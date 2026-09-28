@@ -13,6 +13,9 @@
 
 use std::sync::Arc;
 
+use crate::http_contract::{
+    Me, PasswordChangeResult, PasswordLoginResult, Profile, ProviderSummary, SessionChannel,
+};
 use application::auth::{ATTEMPT_TTL_SECS, AuthInteractor, SESSION_COOKIE_NAME};
 use application::content::PostInteractor;
 use application::error::UseCaseError;
@@ -24,7 +27,6 @@ use axum::middleware;
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post, put};
 use axum::{Json, Router};
-use serde_json::json;
 
 use crate::http_admin::AdminAuth;
 use crate::http_support::{
@@ -122,7 +124,16 @@ struct LoginQuery {
 /// 公开只读：登录页可用的提供商摘要（id/展示名/类型，匿名可访问）。
 async fn list_providers(State(state): State<AuthState>, request_id: RequestId) -> Response {
     match state.auth.list_provider_summaries().await {
-        Ok(providers) => (StatusCode::OK, Json(providers)).into_response(),
+        Ok(providers) => (
+            StatusCode::OK,
+            Json(
+                providers
+                    .into_iter()
+                    .map(ProviderSummary::from)
+                    .collect::<Vec<_>>(),
+            ),
+        )
+            .into_response(),
         Err(e) => admin_error(e, &request_id),
     }
 }
@@ -148,7 +159,8 @@ async fn login(State(state): State<AuthState>, Query(query): Query<LoginQuery>) 
     }
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, ts_rs::TS)]
+#[ts(rename = "PasswordLoginInput", optional_fields = nullable)]
 struct PasswordLoginBody {
     username: String,
     password: String,
@@ -187,7 +199,10 @@ async fn password_login(
             request_id.set_actor(login.user_id);
             let mut response = (
                 StatusCode::OK,
-                Json(json!({ "user_id": login.user_id, "next": login.next })),
+                Json(PasswordLoginResult {
+                    user_id: login.user_id,
+                    next: login.next,
+                }),
             )
                 .into_response();
             response.headers_mut().append(
@@ -328,23 +343,18 @@ async fn me(
         Ok(zone) => zone,
         Err(error) => return admin_error(error, &request_id),
     };
-    let body = json!({
-        "user_id": actor.user_id.0,
-        "username": profile.username,
-        "display_name": profile.display_name,
-        "bio": profile.bio,
-        "version": profile.version,
-        "avatar_media_id": profile.avatar_media_id,
-        "avatar_url": profile.avatar_url,
-        "permissions": actor.permissions().keys().collect::<Vec<_>>(),
-        "csrf_token": record.csrf_token,
-        "channel": "session",
-        "time_zone": time_zone,
-    });
+    let body = Me {
+        profile: profile.into(),
+        permissions: actor.permissions().keys().map(str::to_owned).collect(),
+        csrf_token: record.csrf_token,
+        channel: SessionChannel::Session,
+        time_zone,
+    };
     (StatusCode::OK, Json(body)).into_response()
 }
 
-#[derive(serde::Deserialize, Default)]
+#[derive(serde::Deserialize, Default, ts_rs::TS)]
+#[ts(rename = "SetAvatarInput", optional_fields = nullable)]
 struct SetAvatarBody {
     /// 缺省或 null = 清除头像；id = 设置头像（PUT 是整值替换，非三态）。
     #[serde(default)]
@@ -365,12 +375,13 @@ async fn set_own_avatar(
         .set_own_avatar(&auth.actor, body.avatar_media_id)
         .await
     {
-        Ok(profile) => (StatusCode::OK, Json(profile)).into_response(),
+        Ok(profile) => (StatusCode::OK, Json(Profile::from(profile))).into_response(),
         Err(e) => admin_error(e, &request_id),
     }
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, ts_rs::TS)]
+#[ts(rename = "ChangePasswordInput", optional_fields = nullable)]
 struct ChangePasswordBody {
     /// 已启用密码登录时必填：用于重新认证（docs §5）。
     #[serde(default)]
@@ -426,7 +437,10 @@ async fn change_password(
             };
             let mut response = (
                 StatusCode::OK,
-                Json(json!({ "user_id": actor.user_id.0, "csrf_token": csrf_token })),
+                Json(PasswordChangeResult {
+                    user_id: actor.user_id.0,
+                    csrf_token,
+                }),
             )
                 .into_response();
             response.headers_mut().append(
@@ -506,4 +520,10 @@ fn auth_error(e: UseCaseError) -> Response {
         other => other.to_string(),
     };
     (status, message).into_response()
+}
+
+pub(crate) fn export_contract(out: &mut Vec<String>) {
+    crate::http_contract::declare::<PasswordLoginBody>(out);
+    crate::http_contract::declare::<SetAvatarBody>(out);
+    crate::http_contract::declare::<ChangePasswordBody>(out);
 }

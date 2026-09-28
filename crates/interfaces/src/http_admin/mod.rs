@@ -27,3 +27,13 @@ pub use tags::{CreateTagBody, RenameTagBody, tags_router};
 
 /// 正文写入端点的请求体上限。
 pub const ADMIN_BODY_LIMIT: usize = 2 * 1024 * 1024;
+
+pub(crate) fn export_contract(out: &mut Vec<String>) {
+    posts::export_contract(out);
+    pages::export_contract(out);
+    tags::export_contract(out);
+    categories::export_contract(out);
+    series::export_contract(out);
+    settings::export_contract(out);
+    support::export_contract(out);
+}

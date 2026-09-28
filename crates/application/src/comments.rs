@@ -60,7 +60,7 @@ pub struct CommentPage {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SubmitComment {
-    pub nickname: String,
+    pub nickname: Option<String>,
     pub body: String,
     pub parent_id: Option<Uuid>,
     pub email: Option<String>,
@@ -156,7 +156,8 @@ impl CommentInteractor {
         let author = match actor {
             Some(actor) => CommentAuthor::Account(actor.user_id.0),
             None => CommentAuthor::Guest(
-                CommentNickname::new(&cmd.nickname).map_err(|e| UseCaseError::Invalid(e.into()))?,
+                CommentNickname::new(cmd.nickname.as_deref().unwrap_or_default())
+                    .map_err(|e| UseCaseError::Invalid(e.into()))?,
             ),
         };
         let body = CommentBody::new(&cmd.body).map_err(|e| UseCaseError::Invalid(e.into()))?;

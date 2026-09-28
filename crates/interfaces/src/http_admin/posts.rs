@@ -5,8 +5,9 @@ use super::support::{
 };
 use super::{ADMIN_BODY_LIMIT, AdminAuth};
 use crate::http_auth::AdminState;
+use crate::http_contract::{ContentPage, SeriesPlacement};
 use crate::http_support::{RequestId, admin_error, no_store};
-use application::content::{CreatePostCmd, EditPostCmd, PostDto, SeriesPlacement};
+use application::content::{CreatePostCmd, EditPostCmd, PostDto};
 use application::content_queries::AdminPostSummary;
 use application::error::UseCaseError;
 use axum::extract::{Path, Query, State};
@@ -17,7 +18,8 @@ use axum::{Json, Router, middleware};
 use serde::Deserialize;
 use uuid::Uuid;
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, ts_rs::TS)]
+#[ts(rename = "PostMetadata")]
 struct PostJson {
     id: Uuid,
     slug: String,
@@ -53,7 +55,7 @@ impl From<&PostDto> for PostJson {
             author_id: dto.author_id,
             tag_ids: dto.tag_ids.clone(),
             category_id: dto.category_id,
-            series: dto.series.clone(),
+            series: dto.series.clone().into_iter().map(Into::into).collect(),
             cover_media_id: dto.cover_media_id,
             cover_url: dto.cover_media_id.map(application::media::media_url),
         }
@@ -62,7 +64,8 @@ impl From<&PostDto> for PostJson {
 
 /// 单篇详情：在摘要之上附 Markdown 源文与摘要（后台编辑需要）。
 /// 列表通过独立的 PostListJson 输出展示字段。
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, ts_rs::TS)]
+#[ts(rename = "PostDetail")]
 struct PostDetailJson {
     #[serde(flatten)]
     summary: PostJson,
@@ -80,7 +83,8 @@ impl From<PostDto> for PostDetailJson {
     }
 }
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, ts_rs::TS)]
+#[ts(rename = "PostSummary")]
 struct PostListJson {
     id: Uuid,
     slug: String,
@@ -112,7 +116,8 @@ impl From<AdminPostSummary> for PostListJson {
 // 请求体
 // ---------------------------------------------------------------------------
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ts_rs::TS)]
+#[ts(rename = "CreatePostInput", optional_fields = nullable)]
 pub struct CreatePostBody {
     pub slug: Option<String>,
     #[serde(default)]
@@ -123,19 +128,22 @@ pub struct CreatePostBody {
     pub visibility: Option<String>,
     /// 初始标签 id 集合（去重与存在性由用例处理）。
     #[serde(default)]
+    #[ts(as = "Option<Vec<Uuid>>", optional)]
     pub tag_ids: Vec<Uuid>,
     /// 初始分类 id（存在性由用例校验）。
     #[serde(default)]
     pub category_id: Option<Uuid>,
     /// 初始系列与序号。
     #[serde(default)]
+    #[ts(as = "Option<Vec<SeriesPlacement>>", optional)]
     pub series: Vec<SeriesPlacement>,
     /// 初始封面媒体资产 id（缺省 = 无封面）。
     #[serde(default)]
     pub cover_media_id: Option<Uuid>,
 }
 
-#[derive(Deserialize, Default)]
+#[derive(Deserialize, Default, ts_rs::TS)]
+#[ts(rename = "EditPostInput", optional_fields = nullable)]
 pub struct EditPostBody {
     pub new_slug: Option<String>,
     pub title: Option<String>,
@@ -146,11 +154,13 @@ pub struct EditPostBody {
     pub tag_ids: Option<Vec<Uuid>>,
     /// 三态：缺省不修改；null 清空分类；id 设置分类。
     #[serde(default, deserialize_with = "deserialize_double_option")]
+    #[ts(as = "Option<Uuid>", optional = nullable)]
     pub category_id: Option<Option<Uuid>>,
     /// 缺省保留，数组整体替换；空数组清空。
     pub series: Option<Vec<SeriesPlacement>>,
     /// 封面三态：缺省不修改；null 移除封面；id 设置封面。
     #[serde(default, deserialize_with = "deserialize_double_option")]
+    #[ts(as = "Option<Uuid>", optional = nullable)]
     pub cover_media_id: Option<Option<Uuid>>,
     pub expected_version: Option<i64>,
 }
@@ -198,7 +208,7 @@ async fn create_post(
                 visibility,
                 tag_ids: body.tag_ids,
                 category_id: body.category_id,
-                series: body.series,
+                series: body.series.into_iter().map(Into::into).collect(),
                 cover_media_id: body.cover_media_id,
             },
         )
@@ -233,7 +243,7 @@ async fn list_posts(
         .posts_by_author(&actor, author.as_deref(), query.request(false))
         .await
     {
-        Ok(page) => Json(page.map(PostListJson::from)).into_response(),
+        Ok(page) => Json(ContentPage::from(page.map(PostListJson::from))).into_response(),
         Err(e) => admin_error(e, &request_id),
     }
 }
@@ -250,7 +260,7 @@ async fn list_trash(
         .posts_by_author(&actor, author.as_deref(), query.request(true))
         .await
     {
-        Ok(page) => Json(page.map(PostListJson::from)).into_response(),
+        Ok(page) => Json(ContentPage::from(page.map(PostListJson::from))).into_response(),
         Err(e) => admin_error(e, &request_id),
     }
 }
@@ -329,7 +339,9 @@ async fn edit_post(
         visibility,
         tag_ids: body.tag_ids,
         category_id: body.category_id,
-        series: body.series,
+        series: body
+            .series
+            .map(|items| items.into_iter().map(Into::into).collect()),
         cover_media_id: body.cover_media_id,
         expected_version: body.expected_version,
     };
@@ -410,4 +422,12 @@ async fn archive_post(
         Ok(dto) => (StatusCode::OK, Json(PostDetailJson::from(dto))).into_response(),
         Err(e) => admin_error(e, &request_id),
     }
+}
+
+pub(crate) fn export_contract(out: &mut Vec<String>) {
+    crate::http_contract::declare::<PostJson>(out);
+    crate::http_contract::declare::<PostDetailJson>(out);
+    crate::http_contract::declare::<PostListJson>(out);
+    crate::http_contract::declare::<CreatePostBody>(out);
+    crate::http_contract::declare::<EditPostBody>(out);
 }

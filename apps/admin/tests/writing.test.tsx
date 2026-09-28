@@ -25,7 +25,7 @@ const post: PostDetail = { ...page, author_id: "writer-1", excerpt: "", tag_ids:
 function editor(kind: "post" | "page", id: string | null = page.id) {
   return <AdminProviders>{kind === "post" ? <PostEditScreen id={id} /> : <PageEditScreen id={id} />}</AdminProviders>;
 }
-function ownKey(owner: string, id: string | null) { return draftKey(draftScope(owner, "page", id), draftIdentity()); }
+function ownKey(owner: string, id: string | null, kind: "post" | "page" = "page") { return draftKey(draftScope(owner, kind, id), draftIdentity()); }
 function content() { return screen.getByLabelText("正文（Markdown）") as HTMLTextAreaElement; }
 function deferred<T>() { let resolve!: (v: T) => void; const promise = new Promise<T>(done => { resolve = done; }); return { promise, resolve }; }
 beforeEach(() => {
@@ -132,50 +132,56 @@ describe("写作恢复与发布边界", () => {
     expect(screen.queryByText("发现本机未保存的编辑")).toBeNull();
   });
 
-  it.each(["route", "account"] as const)("%s 切换后的旧保存响应不能回填或清除当前副本", async transition => {
-    const pending = deferred<PageDetail>(); vi.mocked(api.updatePage).mockReturnValue(pending.promise);
-    const mounted = render(editor("page")); await screen.findByDisplayValue(page.content);
+  it.each([ ["post", "route"], ["post", "account"], ["page", "route"], ["page", "account"] ] as const)("%s %s 切换后的旧保存响应不能回填或清除当前副本", async (kind, transition) => {
+    const get = vi.mocked(kind === "post" ? api.getPost : api.getPage);
+    const update = vi.mocked(kind === "post" ? api.updatePost : api.updatePage);
+    const pending = deferred<PostDetail>(); update.mockReturnValue(pending.promise);
+    const mounted = render(editor(kind)); await screen.findByDisplayValue(page.content);
     fireEvent.change(content(), { target: { value: "旧会话提交" } });
     fireEvent.click(screen.getByRole("button", { name: "保存草稿" }));
-    await waitFor(() => expect(api.updatePage).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
     const nextId = transition === "route" ? "another-id" : page.id;
     if (transition === "account") auth.user = "writer-2";
-    vi.mocked(api.getPage).mockResolvedValue({ ...page, id: nextId, content: "新会话正文" });
-    mounted.rerender(editor("page", nextId)); await screen.findByDisplayValue("新会话正文");
+    get.mockResolvedValue({ ...post, id: nextId, content: "新会话正文" });
+    mounted.rerender(editor(kind, nextId)); await screen.findByDisplayValue("新会话正文");
     fireEvent.change(content(), { target: { value: "新会话未保存编辑" } });
     await screen.findByRole("button", { name: "删除本机副本" });
-    await act(async () => pending.resolve({ ...page, content: "旧会话提交", version: 2 }));
+    await act(async () => pending.resolve({ ...post, content: "旧会话提交", version: 2 }));
     expect(content().value).toBe("新会话未保存编辑");
-    expect(JSON.parse(localStorage.getItem(ownKey(auth.user, nextId))!).value.content).toBe("新会话未保存编辑");
+    expect(JSON.parse(localStorage.getItem(ownKey(auth.user, nextId, kind))!).value.content).toBe("新会话未保存编辑");
     expect((screen.getByRole("button", { name: "保存草稿" }) as HTMLButtonElement).disabled).toBe(false);
   });
 
-  it("冲突覆盖绑定已展示版本，后续更新仍返回冲突并保留输入", async () => {
-    vi.mocked(api.getPage).mockResolvedValueOnce(page).mockResolvedValueOnce({ ...page, content: "同事修改", version: 2 }).mockResolvedValue({ ...page, content: "同事再次修改", version: 3 });
-    vi.mocked(api.updatePage).mockRejectedValue(new ApiError(409, "版本冲突", "version_conflict"));
-    render(editor("page")); await screen.findByDisplayValue(page.content);
+  it.each(["post", "page"] as const)("%s 冲突覆盖绑定已展示版本，后续更新仍返回冲突并保留输入", async kind => {
+    const get = vi.mocked(kind === "post" ? api.getPost : api.getPage);
+    const update = vi.mocked(kind === "post" ? api.updatePost : api.updatePage);
+    get.mockResolvedValueOnce(post).mockResolvedValueOnce({ ...post, content: "同事修改", version: 2 }).mockResolvedValue({ ...post, content: "同事再次修改", version: 3 });
+    update.mockRejectedValue(new ApiError(409, "版本冲突", "version_conflict"));
+    render(editor(kind)); await screen.findByDisplayValue(page.content);
     fireEvent.change(content(), { target: { value: "我的修改" } });
     fireEvent.click(screen.getByRole("button", { name: "保存草稿" }));
     await screen.findByText("服务器版本 v2"); await screen.findByText("同事修改");
     fireEvent.click(screen.getByRole("button", { name: "仍然覆盖" }));
     fireEvent.click(await screen.findByRole("button", { name: "确定" }));
-    await waitFor(() => expect(api.updatePage).toHaveBeenLastCalledWith(page.id, expect.objectContaining({ expected_version: 2, content: "我的修改" })));
+    await waitFor(() => expect(update).toHaveBeenLastCalledWith(page.id, expect.objectContaining({ expected_version: 2, content: "我的修改" })));
     await screen.findByText("服务器版本 v3"); expect(content().value).toBe("我的修改");
-    expect(api.getPage).toHaveBeenCalledTimes(3);
+    expect(get).toHaveBeenCalledTimes(3);
   });
 
-  it("旧版本本机恢复保留原提交前提，普通保存不能覆盖当前服务器版本", async () => {
-    const mounted = render(editor("page")); await screen.findByDisplayValue(page.content);
+  it.each(["post", "page"] as const)("%s 旧版本本机恢复保留原提交前提，普通保存不能覆盖当前服务器版本", async kind => {
+    const get = vi.mocked(kind === "post" ? api.getPost : api.getPage);
+    const update = vi.mocked(kind === "post" ? api.updatePost : api.updatePage);
+    const mounted = render(editor(kind)); await screen.findByDisplayValue(page.content);
     fireEvent.change(content(), { target: { value: "基于 v1 的离线修改" } });
     await screen.findByRole("button", { name: "删除本机副本" }); mounted.unmount();
-    vi.mocked(api.getPage).mockResolvedValue({ ...page, content: "服务器 v2 正文", version: 2 });
-    vi.mocked(api.updatePage).mockRejectedValue(new ApiError(409, "版本冲突", "version_conflict"));
-    render(editor("page")); await screen.findByText("发现本机未保存的编辑");
+    get.mockResolvedValue({ ...post, content: "服务器 v2 正文", version: 2 });
+    update.mockRejectedValue(new ApiError(409, "版本冲突", "version_conflict"));
+    render(editor(kind)); await screen.findByText("发现本机未保存的编辑");
     fireEvent.click(screen.getByRole("button", { name: "恢复本机编辑" }));
     await screen.findByText("服务器版本 v2");
-    expect(JSON.parse(localStorage.getItem(ownKey("writer-1", "writing-id"))!).baselineVersion).toBe(1);
+    expect(JSON.parse(localStorage.getItem(ownKey("writer-1", "writing-id", kind))!).baselineVersion).toBe(1);
     fireEvent.click(screen.getByRole("button", { name: "保存草稿" }));
-    await waitFor(() => expect(api.updatePage).toHaveBeenCalledWith(page.id, expect.objectContaining({ expected_version: 1, content: "基于 v1 的离线修改" })));
+    await waitFor(() => expect(update).toHaveBeenCalledWith(page.id, expect.objectContaining({ expected_version: 1, content: "基于 v1 的离线修改" })));
     expect(content().value).toBe("基于 v1 的离线修改");
   });
 

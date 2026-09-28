@@ -2,6 +2,7 @@
 //! other admin POST requests, without persisting the submitted draft.
 use std::sync::Arc;
 
+use crate::http_contract::PreviewResult;
 use application::content_preview::ContentPreview;
 use axum::{
     Json, Router,
@@ -10,7 +11,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::post,
 };
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use crate::{
     http_admin::{ADMIN_BODY_LIMIT, AdminAuth},
@@ -38,15 +39,11 @@ pub fn content_preview_router(state: ContentPreviewState) -> Router {
         .with_state(state)
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ts_rs::TS)]
 #[serde(deny_unknown_fields)]
+#[ts(rename = "ContentPreviewInput", optional_fields = nullable)]
 struct PreviewBody {
     content: String,
-}
-
-#[derive(Serialize)]
-struct PreviewJson {
-    content_html: String,
 }
 
 async fn preview(
@@ -56,7 +53,11 @@ async fn preview(
     Json(body): Json<PreviewBody>,
 ) -> Response {
     match state.preview.render(&actor, &body.content).await {
-        Ok(content_html) => Json(PreviewJson { content_html }).into_response(),
+        Ok(content_html) => Json(PreviewResult { content_html }).into_response(),
         Err(error) => admin_error(error, &request_id),
     }
+}
+
+pub(crate) fn export_contract(out: &mut Vec<String>) {
+    crate::http_contract::declare::<PreviewBody>(out);
 }

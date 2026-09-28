@@ -33,7 +33,8 @@ pub struct UserListQuery {
     pub offset: Option<i64>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ts_rs::TS)]
+#[ts(rename = "CreateUserInput", optional_fields = nullable)]
 pub struct CreateUserBody {
     pub username: String,
     #[serde(default)]
@@ -61,8 +62,9 @@ pub fn identity_router(state: AdminState) -> Router {
 // 处理器
 // ---------------------------------------------------------------------------
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ts_rs::TS)]
 #[serde(deny_unknown_fields)]
+#[ts(rename = "UpdateProfileInput", optional_fields = nullable)]
 struct UpdateProfileBody {
     display_name: Option<String>,
     bio: Option<String>,
@@ -80,7 +82,7 @@ async fn update_profile(
         .update_own_profile(&actor, body.display_name, body.bio, body.expected_version)
         .await
     {
-        Ok(profile) => Json(profile).into_response(),
+        Ok(profile) => Json(crate::http_contract::Profile::from(profile)).into_response(),
         Err(error) => admin_error(error, &request_id),
     }
 }
@@ -96,20 +98,31 @@ async fn list_users(
         .list_users(&actor, query.limit.unwrap_or(0), query.offset.unwrap_or(0))
         .await
     {
-        Ok(users) => (StatusCode::OK, Json(users)).into_response(),
+        Ok(users) => (
+            StatusCode::OK,
+            Json(
+                users
+                    .into_iter()
+                    .map(crate::http_contract::AdminUser::from)
+                    .collect::<Vec<_>>(),
+            ),
+        )
+            .into_response(),
         Err(e) => admin_error(e, &request_id),
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ts_rs::TS)]
 #[serde(rename_all = "lowercase")]
+#[ts(rename = "AccountStatus")]
 enum AccountStatus {
     Active,
     Disabled,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ts_rs::TS)]
 #[serde(deny_unknown_fields)]
+#[ts(rename = "ChangeStatusInput", optional_fields = nullable)]
 struct ChangeStatusBody {
     status: AccountStatus,
     expected_version: i64,
@@ -131,7 +144,7 @@ async fn change_status(
         .change_status(&actor, user_id, status, body.expected_version)
         .await
     {
-        Ok(result) => Json(result).into_response(),
+        Ok(result) => Json(crate::http_contract::UserStatusResult::from(result)).into_response(),
         Err(error) => admin_error(error, &request_id),
     }
 }
@@ -154,7 +167,11 @@ async fn create_user(
         )
         .await
     {
-        Ok(user) => (StatusCode::CREATED, Json(user)).into_response(),
+        Ok(user) => (
+            StatusCode::CREATED,
+            Json(crate::http_contract::CreatedUser::from(user)),
+        )
+            .into_response(),
         Err(e) => admin_error(e, &request_id),
     }
 }
@@ -198,7 +215,23 @@ async fn list_roles(
     State(state): State<AdminState>,
 ) -> Response {
     match state.roles.list(&actor).await {
-        Ok(roles) => (StatusCode::OK, Json(roles)).into_response(),
+        Ok(roles) => (
+            StatusCode::OK,
+            Json(
+                roles
+                    .into_iter()
+                    .map(crate::http_contract::RoleSummary::from)
+                    .collect::<Vec<_>>(),
+            ),
+        )
+            .into_response(),
         Err(e) => admin_error(e, &request_id),
     }
+}
+
+pub(crate) fn export_contract(out: &mut Vec<String>) {
+    crate::http_contract::declare::<CreateUserBody>(out);
+    crate::http_contract::declare::<UpdateProfileBody>(out);
+    crate::http_contract::declare::<ChangeStatusBody>(out);
+    crate::http_contract::declare::<AccountStatus>(out);
 }

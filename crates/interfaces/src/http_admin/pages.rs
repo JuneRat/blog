@@ -15,7 +15,8 @@ use axum::{Json, Router, middleware};
 use serde::Deserialize;
 use uuid::Uuid;
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, ts_rs::TS)]
+#[ts(rename = "PageSummary")]
 struct PageJson {
     id: Uuid,
     slug: String,
@@ -58,7 +59,8 @@ impl From<AdminPageSummary> for PageJson {
 }
 
 /// 页面详情：摘要 + Markdown 源文（后台编辑数据源）。
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, ts_rs::TS)]
+#[ts(rename = "PageDetail")]
 struct PageDetailJson {
     #[serde(flatten)]
     summary: PageJson,
@@ -74,7 +76,8 @@ impl From<PageDto> for PageDetailJson {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ts_rs::TS)]
+#[ts(rename = "CreatePageInput", optional_fields = nullable)]
 pub struct CreatePageBody {
     pub slug: Option<String>,
     #[serde(default)]
@@ -84,7 +87,8 @@ pub struct CreatePageBody {
     pub visibility: Option<String>,
 }
 
-#[derive(Deserialize, Default)]
+#[derive(Deserialize, Default, ts_rs::TS)]
+#[ts(rename = "EditPageInput", optional_fields = nullable)]
 pub struct EditPageBody {
     pub new_slug: Option<String>,
     pub title: Option<String>,
@@ -93,7 +97,8 @@ pub struct EditPageBody {
     pub expected_version: Option<i64>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ts_rs::TS)]
+#[ts(rename = "DeletePageInput", optional_fields = nullable)]
 pub struct DeletePageBody {
     pub expected_version: i64,
 }
@@ -166,7 +171,10 @@ async fn list_pages(
         .pages(&actor, query.request(false))
         .await
     {
-        Ok(page) => Json(page.map(PageJson::from)).into_response(),
+        Ok(page) => Json(crate::http_contract::ContentPage::from(
+            page.map(PageJson::from),
+        ))
+        .into_response(),
         Err(e) => admin_error(e, &request_id),
     }
 }
@@ -352,7 +360,18 @@ async fn list_page_trash(
         .pages(&actor, query.request(true))
         .await
     {
-        Ok(page) => Json(page.map(PageJson::from)).into_response(),
+        Ok(page) => Json(crate::http_contract::ContentPage::from(
+            page.map(PageJson::from),
+        ))
+        .into_response(),
         Err(e) => admin_error(e, &request_id),
     }
+}
+
+pub(crate) fn export_contract(out: &mut Vec<String>) {
+    crate::http_contract::declare::<PageJson>(out);
+    crate::http_contract::declare::<PageDetailJson>(out);
+    crate::http_contract::declare::<CreatePageBody>(out);
+    crate::http_contract::declare::<EditPageBody>(out);
+    crate::http_contract::declare::<DeletePageBody>(out);
 }

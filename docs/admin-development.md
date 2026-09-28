@@ -14,9 +14,25 @@ Post/Page 管理身份是稳定 UUID。生成编辑链接使用 [router.ts](../a
 
 命令式确认使用 `App.useApp().modal.confirm`，以继承主题与 locale；声明式 `Modal`、`Popconfirm` 也有现行使用。危险操作应说明影响并标出危险按钮。按钮名称与加载反馈服务于操作本身，测试在对应弹窗内定位，不为了避免同名断言限制产品文案。
 
+## HTTP 契约与客户端
+
+[api/index.ts](../apps/admin/src/api/index.ts) 保留调用入口，端点按资源拆分；[client.ts](../apps/admin/src/api/client.ts) 统一认证凭据、错误码、请求编号和响应解析。JSON 成功响应须通过 [Zod 校验](../apps/admin/src/api/schemas.ts)，空响应命令必须返回 204；退出登录单独接受服务端跳转后的 HTML。协议错误使用 `ApiProtocolError`，保留实际 HTTP 状态与请求编号，不自动重试写入，也不显示响应中的原始敏感内容。新增响应字段允许兼容，缺失必填字段、类型错误、未知封闭枚举及不安全整数会被拒绝。
+
+[generated.ts](../apps/admin/src/api/generated.ts) 由实际 HTTP DTO 的 ts-rs 派生生成。依赖仅在 interfaces；直接返回应用视图的端点先转换为接口层 DTO。包装转换穷尽解构应用字段，避免内部字段变化静默丢失。前端输入类型引用生成结果，响应类型从校验器推导，校验器逐字段受生成类型约束；新增、删除或改型字段必须同步校验器。筛选状态等纯前端类型仍由前端维护。
+
+```sh
+cargo run -p interfaces --example export_admin_contract
+cargo run -p interfaces --example export_admin_contract -- --check
+pnpm --dir apps/admin typecheck
+```
+
+生成文件纳入版本控制，CI 与 `scripts/check.sh` 检查是否过期。UUID 对应字符串，JSON 整数对应 number；运行时检查安全整数范围。自定义 PATCH 反序列化不能由 ts-rs 自动理解，因此显式声明可选/可空类型，并用 Rust 和前端测试验证缺省、不为空的值与 null 清空三态。生成类型不替代实际响应校验，也不生成 domain 或基础设施模型。
+
 ## 表单与编辑会话
 
-[文章编辑器](../apps/admin/src/screens/PostEditScreen.tsx)、[页面编辑器](../apps/admin/src/screens/PageEditScreen.tsx)和[设置屏](../apps/admin/src/screens/SettingsScreen.tsx)使用 Ant Design Form store 保存输入，渲染镜像由 `onValuesChange` 和统一写入函数同步。程序调用 `setFieldsValue` 时也要同步镜像，不假设它会触发用户输入回调。
+[文章编辑器](../apps/admin/src/screens/PostEditScreen.tsx)通过 [usePostEditor](../apps/admin/src/screens/postEditor/usePostEditor.ts) 管理请求、服务器基线和恢复副本；[form.ts](../apps/admin/src/screens/postEditor/form.ts) 负责表单归一化与逐字段合并，[PostMetadataFields](../apps/admin/src/screens/postEditor/PostMetadataFields.tsx) 负责目录查询和选择控件。文章输入仅存于 Ant Design Form store，`Form.useWatch` 触发界面更新，不再手工双写整个表单镜像。订阅通知会批量延迟，因此异步响应和离开确认必须同步读取 store；请求完成后的渲染也读取当前值，避免用旧订阅值写入本机副本。
+
+[页面编辑器](../apps/admin/src/screens/PageEditScreen.tsx)和[设置屏](../apps/admin/src/screens/SettingsScreen.tsx)目前仍由 `onValuesChange` 和统一写入函数维护渲染镜像。程序调用 `setFieldsValue` 不会触发用户输入回调。
 
 - 用当前值与最近服务器基线比较 dirty，不能以 touched 状态代替。程序回填与用户实际修改不是同一件事。
 - 发请求时保存提交快照。响应只覆盖等待期间没有继续修改的字段；保留新增输入，并明确提示其尚未保存。标签按集合比较，系列及序号作为关联字段一起处理。
@@ -27,7 +43,7 @@ Post/Page 管理身份是稳定 UUID。生成编辑链接使用 [router.ts](../a
 
 正文保持 Markdown，HTML 由服务端派生。需要对齐后端“字符”上限的字段使用 [codePointLength](../apps/admin/src/text.ts)，不能直接把 HTML `maxLength` 的 UTF-16 长度当作码点数。当前评论回复框仍使用 `maxLength`，不应据此声称所有输入已统一计数。
 
-[未保存保护](../apps/admin/src/unsaved.tsx)由屏幕登记 dirty，外壳和屏内主动离开入口调用 `useLeaveConfirmation`；刷新、关闭标签页或跨文档离开使用 `beforeunload`。后台历史前进、后退由 [NavigationHistory](../apps/admin/src/navigationHistory.ts) 统一确认：历史项记录位置，先恢复原位置，确认前不切换渲染路由；取消保留原编辑组件和前进栈，确认后再前往目标位置。支持一次跨多个历史项返回，重复点击不叠加确认框。
+[未保存保护](../apps/admin/src/unsaved.tsx)由屏幕登记 dirty 或即时读取函数，外壳和屏内主动离开入口调用 `useLeaveConfirmation`；刷新、关闭标签页或跨文档离开使用 `beforeunload`。后台历史前进、后退由 [NavigationHistory](../apps/admin/src/navigationHistory.ts) 统一确认：历史项记录位置，先恢复原位置，确认前不切换渲染路由；取消保留原编辑组件和前进栈，确认后再前往目标位置。支持一次跨多个历史项返回，重复点击不叠加确认框。
 
 保存、删除成功后的程序跳转不需要再次确认；创建响应在确认期间返回时先结束待决导航，再更新内容地址，保留保存期间的新输入。
 
@@ -39,7 +55,9 @@ Post/Page 管理身份是稳定 UUID。生成编辑链接使用 [router.ts](../a
 
 ## 查询与缓存
 
-[默认策略](../apps/admin/src/queryClient.ts)是 30 秒新鲜期、关闭窗口聚焦重取，只对 `ApiError.status >= 500` 最多重试两次；mutation 不自动重试。普通网络异常不满足这条 `ApiError` 判断。401 由 [API](../apps/admin/src/api.ts) 与[认证层](../apps/admin/src/auth.tsx)处理，Query 只负责不重试，尚未统一为 Query 级认证处理器。
+[默认策略](../apps/admin/src/queryClient.ts)是 30 秒新鲜期、关闭窗口聚焦重取，只对 `ApiError.status >= 500` 最多重试两次；mutation 不自动重试。普通网络异常不满足这条 `ApiError` 判断。401 由 [API 客户端](../apps/admin/src/api/client.ts) 与[认证层](../apps/admin/src/auth.tsx)处理，Query 只负责不重试，尚未统一为 Query 级认证处理器。
+
+媒体库、封面选择器和正文图片面板共用 [mediaPageQuery](../apps/admin/src/mediaQueries.ts) 的查询键、取消信号和缓存。封面弹窗关闭或没有读取权限时不加载；重新打开时重取，并可先显示缓存。上传后的失效仍通过统一写入影响表执行。
 
 列表、目录、设置和媒体主要使用 Query。Post/Page 详情仍直接请求并维护编辑基线；系列成员也由系列屏逐项加载。设置首次读取可初始化表单，后续后台重取不能无条件重新填表；版本冲突取服务器当前值时使用直接请求。
 

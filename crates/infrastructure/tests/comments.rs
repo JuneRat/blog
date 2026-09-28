@@ -31,7 +31,7 @@ fn actor(id: Uuid, all: bool) -> Actor {
 }
 fn cmd(body: &str, parent_id: Option<Uuid>) -> SubmitComment {
     SubmitComment {
-        nickname: "Guest".into(),
+        nickname: Some("Guest".into()),
         email: Some("guest@example.com".into()),
         body: body.into(),
         parent_id,
@@ -156,7 +156,7 @@ async fn persisted_html_privacy_identity_and_independent_submissions() {
         .await
         .unwrap();
     let mut account = cmd("Account comment", None);
-    account.nickname = "\nspoof".into();
+    account.nickname = Some("\nspoof".into());
     account.email = Some("invalid".into());
     service
         .submit("discussion", Some(&admin), None, account)
@@ -171,6 +171,19 @@ async fn persisted_html_privacy_identity_and_independent_submissions() {
     assert_eq!(account.nickname, "AliceAdmin");
     assert!(account.is_author);
     assert!(account.author_email.is_none());
+    // Authenticated identity is server-owned; the nickname field may be absent.
+    let mut without_nickname = cmd("Authenticated reply without nickname", None);
+    without_nickname.nickname = None;
+    service
+        .submit("discussion", Some(&admin), None, without_nickname.clone())
+        .await
+        .unwrap();
+    assert!(matches!(
+        service
+            .submit("discussion", None, None, without_nickname)
+            .await,
+        Err(UseCaseError::Invalid(_))
+    ));
     let mut bad = cmd("Guest", None);
     bad.email = Some("invalid".into());
     assert!(matches!(
@@ -188,7 +201,7 @@ async fn persisted_html_privacy_identity_and_independent_submissions() {
             .fetch_all(&pool)
             .await
             .unwrap();
-    assert_eq!(audits.len(), 5);
+    assert_eq!(audits.len(), 6);
     assert!(audits.iter().all(|v| !v.to_string().contains("example.com")
         && v.get("body").is_none()
         && v.get("content").is_none()));

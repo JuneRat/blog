@@ -1,0 +1,89 @@
+use interfaces::http_admin::{EditPostBody, UpdateCategoryBody, UpdateSeriesBody};
+use interfaces::http_contract::{ContentPage, Profile, SubmitCommentBody, typescript};
+use serde_json::json;
+use uuid::Uuid;
+
+#[test]
+fn patch_absent_null_and_value_remain_distinct() {
+    let id = Uuid::from_u128(1);
+    let absent: EditPostBody = serde_json::from_value(json!({})).unwrap();
+    assert_eq!(absent.category_id, None);
+    assert_eq!(absent.cover_media_id, None);
+    let cleared: EditPostBody =
+        serde_json::from_value(json!({"category_id": null, "cover_media_id": null})).unwrap();
+    assert_eq!(cleared.category_id, Some(None));
+    assert_eq!(cleared.cover_media_id, Some(None));
+    let set: EditPostBody =
+        serde_json::from_value(json!({"category_id": id, "cover_media_id": id})).unwrap();
+    assert_eq!(set.category_id, Some(Some(id)));
+    assert_eq!(set.cover_media_id, Some(Some(id)));
+    let series: UpdateSeriesBody =
+        serde_json::from_value(json!({"name": "series", "cover_media_id": null})).unwrap();
+    assert_eq!(series.cover_media_id, Some(None));
+    let category: UpdateCategoryBody =
+        serde_json::from_value(json!({"name": "category", "parent": null})).unwrap();
+    assert_eq!(category.parent, Some(None));
+    let declarations = typescript();
+    assert!(declarations.contains("category_id?: string | null"));
+    assert!(!declarations.contains("bigint"));
+}
+
+#[test]
+fn response_uuids_numbers_and_nullable_fields_match_json() {
+    let profile = Profile::from(application::identity::ProfileView {
+        user_id: Uuid::from_u128(1),
+        username: "writer".into(),
+        display_name: None,
+        bio: None,
+        version: 7,
+        avatar_media_id: None,
+        avatar_url: None,
+    });
+    let value = serde_json::to_value(ContentPage {
+        items: vec![profile],
+        total: 1,
+        page: 1,
+        per_page: 20,
+    })
+    .unwrap();
+    assert_eq!(
+        value["items"][0]["user_id"],
+        json!(Uuid::from_u128(1).to_string())
+    );
+    assert_eq!(value["items"][0]["version"], 7);
+    assert_eq!(
+        value["items"][0].get("avatar_media_id"),
+        Some(&serde_json::Value::Null)
+    );
+}
+
+#[test]
+fn reply_transport_allows_missing_nickname_and_rejects_unknown_fields() {
+    let reply: SubmitCommentBody = serde_json::from_value(json!({"body": "reply"})).unwrap();
+    let command: application::comments::SubmitComment = reply.into();
+    assert!(command.nickname.is_none());
+    assert!(
+        serde_json::from_value::<SubmitCommentBody>(json!({"body": "reply", "is_author": true}))
+            .is_err()
+    );
+}
+
+#[test]
+fn series_placement_keeps_the_default_zero_position() {
+    let request: EditPostBody = serde_json::from_value(json!({
+        "series": [{"series_id": Uuid::from_u128(1)}]
+    }))
+    .unwrap();
+    assert_eq!(request.series.unwrap()[0].position, 0);
+}
+
+#[test]
+fn settings_commands_keep_rejecting_unknown_fields() {
+    assert!(
+        serde_json::from_value::<interfaces::http_contract::CommentPolicy>(
+            json!({"enabled": true, "version": 1, "extra": true})
+        )
+        .is_err()
+    );
+    assert!(serde_json::from_value::<interfaces::http_contract::RetentionSettings>(json!({"comment_ip_days": 180, "comment_version": 1, "audit_days": 180, "audit_version": 1, "extra": true})).is_err());
+}

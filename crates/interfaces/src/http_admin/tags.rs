@@ -13,7 +13,8 @@ use axum::{Json, Router, middleware};
 use serde::Deserialize;
 use uuid::Uuid;
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, ts_rs::TS)]
+#[ts(rename = "TagSummary")]
 struct TagJson {
     id: Uuid,
     slug: String,
@@ -35,13 +36,15 @@ impl From<&TagDto> for TagJson {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ts_rs::TS)]
+#[ts(rename = "CreateTagInput", optional_fields = nullable)]
 pub struct CreateTagBody {
     pub name: String,
     pub slug: String,
 }
 
-#[derive(Deserialize, Default)]
+#[derive(Deserialize, Default, ts_rs::TS)]
+#[ts(rename = "RenameTagInput", optional_fields = nullable)]
 pub struct RenameTagBody {
     pub name: String,
     pub expected_version: Option<i64>,
@@ -127,4 +130,10 @@ async fn delete_tag(
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => admin_error(e, &request_id),
     }
+}
+
+pub(crate) fn export_contract(out: &mut Vec<String>) {
+    crate::http_contract::declare::<TagJson>(out);
+    crate::http_contract::declare::<CreateTagBody>(out);
+    crate::http_contract::declare::<RenameTagBody>(out);
 }
