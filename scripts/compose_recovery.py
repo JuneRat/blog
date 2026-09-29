@@ -64,9 +64,16 @@ def now():
 def private_write(path, value):
     path = Path(path)
     require(not path.is_symlink(), "refusing to write a symbolic link")
-    with path.open("w") as stream:
-        os.chmod(path, 0o600)
-        stream.write(value)
+    # mkstemp 原子创建 0600 文件；写完再替换，已有文件或硬链接也不会暴露半写入内容。
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}-", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            stream.write(value)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
 
 
 def host_owned(path):

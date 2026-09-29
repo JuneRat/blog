@@ -15,10 +15,10 @@
     <p class="intro">连接数据库，创建管理员。一切就绪后，就可以开始写第一篇文章。</p>
     <noscript>请启用 JavaScript 以完成安装。</noscript>
     <form id="install-form">
-      <fieldset id="fields" disabled>
-        <label for="token">安装码</label>
-        <input id="token" type="password" autocomplete="off" required spellcheck="false" aria-describedby="token-help">
-        <p class="hint" id="token-help">从启动服务的终端复制安装码。重启后会生成新的安装码。</p>
+      <label for="token">安装码</label>
+      <input id="token" type="password" autocomplete="off" required spellcheck="false" aria-describedby="token-help">
+      <p class="hint" id="token-help">从启动服务的终端复制安装码。重启后会生成新的安装码。</p>
+      <fieldset id="fields" disabled hidden>
         <div id="database-fields">
           <label for="database">数据库地址</label>
           <input id="database" type="password" autocomplete="off" required spellcheck="false" placeholder="postgres://用户:密码@主机:5432/数据库" aria-describedby="database-help">
@@ -40,7 +40,7 @@
         <input id="confirm" type="password" autocomplete="new-password" required>
       </fieldset>
       <p id="message" role="status" aria-live="polite"></p>
-      <button id="submit" type="submit" disabled>安装博客</button>
+      <button id="submit" type="submit">验证安装码</button>
     </form>
     <p class="footer">管理员拥有站点的全部权限。安装完成后，此入口自动关闭。</p>
   </main>

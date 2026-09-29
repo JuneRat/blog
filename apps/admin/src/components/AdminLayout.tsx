@@ -4,7 +4,7 @@ import type { MenuProps } from "antd";
 import type { ReactNode } from "react";
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { api } from "../api";
+import { api, ApiError, withRequestId } from "../api";
 import { permissionMessageOf } from "../apiError";
 import { useAuth } from "../auth";
 import { PasswordChangeModal } from "./PasswordChangeModal";
@@ -131,6 +131,7 @@ export function AdminLayout({ children }: { children: ReactNode }) {
   /** 头像弹窗：选择值单独存一份，点「保存」前不影响头部显示。 */
   const [avatarOpen, setAvatarOpen] = useState(false);
   const [avatarValue, setAvatarValue] = useState<string | null>(null);
+  const [avatarVersion, setAvatarVersion] = useState<number | null>(null);
   const [avatarBusy, setAvatarBusy] = useState(false);
   const [avatarError, setAvatarError] = useState<string | null>(null);
   const canReadMedia = me?.permissions.includes("media.read") ?? false;
@@ -139,21 +140,30 @@ export function AdminLayout({ children }: { children: ReactNode }) {
   /** 打开头像弹窗：以当前头像为起点，取消不改动任何数据。 */
   function openAvatar(): void {
     setAvatarValue(me?.avatar_media_id ?? null);
+    setAvatarVersion(me?.version ?? null);
     setAvatarError(null);
     setAvatarOpen(true);
   }
 
   /** 保存头像：本人自助接口；成功后刷新 `/me` 让头部立即更新。 */
   async function saveAvatar(): Promise<void> {
+    if (avatarVersion === null || avatarBusy) return;
     setAvatarBusy(true);
     setAvatarError(null);
     try {
-      await api.setOwnAvatar(avatarValue);
+      await api.setOwnAvatar(avatarValue, avatarVersion);
       void invalidateAfterWrite(queryClient, "profile");
       await refresh?.();
       setAvatarOpen(false);
     } catch (e) {
-      setAvatarError(permissionMessageOf(e));
+      if (e instanceof ApiError && e.code === "version_conflict") {
+        setAvatarVersion(null);
+        setAvatarError(withRequestId("个人资料已在其他窗口更新，请关闭窗口后重新选择头像。", e.requestId));
+        // 保留当前选择供查看；刷新成功后也必须重新打开弹窗确认，不能静默重试覆盖。
+        try { await refresh?.(); } catch { /* 下次打开仍使用旧版本，服务端继续拒绝覆盖。 */ }
+      } else {
+        setAvatarError(permissionMessageOf(e));
+      }
     } finally {
       setAvatarBusy(false);
     }
@@ -262,6 +272,7 @@ export function AdminLayout({ children }: { children: ReactNode }) {
           okText="保存"
           cancelText="取消"
           confirmLoading={avatarBusy}
+          okButtonProps={{ disabled: avatarVersion === null }}
           onOk={() => void saveAvatar()}
           onCancel={() => setAvatarOpen(false)}
           destroyOnHidden

@@ -45,6 +45,11 @@ impl Default for SiteTimeZone {
 
 impl SiteTimeZone {
     pub fn parse(name: &str) -> Result<Self, String> {
+        let name = if name.eq_ignore_ascii_case("UTC") {
+            "UTC"
+        } else {
+            name
+        };
         let zone = TimeZone::get(name)
             .map_err(|_| "必须是有效的 IANA 时区名称，例如 Asia/Shanghai 或 UTC".to_owned())?;
         Ok(Self {
@@ -87,6 +92,20 @@ impl DateTimeFormatter for SiteTimeZone {
 mod tests {
     use super::*;
     use time::macros::datetime;
+
+    #[test]
+    fn utc_case_aliases_share_the_canonical_name_and_format() {
+        let at = datetime!(2026-09-29 01:30 +08:00);
+        for name in ["UTC", "utc", "Utc", "uTc"] {
+            let zone = SiteTimeZone::parse(name).unwrap();
+            assert_eq!(zone.name(), "UTC");
+            assert_eq!(zone.format(at), "2026-09-28 17:30 UTC");
+            assert_eq!(
+                zone.log_timestamp(at),
+                SiteTimeZone::default().log_timestamp(at)
+            );
+        }
+    }
 
     #[test]
     fn shanghai_crosses_midnight_without_changing_the_instant() {

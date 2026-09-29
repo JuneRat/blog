@@ -23,13 +23,13 @@ export const tagsApi = {
   createTag: (input: CreateTagInput): Promise<TagSummary> =>
     request(s.tagSummary, "/api/admin/v1/tags", {
       method: "POST",
-      body: JSON.stringify(input),
+      body: json<CreateTagInput>(input),
     }),
 
   renameTag: (slug: string, input: RenameTagInput): Promise<TagSummary> =>
     request(s.tagSummary, `/api/admin/v1/tags/${encodeURIComponent(slug)}`, {
       method: "PATCH",
-      body: JSON.stringify(input),
+      body: json<RenameTagInput>(input),
     }),
 
   deleteTag: (slug: string, expectedVersion?: number): Promise<void> =>
@@ -47,7 +47,7 @@ export const categoryApi = {
   create: (input: CreateCategoryInput): Promise<CategorySummary> =>
     request(s.categorySummary, "/api/admin/v1/categories", {
       method: "POST",
-      body: JSON.stringify(input),
+      body: json<CreateCategoryInput>(input),
     }),
 
   /** 更新（改名/描述/移动父节点）。移动成环是 400 invalid_request。 */
@@ -60,7 +60,7 @@ export const categoryApi = {
       `/api/admin/v1/categories/${encodeURIComponent(slug)}`,
       {
         method: "PATCH",
-        body: JSON.stringify(input),
+        body: json<UpdateCategoryInput>(input),
       },
     ),
 
@@ -79,7 +79,7 @@ export const seriesApi = {
   create: (input: CreateSeriesInput): Promise<SeriesSummary> =>
     request(s.seriesSummary, "/api/admin/v1/series", {
       method: "POST",
-      body: JSON.stringify(input),
+      body: json<CreateSeriesInput>(input),
     }),
 
   update: (slug: string, input: UpdateSeriesInput): Promise<SeriesSummary> =>
@@ -88,7 +88,7 @@ export const seriesApi = {
       `/api/admin/v1/series/${encodeURIComponent(slug)}`,
       {
         method: "PATCH",
-        body: JSON.stringify(input),
+        body: json<UpdateSeriesInput>(input),
       },
     ),
 

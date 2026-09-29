@@ -363,9 +363,10 @@ async fn me(
     (StatusCode::OK, Json(body)).into_response()
 }
 
-#[derive(serde::Deserialize, Default, ts_rs::TS)]
+#[derive(serde::Deserialize, ts_rs::TS)]
 #[ts(rename = "SetAvatarInput", optional_fields = nullable)]
 struct SetAvatarBody {
+    expected_version: i64,
     /// 缺省或 null = 清除头像；id = 设置头像（PUT 是整值替换，非三态）。
     #[serde(default)]
     avatar_media_id: Option<uuid::Uuid>,
@@ -382,7 +383,7 @@ async fn set_own_avatar(
 ) -> Response {
     match state
         .users
-        .set_own_avatar(&auth.actor, body.avatar_media_id)
+        .set_own_avatar(&auth.actor, body.avatar_media_id, body.expected_version)
         .await
     {
         Ok(profile) => (StatusCode::OK, Json(Profile::from(profile))).into_response(),

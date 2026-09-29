@@ -219,7 +219,7 @@ post_count: number, pub_post_count: number, };
 
 export type SessionChannel = "session";
 
-export type SetAvatarInput = {
+export type SetAvatarInput = { expected_version: number,
 /**
  * 缺省或 null = 清除头像；id = 设置头像（PUT 是整值替换，非三态）。
  */

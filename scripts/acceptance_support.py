@@ -157,7 +157,10 @@ class SiteScenario:
         require("author_id" not in self.page, "pages must remain site-wide resources")
         self.private = self.action("posts", self.create("posts", "acceptance-private", content=self.body,
                                                         visibility="private"), "publish")
-        self.admin.json("PUT", API + "/me/avatar", {"avatar_media_id": self.media["id"]})
+        self.admin.json("PUT", API + "/me/avatar", {
+            "avatar_media_id": self.media["id"],
+            "expected_version": self.admin.json("GET", API + "/me")["version"],
+        })
         settings = self.admin.json("GET", API + "/settings/site")
         self.admin.json("PUT", API + "/settings/site", {
             "title": "Acceptance Blog", "description": "全链路验收", "logo_media_id": self.media["id"],

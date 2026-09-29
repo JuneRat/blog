@@ -169,21 +169,24 @@ impl UserProfileStore for PostgresUserRepository {
         &self,
         user_id: Uuid,
         avatar_media_id: Option<Uuid>,
+        expected_version: i64,
         now: OffsetDateTime,
         audit: application::audit::AuditContext,
-    ) -> Result<(), UseCaseError> {
+    ) -> Result<UserSnapshot, UseCaseError> {
         let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
-        let version: i64 = sqlx::query_scalar(
+        let row = sqlx::query(&format!(
             "UPDATE users SET avatar_media_id=$2, version=version+1, updated_at=$3 \
-             WHERE id=$1 AND status='active' AND deleted_at IS NULL RETURNING version",
-        )
+             WHERE id=$1 AND version=$4 AND status='active' AND deleted_at IS NULL RETURNING {USER_COLUMNS}",
+        ))
         .bind(user_id)
         .bind(avatar_media_id)
         .bind(now)
+        .bind(expected_version)
         .fetch_optional(&mut *tx)
         .await
         .map_err(map_sqlx_error)?
-        .ok_or_else(|| UseCaseError::NotFound("用户".into()))?;
+        .ok_or(UseCaseError::VersionConflict)?;
+        let result = user_from_row(&row)?;
         super::media::sync_media_refs(
             &mut tx,
             application::ports::MediaContentKind::User,
@@ -199,11 +202,12 @@ impl UserProfileStore for PostgresUserRepository {
                 action: "user.avatar.update",
                 target_type: "user",
                 target_id: &user_id.to_string(),
-                metadata: serde_json::json!({"version": version}),
+                metadata: serde_json::json!({"version": result.version}),
             },
         )
         .await?;
-        tx.commit().await.map_err(map_sqlx_error)
+        tx.commit().await.map_err(map_sqlx_error)?;
+        Ok(result)
     }
 }
 

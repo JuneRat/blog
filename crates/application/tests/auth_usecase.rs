@@ -426,9 +426,10 @@ impl application::ports::UserProfileStore for FakeUserRepo {
         &self,
         _user_id: uuid::Uuid,
         _avatar_media_id: Option<uuid::Uuid>,
+        _expected_version: i64,
         _now: time::OffsetDateTime,
         _audit: application::audit::AuditContext,
-    ) -> Result<(), UseCaseError> {
+    ) -> Result<UserSnapshot, UseCaseError> {
         unimplemented!("该用例不使用头像")
     }
 }

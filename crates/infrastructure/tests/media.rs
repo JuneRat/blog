@@ -209,6 +209,47 @@ async fn invalid_new_reference_rolls_back_content_html_version_and_reference_cha
 }
 
 #[tokio::test]
+async fn concurrent_avatar_changes_commit_one_version_with_matching_refs_and_audit() {
+    let pool = common::fresh_database("blog_media_avatar_cas").await;
+    let (_, media, owner) = seed(&pool).await;
+    let users = PostgresUserRepository::new(common::database(pool.clone()));
+    let before = users.find_by_id(owner).await.unwrap().unwrap();
+    let now = OffsetDateTime::now_utc();
+    let (a, b) = tokio::join!(
+        users.set_avatar(
+            owner,
+            Some(media.id()),
+            before.version,
+            now,
+            Some(owner).into()
+        ),
+        users.set_avatar(owner, None, before.version, now, Some(owner).into()),
+    );
+    let (Ok(winner), Err(UseCaseError::VersionConflict)) = (match (a, b) {
+        (a @ Ok(_), b) => (a, b),
+        (a, b) => (b, a),
+    }) else {
+        panic!("exactly one avatar write must succeed");
+    };
+    let after = users.find_by_id(owner).await.unwrap().unwrap();
+    assert_eq!(after.version, before.version + 1);
+    assert_eq!(after.auth_version, before.auth_version);
+    assert_eq!(after.version, winner.version);
+    assert_eq!(after.avatar_media_id, winner.avatar_media_id);
+    assert_eq!(
+        refs(&pool, media.id()).await,
+        i64::from(after.avatar_media_id.is_some())
+    );
+    let audits: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM audit_logs WHERE action='user.avatar.update'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(audits, 1);
+    pool.close().await;
+}
+
+#[tokio::test]
 async fn avatar_and_site_logo_preserve_old_trashed_refs_and_reject_new_ones() {
     let pool = common::fresh_database("blog_media_avatar_logo").await;
     let (repo, media, owner) = seed(&pool).await;
@@ -223,7 +264,7 @@ async fn avatar_and_site_logo_preserve_old_trashed_refs_and_reject_new_ones() {
         logo_media_id: Some(media.id()),
     };
     users
-        .set_avatar(owner, Some(media.id()), now, Default::default())
+        .set_avatar(owner, Some(media.id()), 1, now, Default::default())
         .await
         .unwrap();
     settings
@@ -236,7 +277,7 @@ async fn avatar_and_site_logo_preserve_old_trashed_refs_and_reject_new_ones() {
         .await
         .unwrap();
     users
-        .set_avatar(owner, Some(media.id()), now, Default::default())
+        .set_avatar(owner, Some(media.id()), 2, now, Default::default())
         .await
         .unwrap();
     settings
@@ -245,7 +286,7 @@ async fn avatar_and_site_logo_preserve_old_trashed_refs_and_reject_new_ones() {
         .unwrap();
     assert!(matches!(
         users
-            .set_avatar(other, Some(media.id()), now, Default::default())
+            .set_avatar(other, Some(media.id()), 1, now, Default::default())
             .await,
         Err(UseCaseError::Invalid(_))
     ));
@@ -257,7 +298,7 @@ async fn avatar_and_site_logo_preserve_old_trashed_refs_and_reject_new_ones() {
         auth_version
     );
     users
-        .set_avatar(owner, None, now, Default::default())
+        .set_avatar(owner, None, 3, now, Default::default())
         .await
         .unwrap();
     let empty_site = SiteSettingsValue {

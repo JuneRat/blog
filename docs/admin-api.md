@@ -25,10 +25,10 @@
 
 | 方法与路径 | 用途 / 载荷 |
 |---|---|
-| `GET /api/install` | `{ "database_configured": false, "public_base_url": null }`；续装时仅说明配置已保存，不返回数据库地址、账号密码或安装码 |
+| `GET /api/install` | 需 `X-Install-Token`；`{ "database_configured": false, "public_base_url": null }`；续装时仅说明配置已保存，不返回数据库地址、账号密码或安装码 |
 | `POST /api/install` | `{ "database_url": "postgres://…", "public_base_url": "https://blog.example.com", "username": "sun", "password": "…" }`；成功返回 `{ "redirect": "/admin/" }` |
 
-POST 必须带启动终端显示的 `X-Install-Token`，并执行与其他写入相同的 Origin 检查。未知字段、无效 JSON、超过 16 KiB、弱密码、非空库等返回 400 `invalid_request`；错误安装码/跨源返回 403；同时正在处理安装时返回 429 `rate_limited`。响应均 no-store，包含请求编号。续装沿用已保存数据库和站点地址，输入不能覆盖；部署设置的 `BLOG_PUBLIC_BASE_URL` 优先。配置文件不保存账号明文密码或安装码，Owner 与安装完成审计同事务提交。
+GET 和 POST 都必须带启动终端显示的 `X-Install-Token`，并执行 Origin 检查（请求带 Origin 时必须同源）。未知字段、无效 JSON、超过 16 KiB、弱密码、非空库等返回 400 `invalid_request`；错误安装码/跨源返回 403；同时正在处理安装时返回 429 `rate_limited`。响应均 no-store，包含请求编号。续装沿用已保存数据库和站点地址，输入不能覆盖；部署设置的 `BLOG_PUBLIC_BASE_URL` 优先。配置文件不保存账号明文密码或安装码，Owner 与安装完成审计同事务提交。
 
 ## 审计日志
 
@@ -62,7 +62,7 @@ POST 必须带启动终端显示的 `X-Install-Token`，并执行与其他写入
 | `GET /api/admin/v1/me` | 当前用户、有效权限、CSRF token、`bio`、资料编辑 `version` 和站点 `time_zone` |
 | `PUT /api/admin/v1/me/profile` | 本人 `display_name`、`bio` 及必填 `expected_version`；返回资料与新版本，保持登录 |
 | `POST /api/admin/v1/me/password` | `new_password`；已启用密码时还需 `current_password` |
-| `PUT /api/admin/v1/me/avatar` | `{ "avatar_media_id": "UUID" }`；`null` 清除 |
+| `PUT /api/admin/v1/me/avatar` | `{ "avatar_media_id": "UUID", "expected_version": 1 }`；`null` 清除；版本冲突返回 409，需重新读取资料后确认 |
 
 密码登录是匿名写入口，没有可用的会话 CSRF token，执行来源检查。密码登录和本人资料请求体上限为 4 KiB；密码失败与限流行为见下方错误表。
 

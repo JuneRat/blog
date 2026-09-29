@@ -178,6 +178,7 @@ async fn empty_database_installs_once_logs_in_and_restarts_from_saved_config() {
     assert_eq!(response.headers()["location"], "/install");
     let info = client()
         .get(format!("{}/api/install", server.url))
+        .header("x-install-token", &server.token)
         .send()
         .await
         .unwrap();
@@ -362,6 +363,23 @@ async fn authorization_and_input_failures_never_save_configuration_or_mutate_dat
     let dir = common::media_dir("installation-guards");
     let server = start(&dir, false).await;
     let endpoint = format!("{}/api/install", server.url);
+    for request in [
+        client().get(&endpoint),
+        client()
+            .get(&endpoint)
+            .header("x-install-token", "wrong-token"),
+        client()
+            .get(&endpoint)
+            .header("x-install-token", &server.token)
+            .header("origin", "https://evil.invalid"),
+    ] {
+        let response = request.send().await.unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(response.headers()["cache-control"], "no-store");
+        let body = response.json::<Value>().await.unwrap();
+        assert!(body.get("database_configured").is_none());
+        assert!(body.get("public_base_url").is_none());
+    }
     let missing = client()
         .post(&endpoint)
         .json(&input(&url))

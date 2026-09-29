@@ -266,16 +266,21 @@ impl application::ports::UserProfileStore for FakeUserRepo {
         &self,
         user_id: uuid::Uuid,
         avatar_media_id: Option<uuid::Uuid>,
+        expected_version: i64,
         now: time::OffsetDateTime,
         _audit: application::audit::AuditContext,
-    ) -> Result<(), UseCaseError> {
+    ) -> Result<UserSnapshot, UseCaseError> {
         let mut users = self.users.lock().unwrap();
         let Some(user) = users.values_mut().find(|u| u.id == user_id) else {
             return Err(UseCaseError::NotFound("用户".into()));
         };
+        if !user.is_active() || user.version != expected_version {
+            return Err(UseCaseError::VersionConflict);
+        }
+        user.version += 1;
         user.avatar_media_id = avatar_media_id;
         user.updated_at = now;
-        Ok(())
+        Ok(user.clone())
     }
 }
 
@@ -1678,11 +1683,47 @@ async fn trash_scope_versions_restore_and_purge_permissions() {
 
 // 新引用与历史引用：所有媒体链接公开，软删除仅限制新增附着。
 #[tokio::test]
+async fn avatar_rejects_invalid_and_stale_versions_without_changing_the_profile() {
+    let f = fixture().await;
+    let before = f.users.profile_of(&f.author).await.unwrap();
+    assert!(matches!(
+        f.users.set_own_avatar(&f.author, None, 0).await,
+        Err(UseCaseError::Invalid(_))
+    ));
+    let updated = f
+        .users
+        .update_own_profile(&f.author, Some("New name".into()), None, before.version)
+        .await
+        .unwrap();
+    assert!(matches!(
+        f.users
+            .set_own_avatar(&f.author, None, before.version)
+            .await,
+        Err(UseCaseError::VersionConflict)
+    ));
+    assert_eq!(
+        f.users.profile_of(&f.author).await.unwrap().version,
+        updated.version
+    );
+    let saved = f
+        .users
+        .set_own_avatar(&f.author, None, updated.version)
+        .await
+        .unwrap();
+    assert_eq!(saved.version, updated.version + 1);
+    assert_eq!(saved.display_name, updated.display_name);
+}
+
+#[tokio::test]
 async fn avatar_accepts_shared_images_without_media_library_permission() {
     let f = fixture().await;
     let image = Uuid::now_v7();
     f.media_guard.allow(image);
-    let profile = f.users.set_own_avatar(&f.other, Some(image)).await.unwrap();
+    let profile = f
+        .users
+        .set_own_avatar(&f.other, Some(image), 1)
+        .await
+        .unwrap();
     assert_eq!(profile.avatar_media_id, Some(image));
 }
 
@@ -1692,23 +1733,23 @@ async fn avatar_preserves_a_trashed_current_image_but_rejects_new_unavailable_im
     let image = Uuid::now_v7();
     f.media_guard.allow(image);
     f.users
-        .set_own_avatar(&f.author, Some(image))
+        .set_own_avatar(&f.author, Some(image), 1)
         .await
         .unwrap();
     f.media_guard.trash(image);
     let profile = f
         .users
-        .set_own_avatar(&f.author, Some(image))
+        .set_own_avatar(&f.author, Some(image), 2)
         .await
         .unwrap();
     assert_eq!(profile.avatar_media_id, Some(image));
     assert!(matches!(
-        f.users.set_own_avatar(&f.other, Some(image)).await,
+        f.users.set_own_avatar(&f.other, Some(image), 1).await,
         Err(UseCaseError::Invalid(_))
     ));
     assert!(matches!(
         f.users
-            .set_own_avatar(&f.author, Some(Uuid::now_v7()))
+            .set_own_avatar(&f.author, Some(Uuid::now_v7()), 3)
             .await,
         Err(UseCaseError::Invalid(_))
     ));

@@ -15,9 +15,14 @@ import { defineConfig } from "vitest/config";
  */
 export default defineConfig({
   plugins: [react()],
-  // Public comment behavior uses the exact Rust-served browser bundle.
-  server: { fs: { allow: [".", "../../crates/interfaces/assets"] } },
+  // Public comments and installation tests use the exact Rust-served browser bundles.
+  server: {
+    fs: { allow: [".", "../../crates/interfaces/assets", "../../crates/interfaces/src/install"] },
+  },
   test: {
+    // 多屏渲染较重；限制 CPU 争用，并给慢速 CI 留出余量，不用重试掩盖失败。
+    maxWorkers: 4,
+    testTimeout: 15_000,
     environment: "jsdom",
     setupFiles: ["src/testSetup.ts"],
     include: ["src/**/*.test.{ts,tsx}", "tests/**/*.test.{ts,tsx}"],

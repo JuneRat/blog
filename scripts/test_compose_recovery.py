@@ -24,6 +24,44 @@ def make_transport(path, content=b"age-encryption.org/v1\ntransport-only-test"):
 
 
 class ArchiveTests(unittest.TestCase):
+    def test_private_write_is_private_at_creation_and_replaces_existing_inode(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.toml"
+            original_replace = os.replace
+            def inspect_replace(source, target):
+                self.assertEqual(Path(source).stat().st_mode & 0o777, 0o600)
+                self.assertEqual(Path(source).read_text(), "秘密")
+                original_replace(source, target)
+            old_umask = os.umask(0)
+            try:
+                with patch.object(tool.os, "replace", side_effect=inspect_replace):
+                    tool.private_write(path, "秘密")
+                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+                hardlink = Path(directory) / "old-copy"
+                os.link(path, hardlink)
+                path.chmod(0o644)
+                tool.private_write(path, "new-secret")
+                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+                self.assertEqual(hardlink.read_text(), "秘密")
+                self.assertEqual(path.read_text(), "new-secret")
+            finally:
+                os.umask(old_umask)
+
+    def test_private_write_rejects_symlinks_and_preserves_original_on_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.toml"
+            path.write_text("original")
+            link = Path(directory) / "symlink"
+            link.symlink_to(path)
+            with self.assertRaises(tool.RecoveryError):
+                tool.private_write(link, "changed")
+            for operation in ("fsync", "replace"):
+                with patch.object(tool.os, operation, side_effect=OSError("disk failure")):
+                    with self.assertRaises(OSError):
+                        tool.private_write(path, "changed")
+                self.assertEqual(path.read_text(), "original")
+                self.assertEqual(sorted(p.name for p in Path(directory).iterdir()), ["config.toml", "symlink"])
+
     def test_maintenance_mode_uses_resolved_compose_settings_or_toml(self):
         model = {"services": {"maintenance": {"environment": {}}}}
         with patch.dict(os.environ, {"BLOG_MAINTENANCE_DATABASE_URL": "unused-ops-value"}):

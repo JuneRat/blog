@@ -629,13 +629,108 @@ async fn public_url_works_without_references_and_never_reads_or_refreshes_sessio
 }
 
 #[tokio::test]
+async fn avatar_http_requires_a_version_and_rejects_stale_updates_without_revoking_session() {
+    let _serial = SERIAL.lock().await;
+    let stack = fresh_stack().await;
+    let (cookie, csrf) = login_as(&stack.router, &stack.idp, "author").await;
+    let (_, _, before) = send(
+        &stack.router,
+        "GET",
+        "/api/admin/v1/me",
+        Some(&cookie),
+        None,
+        None,
+        None,
+    )
+    .await;
+    let version = before["version"].as_i64().unwrap();
+    let uri = "/api/admin/v1/me/avatar";
+    let missing = serde_json::json!({"avatar_media_id": null});
+    assert_eq!(
+        send(
+            &stack.router,
+            "PUT",
+            uri,
+            Some(&cookie),
+            Some(&csrf),
+            Some(&missing),
+            None
+        )
+        .await
+        .0,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let invalid = serde_json::json!({"avatar_media_id": null, "expected_version": 0});
+    assert_eq!(
+        send(
+            &stack.router,
+            "PUT",
+            uri,
+            Some(&cookie),
+            Some(&csrf),
+            Some(&invalid),
+            None
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    let update = serde_json::json!({"avatar_media_id": null, "expected_version": version});
+    let (status, _, saved) = send(
+        &stack.router,
+        "PUT",
+        uri,
+        Some(&cookie),
+        Some(&csrf),
+        Some(&update),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(saved["version"], version + 1);
+    let (status, _, stale) = send(
+        &stack.router,
+        "PUT",
+        uri,
+        Some(&cookie),
+        Some(&csrf),
+        Some(&update),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(stale["code"], "version_conflict");
+    let (status, _, after) = send(
+        &stack.router,
+        "GET",
+        "/api/admin/v1/me",
+        Some(&cookie),
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(after["version"], saved["version"]);
+    stack.pool.close().await;
+}
+
+#[tokio::test]
 async fn referenced_media_can_be_trashed_and_restored_without_revoking_its_url() {
     let _serial = SERIAL.lock().await;
     let stack = fresh_stack().await;
     let (author, csrf) = login_as(&stack.router, &stack.idp, "author").await;
     let (other, other_csrf) = login_as(&stack.router, &stack.idp, "author2").await;
     let (id, version) = upload(&stack, &author, &csrf, 8).await;
-    let avatar = serde_json::json!({"avatar_media_id": id});
+    let version_of = async |username: &str| {
+        sqlx::query_scalar::<_, i64>("SELECT version FROM users WHERE username=$1")
+            .bind(username.to_owned())
+            .fetch_one(&stack.pool)
+            .await
+            .unwrap()
+    };
+    let mut avatar =
+        serde_json::json!({"avatar_media_id": id, "expected_version": version_of("author").await});
     assert_eq!(
         send(
             &stack.router,
@@ -735,6 +830,7 @@ async fn referenced_media_can_be_trashed_and_restored_without_revoking_its_url()
     assert_eq!(trash["items"][0]["reference_count"], 1);
     assert!(trash["items"][0]["deleted_at"].is_string());
     // 历史头像保留，但其他来源不可新选回收站图片。
+    avatar["expected_version"] = serde_json::json!(version_of("author").await);
     assert_eq!(
         send(
             &stack.router,
@@ -756,7 +852,7 @@ async fn referenced_media_can_be_trashed_and_restored_without_revoking_its_url()
             "/api/admin/v1/me/avatar",
             Some(&other),
             Some(&other_csrf),
-            Some(&avatar),
+            Some(&serde_json::json!({"avatar_media_id": id, "expected_version": version_of("author2").await})),
             None
         )
         .await
@@ -815,7 +911,7 @@ async fn referenced_media_can_be_trashed_and_restored_without_revoking_its_url()
             "/api/admin/v1/me/avatar",
             Some(&other),
             Some(&other_csrf),
-            Some(&avatar),
+            Some(&serde_json::json!({"avatar_media_id": id, "expected_version": version_of("author2").await})),
             None
         )
         .await
@@ -887,7 +983,17 @@ async fn publicly_readable_media_does_not_expose_private_usage_titles() {
         StatusCode::OK
     );
     let (stranger, stranger_csrf) = login_as(&stack.router, &stack.idp, "stranger").await;
-    let avatar = serde_json::json!({"avatar_media_id": id});
+    let (_, _, me) = send(
+        &stack.router,
+        "GET",
+        "/api/admin/v1/me",
+        Some(&stranger),
+        None,
+        None,
+        None,
+    )
+    .await;
+    let avatar = serde_json::json!({"avatar_media_id": id, "expected_version": me["version"]});
     assert_eq!(
         send(
             &stack.router,

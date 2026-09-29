@@ -33,7 +33,7 @@ export const commentsApi = {
   savePolicy: (policy: CommentPolicy, post?: string) =>
     request(s.commentPolicy, commentPolicyPath(post), {
       method: "PUT",
-      body: JSON.stringify(policy),
+      body: json<CommentPolicy>(policy),
     }),
 };
 

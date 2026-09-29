@@ -20,16 +20,16 @@ import type {
 export const identityApi = {
   me: (): Promise<Me> => request(s.me, "/api/admin/v1/me"),
 
-  setOwnAvatar: (avatarMediaId: string | null): Promise<Profile> =>
+  setOwnAvatar: (avatarMediaId: string | null, expectedVersion: number): Promise<Profile> =>
     request(s.profile, "/api/admin/v1/me/avatar", {
       method: "PUT",
-      body: json<Wire.SetAvatarInput>({ avatar_media_id: avatarMediaId }),
+      body: json<Wire.SetAvatarInput>({ avatar_media_id: avatarMediaId, expected_version: expectedVersion }),
     }),
 
   updateOwnProfile: (input: UpdateProfileInput): Promise<Profile> =>
     request(s.profile, "/api/admin/v1/me/profile", {
       method: "PUT",
-      body: JSON.stringify(input),
+      body: json<UpdateProfileInput>(input),
     }),
 
   changeOwnPassword: (
@@ -37,7 +37,7 @@ export const identityApi = {
   ): Promise<{ user_id: string; csrf_token: string }> =>
     request(s.passwordChangeResult, "/api/admin/v1/me/password", {
       method: "POST",
-      body: JSON.stringify(input),
+      body: json<ChangePasswordInput>(input),
     }),
 
   providers: (): Promise<ProviderSummary[]> =>
@@ -48,7 +48,7 @@ export const identityApi = {
   ): Promise<PasswordLoginResult> =>
     request(s.passwordLoginResult, "/auth/login/password", {
       method: "POST",
-      body: JSON.stringify(input),
+      body: json<PasswordLoginInput>(input),
     }),
 
   listUsers: (limit?: number, offset?: number): Promise<AdminUser[]> => {
@@ -63,7 +63,7 @@ export const identityApi = {
   createUser: (input: CreateUserInput): Promise<CreatedUser> =>
     request(s.createdUser, "/api/admin/v1/users", {
       method: "POST",
-      body: JSON.stringify(input),
+      body: json<CreateUserInput>(input),
     }),
 
   changeUserStatus: (

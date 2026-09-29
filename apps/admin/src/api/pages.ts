@@ -23,13 +23,13 @@ export const pagesApi = {
   createPage: (input: CreatePageInput): Promise<PageDetail> =>
     request(s.pageDetail, "/api/admin/v1/pages", {
       method: "POST",
-      body: JSON.stringify(input),
+      body: json<CreatePageInput>(input),
     }),
 
   updatePage: (id: string, input: EditPageInput): Promise<PageDetail> =>
     request(s.pageDetail, `/api/admin/v1/pages/${encodeURIComponent(id)}`, {
       method: "PATCH",
-      body: JSON.stringify(input),
+      body: json<EditPageInput>(input),
     }),
 
   schedulePage: (

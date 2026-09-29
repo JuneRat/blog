@@ -13,7 +13,7 @@ export const settingsApi = {
   save: (input: SaveSiteSettingsInput): Promise<SiteSettings> =>
     request(s.siteSettings, "/api/admin/v1/settings/site", {
       method: "PUT",
-      body: JSON.stringify(input),
+      body: json<SaveSiteSettingsInput>(input),
     }),
 };
 
@@ -36,6 +36,6 @@ export const retentionApi = {
   save: (input: RetentionSettings): Promise<RetentionSettings> =>
     request(s.retentionSettings, "/api/admin/v1/settings/retention", {
       method: "PUT",
-      body: JSON.stringify(input),
+      body: json<RetentionSettings>(input),
     }),
 };

@@ -139,6 +139,9 @@ def exercise(image, root, ops_image):
         body, _ = metrics.request("GET", "/metrics")
         require(b"blog_installation_complete 0" in body, "installer metrics must not report an active pool")
         metrics.request("GET", "/api/install", status=404)
+        guest.request("GET", "/api/install", status=403)
+        install_info = guest.json("GET", "/api/install", headers={"X-Install-Token": token})
+        require("database_configured" in install_info, "authorized installation info missing")
         installation = {
             "database_url": f"postgres://blog_owner:{owner_password}@db:5432/blog",
             "public_base_url": guest.origin,

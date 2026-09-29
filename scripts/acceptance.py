@@ -185,7 +185,8 @@ class Acceptance(SiteScenario):
         require(headers.get("Location") == "/install", "fresh site must redirect to installation")
         self.guest.request("GET", "/healthz", status=503)
         self.guest.request("GET", "/install")
-        info = self.guest.json("GET", "/api/install")
+        self.guest.request("GET", "/api/install", status=403)
+        info = self.guest.json("GET", "/api/install", headers={"X-Install-Token": token})
         require(info["database_configured"] is False, "installation must start without saved database")
         installed = self.guest.json("POST", "/api/install", {
             "database_url": database_url(self.args.admin_url, self.source), "public_base_url": self.origin,

@@ -78,14 +78,16 @@ pub trait UserProfileStore: Send + Sync {
 
     /// 设置/清除头像（自助；仅本人）。
     ///
-    /// 递增资料编辑 version，保持 auth_version；头像引用与列同事务替换。
+    /// 按 expected_version 提交，冲突返回 VersionConflict。递增资料编辑 version，
+    /// 保持 auth_version；头像、引用与审计同事务替换，并返回同次事务的用户记录。
     async fn set_avatar(
         &self,
         user_id: Uuid,
         avatar_media_id: Option<Uuid>,
+        expected_version: i64,
         now: OffsetDateTime,
         audit: crate::audit::AuditContext,
-    ) -> Result<(), UseCaseError>;
+    ) -> Result<UserSnapshot, UseCaseError>;
 }
 
 /// 账号创建、状态及认证撤销；跨表身份保护由同一次提交保证。

@@ -73,7 +73,23 @@ pub fn install_router(state: InstallState) -> Router {
         .layer(middleware::from_fn(http_support::request_context))
 }
 
-async fn info(State(state): State<InstallState>) -> Response {
+fn authorized(state: &InstallState, headers: &HeaderMap) -> bool {
+    let token = headers
+        .get("x-install-token")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default();
+    http_support::csrf_token_matches(token, &state.token)
+        && http_support::ensure_same_origin(headers).is_ok()
+}
+
+async fn info(
+    State(state): State<InstallState>,
+    request_id: RequestId,
+    headers: HeaderMap,
+) -> Response {
+    if !authorized(&state, &headers) {
+        return http_support::admin_error(UseCaseError::Forbidden, &request_id);
+    }
     Json(state.installer.info()).into_response()
 }
 
@@ -84,13 +100,7 @@ async fn install(
     headers: HeaderMap,
     input: Result<Json<InstallInput>, axum::extract::rejection::JsonRejection>,
 ) -> Response {
-    let token = headers
-        .get("x-install-token")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or_default();
-    if !http_support::csrf_token_matches(token, &state.token)
-        || http_support::ensure_same_origin(&headers).is_err()
-    {
+    if !authorized(&state, &headers) {
         return http_support::admin_error(UseCaseError::Forbidden, &request_id);
     }
     let Json(input) = match input {

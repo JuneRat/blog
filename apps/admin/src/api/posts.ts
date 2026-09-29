@@ -62,13 +62,13 @@ export const postsApi = {
   createPost: (input: CreatePostInput): Promise<PostDetail> =>
     request(s.postDetail, "/api/admin/v1/posts", {
       method: "POST",
-      body: JSON.stringify(input),
+      body: json<CreatePostInput>(input),
     }),
 
   updatePost: (id: string, input: EditPostInput): Promise<PostDetail> =>
     request(s.postDetail, `/api/admin/v1/posts/${encodeURIComponent(id)}`, {
       method: "PATCH",
-      body: JSON.stringify(input),
+      body: json<EditPostInput>(input),
     }),
 
   schedulePost: (

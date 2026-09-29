@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { api, mediaApi } from "../src/api";
+import { api, ApiError, mediaApi } from "../src/api";
 import { AdminLayout } from "../src/components/AdminLayout";
 import { AdminProviders } from "../src/providers";
 import { MediaLibraryScreen } from "../src/screens/MediaLibraryScreen";
@@ -94,6 +94,7 @@ function renderLayout(showMedia = false) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  h.refresh.mockReset();
   window.history.replaceState(null, "", "/admin/");
   vi.mocked(mediaApi.list).mockResolvedValue({
     items: [asset],
@@ -123,7 +124,7 @@ describe("外壳头像入口", () => {
     fireEvent.click(await screen.findByRole("button", { name: /^选\s*择$/ }));
     fireEvent.click(await screen.findByRole("button", { name: /保\s*存/ }));
 
-    await waitFor(() => expect(api.setOwnAvatar).toHaveBeenCalledWith("m1"));
+    await waitFor(() => expect(api.setOwnAvatar).toHaveBeenCalledWith("m1", 3));
     await waitFor(() => expect(h.refresh).toHaveBeenCalled());
     await screen.findByText("被 1 处引用");
   });
@@ -137,7 +138,7 @@ describe("外壳头像入口", () => {
     fireEvent.click(await screen.findByRole("button", { name: "移除封面" }));
     fireEvent.click(await screen.findByRole("button", { name: /保\s*存/ }));
 
-    await waitFor(() => expect(api.setOwnAvatar).toHaveBeenCalledWith(null));
+    await waitFor(() => expect(api.setOwnAvatar).toHaveBeenCalledWith(null, 3));
   });
 
   it("保存失败时在弹窗内展示服务端文案，不刷新 /me", async () => {
@@ -154,4 +155,30 @@ describe("外壳头像入口", () => {
     await waitFor(() => expect(screen.getByText("头像保存失败")).toBeTruthy());
     expect(h.refresh).not.toHaveBeenCalled();
   });
+
+  it("打开时锁定版本；冲突保留选择，重新打开后才使用刷新版本", async () => {
+    h.me = me(null);
+    vi.mocked(api.setOwnAvatar).mockRejectedValueOnce(new ApiError(409, "版本冲突", "version_conflict", "req-avatar"));
+    h.refresh.mockImplementation(async () => { h.me = { ...me(null), version: 4 }; });
+    renderLayout();
+    fireEvent.click(screen.getByRole("button", { name: /更换头像/ }));
+    // 模拟后台刷新：打开的编辑窗口仍须提交原始版本。
+    h.me = { ...me(null), version: 4 };
+    fireEvent.click(await screen.findByRole("button", { name: "选择封面" }));
+    fireEvent.click(await screen.findByRole("button", { name: /^选\s*择$/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /保\s*存/ }));
+    await screen.findByText(/请关闭窗口后重新选择头像/);
+    expect(api.setOwnAvatar).toHaveBeenCalledWith("m1", 3);
+    expect((screen.getByRole("button", { name: /保\s*存/ }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByRole("button", { name: "移除封面" })).toBeTruthy();
+    expect(screen.getByText(/req-avatar/)).toBeTruthy();
+    expect(api.setOwnAvatar).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole("button", { name: /取\s*消/ }));
+    vi.mocked(api.setOwnAvatar).mockResolvedValueOnce(profile(null));
+    fireEvent.click(screen.getByRole("button", { name: /更换头像/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /保\s*存/ }));
+    await waitFor(() => expect(api.setOwnAvatar).toHaveBeenLastCalledWith(null, 4));
+  });
+
 });

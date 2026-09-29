@@ -624,8 +624,14 @@ impl UserInteractor {
         &self,
         actor: &Actor,
         avatar_media_id: Option<Uuid>,
+        expected_version: i64,
     ) -> Result<ProfileView, UseCaseError> {
         actor.ensure_write_channel()?;
+        if expected_version < 1 {
+            return Err(UseCaseError::Invalid(
+                "expected_version 必须为正整数".into(),
+            ));
+        }
         let snapshot = self
             .users
             .query
@@ -633,21 +639,26 @@ impl UserInteractor {
             .await?
             .filter(UserSnapshot::is_active)
             .ok_or_else(|| UseCaseError::NotFound("用户".into()))?;
+        if snapshot.version != expected_version {
+            return Err(UseCaseError::VersionConflict);
+        }
         if let Some(id) = avatar_media_id
             && snapshot.avatar_media_id != Some(id)
         {
             crate::media::ensure_attachable(&*self.media_guard, id).await?;
         }
-        self.users
+        let saved = self
+            .users
             .profiles
             .set_avatar(
                 snapshot.id,
                 avatar_media_id,
+                expected_version,
                 self.clock.now(),
                 actor.audit_context(),
             )
             .await?;
-        self.profile_of(actor).await
+        Ok(ProfileView::from_snapshot(&saved))
     }
 
     /// 账号管理列表：持有 `user.manage` 或 `role.manage` 才可读取。

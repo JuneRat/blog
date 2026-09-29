@@ -1093,7 +1093,11 @@ async fn site_logo_and_author_avatar_are_rendered_on_public_pages() {
 
     // 作者头像：本人自助设置（写 users.avatar_media_id 与引用行）。
     s.users
-        .set_own_avatar(&s.author, Some(avatar))
+        .set_own_avatar(
+            &s.author,
+            Some(avatar),
+            s.users.profile_of(&s.author).await.unwrap().version,
+        )
         .await
         .unwrap();
 
