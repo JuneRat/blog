@@ -8,12 +8,18 @@ use serde::Deserialize;
 /// 三态字段的反序列化：缺失 → None（不修改）；JSON null → Some(None)（清空）；
 /// 值 → Some(Some(v))。serde 对 Option<Option<T>> 会把 null 折叠成 None，
 /// 必须显式包一层才能区分「清空」与「不触碰」。
-pub fn deserialize_double_option<'de, T, D>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
-where
-    T: serde::Deserialize<'de>,
-    D: serde::Deserializer<'de>,
-{
-    Ok(Some(Option::<T>::deserialize(deserializer)?))
+/// 请求 DTO 通过 `serde(default, with = "double_option")` 使用本模块，
+/// 并以 `ts(as = "Option<T>", optional = nullable)` 显式声明 JSON 类型。
+pub(super) mod double_option {
+    use serde::Deserialize;
+
+    pub fn deserialize<'de, T, D>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+    where
+        T: Deserialize<'de>,
+        D: serde::Deserializer<'de>,
+    {
+        Ok(Some(Option::<T>::deserialize(deserializer)?))
+    }
 }
 
 #[derive(Deserialize, Default, ts_rs::TS)]

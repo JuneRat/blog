@@ -22,7 +22,8 @@ pub use pages::{CreatePageBody, DeletePageBody, EditPageBody, pages_router};
 pub use posts::{CreatePostBody, EditPostBody, posts_router};
 pub use series::{CreateSeriesBody, ReorderBody, UpdateSeriesBody, series_router};
 pub use settings::{SaveSiteSettingsBody, SaveThemeSettingsBody, settings_router};
-pub use support::{ListQuery, VersionBody, deserialize_double_option};
+pub use support::double_option::deserialize as deserialize_double_option;
+pub use support::{ListQuery, VersionBody};
 pub use tags::{CreateTagBody, RenameTagBody, tags_router};
 
 /// 正文写入端点的请求体上限。

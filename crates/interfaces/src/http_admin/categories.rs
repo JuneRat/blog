@@ -1,6 +1,6 @@
 //! 分类目录路由与传输 DTO。
 
-use super::support::{VersionBody, deserialize_double_option};
+use super::support::{VersionBody, double_option};
 use super::{ADMIN_BODY_LIMIT, AdminAuth};
 use crate::http_auth::AdminState;
 use crate::http_support::{RequestId, admin_error, no_store};
@@ -56,7 +56,7 @@ pub struct UpdateCategoryBody {
     pub name: String,
     pub description: Option<String>,
     /// 三态：缺省保持现状；null 移到根；slug 移到指定父。
-    #[serde(default, deserialize_with = "deserialize_double_option")]
+    #[serde(default, with = "double_option")]
     #[ts(as = "Option<String>", optional = nullable)]
     pub parent: Option<Option<String>>,
     pub expected_version: Option<i64>,

@@ -17,15 +17,42 @@ fn patch_absent_null_and_value_remain_distinct() {
         serde_json::from_value(json!({"category_id": id, "cover_media_id": id})).unwrap();
     assert_eq!(set.category_id, Some(Some(id)));
     assert_eq!(set.cover_media_id, Some(Some(id)));
+    let series: UpdateSeriesBody = serde_json::from_value(json!({"name": "series"})).unwrap();
+    assert_eq!(series.cover_media_id, None);
     let series: UpdateSeriesBody =
         serde_json::from_value(json!({"name": "series", "cover_media_id": null})).unwrap();
     assert_eq!(series.cover_media_id, Some(None));
+    let series: UpdateSeriesBody =
+        serde_json::from_value(json!({"name": "series", "cover_media_id": id})).unwrap();
+    assert_eq!(series.cover_media_id, Some(Some(id)));
+    let category: UpdateCategoryBody = serde_json::from_value(json!({"name": "category"})).unwrap();
+    assert_eq!(category.parent, None);
     let category: UpdateCategoryBody =
         serde_json::from_value(json!({"name": "category", "parent": null})).unwrap();
     assert_eq!(category.parent, Some(None));
+    let category: UpdateCategoryBody =
+        serde_json::from_value(json!({"name": "category", "parent": "parent"})).unwrap();
+    assert_eq!(category.parent, Some(Some("parent".into())));
     let declarations = typescript();
     assert!(declarations.contains("category_id?: string | null"));
     assert!(!declarations.contains("bigint"));
+}
+
+#[test]
+fn patch_fields_keep_rejecting_invalid_values() {
+    for field in ["category_id", "cover_media_id"] {
+        assert!(serde_json::from_value::<EditPostBody>(json!({field: "not-a-uuid"})).is_err());
+    }
+    assert!(
+        serde_json::from_value::<UpdateSeriesBody>(json!({
+            "name": "series", "cover_media_id": "not-a-uuid"
+        }))
+        .is_err()
+    );
+    assert!(
+        serde_json::from_value::<UpdateCategoryBody>(json!({"name": "category", "parent": 42}))
+            .is_err()
+    );
 }
 
 #[test]

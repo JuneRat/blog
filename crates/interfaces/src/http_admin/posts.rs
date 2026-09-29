@@ -1,7 +1,7 @@
 //! 文章管理路由与传输 DTO；业务授权由应用用例执行。
 
 use super::support::{
-    ListQuery, ScheduleBody, VersionBody, api_datetime, deserialize_double_option, parse_visibility,
+    ListQuery, ScheduleBody, VersionBody, api_datetime, double_option, parse_visibility,
 };
 use super::{ADMIN_BODY_LIMIT, AdminAuth};
 use crate::http_auth::AdminState;
@@ -153,13 +153,13 @@ pub struct EditPostBody {
     /// Some 表示整体替换标签集合（[] = 清空）；缺省不触碰。
     pub tag_ids: Option<Vec<Uuid>>,
     /// 三态：缺省不修改；null 清空分类；id 设置分类。
-    #[serde(default, deserialize_with = "deserialize_double_option")]
+    #[serde(default, with = "double_option")]
     #[ts(as = "Option<Uuid>", optional = nullable)]
     pub category_id: Option<Option<Uuid>>,
     /// 缺省保留，数组整体替换；空数组清空。
     pub series: Option<Vec<SeriesPlacement>>,
     /// 封面三态：缺省不修改；null 移除封面；id 设置封面。
-    #[serde(default, deserialize_with = "deserialize_double_option")]
+    #[serde(default, with = "double_option")]
     #[ts(as = "Option<Uuid>", optional = nullable)]
     pub cover_media_id: Option<Option<Uuid>>,
     pub expected_version: Option<i64>,

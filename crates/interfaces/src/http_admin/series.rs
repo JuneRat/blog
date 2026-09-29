@@ -1,6 +1,6 @@
 //! 系列目录、成员与重排路由。
 
-use super::support::{VersionBody, deserialize_double_option};
+use super::support::{VersionBody, double_option};
 use super::{ADMIN_BODY_LIMIT, AdminAuth};
 use crate::http_auth::AdminState;
 use crate::http_support::{RequestId, admin_error, no_store};
@@ -60,7 +60,7 @@ pub struct UpdateSeriesBody {
     pub name: String,
     pub description: Option<String>,
     /// 封面三态：缺省不修改；null 移除封面；id 设置封面。
-    #[serde(default, deserialize_with = "deserialize_double_option")]
+    #[serde(default, with = "double_option")]
     #[ts(as = "Option<Uuid>", optional = nullable)]
     pub cover_media_id: Option<Option<Uuid>>,
     pub expected_version: Option<i64>,

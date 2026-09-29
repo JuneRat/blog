@@ -26,7 +26,7 @@ cargo run -p interfaces --example export_admin_contract -- --check
 pnpm --dir apps/admin typecheck
 ```
 
-生成文件纳入版本控制，CI 与 `scripts/check.sh` 检查是否过期。UUID 对应字符串，JSON 整数对应 number；运行时检查安全整数范围。自定义 PATCH 反序列化不能由 ts-rs 自动理解，因此显式声明可选/可空类型，并用 Rust 和前端测试验证缺省、不为空的值与 null 清空三态。生成类型不替代实际响应校验，也不生成 domain 或基础设施模型。
+生成文件纳入版本控制，CI 与 `scripts/check.sh` 检查是否过期。UUID 对应字符串，JSON 整数对应 number；运行时检查安全整数范围。自定义 PATCH 反序列化使用 `serde(default, with = "double_option")`，配合 `ts(as = "Option<T>", optional = nullable)` 显式声明可选/可空类型；这种写法由 ts-rs 支持，保留其他不兼容 serde 属性的警告。Rust 和前端测试验证缺省、不为空的值与 null 清空三态。生成类型不替代实际响应校验，也不生成 domain 或基础设施模型。
 
 ## 表单与编辑会话
 
