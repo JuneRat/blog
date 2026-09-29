@@ -289,6 +289,11 @@ impl DeploymentConfig {
         self.metrics_bind()?;
         let public_base_url = PublicBaseUrl::parse(&self.string("server.public_base_url")?)
             .map_err(|_| "server.public_base_url / BLOG_PUBLIC_BASE_URL 无效，须为不含路径前缀的 http/https 地址".to_owned())?;
+        let https = public_base_url.as_str().starts_with("https://");
+        let secure_cookies = self.boolean("server.secure_cookies")?.unwrap_or(https);
+        if https && !secure_cookies {
+            return Err("HTTPS 公开地址不允许关闭 Secure Cookie；移除 server.secure_cookies / BLOG_SECURE_COOKIES=false 或设置为 true".into());
+        }
         let bind = match addr {
             Some(addr) => addr,
             None => self.string("server.bind")?,
@@ -313,9 +318,7 @@ impl DeploymentConfig {
             .collect::<Result<Vec<_>, _>>()?;
         Ok(SiteConfig {
             http: self.http_limits()?,
-            secure_cookies: self
-                .boolean("server.secure_cookies")?
-                .unwrap_or_else(|| public_base_url.as_str().starts_with("https://")),
+            secure_cookies,
             public_base_url,
             bind,
             trusted_proxies,

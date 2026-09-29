@@ -7,7 +7,7 @@
 //! - GET /api/admin/v1/me ：会话认证的当前用户信息（含 CSRF token 供 SPA 使用）。
 //! - POST /api/admin/v1/me/password ：自助改密（会话 + CSRF + 当前密码重新认证）。
 //!
-//! Cookie：不透明高熵令牌，HttpOnly + SameSite=Lax（HTTPS 部署加 Secure）；
+//! Cookie：不透明高熵令牌，HttpOnly + SameSite=Lax（HTTPS 使用 __Host-blog_session + Secure）；
 //! 登录另发短命 `blog_oauth_state`（Secure 部署用 `__Host-` 前缀）绑定浏览器。
 //! 会话持久化到数据库，每次请求重新读取用户与权限。
 
@@ -16,7 +16,7 @@ use std::sync::Arc;
 use crate::http_contract::{
     Me, PasswordChangeResult, PasswordLoginResult, Profile, ProviderSummary, SessionChannel,
 };
-use application::auth::{ATTEMPT_TTL_SECS, AuthInteractor, SESSION_COOKIE_NAME};
+use application::auth::{ATTEMPT_TTL_SECS, AuthInteractor};
 use application::content::PostInteractor;
 use application::error::UseCaseError;
 use application::identity::UserInteractor;
@@ -31,7 +31,7 @@ use axum::{Json, Router};
 use crate::http_admin::AdminAuth;
 use crate::http_support::{
     RequestId, admin_error, admin_error_with_status, cookie_value, csrf_token_matches,
-    ensure_same_origin, no_store, oauth_state_cookie_name,
+    ensure_same_origin, no_store, oauth_state_cookie_name, session_cookie_name,
 };
 
 #[derive(Clone)]
@@ -292,7 +292,7 @@ async fn logout(
     request_id: RequestId,
     headers: HeaderMap,
 ) -> Response {
-    let Some(token) = cookie_value(&headers, SESSION_COOKIE_NAME) else {
+    let Some(token) = cookie_value(&headers, session_cookie_name(state.secure_cookies)) else {
         return admin_error(UseCaseError::Unauthenticated, &request_id);
     };
     // 退出是受保护写：先校验 Origin，再校验会话与 CSRF 头。
@@ -328,7 +328,7 @@ async fn me(
     request_id: RequestId,
     headers: HeaderMap,
 ) -> Response {
-    let Some(token) = cookie_value(&headers, SESSION_COOKIE_NAME) else {
+    let Some(token) = cookie_value(&headers, session_cookie_name(state.secure_cookies)) else {
         return admin_error(UseCaseError::Unauthenticated, &request_id);
     };
     let (record, actor) = match state.auth.session_actor(&token).await {
@@ -412,7 +412,7 @@ async fn change_password(
     client: crate::http_client_ip::ClientAddress,
     Json(body): Json<ChangePasswordBody>,
 ) -> Response {
-    let Some(token) = cookie_value(&headers, SESSION_COOKIE_NAME) else {
+    let Some(token) = cookie_value(&headers, session_cookie_name(state.secure_cookies)) else {
         return admin_error(UseCaseError::Unauthenticated, &request_id);
     };
     if let Err(e) = ensure_same_origin(&headers) {
@@ -483,7 +483,8 @@ async fn change_password(
 /// 会话 cookie 的完整 Set-Cookie 值；`max_age = 0` 即清除。
 fn session_cookie(token: &str, secure: bool, max_age: u64) -> String {
     format!(
-        "{SESSION_COOKIE_NAME}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={max_age}{}",
+        "{}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={max_age}{}",
+        session_cookie_name(secure),
         secure_suffix(secure)
     )
 }

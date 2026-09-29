@@ -3,10 +3,10 @@
 use crate::http_auth::AdminState;
 use crate::http_support::{
     RequestId, admin_error, cookie_value, csrf_token_matches, ensure_same_origin,
+    session_cookie_name,
 };
 use application::error::UseCaseError;
 use application::identity::Actor;
-use application::ports::SESSION_COOKIE;
 use axum::extract::FromRef;
 use axum::http::request::Parts;
 use axum::response::Response;
@@ -31,7 +31,8 @@ where
             .get::<RequestId>()
             .cloned()
             .unwrap_or_else(RequestId::generate);
-        let Some(token) = cookie_value(&parts.headers, SESSION_COOKIE) else {
+        let Some(token) = cookie_value(&parts.headers, session_cookie_name(admin.secure_cookies))
+        else {
             return Err(admin_error(UseCaseError::Unauthenticated, &request_id));
         };
         // 一次校验同时拿到会话记录与 Actor：分开调用会对同一请求写两次 last_seen_at。

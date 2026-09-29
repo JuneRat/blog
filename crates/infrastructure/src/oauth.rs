@@ -93,11 +93,50 @@ pub struct ReqwestIdentityClient {
     discovery_cache: tokio::sync::RwLock<HashMap<String, Arc<OidcDiscovery>>>,
 }
 
+fn identity_http_builder() -> reqwest::ClientBuilder {
+    reqwest::Client::builder()
+        .https_only(true)
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(10))
+}
+
+/// Discovery 可以声明跨域端点（例如 Google）；禁止降级、嵌入凭据和片段。
+/// IdP 仍是管理员配置的信任边界；内网访问限制由部署的出站网络策略承担。
+fn validate_endpoint(raw: &str, field: &str) -> Result<(), UseCaseError> {
+    let url = reqwest::Url::parse(raw).ok();
+    if raw.chars().any(|c| c.is_whitespace() || c.is_control())
+        || url.as_ref().is_none_or(|url| {
+            url.scheme() != "https"
+                || url.host_str().is_none()
+                || !url.username().is_empty()
+                || url.password().is_some()
+                || url.fragment().is_some()
+        })
+    {
+        // 不把带凭据的原始 URL 放进错误或日志。
+        return Err(UseCaseError::External(format!(
+            "OIDC {field} 必须是不含凭据和片段的绝对 HTTPS URL"
+        )));
+    }
+    Ok(())
+}
+
+impl OidcDiscovery {
+    fn validate_endpoints(&self) -> Result<(), UseCaseError> {
+        validate_endpoint(&self.authorization_endpoint, "authorization_endpoint")?;
+        validate_endpoint(&self.token_endpoint, "token_endpoint")?;
+        validate_endpoint(&self.jwks_uri, "jwks_uri")?;
+        if let Some(url) = &self.userinfo_endpoint {
+            validate_endpoint(url, "userinfo_endpoint")?;
+        }
+        Ok(())
+    }
+}
+
 impl ReqwestIdentityClient {
     pub fn new(secrets: Arc<dyn SecretSource>) -> Self {
         Self {
-            http: reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(10))
+            http: identity_http_builder()
                 .build()
                 .expect("构建 HTTP 客户端失败"),
             secrets,
@@ -106,6 +145,7 @@ impl ReqwestIdentityClient {
     }
 
     async fn discovery(&self, issuer: &str) -> Result<Arc<OidcDiscovery>, UseCaseError> {
+        validate_endpoint(issuer, "issuer")?;
         if let Some(doc) = self.discovery_cache.read().await.get(issuer) {
             return Ok(doc.clone());
         }
@@ -131,6 +171,7 @@ impl ReqwestIdentityClient {
                 doc.issuer
             )));
         }
+        doc.validate_endpoints()?;
         let doc = Arc::new(doc);
         self.discovery_cache
             .write()
@@ -775,5 +816,99 @@ impl OAuthAccountStore for PostgresOAuthAccountStore {
                 })
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod outbound_security_tests {
+    use super::*;
+
+    fn discovery() -> OidcDiscovery {
+        OidcDiscovery {
+            issuer: "https://accounts.google.com".into(),
+            authorization_endpoint: "https://accounts.google.com/o/oauth2/v2/auth".into(),
+            token_endpoint: "https://oauth2.googleapis.com/token".into(),
+            jwks_uri: "https://www.googleapis.com/oauth2/v3/certs".into(),
+            userinfo_endpoint: Some("https://openidconnect.googleapis.com/v1/userinfo".into()),
+        }
+    }
+
+    #[test]
+    fn discovery_allows_cross_host_https_but_validates_every_endpoint() {
+        assert!(discovery().validate_endpoints().is_ok());
+        for bad in [
+            "http://127.0.0.1/token",
+            "/token",
+            "https://idp.example:invalid/token",
+            "https://user:secret@idp.example/token",
+            "https://idp.example/token#fragment",
+            "https://idp.example/\npath",
+        ] {
+            for field in [
+                "authorization_endpoint",
+                "token_endpoint",
+                "jwks_uri",
+                "userinfo_endpoint",
+            ] {
+                let mut doc = discovery();
+                match field {
+                    "authorization_endpoint" => doc.authorization_endpoint = bad.into(),
+                    "token_endpoint" => doc.token_endpoint = bad.into(),
+                    "jwks_uri" => doc.jwks_uri = bad.into(),
+                    _ => doc.userinfo_endpoint = Some(bad.into()),
+                }
+                let error = doc.validate_endpoints().unwrap_err().to_string();
+                assert!(error.contains(field));
+                assert!(!error.contains("secret"));
+            }
+        }
+        assert!(
+            validate_endpoint("https://tokens.example/token?tenant=a", "token_endpoint").is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn identity_client_rejects_plain_http() {
+        assert!(
+            identity_http_builder()
+                .build()
+                .unwrap()
+                .get("http://127.0.0.1:1/token")
+                .send()
+                .await
+                .unwrap_err()
+                .is_builder()
+        );
+    }
+
+    #[tokio::test]
+    async fn token_posts_do_not_follow_307_or_308_redirects() {
+        use std::io::{Read, Write};
+        for status in [307, 308] {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                    .unwrap();
+                let mut buffer = [0; 8192];
+                assert!(stream.read(&mut buffer).unwrap() > 0);
+                write!(stream, "HTTP/1.1 {status} Redirect\r\nLocation: http://{address}/leak\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+                // 只服务一次；若客户端跟随跳转，第二次连接会失败而非返回 3xx。
+            });
+            // 仅测试传输改用 loopback HTTP，保留生产构造器的重定向策略。
+            let result = identity_http_builder()
+                .https_only(false)
+                .no_proxy()
+                .build()
+                .unwrap()
+                .post(format!("http://{address}/token"))
+                .form(&[("client_secret", "test-secret")])
+                .send()
+                .await;
+            server.join().unwrap();
+            assert_eq!(result.unwrap().status().as_u16(), status);
+        }
     }
 }

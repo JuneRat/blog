@@ -527,3 +527,34 @@ fn http_limits_validate_ranges_relationships_and_environment_overrides() {
         );
     }
 }
+
+#[test]
+fn https_public_origin_cannot_disable_secure_cookies() {
+    let https = "[server]\npublic_base_url='https://blog.example.com'";
+    assert!(config(https, &[]).site(None).unwrap().secure_cookies);
+    for (source, env) in [
+        (format!("{https}\nsecure_cookies=false"), vec![]),
+        (https.into(), vec![("BLOG_SECURE_COOKIES", "false")]),
+    ] {
+        let deployment = config(&source, &env);
+        assert!(
+            deployment
+                .site(None)
+                .err()
+                .unwrap()
+                .contains("Secure Cookie")
+        );
+        assert!(deployment.check(ConfigScope::Resources).is_ok());
+    }
+    // HTTP 开发仍可用；环境变量覆盖错误的文件配置。
+    assert!(!config("", &[]).site(None).unwrap().secure_cookies);
+    assert!(
+        config(
+            &format!("{https}\nsecure_cookies=false"),
+            &[("BLOG_SECURE_COOKIES", "true")]
+        )
+        .site(None)
+        .unwrap()
+        .secure_cookies
+    );
+}

@@ -10,7 +10,7 @@
 
 用例只接受由服务端会话或受控本机 CLI 解析出的 `Actor`。用户 ID、有效权限和文章归属从服务端读取，不能相信请求提交的作者或权限列表。前端路由守卫和禁用按钮用于提示，最终授权在后端执行。Post/Page 管理操作以 UUID 定位；公开阅读以 slug 定位，规则见 [内容生命周期](content-lifecycle.md)。
 
-浏览器持有不透明会话 Cookie，设置 `HttpOnly`、`SameSite=Lax`，`Secure` 由部署配置控制。已认证写请求要求会话对应的 `X-CSRF-Token`，退出也受此保护。当前 Origin 检查的实际边界是：
+浏览器持有不透明会话 Cookie，设置 `HttpOnly`、`SameSite=Lax`。HTTPS 公开地址强制 Secure，使用 `__Host-blog_session` 且不接受旧名称回退；HTTP 开发使用 `blog_session`。HTTPS 用户从旧版本升级需重新登录。已认证写请求要求会话对应的 `X-CSRF-Token`，退出也受此保护。当前 Origin 检查的实际边界是：
 
 - 有 `Origin` 时，与 `http://<Host>` 或 `https://<Host>` 比较，忽略大小写；跨源请求拒绝。
 - 缺少 `Origin` 时放行；因此当前并未强制所有客户端发送 Origin，也未按外部站点配置强制校验协议。
@@ -64,6 +64,11 @@
 当前适配通用 OIDC 和 GitHub。OIDC 身份键使用精确 issuer 与 `sub`，GitHub 使用固定平台标识与稳定用户 ID，不使用可改名的 login 或邮箱作为身份键。相同邮箱不会自动合并账号；未预先绑定的外部身份不能登录。
 
 提供商的非敏感配置存入 `settings.oauth`，秘密由 `secret_ref` 指向部署环境。维护配置和绑定需要 `oauth.manage`，不受普通 `settings.manage` 覆盖；当前通过受控 CLI 操作，没有浏览器绑定界面。操作者须核对稳定外部 ID。修改 OIDC issuer 会改变身份命名空间，不能假定原绑定自动迁移。
+
+OIDC issuer 必须是可解析的精确 HTTPS URL，不允许凭据、查询或片段。发现文档的 authorization/token/JWKS/userinfo 端点必须为不带凭据和片段的绝对 HTTPS URL；允许合法跨域端点。身份客户端（含 GitHub）仅访问 HTTPS，不自动跟随重定向，以免 307/308 转发带 client_secret 的请求体。此策略不等于完整的 SSRF 网络隔离：IdP 仍需可信，若部署要求禁止内网目标，应在出站代理或防火墙限制地址和 DNS 解析后的目标。
+
+目录读取仍对已认证会话开放。标签、分类只返回公开文章计数；系列 `post_count` 仅在调用者具有 `post.read_any` 时返回数字，否则为 null，公开成员计数保持可见。创建和更新（含幂等更新）的系列响应也遵循同一规则，自定义 `series.manage` 不隐含文章读取权。
+
 
 提供商配置读取返回列表与分组版本；缺失组版本为 0。保存必须带读取时的版本，先检查版本再判断同值：旧版本即使内容相同也冲突；匹配版本且同值不增版、不记变更审计，空组保存空列表仍保持版本 0。CLI `add-oidc/add-github` 内部读取并提交该版本，没有新增版本参数；并发冲突须重新执行，不会静默丢失另一次更新。
 

@@ -140,7 +140,7 @@ export const seriesSummary = object<Wire.SeriesSummary>()({
   name: string,
   description: nullable,
   version: count,
-  post_count: count,
+  post_count: count.nullable(),
   pub_post_count: count,
   cover_media_id: nullable,
   cover_url: nullable,

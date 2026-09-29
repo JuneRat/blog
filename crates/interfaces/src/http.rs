@@ -47,6 +47,7 @@ pub struct HttpAssets {
 
 /// 组合完整站点路由；监听地址、进程信号和关闭策略由 server 装配层负责。
 pub fn app_router(state: AppState, assets: HttpAssets, config: HttpConfig) -> Router {
+    let https = config.public_origin.starts_with("https://");
     let content_preview = crate::http_content_preview::content_preview_router(
         crate::http_content_preview::ContentPreviewState {
             preview: state.content_preview,
@@ -95,6 +96,10 @@ pub fn app_router(state: AppState, assets: HttpAssets, config: HttpConfig) -> Ro
         .merge(access);
     mount_admin_spa(app, Some(assets.admin_dist))
         .layer(middleware::from_fn(crate::http_support::request_context))
+        .layer(middleware::from_fn_with_state(
+            https,
+            crate::http_support::security_headers,
+        ))
         .layer(axum::Extension(crate::http_client_ip::TrustedProxies(
             config.trusted_proxies,
         )))

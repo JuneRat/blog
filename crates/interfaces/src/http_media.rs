@@ -336,6 +336,10 @@ fn file_response(content: &MediaContent, request: &HeaderMap) -> Response {
 }
 
 fn insert_media_headers(headers: &mut HeaderMap, content: &MediaContent, etag: &str) {
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
     if let Ok(value) = HeaderValue::from_str(&content.mime) {
         headers.insert(header::CONTENT_TYPE, value);
     }

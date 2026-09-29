@@ -2695,6 +2695,34 @@ async fn series_management_reorder_and_post_association() {
         posts.push(post_id);
     }
 
+    // 已认证目录仍可读，但非公开总数仅对 read_any 开放。
+    let (reader_cookie, _) = login_as(&stack.router, &stack.idp, "stranger").await;
+    for (cookie, expected) in [
+        (&author_cookie, serde_json::Value::Null),
+        (&reader_cookie, serde_json::Value::Null),
+        (&editor_cookie, serde_json::json!(2)),
+    ] {
+        let (status, body) = api(
+            &stack.router,
+            "GET",
+            "/api/admin/v1/series",
+            Some(cookie),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let rows: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let row = rows
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["slug"] == "guide")
+            .unwrap();
+        assert_eq!(row["post_count"], expected);
+        assert_eq!(row["pub_post_count"], 0);
+    }
+
     // author2（author 角色，无 any）：系列含他人文章 → 重排 403。
     let (status, body) = api(
         &stack.router,
@@ -3009,6 +3037,23 @@ async fn series_members_requires_read_permission_for_every_member() {
         )
         .await;
         assert_eq!(status, StatusCode::OK, "{body}");
+    }
+
+    // 自定义 series.manage 也不授予全站文章计数：更新、幂等更新响应均过滤。
+    for name in ["已改名", "已改名"] {
+        let (status, body) = api(
+            &stack.router,
+            "PATCH",
+            "/api/admin/v1/series/mixed",
+            Some(&author_cookie),
+            Some(&author_csrf),
+            Some(&format!(r#"{{"name":"{name}"}}"#)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let value: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(value["post_count"], serde_json::Value::Null);
+        assert_eq!(value["pub_post_count"], 0);
     }
 
     // author（series.manage + post.read own，无 read_any）：

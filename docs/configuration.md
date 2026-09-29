@@ -35,7 +35,7 @@ TOML 可以先只配置路径、代理或 `[bootstrap]`：没有数据库连接�
 | `server.bind` | `BLOG_BIND` | `127.0.0.1:8080`；支持 IPv4/IPv6 的 IP:端口 |
 | `server.public_base_url` | `BLOG_PUBLIC_BASE_URL` | `http://127.0.0.1:8080`；公开链接、OAuth 回调与来源校验 |
 | `server.trusted_proxies` | `BLOG_TRUSTED_PROXIES` | 空数组；登录/改密限流、评论与业务审计可信代理 |
-| `server.secure_cookies` | `BLOG_SECURE_COOKIES` | 缺省时按公开 URL 是否为 HTTPS 推导 |
+| `server.secure_cookies` | `BLOG_SECURE_COOKIES` | 缺省时按公开 URL 是否为 HTTPS 推导；HTTPS 地址禁止设为 false |
 | `paths.theme_dir` | `BLOG_THEME_DIR` | `themes/default`；扫描同级目录建立主题注册表 |
 | `paths.admin_dist` | `BLOG_ADMIN_DIST` | `apps/admin/dist`；安装要求存在 index.html |
 | `paths.media_dir` | `BLOG_MEDIA_DIR` | `data/media` |
@@ -131,7 +131,13 @@ cargo run -- config show --for resources
 
 `BLOG_PUBLIC_BASE_URL` 必须是带主机的绝对 HTTP/HTTPS URL，不允许用户名、密码、查询参数、片段或根路径以外的路径前缀。例如 `https://blog.example.com` 有效，`https://example.com/blog` 不受支持。它是公开绝对链接的可信来源，不从请求 `Host` 推导。
 
-监听地址和公开地址分别配置：反向代理终止 TLS 时，程序可以监听 `127.0.0.1:8080`，公开地址设为 `https://blog.example.com`，cookie 默认随公开地址启用 Secure。
+监听地址和公开地址分别配置：反向代理终止 TLS 时，程序可以监听 `127.0.0.1:8080`，公开地址必须设为 `https://blog.example.com`，cookie 随公开地址启用 Secure。HTTPS 公开地址下显式设置 `server.secure_cookies=false`（或 `BLOG_SECURE_COOKIES=false`）会使配置校验和启动失败；HTTP 本地开发仍可使用默认值。不要从反向代理到程序的内部 HTTP 协议推断公开地址。
+
+Secure 模式使用 `__Host-blog_session`（`Secure; HttpOnly; SameSite=Lax; Path=/`，无 Domain），只读取该名称，不回退到 `blog_session`。从旧版本升级的 HTTPS 用户需重新登录一次；HTTP 开发仍使用 `blog_session`。
+
+主站点所有路由统一设置 `nosniff`、`X-Frame-Options: DENY`、`Referrer-Policy: same-origin` 和 CSP。公开主题禁止对象嵌入、限制 base 并禁止被嵌入；后台额外限制脚本和连接为本站，允许 antd 的内联样式与正文图片预览。HTTPS 公开地址启用 `Strict-Transport-Security: max-age=31536000`，不包含子域；判断不依赖请求 Host 或 X-Forwarded-Proto。
+
+部署后检查 HTTPS `/admin/` 响应中的这些安全头，以及实际登录响应中的 `__Host-blog_session` 与 Secure 属性。代码测试不能替代生产反向代理和环境变量的核对。
 
 浏览器写请求的 Origin 检查是另一条独立路径：后台将提供的 Origin 与请求 Host 比较，允许 `http://{Host}` 或 `https://{Host}`；未提供 Origin 时不执行该项检查，已认证写请求仍要求 CSRF token。代理须保持与浏览器入口一致的 Host。登录与自助改密限流使用同一可信代理解析结果；无法解析时回退 socket 对端桶，不跳过来源限流。评论提交/预览额外要求 Origin 与配置的公开地址精确匹配；评论与业务审计来源 IP 共用 `BLOG_TRUSTED_PROXIES`，从 X-Forwarded-For 右侧剥离可信代理，非法或未知来源留空，规则见[评论](comments.md#请求与来源地址)。认证规则见[身份与权限](identity-and-admin.md)。
 

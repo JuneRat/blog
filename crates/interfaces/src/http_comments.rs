@@ -6,12 +6,11 @@ use crate::http_contract::{
 use crate::{
     http_admin::AdminAuth,
     http_auth::AdminState,
-    http_support::{RequestId, admin_error, cookie_value, no_store},
+    http_support::{RequestId, admin_error, cookie_value, no_store, session_cookie_name},
 };
 use application::{
     comments::{CommentDto, CommentInteractor, CommentPage, CommentStatus},
     error::UseCaseError,
-    ports::SESSION_COOKIE,
 };
 use axum::{
     Json, Router,
@@ -53,7 +52,12 @@ impl FromRequestParts<CommentState> for CommentAuth {
         if parts.method != axum::http::Method::GET {
             check_origin(&parts.headers, &state.origin).map_err(|e| admin_error(e, &id))?;
         }
-        if cookie_value(&parts.headers, SESSION_COOKIE).is_some() {
+        if cookie_value(
+            &parts.headers,
+            session_cookie_name(state.admin.secure_cookies),
+        )
+        .is_some()
+        {
             Ok(Self(Some(
                 AdminAuth::from_request_parts(parts, state).await?.actor,
             )))

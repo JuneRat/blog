@@ -25,8 +25,8 @@ struct SeriesJson {
     /// 封面站内地址（`/media/{id}`）；None = 无封面。
     cover_url: Option<String>,
     version: i64,
-    /// 成员总数（含草稿/私密/回收站——它们保留位置）。
-    post_count: i64,
+    /// 成员总数（含草稿/私密/回收站）；无 post.read_any 时为 null。
+    post_count: Option<i64>,
     pub_post_count: i64,
 }
 

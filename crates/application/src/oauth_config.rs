@@ -46,14 +46,53 @@ pub fn validate_provider_config(config: &ProviderConfig) -> Result<(), UseCaseEr
     }
     if matches!(config.kind, ProviderKind::Oidc) {
         let issuer = config.issuer.as_deref().unwrap_or("");
+        let parsed = url::Url::parse(issuer).ok();
         if !issuer.starts_with("https://")
-            || issuer.len() < 12
             || issuer.chars().any(|c| c.is_whitespace() || c.is_control())
+            || parsed.as_ref().is_none_or(|url| {
+                url.scheme() != "https"
+                    || url.host_str().is_none()
+                    || !url.username().is_empty()
+                    || url.password().is_some()
+                    || url.query().is_some()
+                    || url.fragment().is_some()
+            })
         {
             return Err(UseCaseError::Invalid(
-                "OIDC issuer 必须是精确 https URL".into(),
+                "OIDC issuer 必须是不含凭据、查询和片段的精确 https URL".into(),
             ));
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn issuer_requires_a_parsed_https_url_without_credentials_query_or_fragment() {
+        let mut provider = ProviderConfig {
+            id: "idp".into(),
+            name: None,
+            kind: ProviderKind::Oidc,
+            issuer: None,
+            client_id: "client".into(),
+            secret_ref: "IDP_SECRET".into(),
+            scopes: vec![],
+        };
+        for bad in [
+            "https://",
+            "http://idp.example",
+            "https://idp.example:bad",
+            "https://user:secret@idp.example",
+            "https://idp.example?tenant=a",
+            "https://idp.example#x",
+        ] {
+            provider.issuer = Some(bad.into());
+            assert!(validate_provider_config(&provider).is_err(), "{bad}");
+        }
+        provider.issuer = Some("https://idp.example/realms/blog".into());
+        assert!(validate_provider_config(&provider).is_ok());
+    }
 }

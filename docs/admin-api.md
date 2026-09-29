@@ -257,3 +257,9 @@ Page 没有作者，使用站点级 `page.*` 权限。
 - `GET/PUT /api/admin/v1/access-settings`：要求 `settings.manage`，字段为 `registration_enabled`、`guest_comments_enabled`、`version`。默认两个开关均关闭，更新需匹配版本。
 - 公开评论列表附带 `guest_comments_enabled`。游客评论关闭时匿名提交返回 401；登录账号仍可按当前审核策略提交评论；评论 API 的策略和回执见[原生评论](comments.md#接口)。
 - 内置角色为 admin、editor、author、reader。admin 拥有完整权限，editor 可创建及管理全部文章，author 管理本人文章，reader 仅可评论及管理本人资料。保护错误码为 `last_admin`，用户列表标记为 `is_last_loginable_admin`。
+
+## 安全响应与系列计数
+
+完整站点路由统一返回安全响应头，策略与 HTTPS 部署要求见[配置说明](configuration.md)。Secure 会话 Cookie 名为 `__Host-blog_session`，HTTP 开发使用 `blog_session`；前端仍通过 `/me` 获取 CSRF token，不读取 Cookie。
+
+`SeriesSummary.post_count` 类型为 `number | null`：仅 `post.read_any` 可见含草稿、私密和回收站的总数，其他账号得到 null。`pub_post_count` 始终为公开成员数量。列表、创建和更新响应一致；标签与分类仍仅有公开文章计数。后台对不可见总数仅展示公开数量，不把 null 当作 0。

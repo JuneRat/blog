@@ -600,6 +600,7 @@ async fn public_url_works_without_references_and_never_reads_or_refreshes_sessio
             send(&stack.router, "GET", &uri, session, None, None, None).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(headers[header::CONTENT_TYPE], "image/png");
+        assert_eq!(headers[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
         assert_eq!(
             headers[header::CACHE_CONTROL],
             "public, max-age=31536000, immutable"
@@ -654,6 +655,7 @@ async fn public_url_works_without_references_and_never_reads_or_refreshes_sessio
         .await
         .unwrap();
     assert_eq!(cached.status(), StatusCode::NOT_MODIFIED);
+    assert_eq!(cached.headers()[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
     assert_eq!(cached.headers()[header::ETAG], etag);
     let (status, _, body) = send(&stack.router, "HEAD", &uri, None, None, None, None).await;
     assert_eq!(status, StatusCode::OK);

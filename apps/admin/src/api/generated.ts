@@ -227,9 +227,9 @@ cover_media_id: string | null,
  */
 cover_url: string | null, version: number,
 /**
- * 成员总数（含草稿/私密/回收站——它们保留位置）。
+ * 成员总数（含草稿/私密/回收站）；无 post.read_any 时为 null。
  */
-post_count: number, pub_post_count: number, };
+post_count: number | null, pub_post_count: number, };
 
 export type SessionChannel = "session";
 

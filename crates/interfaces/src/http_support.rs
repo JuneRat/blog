@@ -12,9 +12,9 @@
 use std::sync::{Arc, OnceLock};
 
 use application::error::{ConflictKind, UseCaseError};
-use application::ports::OAUTH_STATE_COOKIE;
+use application::ports::{OAUTH_STATE_COOKIE, SESSION_COOKIE};
 use axum::Json;
-use axum::extract::{FromRequestParts, MatchedPath, Request};
+use axum::extract::{FromRequestParts, MatchedPath, Request, State};
 use axum::http::request::Parts;
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::middleware::Next;
@@ -150,6 +150,36 @@ pub async fn no_store(req: Request, next: Next) -> Response {
     response
 }
 
+/// 覆盖公开页面、后台、媒体及错误响应。HTTPS 来自可信公开地址配置，不信任请求头。
+pub async fn security_headers(State(https): State<bool>, req: Request, next: Next) -> Response {
+    let path = req.uri().path();
+    let admin = path == "/admin" || path.starts_with("/admin/");
+    let mut response = next.run(req).await;
+    let headers = response.headers_mut();
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    headers.insert(
+        header::REFERRER_POLICY,
+        HeaderValue::from_static("same-origin"),
+    );
+    // 公开主题保留资源加载自由；后台仅加载本站脚本，兼容 antd 内联样式和正文图片预览。
+    headers.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static(if admin {
+        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https: http:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+    } else {
+        "object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
+    }));
+    if https {
+        headers.insert(
+            header::STRICT_TRANSPORT_SECURITY,
+            HeaderValue::from_static("max-age=31536000"),
+        );
+    }
+    response
+}
+
 /// 从 Cookie 头解析指定名称的值。
 /// 名称精确匹配（`blog_session_x` 不算 `blog_session`），
 /// 同名空值继续扫描后续 pair，不提前中止（否则同级干扰 cookie 会让正常会话被判未登录）。
@@ -172,6 +202,15 @@ pub fn oauth_state_cookie_name(secure: bool) -> &'static str {
         "__Host-blog_oauth_state"
     } else {
         OAUTH_STATE_COOKIE
+    }
+}
+
+/// HTTPS 模式只接受 host-only 会话；不回退到可被同站子域投放的旧名称。
+pub fn session_cookie_name(secure: bool) -> &'static str {
+    if secure {
+        "__Host-blog_session"
+    } else {
+        SESSION_COOKIE
     }
 }
 

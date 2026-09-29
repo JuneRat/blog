@@ -329,7 +329,7 @@ export function SeriesListScreen() {
             {s.name}
           </Typography.Link>
           <Typography.Text type="secondary">
-            {s.pub_post_count}/{s.post_count} 篇公开 · v{s.version}
+            {s.post_count === null ? s.pub_post_count : `${s.pub_post_count}/${s.post_count}`} 篇公开 · v{s.version}
           </Typography.Text>
         </Space>
       ),

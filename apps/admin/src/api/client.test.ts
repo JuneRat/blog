@@ -4,6 +4,7 @@ import {
   ApiProtocolError,
   api,
   commentsApi,
+  seriesApi,
   mediaApi,
   setCsrfToken,
   setUnauthorizedHandler,
@@ -204,4 +205,11 @@ describe("HTTP response boundary", () => {
       parent_id: "comment",
     });
   });
+});
+
+it.each([null, 4])("accepts series total count %s according to caller visibility", async (post_count) => {
+  const series = { id: "series-id", name: "系列", slug: "series", description: null,
+    version: 1, post_count, pub_post_count: 2, cover_media_id: null, cover_url: null };
+  respond(jsonResponse([series]));
+  await expect(seriesApi.list()).resolves.toEqual([series]);
 });

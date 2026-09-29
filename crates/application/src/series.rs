@@ -53,14 +53,14 @@ pub struct SeriesDto {
     /// 封面媒体资产 id（None = 无封面）；URL 由接口层按 `/media/{id}` 生成。
     pub cover_media_id: Option<Uuid>,
     pub version: i64,
-    /// 成员总数（含草稿/私密/回收站——它们保留位置）。
-    pub post_count: i64,
+    /// 成员总数（含草稿/私密/回收站）；无 post.read_any 时不返回。
+    pub post_count: Option<i64>,
     /// 公开可见成员数（与公开系列页同口径）。
     pub public_post_count: i64,
 }
 
 impl SeriesDto {
-    fn from_usage(row: &SeriesWithUsage) -> Self {
+    fn from_usage(row: &SeriesWithUsage, actor: &Actor) -> Self {
         Self {
             id: row.snapshot.id,
             name: row.snapshot.name.clone(),
@@ -68,7 +68,9 @@ impl SeriesDto {
             description: row.snapshot.description.clone(),
             cover_media_id: row.snapshot.cover_media_id,
             version: row.snapshot.version,
-            post_count: row.post_count,
+            post_count: actor
+                .has_permission("post.read_any")
+                .then_some(row.post_count),
             public_post_count: row.public_post_count,
         }
     }
@@ -122,7 +124,7 @@ impl SeriesInteractor {
             description: snapshot.description,
             cover_media_id: snapshot.cover_media_id,
             version: snapshot.version,
-            post_count: 0,
+            post_count: actor.has_permission("post.read_any").then_some(0),
             public_post_count: 0,
         })
     }
@@ -150,7 +152,7 @@ impl SeriesInteractor {
             .update(cmd.name, cmd.description, cmd.cover_media_id)
             .map_err(map_domain)?
         {
-            return self.dto_of(series.id()).await;
+            return self.dto_of(series.id(), actor).await;
         }
         let snapshot = series.snapshot();
         match self
@@ -165,7 +167,7 @@ impl SeriesInteractor {
             )
             .await?
         {
-            Some(updated) => Ok(self.dto_of_loaded(updated.id).await?),
+            Some(updated) => Ok(self.dto_of(updated.id, actor).await?),
             None => Err(UseCaseError::VersionConflict),
         }
     }
@@ -194,13 +196,13 @@ impl SeriesInteractor {
     }
 
     /// 全量目录（管理屏与编辑器选择器共用）。
-    pub async fn list(&self, _actor: &Actor) -> Result<Vec<SeriesDto>, UseCaseError> {
+    pub async fn list(&self, actor: &Actor) -> Result<Vec<SeriesDto>, UseCaseError> {
         Ok(self
             .series
             .list()
             .await?
             .iter()
-            .map(SeriesDto::from_usage)
+            .map(|row| SeriesDto::from_usage(row, actor))
             .collect())
     }
 
@@ -308,11 +310,7 @@ impl SeriesInteractor {
         Series::reconstitute(snapshot).map_err(|e| UseCaseError::DataCorrupt(e.to_string()))
     }
 
-    async fn dto_of(&self, id: Uuid) -> Result<SeriesDto, UseCaseError> {
-        self.dto_of_loaded(id).await
-    }
-
-    async fn dto_of_loaded(&self, id: Uuid) -> Result<SeriesDto, UseCaseError> {
+    async fn dto_of(&self, id: Uuid, actor: &Actor) -> Result<SeriesDto, UseCaseError> {
         let row = self
             .series
             .list()
@@ -320,7 +318,7 @@ impl SeriesInteractor {
             .into_iter()
             .find(|row| row.snapshot.id == id)
             .ok_or_else(|| UseCaseError::NotFound("系列".into()))?;
-        Ok(SeriesDto::from_usage(&row))
+        Ok(SeriesDto::from_usage(&row, actor))
     }
 }
 

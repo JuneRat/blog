@@ -626,11 +626,66 @@ async fn secure_deployment_marks_cookies_secure_and_host_prefixed() {
     )
     .await;
     assert_eq!(status, StatusCode::SEE_OTHER);
-    let session_cookie = set_cookie_named(&callback_headers, "blog_session");
+    let session_cookie = set_cookie_named(&callback_headers, "__Host-blog_session");
     assert!(
         session_cookie.contains("; Secure"),
         "HTTPS 部署的会话 cookie 必须 Secure：{session_cookie}"
     );
+    assert!(session_cookie.contains("Path=/"));
+    assert!(session_cookie.contains("HttpOnly"));
+    assert!(!session_cookie.contains("Domain="));
+    let pair = session_cookie.split(';').next().unwrap();
+    let token = pair.strip_prefix("__Host-blog_session=").unwrap();
+    // 仅旧名称不得登录；同时存在旧名称时只能使用受保护的名称。
+    for path in ["/api/admin/v1/me", "/api/admin/v1/posts"] {
+        let (status, _, _) = request(
+            &stack.router,
+            "GET",
+            path,
+            &[("cookie", &format!("blog_session={token}"))],
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let (status, _, _) = request(
+            &stack.router,
+            "GET",
+            path,
+            &[("cookie", &format!("blog_session=attacker; {pair}"))],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+    let (_, _, body) = request(
+        &stack.router,
+        "GET",
+        "/api/admin/v1/me",
+        &[("cookie", pair)],
+    )
+    .await;
+    let me: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let (status, headers, _) = request(
+        &stack.router,
+        "POST",
+        "/auth/logout",
+        &[
+            ("cookie", pair),
+            ("x-csrf-token", me["csrf_token"].as_str().unwrap()),
+            ("origin", "https://blog.example"),
+            ("host", "blog.example"),
+        ],
+    )
+    .await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    let cleared = set_cookie_named(&headers, "__Host-blog_session");
+    assert!(cleared.contains("Max-Age=0") && cleared.contains("Secure"));
+    let (status, _, _) = request(
+        &stack.router,
+        "GET",
+        "/api/admin/v1/me",
+        &[("cookie", pair)],
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]
