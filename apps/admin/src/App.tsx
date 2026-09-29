@@ -104,10 +104,13 @@ function AdminRoutes() {
     return <LoginScreen />;
   }
 
+  const readerOnly = auth.me?.permissions.length === 0;
   return (
-    <AdminLayout>
+    <AdminLayout readerOnly={readerOnly}>
       <Suspense fallback={<Loading />}>
-        {route.name === "invalid" ? (
+        {readerOnly ? (
+          <><Typography.Paragraph>欢迎回来！你可以浏览文章并发表评论。</Typography.Paragraph><Button href="/">浏览文章</Button><ProfileScreen /></>
+        ) : route.name === "invalid" ? (
           <Result
             status="warning"
             title="地址无法识别"

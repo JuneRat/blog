@@ -26,7 +26,7 @@ pub trait CommentRepository: Send + Sync {
         slug: &str,
         client: Option<IpAddr>,
         cmd: NewComment,
-    ) -> Result<(), UseCaseError>;
+    ) -> Result<CommentStatus, UseCaseError>;
     async fn list(
         &self,
         scope: CommentScope,

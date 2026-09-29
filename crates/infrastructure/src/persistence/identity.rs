@@ -91,7 +91,7 @@ impl UserQuery for PostgresUserRepository {
     }
 
     async fn list_admin(&self, limit: i64, offset: i64) -> Result<Vec<AdminUserRow>, UseCaseError> {
-        // 登录方式与 RBAC 的最后 Owner 判定保持同一谓词（已配置 OAuth 或密码），
+        // 登录方式与 RBAC 的最后 Admin 判定保持同一谓词（已配置 OAuth 或密码），
         // 否则界面会提示「可登录」而后端拒绝，两处定义漂移。
         let rows = sqlx::query(&format!(
             "SELECT u.id, u.username, u.email, u.display_name, \
@@ -282,29 +282,29 @@ impl AccountAdministration for PostgresUserRepository {
         .map_err(map_sqlx_error)?
         .ok_or_else(|| UseCaseError::NotFound("用户".into()))?;
         let before = user_from_row(&row)?;
-        let is_owner: bool = sqlx::query_scalar(
+        let is_admin: bool = sqlx::query_scalar(
             "SELECT EXISTS (SELECT 1 FROM user_roles ur JOIN roles r ON r.id=ur.role_id \
-             WHERE ur.user_id=$1 AND r.code='owner')",
+             WHERE ur.user_id=$1 AND r.code='admin')",
         )
         .bind(user_id)
         .fetch_one(&mut *tx)
         .await
         .map_err(map_sqlx_error)?;
         let plan =
-            policy::plan_status_change(&permissions, &before, is_owner, status, expected_version)?;
+            policy::plan_status_change(&permissions, &before, is_admin, status, expected_version)?;
         match plan {
             StatusChangePlan::Unchanged => {
                 tx.commit().await.map_err(map_sqlx_error)?;
                 return Ok(before);
             }
             StatusChangePlan::Update {
-                requires_owner_check,
+                requires_admin_check,
             } => {
-                if requires_owner_check
+                if requires_admin_check
                     && PostgresRbacStore::user_has_login_method(&mut *tx, user_id).await?
                 {
-                    let owners = PostgresRbacStore::active_owner_count(&mut *tx).await?;
-                    policy::ensure_owner_removal_allowed(owners)?;
+                    let owners = PostgresRbacStore::active_admin_count(&mut *tx).await?;
+                    policy::ensure_admin_removal_allowed(owners)?;
                 }
             }
         }
@@ -481,17 +481,18 @@ impl PasswordCredentialStore for PostgresUserRepository {
     ) -> Result<Option<PasswordCredential>, UseCaseError> {
         // 软删除用户在查询层排除：登录失败路径因此无法区分「不存在」与「已停用」。
         // auth_version 一并读出：会话签发时绑定，跨进程改密也能让旧会话失效。
-        let row = sqlx::query_as::<_, (Uuid, String, i64)>(
-            "SELECT id, password_hash, auth_version FROM users \
-             WHERE lower(username) = lower($1) AND password_hash IS NOT NULL AND status = 'active' AND deleted_at IS NULL",
+        let row = sqlx::query_as::<_, (Uuid, String, String, i64)>(
+            "SELECT id, username, password_hash, auth_version FROM users \
+             WHERE (lower(username) = lower($1) OR lower(email) = lower($1)) AND password_hash IS NOT NULL AND status = 'active' AND deleted_at IS NULL",
         )
         .bind(username)
         .fetch_optional(&self.pool)
         .await
         .map_err(map_sqlx_error)?;
         Ok(row.map(
-            |(user_id, password_hash, auth_version)| PasswordCredential {
+            |(user_id, username, password_hash, auth_version)| PasswordCredential {
                 user_id,
+                username,
                 password_hash,
                 auth_version,
             },

@@ -2,7 +2,7 @@
 //!
 //! 权限目录是应用可信注册表（PERMISSION_REGISTRY），随初始化同步；
 //! 普通入口不能创造任意 key。内置角色 seed 保留 slug；
-//! Owner 识别只来自受保护的 owner 角色分配，不从“拥有全部权限”推导。
+//! Admin 识别只来自受保护的 admin 角色分配，不从“拥有全部权限”推导。
 
 use std::sync::Arc;
 
@@ -144,12 +144,12 @@ pub const PERMISSION_REGISTRY: &[PermissionDescriptor] = &[
     PermissionDescriptor {
         key: "user.manage",
         name: "账号管理",
-        description: "管理普通账号（受委派与 Owner 限制约束）。",
+        description: "管理普通账号（受委派与 Admin 限制约束）。",
     },
     PermissionDescriptor {
         key: "role.manage",
         name: "角色管理",
-        description: "管理角色与分配（不能绕过委派检查与 Owner 保护）。",
+        description: "管理角色与分配（不能绕过委派检查与 Admin 保护）。",
     },
     PermissionDescriptor {
         key: "settings.manage",
@@ -184,17 +184,17 @@ pub const PERMISSION_REGISTRY: &[PermissionDescriptor] = &[
     PermissionDescriptor {
         key: "audit.read",
         name: "查看审计记录",
-        description: "读取全站成功业务变更及来源信息；默认仅 Owner，独立于 settings.manage。",
+        description: "读取全站成功业务变更及来源信息；默认仅 Admin，独立于 settings.manage。",
     },
     PermissionDescriptor {
-        key: "ownership.manage",
-        name: "所有权操作",
-        description: "授予/移除 Owner 与所有权转移；普通角色分配不得授予 Owner。",
+        key: "admin.manage",
+        name: "管理管理员",
+        description: "授予、移除管理员角色及停用管理员账号。",
     },
 ];
 
-/// Owner 角色的稳定 slug：所有权识别只来自该角色的受保护分配。
-pub const OWNER_ROLE_SLUG: &str = "owner";
+/// Admin 角色的稳定 slug：所有权识别只来自该角色的受保护分配。
+pub const ADMIN_ROLE_SLUG: &str = "admin";
 
 /// 内置角色定义。slug 由 seed 保留，普通 API 不可创建、改名或删除。
 #[derive(Debug, Clone)]
@@ -208,9 +208,9 @@ pub struct BuiltinRoleDef {
 
 pub const BUILTIN_ROLES: &[BuiltinRoleDef] = &[
     BuiltinRoleDef {
-        slug: "owner",
-        name: "Owner",
-        description: "站点所有者：全部已注册权限；受最后 Owner 保护。",
+        slug: "admin",
+        name: "Administrator",
+        description: "管理员：全部已注册权限；保护最后一个可登录管理员。",
         permissions: &[
             "audit.read",
             "post.create",
@@ -244,20 +244,21 @@ pub const BUILTIN_ROLES: &[BuiltinRoleDef] = &[
             "media.delete",
             "media.delete_any",
             "oauth.manage",
-            "ownership.manage",
+            "admin.manage",
         ],
-    },
-    BuiltinRoleDef {
-        slug: "admin",
-        name: "Administrator",
-        description: "管理普通身份与站点设置；不含所有权与外部身份配置。",
-        permissions: &["user.manage", "role.manage", "settings.manage"],
     },
     BuiltinRoleDef {
         slug: "editor",
         name: "Editor",
         description: "内容编辑：对所有文章执行 any 动作，并管理站点级页面与标签目录。",
         permissions: &[
+            "post.create",
+            "post.read",
+            "post.update",
+            "post.publish",
+            "post.unpublish",
+            "post.delete",
+            "media.delete",
             "post.read_any",
             "post.update_any",
             "post.publish_any",
@@ -293,6 +294,12 @@ pub const BUILTIN_ROLES: &[BuiltinRoleDef] = &[
             "media.upload",
             "media.delete",
         ],
+    },
+    BuiltinRoleDef {
+        slug: "reader",
+        name: "Reader",
+        description: "读者：管理本人资料、发表评论，不能发表文章。",
+        permissions: &[],
     },
 ];
 
@@ -345,7 +352,7 @@ impl Actor {
     }
 
     /// 受控 CLI 引导身份：本机 shell 访问等同部署权限，持有全部已注册权限。
-    /// 仅用于 `ControlledCli` 通道的身份/OAuth 引导（首个 Owner 初始化等）；
+    /// 仅用于 `ControlledCli` 通道的身份/OAuth 引导（首个 Admin 初始化等）；
     /// 不承载文章归属，`user_id` 为占位值。
     pub fn bootstrap_cli() -> Self {
         Self::new(
@@ -443,9 +450,9 @@ pub const ADMIN_USER_PAGE_MAX: i64 = 200;
 
 /// 账号管理列表条目：账号字段 + 角色 + 登录方式是否存在。
 ///
-/// `can_login` 与最后 Owner 保护使用同一谓词，界面可据它在移除 Owner 前提示；
-/// `is_last_loginable_owner` 是**全局**结论（不受分页影响）：为 true 时移除其
-/// Owner 角色会被 `remove_role` 拒绝。邮箱只回给持有
+/// `can_login` 与最后 Admin 保护使用同一谓词，界面可据它在移除 Admin 前提示；
+/// `is_last_loginable_admin` 是**全局**结论（不受分页影响）：为 true 时移除其
+/// Admin 角色会被 `remove_role` 拒绝。邮箱只回给持有
 /// `user.manage`/`role.manage` 的调用者。
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct AdminUserDto {
@@ -457,7 +464,7 @@ pub struct AdminUserDto {
     pub version: i64,
     pub deleted: bool,
     pub can_login: bool,
-    pub is_last_loginable_owner: bool,
+    pub is_last_loginable_admin: bool,
     pub password_enabled: bool,
     pub external_identities: i64,
     pub roles: Vec<String>,
@@ -666,8 +673,8 @@ impl UserInteractor {
     /// 读取不改状态，因此不要求写通道，但仍由用例执行授权——接口层不做权限判断。
     /// 角色一次批量读取，避免逐账号查询。
     ///
-    /// `is_last_loginable_owner` 由**全局**可登录 Owner 数判定，不能按当前页推断：
-    /// 另一个可登录 Owner 落在后续页时，按页推断会误标并错误禁用移除
+    /// `is_last_loginable_admin` 由**全局**可登录 Admin 数判定，不能按当前页推断：
+    /// 另一个可登录 Admin 落在后续页时，按页推断会误标并错误禁用移除
     /// （docs §8.3）。这里读出全局计数，逐行给出结论；存储侧执行时仍会复核。
     pub async fn list_users(
         &self,
@@ -692,18 +699,18 @@ impl UserInteractor {
         for (user_id, slug) in self.rbac.roles_of_users(&ids).await? {
             roles.entry(user_id).or_default().push(slug);
         }
-        let loginable_owners = self.rbac.loginable_owner_count().await?;
+        let loginable_admins = self.rbac.loginable_admin_count().await?;
 
         Ok(rows
             .into_iter()
             .map(|row| {
                 let can_login = row.can_login();
                 let roles = roles.remove(&row.id).unwrap_or_default();
-                // 与 remove_role 的保护条件同构：确实持有 owner 且可登录，
-                // 且全站只剩这一个可登录 Owner。
-                let is_last_loginable_owner = can_login
-                    && !policy::has_other_loginable_owner(loginable_owners)
-                    && roles.iter().any(|slug| slug == OWNER_ROLE_SLUG);
+                // 与 remove_role 的保护条件同构：确实持有 admin 且可登录，
+                // 且全站只剩这一个可登录 Admin。
+                let is_last_loginable_admin = can_login
+                    && !policy::has_other_loginable_admin(loginable_admins)
+                    && roles.iter().any(|slug| slug == ADMIN_ROLE_SLUG);
                 AdminUserDto {
                     id: row.id,
                     username: row.username,
@@ -713,7 +720,7 @@ impl UserInteractor {
                     version: row.version,
                     deleted: row.deleted,
                     can_login,
-                    is_last_loginable_owner,
+                    is_last_loginable_admin,
                     password_enabled: row.password_enabled,
                     external_identities: row.external_identities,
                     roles,
@@ -797,9 +804,9 @@ impl UserInteractor {
     }
 }
 
-/// 角色管理用例。结构性保护（内置 slug、最后 Owner）始终执行；
+/// 角色管理用例。结构性保护（内置 slug、最后 Admin）始终执行；
 /// 入口接受可信 Actor：普通角色分配要求 `role.manage` 且不得超出调用者的
-/// 权限集合（委派上限，docs §3）；授予/移除 Owner 另需 `ownership.manage`。
+/// 权限集合（委派上限，docs §3）；授予/移除 Admin 另需 `admin.manage`。
 pub struct RoleInteractor {
     rbac: Arc<dyn RbacStore>,
     users: Arc<dyn UserQuery>,
@@ -839,8 +846,8 @@ impl RoleInteractor {
         if !actor.has_permission("role.manage") {
             return Err(UseCaseError::Forbidden);
         }
-        // 普通角色分配不能授予 Owner：需专门的所有权权限。
-        if role_slug == OWNER_ROLE_SLUG && !actor.has_permission("ownership.manage") {
+        // 普通角色分配不能授予 Admin：需专门的所有权权限。
+        if role_slug == ADMIN_ROLE_SLUG && !actor.has_permission("admin.manage") {
             return Err(UseCaseError::Forbidden);
         }
         // 委派上限：不能授予自己不具备的权限（未知角色在这里就返回 NotFound）。
@@ -864,11 +871,11 @@ impl RoleInteractor {
         if !actor.has_permission("role.manage") {
             return Err(UseCaseError::Forbidden);
         }
-        if role_slug == OWNER_ROLE_SLUG && !actor.has_permission("ownership.manage") {
+        if role_slug == ADMIN_ROLE_SLUG && !actor.has_permission("admin.manage") {
             return Err(UseCaseError::Forbidden);
         }
         let user = self.find_active_user(username).await?;
-        // 最后 Owner 保护由存储在排他锁下判定并拒绝。
+        // 最后 Admin 保护由存储在排他锁下判定并拒绝。
         self.rbac
             .remove_role(user.id, role_slug, actor.audit_context())
             .await

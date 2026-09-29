@@ -37,7 +37,7 @@ themes/default/
 
 `slug` 只允许小写 ASCII 字母、数字、`-`，主题目录名必须与它一致，名称不能为空。`required_functions` 只能包含已注册函数；它声明所需能力，不授予额外权限。清单与模板校验在 [rendering.rs](../crates/infrastructure/src/rendering.rs)，加载和资源挂载在 [website.rs](../crates/server/src/website.rs)。
 
-`BLOG_THEME_DIR` 指定启动默认主题。启动时加载它及同级目录下有效的主题，解析模板并读取静态资源快照；默认主题失败会阻止 `serve`，其他无效主题被跳过。通过统一的 `MiniJinjaThemeRenderer::load_checked` 入口，使用固定公开数据和真实执行器验证六类页面，覆盖空列表、缺少可选字段、50 篇首页、20 篇目录页及分页首/中/末页。校验沿用函数参数、查询和执行预算，不访问数据库；报错包含场景和页面入口。它是发布前契约检查，不穷尽任意数据相关分支。只有通过检查的快照进入可选主题注册表。请求复用已加载的模板与资源字节，不读取磁盘。新增或修改主题文件后需重启，使模板和资源快照一同生效；没有热安装、后台上传或样例预览发布流程。
+`BLOG_THEME_DIR` 指定启动默认主题。启动时加载它及同级目录下有效的主题，解析模板并读取静态资源快照；默认主题失败会阻止 `serve`，其他无效主题被跳过。通过统一的 `MiniJinjaThemeRenderer::load_checked` 入口，使用固定公开数据和真实执行器验证六类页面，覆盖空列表、缺少可选字段、首页配置允许的最大容量、目录页及分页首/中/末页。校验沿用函数参数、查询和执行预算，不访问数据库；报错包含场景和页面入口。它是发布前契约检查，不穷尽任意数据相关分支。只有通过检查的快照进入可选主题注册表。请求复用已加载的模板与资源字节，不读取磁盘。新增或修改主题文件后需重启，使模板和资源快照一同生效；没有热安装、后台上传或样例预览发布流程。
 
 后台站点设置可以选择已加载主题，选择以版本条件保存到 `settings.theme`。公开请求每次读取活动选择，切换已安装主题无需重启；未配置或对应主题不在启动注册表中时，使用启动默认主题。设置查询或模板执行失败会返回错误，不触发这项回退。资源按 `/assets/{theme_slug}/{release}/{path}` 分开，release 为模板、资源路径及字节内容共同计算的完整 SHA-256。HTTP 仅返回同一快照中的资源字节，并为成功响应设置一年 immutable 缓存；不存在的版本或文件返回 404。进程内原地替换磁盘文件不会改变既有 URL 的内容。重启后旧版本若未继续部署则返回 404，不会返回新内容；需要跨版本保留资源时应在部署层保留旧版本或使用 CDN。快照占用的内存与全部已加载主题资源大小有关。
 
@@ -51,6 +51,9 @@ themes/default/
 |---|---|---|
 | `site` | `title`、`description`、可空 `logo_url` | 全部 |
 | `seo` | `title`、`description`、`canonical_url`、`feed_url`、`og_type` | 全部 |
+| `pagination` | 首页 `page`、可空 `previous_url/next_url`，由应用层生成 | index |
+| `site.home_page_size` | 首页每页文章数 | 全部主题页面 |
+| `site.navigation` | 当前公开页面导航数组：`label/url/placement`，保持配置顺序 | 全部主题页面 |
 | `posts` | 文章卡片列表：标题、slug、`url`、摘要、发布时间、作者展示名及可空头像 URL | index |
 | `post` | 文章详情、清洗后 `content_html`、标签、系列数组、可空分类/封面 | post |
 | `page` | 页面详情与清洗后 `content_html` | page |
@@ -62,6 +65,12 @@ themes/default/
 可空图片 URL 为 `/media/{id}`。文章卡片和详情有 `author_avatar_url`，详情有 `cover_url`；已登记媒体链接独立公开，不随文章隐私、引用变化或媒体软删除撤销读取。
 
 站点信息每次按数据库设置、装配回退值解析；SEO 规则集中在 [seo.rs](../crates/application/src/seo.rs)，主题只输出结果。canonical、RSS 和 sitemap 使用经过验证的 `BLOG_PUBLIC_BASE_URL`，不取请求 Host；当前要求部署在域名根路径，不支持 URL 路径前缀。描述折叠为空白单行并限制为 160 字符，目录分页从第 2 页起使用自指 canonical。
+
+### 首页分页与页面导航
+
+首页 `/` 每页数量由站点设置 `home_page_size` 决定，默认 20，可在后台设置为 1–100，保存后下次请求即生效；后续页为 `/?page=N`，按发布时间和 ID 倒序。用多取一条判断下一页，模板使用 `pagination.previous_url/next_url`；第一页 canonical 为 `/`，后续页自指，越过末页返回 404，非法页码格式或溢出返回 400，非正数沿用目录分页规范化为第一页。空站点仍返回第一页。跨请求翻页不冻结数据集合。
+
+后台站点设置配置独立页面导航名称、目标 slug、页头/页脚位置及顺序。每次主题渲染以一次批量查询复核公开条件，只向模板提供可公开页面的链接；页面撤回、预约、私有、回收站或物理删除均隐藏入口，重新公开后恢复。不输出隐藏页面的名称或 slug。导航按路径配置，草稿改 slug 后需同步调整；永久删除后若新页面复用相同 slug，导航会指向该新页面。default/paper 均实现页头与页脚导航；导航是 `site` 上下文字段，不是可执行模板函数。
 
 ### RSS、sitemap 与 robots
 
@@ -151,6 +160,6 @@ sitemap 的 50,000 条限制是整个文件的预算：首页、文章、Page、
 
 ## 文章评论组件
 
-内置 default / paper 的文章模板通过 `data-comments-slug="{{ post.slug }}"` 挂载原生评论，加载 `/assets/comments.js` 与 `/assets/comments.css`。这些共享资源由 Rust 提供；昵称、错误和占位使用 DOM `textContent`，正文仅将服务端受限渲染的 `content_html` 放入 HTML 节点，不使用源文回退。公开列表和提交开关由同源 API 实时检查文章可见性。行为、分页及接口见[评论](comments.md)。
+内置 default / paper 的文章模板通过 `data-comments-slug="{{ post.slug }}"` 挂载原生评论，容器初始带 `hidden`，同源 API 确认全站及文章评论均开启后才显示整个区域，加载 `/assets/comments.js` 与 `/assets/comments.css`。这些共享资源由 Rust 提供；昵称、错误和占位使用 DOM `textContent`，正文仅将服务端受限渲染的 `content_html` 放入 HTML 节点，不使用源文回退。公开列表和提交开关由同源 API 实时检查文章可见性。行为、分页及接口见[评论](comments.md)。
 
 模板中的 `published_at`、`updated_at` 是按数据库站点设置 `site.time_zone` 格式化的展示文本，包含时区标记；`get_posts` / `get_post` 与页面主体使用该次渲染的同一时区快照；后台保存后，下次请求即生效。主题直接展示即可，不应按固定 UTC 格式解析这些文本。

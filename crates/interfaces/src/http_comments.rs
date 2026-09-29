@@ -1,13 +1,15 @@
 //! Comment HTTP boundaries: no cached visibility, session writes reuse AdminAuth.
 use crate::http_client_ip::client_ip;
-use crate::http_contract::{CommentPolicy, MessageResult, PreviewResult, SubmitCommentBody};
+use crate::http_contract::{
+    CommentPolicy, CommentSubmissionResult, PreviewResult, SubmitCommentBody,
+};
 use crate::{
     http_admin::AdminAuth,
     http_auth::AdminState,
     http_support::{RequestId, admin_error, cookie_value, no_store},
 };
 use application::{
-    comments::{CommentDto, CommentInteractor, CommentPage},
+    comments::{CommentDto, CommentInteractor, CommentPage, CommentStatus},
     error::UseCaseError,
     ports::SESSION_COOKIE,
 };
@@ -182,10 +184,20 @@ async fn submit(
         )
         .await
     {
-        Ok(()) => (
-            axum::http::StatusCode::ACCEPTED,
-            Json(MessageResult {
-                message: "已提交，等待审核".into(),
+        Ok(status) => (
+            if status == CommentStatus::Approved {
+                axum::http::StatusCode::CREATED
+            } else {
+                axum::http::StatusCode::ACCEPTED
+            },
+            Json(CommentSubmissionResult {
+                status: status.as_str(),
+                message: if status == CommentStatus::Approved {
+                    "评论已发布"
+                } else {
+                    "已提交，等待审核"
+                }
+                .into(),
             }),
         )
             .into_response(),
@@ -240,6 +252,7 @@ struct CommentJson {
     body: String,
     is_author: bool,
     status: &'static str,
+    moderation_reason: Option<String>,
     version: i64,
     created_at: String,
 }
@@ -260,6 +273,7 @@ impl From<CommentDto> for CommentJson {
             body: comment.body,
             is_author: comment.is_author,
             status: comment.status.as_str(),
+            moderation_reason: comment.moderation_reason,
             version: comment.version,
             created_at: comment.created_at,
         }

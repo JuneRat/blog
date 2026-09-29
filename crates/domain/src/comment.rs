@@ -47,11 +47,83 @@ pub struct ReplyContext {
     pub root: CommentReference,
 }
 
+/// Policy applies only to new submissions. Guest-supplied names/emails never establish trust.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum ModerationMode {
+    #[default]
+    All,
+    Guests,
+    FirstComment,
+    None,
+}
+impl ModerationMode {
+    pub fn parse(value: &str) -> Result<Self, &'static str> {
+        match value {
+            "all" => Ok(Self::All),
+            "guests" => Ok(Self::Guests),
+            "first_comment" => Ok(Self::FirstComment),
+            "none" => Ok(Self::None),
+            _ => Err("未知评论审核策略"),
+        }
+    }
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Guests => "guests",
+            Self::FirstComment => "first_comment",
+            Self::None => "none",
+        }
+    }
+    pub fn decide(self, account: bool, has_manual_approval: bool) -> SubmissionDecision {
+        match self {
+            Self::All => SubmissionDecision::ReviewAll,
+            Self::Guests | Self::FirstComment if !account => SubmissionDecision::ReviewGuest,
+            Self::Guests => SubmissionDecision::RegisteredAccount,
+            Self::FirstComment if has_manual_approval => SubmissionDecision::TrustedAccount,
+            Self::FirstComment => SubmissionDecision::ReviewFirstComment,
+            Self::None => SubmissionDecision::Unmoderated,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubmissionDecision {
+    ReviewAll,
+    ReviewGuest,
+    ReviewFirstComment,
+    RegisteredAccount,
+    TrustedAccount,
+    Unmoderated,
+}
+impl SubmissionDecision {
+    pub fn status(self) -> CommentStatus {
+        match self {
+            Self::ReviewAll | Self::ReviewGuest | Self::ReviewFirstComment => {
+                CommentStatus::Pending
+            }
+            Self::RegisteredAccount | Self::TrustedAccount | Self::Unmoderated => {
+                CommentStatus::Approved
+            }
+        }
+    }
+    pub fn reason(self) -> &'static str {
+        match self {
+            Self::ReviewAll => "all_comments",
+            Self::ReviewGuest => "guest",
+            Self::ReviewFirstComment => "first_comment",
+            Self::RegisteredAccount => "registered_account",
+            Self::TrustedAccount => "trusted_account",
+            Self::Unmoderated => "unmoderated",
+        }
+    }
+}
+
 /// 文章可访问性由提交端口保证；开关和关联事实须保持有效直到提交结束。
 #[derive(Debug, Clone, Copy)]
 pub struct CommentSubmission {
     pub post_id: Uuid,
     pub global_enabled: bool,
+    pub moderation: SubmissionDecision,
     pub post_enabled: bool,
     pub reply: Option<ReplyContext>,
 }
@@ -126,7 +198,7 @@ impl Comment {
             nickname: nickname.as_str().to_owned(),
             email,
             body: body.as_str().to_owned(),
-            status: CommentStatus::Pending,
+            status: context.moderation.status(),
             version: 1,
         })
     }

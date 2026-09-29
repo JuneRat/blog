@@ -1,12 +1,14 @@
 import { statusLabel } from "../components/ContentLifecycleControls";
 import { Alert, App as AntdApp, Button, Flex, Table, Typography } from "antd";
 import type { TableProps } from "antd";
-import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
 import { api } from "../api";
 import { permissionMessageOf } from "../apiError";
 import { useAuth } from "../auth";
-import { queryKeys } from "../queryClient";
+import { useContentList } from "../useContentList";
+import { PostScopeFilters } from "../components/PostScopeFilters";
+import { ContentListFilters } from "../components/ContentListControls";
 import { invalidateAfterWrite } from "../queryEffects";
 import type { PostSummary, PageSummary } from "../types";
 
@@ -31,35 +33,21 @@ export function PostTrashScreen({kind = "post"}: {kind?: "post" | "page"} = {}) 
   const { modal } = AntdApp.useApp();
   const queryClient = useQueryClient();
   /** 请求的是哪一页；**渲染一律用服务端回显的 `data.page`**，两者不混用。 */
-  const [requested, setRequested] = useState(1);
+
   const [actionError, setActionError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const canPurge = me?.permissions.includes(isPage ? "page.purge" : "post.purge") ?? false;
 
   const canRestore = me?.permissions.some((p) => isPage ? p === "page.delete" : p === "post.delete" || p === "post.delete_any") ?? false;
-  const trash = useQuery({
-    queryKey: isPage ? queryKeys.pageTrash(requested) : queryKeys.trash(requested),
-    queryFn: (): Promise<{items: (PostSummary | PageSummary)[]; total: number; page: number; per_page: number}> => isPage ? api.listPageTrash(requested) : api.listTrash(requested),
-    // 保留上一次成功的数据：页码与行都来自服务端回显，翻页期间两者始终自洽。
-    placeholderData: keepPreviousData,
-  });
+  const { query: trash, filter, setFilter, setPage: setRequested } = useContentList<PostSummary | PageSummary>(
+    isPage ? "page-trash" : "trash",
+    f => isPage ? api.listPageTrash(f.page, f) :
+      f.scope || f.author || f.q || f.category_id || f.status || f.visibility ? api.listTrash(f.page, f.author, f) : api.listTrash(f.page),
+  );
   const data = trash.data;
   const errorText =
     actionError ?? (trash.error === null ? null : permissionMessageOf(trash.error));
-
-  /**
-   * 删除/恢复后当前页可能已空：回退一页，而不是停在空的「第 N 页」。
-   *
-   * 只改「请求哪一页」，**不动 data**：页码一律由 `data.page`（服务端回显）渲染，
-   * 所以回退期间界面仍显示上一次成功那页的页码与行，两者始终自洽；
-   * 否则会出现「第 1 页」旁边还挂着第 2 页数据这种瞬时错配。
-   */
-  useEffect(() => {
-    if (data !== undefined && data.items.length === 0 && requested > 1) {
-      setRequested(requested - 1);
-    }
-  }, [data, requested]);
 
   async function run(post: PostSummary | PageSummary, purge: boolean): Promise<void> {
     setBusy(post.id);
@@ -103,6 +91,7 @@ export function PostTrashScreen({kind = "post"}: {kind?: "post" | "page"} = {}) 
       dataIndex: "slug",
       render: (slug: string) => <Typography.Text code>{slug}</Typography.Text>,
     },
+    ...(!isPage ? [{ title: "作者", dataIndex: "author_username" }] : []),
     { title: "原状态", dataIndex: "status", render: statusLabel },
     {
       title: "版本",
@@ -114,7 +103,7 @@ export function PostTrashScreen({kind = "post"}: {kind?: "post" | "page"} = {}) 
       key: "actions",
       render: (_value, post) => (
         <Flex gap={8}>
-          <Button type="text" disabled={busy !== null || !canRestore} onClick={() => act(post, false)}>
+          <Button type="text" disabled={busy !== null || !canRestore || (!isPage && "author_id" in post && post.author_id !== me?.user_id && !me?.permissions.includes("post.delete_any"))} onClick={() => act(post, false)}>
             恢复
           </Button>
           {canPurge && (
@@ -135,6 +124,8 @@ export function PostTrashScreen({kind = "post"}: {kind?: "post" | "page"} = {}) 
         恢复后统一为草稿，不会自动发布。永久删除不可撤销。
       </Typography.Paragraph>
 
+      {!isPage && <PostScopeFilters filter={filter} onChange={setFilter} />}
+      <ContentListFilters filter={filter} onChange={setFilter} />
       {errorText !== null && (
         <Alert type="error" showIcon title={errorText} style={{ marginBottom: 16 }} />
       )}

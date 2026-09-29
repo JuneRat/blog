@@ -268,6 +268,7 @@ pub async fn run_post(deps: PostCliDeps, action: PostAction) -> Result<(), Strin
                         status,
                         visibility,
                         trash: false,
+                        ..Default::default()
                     },
                 )
                 .await

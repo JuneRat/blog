@@ -40,6 +40,10 @@ export interface AuditFilter {
   until?: string;
 }
 export interface ContentListFilter {
+  q?: string;
+  scope?: "mine" | "all";
+  author?: string;
+  category_id?: string;
   page: number;
   status?: string;
   visibility?: Visibility;

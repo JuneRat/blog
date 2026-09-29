@@ -18,7 +18,7 @@ static SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 async fn status_change_does_not_deadlock_with_session_eviction_and_late_creation() {
     let _g = SERIAL.lock().await;
     let pool = database().await;
-    let (owner, _) = account(&pool, "owner", "owner").await;
+    let (owner, _) = account(&pool, "owner", "admin").await;
     let (_, target) = account(&pool, "author", "author").await;
     let sessions = PostgresSessionStore::with_defaults(common::database(pool.clone()));
     sessions
@@ -88,6 +88,13 @@ async fn database() -> PgPool {
         .await
         .unwrap();
     rbac.sync_builtin_roles(BUILTIN_ROLES).await.unwrap();
+    sqlx::query("INSERT INTO roles(id,code,name) VALUES($1,'account-manager','Account manager')")
+        .bind(Uuid::now_v7())
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO role_permissions(role_id,permission_code) SELECT id,'user.manage' FROM roles WHERE code='account-manager'")
+        .execute(&pool).await.unwrap();
     pool
 }
 
@@ -129,7 +136,7 @@ async fn change(
 async fn status_changes_revoke_sessions_and_never_revive_old_tokens() {
     let _g = SERIAL.lock().await;
     let pool = database().await;
-    let (owner, _) = account(&pool, "owner", "owner").await;
+    let (owner, _) = account(&pool, "owner", "admin").await;
     let (_, user) = account(&pool, "author", "author").await;
     let repo = PostgresUserRepository::new(common::database(pool.clone()));
     let sessions = PostgresSessionStore::with_defaults(common::database(pool.clone()));
@@ -224,8 +231,8 @@ async fn status_changes_revoke_sessions_and_never_revive_old_tokens() {
 async fn owner_and_current_operator_permissions_are_checked_under_the_lock() {
     let _g = SERIAL.lock().await;
     let pool = database().await;
-    let (owner, owner_user) = account(&pool, "owner", "owner").await;
-    let (admin, admin_user) = account(&pool, "admin", "admin").await;
+    let (owner, owner_user) = account(&pool, "owner", "admin").await;
+    let (admin, admin_user) = account(&pool, "manager", "account-manager").await;
     let (_, target) = account(&pool, "author", "author").await;
     let repo = PostgresUserRepository::new(common::database(pool.clone()));
     assert!(matches!(
@@ -234,7 +241,7 @@ async fn owner_and_current_operator_permissions_are_checked_under_the_lock() {
     ));
     assert!(matches!(
         change(&repo, &owner, &owner_user, UserStatus::Disabled).await,
-        Err(UseCaseError::LastOwnerProtected)
+        Err(UseCaseError::LastAdminProtected)
     ));
     let disabled = change(&repo, &admin, &target, UserStatus::Disabled)
         .await
@@ -262,8 +269,8 @@ async fn owner_and_current_operator_permissions_are_checked_under_the_lock() {
 async fn two_owners_cannot_disable_themselves_concurrently() {
     let _g = SERIAL.lock().await;
     let pool = database().await;
-    let (actor_a, a) = account(&pool, "owner-a", "owner").await;
-    let (actor_b, b) = account(&pool, "owner-b", "owner").await;
+    let (actor_a, a) = account(&pool, "owner-a", "admin").await;
+    let (actor_b, b) = account(&pool, "owner-b", "admin").await;
     let repo = PostgresUserRepository::new(common::database(pool.clone()));
     let (a, b) = tokio::join!(
         change(&repo, &actor_a, &a, UserStatus::Disabled),
@@ -272,11 +279,11 @@ async fn two_owners_cannot_disable_themselves_concurrently() {
     assert!(a.is_ok() ^ b.is_ok());
     assert!(matches!(
         a.err().or(b.err()),
-        Some(UseCaseError::LastOwnerProtected)
+        Some(UseCaseError::LastAdminProtected)
     ));
     assert_eq!(
         PostgresRbacStore::new(common::database(pool))
-            .loginable_owner_count()
+            .loginable_admin_count()
             .await
             .unwrap(),
         1
@@ -284,31 +291,31 @@ async fn two_owners_cannot_disable_themselves_concurrently() {
 }
 
 #[tokio::test]
-async fn disabling_and_role_removal_share_last_owner_protection() {
+async fn disabling_and_role_removal_share_last_admin_protection() {
     let _g = SERIAL.lock().await;
     let pool = database().await;
-    let (_, a) = account(&pool, "owner-a", "owner").await;
-    let (_, b) = account(&pool, "owner-b", "owner").await;
+    let (_, a) = account(&pool, "owner-a", "admin").await;
+    let (_, b) = account(&pool, "owner-b", "admin").await;
     let repo = PostgresUserRepository::new(common::database(pool.clone()));
     let rbac = PostgresRbacStore::new(common::database(pool));
     let operator = Actor::bootstrap_cli();
     let (disable, remove) = tokio::join!(
         change(&repo, &operator, &a, UserStatus::Disabled),
-        rbac.remove_role(b.id, "owner", None.into()),
+        rbac.remove_role(b.id, "admin", None.into()),
     );
     assert!(disable.is_ok() ^ remove.is_ok());
     assert!(matches!(
         disable.err().or(remove.err()),
-        Some(UseCaseError::LastOwnerProtected)
+        Some(UseCaseError::LastAdminProtected)
     ));
-    assert_eq!(rbac.loginable_owner_count().await.unwrap(), 1);
+    assert_eq!(rbac.loginable_admin_count().await.unwrap(), 1);
 }
 
 #[tokio::test]
 async fn failed_audit_rolls_back_status_versions_and_session_deletion() {
     let _g = SERIAL.lock().await;
     let pool = database().await;
-    let (owner, _) = account(&pool, "owner", "owner").await;
+    let (owner, _) = account(&pool, "owner", "admin").await;
     let (_, target) = account(&pool, "author", "author").await;
     let repo = PostgresUserRepository::new(common::database(pool.clone()));
     let sessions = PostgresSessionStore::with_defaults(common::database(pool.clone()));
@@ -331,9 +338,9 @@ async fn failed_audit_rolls_back_status_versions_and_session_deletion() {
 async fn enabling_never_restores_deleted_accounts_or_bypasses_owner_permissions() {
     let _g = SERIAL.lock().await;
     let pool = database().await;
-    let (owner, _) = account(&pool, "owner", "owner").await;
-    let (_, other) = account(&pool, "owner-other", "owner").await;
-    let (admin, _) = account(&pool, "admin", "admin").await;
+    let (owner, _) = account(&pool, "owner", "admin").await;
+    let (_, other) = account(&pool, "owner-other", "admin").await;
+    let (admin, _) = account(&pool, "manager", "account-manager").await;
     let repo = PostgresUserRepository::new(common::database(pool.clone()));
     let disabled = change(&repo, &owner, &other, UserStatus::Disabled)
         .await
@@ -357,8 +364,8 @@ async fn enabling_never_restores_deleted_accounts_or_bypasses_owner_permissions(
 async fn owner_noop_still_checks_permissions_and_version_without_side_effects() {
     let _g = SERIAL.lock().await;
     let pool = database().await;
-    let (owner, target) = account(&pool, "owner", "owner").await;
-    let (admin, _) = account(&pool, "admin", "admin").await;
+    let (owner, target) = account(&pool, "owner", "admin").await;
+    let (admin, _) = account(&pool, "manager", "account-manager").await;
     let repo = PostgresUserRepository::new(common::database(pool.clone()));
     let sessions = PostgresSessionStore::with_defaults(common::database(pool.clone()));
     let token = sessions

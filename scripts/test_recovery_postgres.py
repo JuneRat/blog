@@ -54,7 +54,7 @@ class PostgresRecoveryTests(unittest.TestCase):
         self.cli(["migrate"])
         self.cli(["user", "create", "recovery-owner"])
         self.cli(["user", "passwd", "--user", "recovery-owner", "--password-stdin"], password="Recovery drill password 2026!\n")
-        self.cli(["role", "assign", "--user", "recovery-owner", "--role", "owner"])
+        self.cli(["role", "assign", "--user", "recovery-owner", "--role", "admin"])
         self.seed()
 
     def cleanup_database(self):

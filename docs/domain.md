@@ -18,7 +18,7 @@
 | [identity/password.rs](../crates/domain/src/identity/password.rs) | `PasswordError`、密码策略与常量 | 新密码长度、用户名包含与常见口令规则 |
 | [identity/permissions.rs](../crates/domain/src/identity/permissions.rs) | `PermissionSet` | 权限并集、成员判断与子集关系 |
 | [media.rs](../crates/domain/src/media.rs) | `Media`、软删除标记、图片格式与校验结果 | 软删除和恢复、上传大小与声明尺寸、文件名规范化 |
-| [comment.rs](../crates/domain/src/comment.rs) | `CommentBody`、`CommentNickname`、`CommentStatus`、`ModerationAction` | 评论正文与昵称校验、审核动作与状态 |
+| [comment.rs](../crates/domain/src/comment.rs) | `CommentBody`、`CommentNickname`、`CommentStatus`、`ModerationAction`、`ModerationMode`、`SubmissionDecision` | 评论正文与昵称校验、提交审核策略、审核动作与状态 |
 | [settings.rs](../crates/domain/src/settings.rs) | `SiteSettings` | 站点标题、描述与 logo 的完整写入值 |
 
 没有 `appearance`、邀请、主题激活或通用扩展聚合；角色授权、OAuth 绑定和设置持久化由应用用例与对应端口组织。数据库关系表不自动对应一个领域聚合。
@@ -63,7 +63,7 @@ Post/Page 第一次预约或发布后禁止改 slug，取消预约、撤回与�
 | 删除标签/系列时解除关联、增版并保留文章 | 对应目录删除事务；聚合不查询其他内容 |
 | 新媒体引用可用性、软删除保留历史引用、禁止物理删除仍被引用资产 | 应用授权与媒体引用事务协议 |
 | 作者归属、own/any 权限、Page 站点权限 | 应用 `Actor` 与授权用例 |
-| 最后 Owner、最后登录方式、角色委派上限 | 身份用例与身份变更锁 |
+| 最后 Admin、最后登录方式、角色委派上限 | 身份用例与身份变更锁 |
 
 Post 只引用 `identity::UserId`，不引用 User 聚合或权限实现。公开作者信息、目录当前名称和图片 URL 由读取用例组装，不让聚合互相持有展示数据。
 

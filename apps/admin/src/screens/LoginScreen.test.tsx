@@ -18,7 +18,7 @@ vi.mock("../auth", () => ({
 
 vi.mock("../api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api")>();
-  return { ...actual, api: { loginWithPassword: vi.fn() } };
+  return { ...actual, api: { loginWithPassword: vi.fn(), registrationStatus: vi.fn(async () => ({enabled:false})), register: vi.fn() } };
 });
 
 import { ApiError, api } from "../api";
@@ -44,7 +44,7 @@ function submitButton(): HTMLButtonElement {
 }
 
 function fillForm(username: string, password: string): void {
-  fireEvent.change(screen.getByLabelText("用户名"), { target: { value: username } });
+  fireEvent.change(screen.getByLabelText("用户名或邮箱"), { target: { value: username } });
   fireEvent.change(screen.getByLabelText("密码"), { target: { value: password } });
 }
 
@@ -122,4 +122,21 @@ describe("LoginScreen", () => {
     const link = screen.getByRole("link", { name: "使用 示例 IdP 登录" }) as HTMLAnchorElement;
     expect(link.getAttribute("href")).toBe("/auth/login?provider=idp&next=%2Fadmin%2F");
   });
+});
+
+it("registers without a nickname and returns to username/email login", async () => {
+  vi.mocked(api.registrationStatus).mockResolvedValueOnce({ enabled: true });
+  vi.mocked(api.register).mockResolvedValueOnce({ message: "注册成功，请登录" });
+  renderLogin();
+  fireEvent.click(await screen.findByRole("button", { name: "注册账号" }));
+  fireEvent.change(screen.getByLabelText("用户名"), { target: { value: "reader" } });
+  fireEvent.change(screen.getByLabelText("邮箱"), { target: { value: "reader@example.com" } });
+  fireEvent.change(screen.getByLabelText("密码"), { target: { value: "harbor-lantern-2026" } });
+  fireEvent.click(screen.getByRole("button", { name: "注册" }));
+  expect(await screen.findByText("注册成功，请登录。")).toBeTruthy();
+  expect(api.register).toHaveBeenCalledWith({ username: "reader", display_name: null, email: "reader@example.com", password: "harbor-lantern-2026" });
+  loginWithPassword.mockResolvedValueOnce({ user_id: "reader-id", next: "/admin/" });
+  fillForm("reader@example.com", "harbor-lantern-2026");
+  fireEvent.click(submitButton());
+  await waitFor(() => expect(loginWithPassword).toHaveBeenCalledWith(expect.objectContaining({ username: "reader@example.com" })));
 });

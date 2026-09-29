@@ -51,6 +51,7 @@ pub trait ThemeRenderer: Send + Sync {
         site: &SiteInfo,
         seo: &SeoMeta,
         posts: &[PostCard],
+        pagination: &crate::public_site::IndexPagination,
     ) -> Result<String, UseCaseError>;
     async fn render_post(
         &self,

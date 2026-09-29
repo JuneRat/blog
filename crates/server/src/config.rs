@@ -320,6 +320,7 @@ impl DeploymentConfig {
             bind,
             trusted_proxies,
             site: SiteInfo {
+                navigation: vec![],
                 time_zone: self.legacy_site_time_zone()?.name().into(),
                 ..SiteInfo::default()
             },
@@ -331,6 +332,8 @@ impl DeploymentConfig {
 
     pub fn bootstrap_site(&self) -> Result<SiteSettingsValue, String> {
         validate_initial_site(SiteSettingsValue {
+            home_page_size: None,
+            navigation: vec![],
             time_zone: None,
             title: self.optional_string("bootstrap.title")?,
             description: self.optional_string("bootstrap.description")?,

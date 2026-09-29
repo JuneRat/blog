@@ -215,6 +215,7 @@ async fn fresh_stack_with(throttle_config: ThrottleConfig) -> Stack {
     ));
 
     let auth_state = AuthState {
+        registration: common::registration(&pool),
         admission: Arc::new(infrastructure::InMemoryRequestAdmission::default()),
         auth: auth.clone(),
         passwords: passwords.clone(),
@@ -250,6 +251,8 @@ async fn fresh_stack_with(throttle_config: ThrottleConfig) -> Stack {
             )),
             Arc::new(SystemClock),
             application::site_info::SiteInfo {
+                home_page_size: application::site_info::DEFAULT_HOME_PAGE_SIZE,
+                navigation: vec![],
                 time_zone: "UTC".into(),
                 title: "测试站点".into(),
                 description: "测试描述".into(),
@@ -427,7 +430,7 @@ async fn owner_can_edit_profile_keep_session_and_log_out() {
     let stack = fresh_stack().await;
     stack
         .roles
-        .assign_to_username(&Actor::bootstrap_cli(), "sun", "owner")
+        .assign_to_username(&Actor::bootstrap_cli(), "sun", "admin")
         .await
         .unwrap();
     let (status, headers, _) = login(&stack, PASSWORD).await;
@@ -439,7 +442,7 @@ async fn owner_can_edit_profile_keep_session_and_log_out() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|p| p == "ownership.manage")
+            .any(|p| p == "admin.manage")
     );
     let csrf = profile["csrf_token"].as_str().unwrap();
     let version = profile["version"].as_i64().unwrap();
@@ -1068,7 +1071,7 @@ async fn status_operator(stack: &Stack, username: &str, role: &str) -> (String, 
 async fn disabling_blocks_password_login_and_enabling_requires_a_new_session() {
     let _g = SERIAL.lock().await;
     let stack = fresh_stack().await;
-    let (cookie, operator) = status_operator(&stack, "owner", "owner").await;
+    let (cookie, operator) = status_operator(&stack, "owner", "admin").await;
     let csrf = operator["csrf_token"].as_str().unwrap();
     let headers = [("cookie", cookie.as_str()), ("x-csrf-token", csrf)];
     let (_, original_headers, _) = login(&stack, PASSWORD).await;
@@ -1135,7 +1138,7 @@ async fn disabling_blocks_password_login_and_enabling_requires_a_new_session() {
 async fn status_endpoint_enforces_csrf_permissions_owner_guard_and_versions() {
     let _g = SERIAL.lock().await;
     let stack = fresh_stack().await;
-    let (cookie, owner) = status_operator(&stack, "owner", "owner").await;
+    let (cookie, owner) = status_operator(&stack, "owner", "admin").await;
     let path = format!(
         "/api/admin/v1/users/{}/status",
         owner["user_id"].as_str().unwrap()
@@ -1166,7 +1169,7 @@ async fn status_endpoint_enforces_csrf_permissions_owner_guard_and_versions() {
     let (status, _, response) =
         request(&stack.router, "PUT", &path, &headers, Some(body.clone())).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
-    assert_eq!(response["code"], "last_owner");
+    assert_eq!(response["code"], "last_admin");
     let mut stale = body.clone();
     stale["expected_version"] = serde_json::json!(owner["version"].as_i64().unwrap() - 1);
     let (status, _, response) = request(&stack.router, "PUT", &path, &headers, Some(stale)).await;
@@ -1226,7 +1229,14 @@ async fn status_endpoint_enforces_csrf_permissions_owner_guard_and_versions() {
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
     assert_eq!(response["code"], "forbidden");
-    let (admin_cookie, admin) = status_operator(&stack, "administrator", "admin").await;
+    sqlx::query("INSERT INTO roles(id,code,name) VALUES($1,'account-manager','Account manager')")
+        .bind(uuid::Uuid::now_v7())
+        .execute(&stack.pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO role_permissions(role_id,permission_code) SELECT id,'user.manage' FROM roles WHERE code='account-manager'")
+        .execute(&stack.pool).await.unwrap();
+    let (admin_cookie, admin) = status_operator(&stack, "administrator", "account-manager").await;
     assert_eq!(
         request(
             &stack.router,
@@ -1244,7 +1254,7 @@ async fn status_endpoint_enforces_csrf_permissions_owner_guard_and_versions() {
         "Administrator 不能停用 Owner"
     );
     // 有另一位可登录 Owner 后允许本人停用；下一次请求必须重新认证。
-    status_operator(&stack, "other-owner", "owner").await;
+    status_operator(&stack, "other-owner", "admin").await;
     assert_eq!(
         request(&stack.router, "PUT", &path, &headers, Some(body))
             .await

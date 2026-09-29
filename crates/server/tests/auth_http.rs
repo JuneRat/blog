@@ -200,6 +200,7 @@ async fn fresh_stack_with(secure_cookies: bool) -> Stack {
     let passwords = common::password_interactor(user_repo.clone(), sessions);
 
     let auth_state = AuthState {
+        registration: common::registration(&pool),
         admission: Arc::new(infrastructure::InMemoryRequestAdmission::default()),
         auth: auth.clone(),
         passwords: passwords.clone(),
@@ -235,6 +236,8 @@ async fn fresh_stack_with(secure_cookies: bool) -> Stack {
             )),
             std::sync::Arc::new(infrastructure::SystemClock),
             application::site_info::SiteInfo {
+                home_page_size: application::site_info::DEFAULT_HOME_PAGE_SIZE,
+                navigation: vec![],
                 time_zone: "Asia/Shanghai".into(),
                 title: "测试站点".into(),
                 description: "测试描述".into(),

@@ -36,6 +36,7 @@ use crate::http_support::{
 
 #[derive(Clone)]
 pub struct AuthState {
+    pub registration: Arc<application::registration::RegistrationInteractor>,
     pub admission: Arc<dyn application::ports::RequestAdmission>,
     pub auth: Arc<AuthInteractor>,
     pub passwords: Arc<PasswordInteractor>,
@@ -51,6 +52,7 @@ const SESSION_COOKIE_MAX_AGE: u64 = 7 * 24 * 3600;
 const PASSWORD_BODY_LIMIT: usize = 4 * 1024;
 
 pub fn auth_router(state: AuthState) -> Router {
+    let registration_state = state.clone();
     let providers_route = Router::new()
         .route("/auth/providers", get(list_providers))
         .layer(middleware::from_fn(no_store))
@@ -76,6 +78,7 @@ pub fn auth_router(state: AuthState) -> Router {
         .with_state(state)
         .merge(providers_route)
         .merge(password_route)
+        .merge(crate::http_registration::public_router(registration_state))
 }
 
 // ---------------------------------------------------------------------------
@@ -518,7 +521,9 @@ fn auth_error(e: UseCaseError) -> Response {
         | UseCaseError::Conflict(_)
         | UseCaseError::CategoryInUse { .. } => StatusCode::BAD_REQUEST,
         UseCaseError::NotFound(_) => StatusCode::NOT_FOUND,
-        UseCaseError::Forbidden | UseCaseError::LastOwnerProtected => StatusCode::FORBIDDEN,
+        UseCaseError::Forbidden
+        | UseCaseError::RegistrationClosed
+        | UseCaseError::LastAdminProtected => StatusCode::FORBIDDEN,
         UseCaseError::External(_) => StatusCode::BAD_GATEWAY,
         UseCaseError::VersionConflict => StatusCode::CONFLICT,
         UseCaseError::Repository(_) | UseCaseError::DataCorrupt(_) | UseCaseError::Render(_) => {

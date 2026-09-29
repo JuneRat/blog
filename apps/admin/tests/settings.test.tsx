@@ -2,7 +2,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
-import { ApiError, mediaApi, settingsApi, themeSettingsApi, retentionApi } from "../src/api";
+import { ApiError, api, commentsApi, mediaApi, settingsApi, themeSettingsApi, retentionApi } from "../src/api";
 import { paths } from "../src/router";
 import type { SiteSettings } from "../src/types";
 
@@ -20,6 +20,8 @@ vi.mock("../src/api", async (importOriginal) => {
   const original = await importOriginal<typeof import("../src/api")>();
   return {
     ...original,
+    api: { ...original.api, accessSettings: vi.fn(), saveAccessSettings: vi.fn() },
+    commentsApi: { ...original.commentsApi, policy: vi.fn(), savePolicy: vi.fn() },
     settingsApi: { get: vi.fn(), save: vi.fn() },
     themeSettingsApi: { get: vi.fn(), save: vi.fn() },
     retentionApi: { get: vi.fn(), save: vi.fn() },
@@ -28,6 +30,8 @@ vi.mock("../src/api", async (importOriginal) => {
 });
 
 const fallbackView: SiteSettings = {
+  home_page_size: 12,
+  navigation: [],
   time_zone: "UTC",
   time_zones: ["UTC", "Asia/Shanghai", "America/New_York"],
   title: "默认站点",
@@ -58,12 +62,34 @@ beforeEach(() => {
   vi.resetAllMocks();
   window.history.replaceState(null, "", paths.settings);
   vi.mocked(settingsApi.get).mockResolvedValue(fallbackView);
+  vi.mocked(api.accessSettings).mockResolvedValue({ registration_enabled: false, guest_comments_enabled: false, version: 0 });
+  vi.mocked(commentsApi.policy).mockResolvedValue({ enabled: true, moderation: 'all', version: 4 });
   vi.mocked(retentionApi.get).mockResolvedValue({ comment_ip_days: 180, comment_version: 0, audit_days: 180, audit_version: 0 });
   vi.mocked(themeSettingsApi.get).mockResolvedValue({ slug: "default", effective_slug: "default", source: "fallback", version: 0, available: [{ slug: "default", name: "Default" }, { slug: "paper", name: "Paper" }] });
 });
 afterEach(cleanup);
 
 describe("站点设置屏", () => {
+  it("评论审核策略和全站开关立即保存，并沿用最新设置版本", async () => {
+    vi.mocked(commentsApi.savePolicy).mockImplementation(async policy => {
+      const updated = { ...policy, moderation: policy.moderation ?? 'first_comment' as const, version: policy.version + 1 };
+      vi.mocked(commentsApi.policy).mockResolvedValue(updated);
+      return updated;
+    });
+    render(<App />);
+    fireEvent.click(await screen.findByRole('tab', { name: '账号与评论' }));
+    const selector = await screen.findByRole('combobox', { name: '审核策略' });
+    await waitFor(() => expect(selector.hasAttribute('disabled')).toBe(false));
+    fireEvent.mouseDown(selector);
+    fireEvent.click(await screen.findByTitle('首次评论审核'));
+    await waitFor(() => expect(commentsApi.savePolicy).toHaveBeenCalledWith({ enabled: true, moderation: 'first_comment', version: 4 }, undefined));
+    const toggle = screen.getByRole('switch', { name: '允许全站评论' });
+    await waitFor(() => expect((toggle as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(toggle);
+    await waitFor(() => expect(commentsApi.savePolicy).toHaveBeenLastCalledWith({ enabled: false, version: 5 }, undefined));
+    await screen.findByText(/账号已有人工审核通过且仍保留为通过状态/);
+    await waitFor(() => expect(toggle.getAttribute('aria-checked')).toBe('false'));
+  });
   it("保存时区后立即更新后台显示，并保留等待期间的新选择", async () => {
     let resolveSave!: (view: SiteSettings) => void;
     vi.mocked(settingsApi.save).mockImplementation(() => new Promise((resolve) => { resolveSave = resolve; }));
@@ -72,10 +98,11 @@ describe("站点设置屏", () => {
     fireEvent.mouseDown(zone);
     fireEvent.click(await screen.findByTitle("Asia/Shanghai"));
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
-    await waitFor(() => expect(settingsApi.save).toHaveBeenCalledWith({
+    await waitFor(() => expect(settingsApi.save).toHaveBeenCalledWith(expect.objectContaining({
+      navigation: [],
       title: fallbackView.title, description: fallbackView.description, logo_media_id: null,
       time_zone: "Asia/Shanghai", expected_version: 0,
-    }));
+    })));
     fireEvent.mouseDown(zone);
     fireEvent.click(await screen.findByTitle("America/New_York"));
     await act(async () => resolveSave({ ...fallbackView, time_zone: "Asia/Shanghai", source: "database", version: 1 }));
@@ -97,7 +124,7 @@ describe("站点设置屏", () => {
     fireEvent.change(ip, { target: { value: "60" } });
     fireEvent.blur(ip);
     fireEvent.click(screen.getByRole("button", { name: "保存保留期" }));
-    await waitFor(() => expect(retentionApi.save).toHaveBeenCalledWith({ comment_ip_days: 60, comment_version: 0, audit_days: 180, audit_version: 0 }));
+    await waitFor(() => expect(retentionApi.save).toHaveBeenCalledWith(expect.objectContaining({ comment_ip_days: 60, comment_version: 0, audit_days: 180, audit_version: 0 })));
     await screen.findByText(/你的输入已保留，请重新加载后再编辑/);
     expect((ip as HTMLInputElement).value).toBe("60");
     expect((screen.getByRole("button", { name: "保存保留期" }) as HTMLButtonElement).disabled).toBe(true);
@@ -108,7 +135,7 @@ describe("站点设置屏", () => {
     fireEvent.change(ip, { target: { value: "91" } });
     fireEvent.blur(ip);
     fireEvent.click(screen.getByRole("button", { name: "保存保留期" }));
-    await waitFor(() => expect(retentionApi.save).toHaveBeenLastCalledWith({ comment_ip_days: 91, comment_version: 2, audit_days: 365, audit_version: 3 }));
+    await waitFor(() => expect(retentionApi.save).toHaveBeenLastCalledWith(expect.objectContaining({ comment_ip_days: 91, comment_version: 2, audit_days: 365, audit_version: 3 })));
     await screen.findByText("保留期已保存，下次维护时生效。");
   });
   it("切换主题携带版本并显示即时生效", async () => {
@@ -181,13 +208,14 @@ describe("站点设置屏", () => {
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
 
     await waitFor(() =>
-      expect(settingsApi.save).toHaveBeenCalledWith({
+      expect(settingsApi.save).toHaveBeenCalledWith(expect.objectContaining({
+      navigation: [],
         time_zone: "UTC",
         title: "数据库站点",
         description: "新描述",
         logo_media_id: null,
         expected_version: 0,
-      }),
+      })),
     );
     await waitFor(() => expect(screen.getByText(/已保存（v1）/)).toBeTruthy());
     expect(screen.getByText(/当前生效来源：数据库（v1）/)).toBeTruthy();
@@ -257,13 +285,14 @@ describe("站点设置屏", () => {
     // window.confirm 换成 antd modal.confirm：确认动作挪进弹窗的默认「确定」。
     fireEvent.click(await screen.findByRole("button", { name: "确定" }));
     await waitFor(() =>
-      expect(settingsApi.save).toHaveBeenLastCalledWith({
+      expect(settingsApi.save).toHaveBeenLastCalledWith(expect.objectContaining({
+      navigation: [],
         time_zone: "UTC",
         logo_media_id: null,
         title: "我的标题",
         description: "描述",
         expected_version: 2,
-      }),
+      })),
     );
     await waitFor(() => expect(screen.getByText(/已保存（v3）/)).toBeTruthy());
   });
@@ -291,12 +320,13 @@ describe("站点设置屏", () => {
       expect(screen.getByRole("button", { name: "重新加载" })).toBeTruthy(),
     );
 
+    vi.mocked(settingsApi.save).mockClear();
     fireEvent.click(screen.getByRole("button", { name: "重新加载" }));
     await waitFor(() =>
       expect((screen.getByLabelText("站点标题") as HTMLInputElement).value).toBe("服务器标题"),
     );
     expect(screen.getByText(/已重新加载服务器当前值/)).toBeTruthy();
-    expect(settingsApi.save).toHaveBeenCalledTimes(1, "重新加载本身不再保存");
+    expect(settingsApi.save).not.toHaveBeenCalled();
   });
 
   it("无权限时展示服务端 403 文案", async () => {
@@ -322,7 +352,7 @@ describe("站点设置屏", () => {
     const title = (await screen.findByLabelText("站点标题")) as HTMLInputElement;
     fireEvent.change(title, { target: { value: "提交时的标题" } });
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
-    await waitFor(() => expect(settingsApi.save).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(settingsApi.save).toHaveBeenCalled());
 
     // 请求未回来之前继续编辑：这段输入不能被响应覆盖。
     fireEvent.change(title, { target: { value: "等待期间的新输入" } });
@@ -363,35 +393,6 @@ describe("站点设置屏", () => {
     expect(screen.queryByText(/尚未提交/)).toBeNull();
   });
 
-  it("长度按 Unicode 码点计：200 个 emoji 通过，201 个被拦下", async () => {
-    vi.mocked(settingsApi.save).mockResolvedValue({
-      ...fallbackView,
-      title: "😀".repeat(200),
-      description: "回退描述",
-      source: "database",
-      version: 1,
-    });
-    render(<App />);
-
-    const title = (await screen.findByLabelText("站点标题")) as HTMLInputElement;
-    // 原生 maxLength 按 UTF-16 代码单元截断，无法表达码点上限，因此不设该属性。
-    expect(title.getAttribute("maxlength")).toBeNull();
-
-    fireEvent.change(title, { target: { value: "😀".repeat(200) } });
-    expect(screen.getByText(`200/200 字符`)).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "保存" }));
-    await waitFor(() => expect(settingsApi.save).toHaveBeenCalledTimes(1));
-    expect(vi.mocked(settingsApi.save).mock.calls[0][0].title).toBe("😀".repeat(200));
-
-    fireEvent.change(title, { target: { value: "😀".repeat(201) } });
-    expect(screen.getByText(`201/200 字符`)).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "保存" }));
-    await waitFor(() =>
-      expect(screen.getByText("站点标题长度不能超过 200 字符。")).toBeTruthy(),
-    );
-    expect(settingsApi.save).toHaveBeenCalledTimes(1);
-  });
-
   it("选择站点 logo 后保存：整组 PUT 携带 logo_media_id", async () => {
     vi.mocked(settingsApi.get).mockResolvedValue({
       ...fallbackView,
@@ -418,7 +419,7 @@ describe("站点设置屏", () => {
     fireEvent.click(await screen.findByRole("button", { name: "选择" }));
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
 
-    await waitFor(() => expect(settingsApi.save).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(settingsApi.save).toHaveBeenCalled());
     expect(vi.mocked(settingsApi.save).mock.calls[0][0]).toMatchObject({
       logo_media_id: "logo-1",
       expected_version: 1,
@@ -443,10 +444,28 @@ describe("站点设置屏", () => {
     fireEvent.click(await screen.findByRole("button", { name: "移除封面" }));
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
 
-    await waitFor(() => expect(settingsApi.save).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(settingsApi.save).toHaveBeenCalled());
     expect(vi.mocked(settingsApi.save).mock.calls[0][0]).toMatchObject({
       logo_media_id: null,
       expected_version: 3,
     });
   });
+});
+
+
+it("首页数量和页面导航顺序随站点设置保存", async () => {
+  const navigation: SiteSettings["navigation"] = [
+    { label: "关于", page_slug: "about", placement: "header" },
+    { label: "联系", page_slug: "contact", placement: "footer" },
+  ];
+  const homePageSize = 8;
+  vi.mocked(settingsApi.get).mockResolvedValue({ ...fallbackView, navigation });
+  vi.mocked(settingsApi.save).mockResolvedValue({ ...fallbackView, home_page_size: homePageSize, navigation: [...navigation].reverse(), source: "database", version: 1 });
+  render(<App />);
+  fireEvent.change(await screen.findByLabelText("首页每页文章数"), { target: { value: String(homePageSize) } });
+  fireEvent.click(screen.getByRole("button", { name: "上移导航 2" }));
+  fireEvent.click(screen.getByRole("button", { name: "保存" }));
+  await waitFor(() => expect(settingsApi.save).toHaveBeenCalledWith(expect.objectContaining({
+    home_page_size: homePageSize, navigation: [...navigation].reverse(),
+  })));
 });

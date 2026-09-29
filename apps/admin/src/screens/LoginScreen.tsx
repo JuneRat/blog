@@ -1,8 +1,10 @@
 import { Alert, Button, Card, Flex, Form, Input, Typography } from "antd";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { messageOf } from "../apiError";
 import { useAuth } from "../auth";
+
+import { RegisterScreen } from "./RegisterScreen";
 
 interface Credentials {
   username: string;
@@ -18,6 +20,19 @@ interface Credentials {
  */
 export function LoginScreen() {
   const { providers, providersLoaded, refresh } = useAuth();
+  const [registrationEnabled, setRegistrationEnabled] = useState(false);
+  const [registering, setRegistering] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const next = new URLSearchParams(window.location.search).get("next") || "/admin/";
+  useEffect(() => {
+    let active = true;
+    void api.registrationStatus()
+      .then((result) => {
+        if (active) setRegistrationEnabled(result.enabled);
+      })
+      .catch(() => {});
+    return () => { active = false; };
+  }, []);
   const [form] = Form.useForm<Credentials>();
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -50,11 +65,12 @@ export function LoginScreen() {
     setSubmitting(true);
     setError(null);
     try {
-      await api.loginWithPassword({ username: name, password: pass, next: "/admin/" });
+      const login = await api.loginWithPassword({ username: name, password: pass, next });
       // 成功后立即从内存状态抹掉口令，再刷新会话。
       clearPassword();
       // 登录成功后重新读取会话与内存 CSRF token，路由守卫随即进入后台。
-      await refresh();
+      if (login.next !== "/admin/") window.location.assign(login.next);
+      else await refresh();
     } catch (cause) {
       setError(messageOf(cause));
       clearPassword();
@@ -64,22 +80,37 @@ export function LoginScreen() {
     }
   }
 
+  if (registering) {
+    return (
+      <RegisterScreen
+        onBack={() => setRegistering(false)}
+        onRegistered={(username) => {
+          setRegistering(false);
+          setNotice("注册成功，请登录。");
+          form.setFieldsValue({ username, password: "" });
+          setValues({ username, password: "" });
+        }}
+      />
+    );
+  }
+
   return (
     <Flex justify="center" style={{ padding: "12vh 20px" }}>
       <Card style={{ width: "100%", maxWidth: 420 }}>
-        <Typography.Title level={3}>博客后台</Typography.Title>
+        <Typography.Title level={3}>登录</Typography.Title>
         <Typography.Paragraph type="secondary">
           使用本站账号密码，或已绑定的外部身份登录。
         </Typography.Paragraph>
 
+        {notice && <Alert type="success" title={notice} showIcon style={{ marginBottom: 16 }} />}
         <Form
           form={form}
           layout="vertical"
-          initialValues={{ username: "", password: "" }}
+          initialValues={values}
           onValuesChange={(_changed, all) => setValues(all)}
           onFinish={() => void onSubmit()}
         >
-          <Form.Item label="用户名" name="username">
+          <Form.Item label="用户名或邮箱" name="username">
             <Input name="username" autoComplete="username" />
           </Form.Item>
           <Form.Item label="密码" name="password">
@@ -95,9 +126,11 @@ export function LoginScreen() {
         </Form>
 
         <Typography.Paragraph type="secondary" style={{ marginTop: 16 }}>
-          连续失败会临时锁定账号。登录后可在右上角「修改密码」自助设置或更换密码；
-          忘记密码时由运维用 <Typography.Text code>blog user passwd</Typography.Text> 重置。
+          登录后可在个人资料中修改昵称，在账号菜单中修改密码。
         </Typography.Paragraph>
+
+        {registrationEnabled && <Button type="link" onClick={() => { clearPassword(); setRegistering(true); }}>注册账号</Button>}
+        <Button type="link" href="/">返回首页</Button>
 
         {providersLoaded && providers.length > 0 && (
           <>
@@ -106,7 +139,7 @@ export function LoginScreen() {
               {providers.map((provider) => (
                 <Button
                   key={provider.id}
-                  href={`/auth/login?provider=${encodeURIComponent(provider.id)}&next=${encodeURIComponent("/admin/")}`}
+                  href={`/auth/login?provider=${encodeURIComponent(provider.id)}&next=${encodeURIComponent(next)}`}
                 >
                   使用 {provider.name} 登录
                 </Button>

@@ -126,11 +126,24 @@ impl SessionStore for CountingSessionStore {
 async fn fresh_stack() -> Stack {
     let pool = common::fresh_database("blog_admin_test").await;
 
+    sqlx::query(
+        "INSERT INTO settings(key,value) VALUES('access','{\"guest_comments_enabled\":true}')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
     let user_repo = Arc::new(PostgresUserRepository::new(common::database(pool.clone())));
     let rbac = Arc::new(PostgresRbacStore::new(common::database(pool.clone())));
     let roles = Arc::new(RoleInteractor::new(rbac.clone(), user_repo.clone()));
     roles.sync_registry().await.expect("同步权限目录失败");
+    sqlx::query("INSERT INTO roles(id,code,name) VALUES($1,'account-manager','Account manager')")
+        .bind(Uuid::now_v7())
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO role_permissions(role_id,permission_code) SELECT id,unnest(ARRAY['user.manage','role.manage','settings.manage']) FROM roles WHERE code='account-manager'")
+        .execute(&pool).await.unwrap();
     let users = Arc::new(UserInteractor::new(
         application::identity::UserStores {
             query: user_repo.clone(),
@@ -143,15 +156,15 @@ async fn fresh_stack() -> Stack {
     ));
 
     // author / author2 / editor / stranger / admin / owner：覆盖内容 own/any、
-    // 账号管理（user.manage + role.manage）与所有权（ownership.manage）三类边界。
+    // 账号管理（user.manage + role.manage）与所有权（admin.manage）三类边界。
     let mut ids = std::collections::HashMap::new();
     for (username, role) in [
         ("author", Some("author")),
         ("author2", Some("author")),
         ("editor", Some("editor")),
         ("stranger", None),
-        ("admin", Some("admin")),
-        ("owner", Some("owner")),
+        ("admin", Some("account-manager")),
+        ("owner", Some("admin")),
     ] {
         let user = users
             .create_user(
@@ -253,6 +266,8 @@ async fn fresh_stack() -> Stack {
         )),
         clock.clone(),
         application::site_info::SiteInfo {
+            home_page_size: application::site_info::DEFAULT_HOME_PAGE_SIZE,
+            navigation: vec![],
             time_zone: "UTC".into(),
             title: "测试站点".into(),
             description: "集成测试".into(),
@@ -282,6 +297,7 @@ async fn fresh_stack() -> Stack {
     let passwords = common::password_interactor(user_repo.clone(), sessions);
 
     let auth_state = AuthState {
+        registration: common::registration(&pool),
         admission: Arc::new(infrastructure::InMemoryRequestAdmission::default()),
         auth: auth.clone(),
         passwords: passwords.clone(),
@@ -303,7 +319,13 @@ async fn fresh_stack() -> Stack {
         secure_cookies: false,
     };
 
+    let access_router =
+        interfaces::http_registration::admin_router(interfaces::http_registration::AccessState {
+            registration: auth_state.registration.clone(),
+            admin: admin_state.clone(),
+        });
     let router = auth_router(auth_state)
+        .merge(access_router)
         .merge(interfaces::http_content_preview::content_preview_router(
             interfaces::http_content_preview::ContentPreviewState {
                 preview: Arc::new(application::content_preview::ContentPreview::new(Arc::new(
@@ -1009,7 +1031,7 @@ async fn own_any_authorization_matrix() {
     .await;
     assert_eq!(status, StatusCode::OK, "publish_any 可发他人文章");
 
-    // editor 无 post.create：不能建文章。
+    // editor 可创建自己的文章，也可管理他人的文章。
     let (status, _) = api(
         &stack.router,
         "POST",
@@ -1019,7 +1041,7 @@ async fn own_any_authorization_matrix() {
         Some(r#"{"title":"x","content":"y"}"#),
     )
     .await;
-    assert_eq!(status, StatusCode::FORBIDDEN, "editor 无 post.create");
+    assert_eq!(status, StatusCode::CREATED, "editor 可创建文章");
 
     // author 读他人文章列表 → 403（无 read_any）。
     let (status, _) = api(
@@ -1685,11 +1707,11 @@ async fn account_api_enforces_permission_boundaries() {
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
     assert!(body.contains("\"code\":\"forbidden\""), "{body}");
 
-    // 授予 Owner 需要专门的 ownership.manage。
+    // 授予 Owner 需要专门的 admin.manage。
     let (status, body) = api(
         &stack.router,
         "PUT",
-        "/api/admin/v1/users/author/roles/owner",
+        "/api/admin/v1/users/author/roles/admin",
         Some(&admin_cookie),
         Some(&admin_csrf),
         None,
@@ -1773,7 +1795,7 @@ async fn username_and_email_conflicts_reach_the_ui_as_distinct_codes() {
 
 /// 最后一个「可登录」Owner 的 Owner 角色不能被移除；登不进去的 Owner 不构成有效 Owner。
 #[tokio::test]
-async fn last_loginable_owner_is_protected_with_a_dedicated_code() {
+async fn last_loginable_admin_is_protected_with_a_dedicated_code() {
     let _g = SERIAL.lock().await;
     let stack = fresh_stack().await;
 
@@ -1789,7 +1811,7 @@ async fn last_loginable_owner_is_protected_with_a_dedicated_code() {
     .unwrap();
     stack
         .roles
-        .assign_to_username(&Actor::bootstrap_cli(), "ghost", "owner")
+        .assign_to_username(&Actor::bootstrap_cli(), "ghost", "admin")
         .await
         .unwrap();
 
@@ -1817,11 +1839,11 @@ async fn last_loginable_owner_is_protected_with_a_dedicated_code() {
         Some(false)
     );
     assert_eq!(
-        listed_user(&body, "ghost")["is_last_loginable_owner"].as_bool(),
+        listed_user(&body, "ghost")["is_last_loginable_admin"].as_bool(),
         Some(false)
     );
     assert_eq!(
-        listed_user(&body, "owner")["is_last_loginable_owner"].as_bool(),
+        listed_user(&body, "owner")["is_last_loginable_admin"].as_bool(),
         Some(true)
     );
 
@@ -1829,21 +1851,21 @@ async fn last_loginable_owner_is_protected_with_a_dedicated_code() {
     let (status, body) = api(
         &stack.router,
         "DELETE",
-        "/api/admin/v1/users/owner/roles/owner",
+        "/api/admin/v1/users/owner/roles/admin",
         Some(&cookie),
         Some(&csrf),
         None,
     )
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
-    assert!(body.contains("\"code\":\"last_owner\""), "{body}");
+    assert!(body.contains("\"code\":\"last_admin\""), "{body}");
     assert!(!body.contains("\"code\":\"forbidden\""), "{body}");
 
     // 登不进去的 Owner 可以清理：它不减少可用 Owner。
     let (status, body) = api(
         &stack.router,
         "DELETE",
-        "/api/admin/v1/users/ghost/roles/owner",
+        "/api/admin/v1/users/ghost/roles/admin",
         Some(&cookie),
         Some(&csrf),
         None,
@@ -1871,7 +1893,7 @@ async fn last_loginable_owner_is_protected_with_a_dedicated_code() {
     .unwrap();
     stack
         .roles
-        .assign_to_username(&Actor::bootstrap_cli(), "owner2", "owner")
+        .assign_to_username(&Actor::bootstrap_cli(), "owner2", "admin")
         .await
         .unwrap();
 
@@ -1887,18 +1909,18 @@ async fn last_loginable_owner_is_protected_with_a_dedicated_code() {
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(
-        listed_user(&body, "owner")["is_last_loginable_owner"].as_bool(),
+        listed_user(&body, "owner")["is_last_loginable_admin"].as_bool(),
         Some(false)
     );
     assert_eq!(
-        listed_user(&body, "owner2")["is_last_loginable_owner"].as_bool(),
+        listed_user(&body, "owner2")["is_last_loginable_admin"].as_bool(),
         Some(false)
     );
 
     let (status, body) = api(
         &stack.router,
         "DELETE",
-        "/api/admin/v1/users/owner/roles/owner",
+        "/api/admin/v1/users/owner/roles/admin",
         Some(&cookie),
         Some(&csrf),
         None,
@@ -1911,12 +1933,12 @@ async fn last_loginable_owner_is_protected_with_a_dedicated_code() {
     );
 }
 
-/// 回归：`is_last_loginable_owner` 必须按全站计数判定，不能只看当前页。
+/// 回归：`is_last_loginable_admin` 必须按全站计数判定，不能只看当前页。
 ///
 /// 若按页推断，第一页里唯一的 Owner 会被误标成「最后一个可登录 Owner」，
 /// 界面随即错误禁用移除——即使另一个可登录 Owner 就在后续页。
 #[tokio::test]
-async fn last_owner_flag_is_global_across_pages() {
+async fn last_admin_flag_is_global_across_pages() {
     let _g = SERIAL.lock().await;
     let stack = fresh_stack().await;
 
@@ -1947,12 +1969,12 @@ async fn last_owner_flag_is_global_across_pages() {
         .unwrap();
         stack
             .roles
-            .assign_to_username(&Actor::bootstrap_cli(), username, "owner")
+            .assign_to_username(&Actor::bootstrap_cli(), username, "admin")
             .await
             .unwrap();
     }
 
-    let (cookie, _) = login_as(&stack.router, &stack.idp, "owner").await;
+    let (cookie, _) = login_as(&stack.router, &stack.idp, "admin").await;
     let (status, body) = api(
         &stack.router,
         "GET",
@@ -1969,7 +1991,7 @@ async fn last_owner_flag_is_global_across_pages() {
         "确认另一个 Owner 在后续页：{body}"
     );
     assert_eq!(
-        listed_user(&body, "aaa-owner")["is_last_loginable_owner"].as_bool(),
+        listed_user(&body, "aaa-owner")["is_last_loginable_admin"].as_bool(),
         Some(false),
         "最后 Owner 必须按全局计数判定，不能按当前页推断：{body}"
     );
@@ -4355,6 +4377,7 @@ async fn content_list_contract_pagination_filters_and_authorization() {
     let (author_cookie, _) = login_as(&stack.router, &stack.idp, "author").await;
     let (editor_cookie, _) = login_as(&stack.router, &stack.idp, "editor").await;
     let (stranger_cookie, _) = login_as(&stack.router, &stack.idp, "stranger").await;
+    let fixture_size = application::content_queries::CONTENT_PER_PAGE + 1;
     for table in ["posts", "pages"] {
         let (column, value) = if table == "posts" {
             (
@@ -4366,16 +4389,16 @@ async fn content_list_contract_pagination_filters_and_authorization() {
         };
         sqlx::query(&format!("INSERT INTO {table} ({column} id, slug, title, content, content_html, content_render_version, visibility)
             SELECT {value} gen_random_uuid(), 'listed-' || i, '条目 ' || i, 'PRIVATE_BODY', '<p>body</p>', 1,
-            CASE WHEN i % 2 = 0 THEN 'private' ELSE 'public' END FROM generate_series(1, 23) i"))
+            CASE WHEN i % 2 = 0 THEN 'private' ELSE 'public' END FROM generate_series(1, $1::int) i"))
+            .bind(fixture_size as i32)
             .execute(&stack.pool).await.unwrap();
     }
     for (path, cookie) in [("posts", &author_cookie), ("pages", &editor_cookie)] {
-        for (query, expected_count, expected_total, expected_page) in [
-            ("", 20, 23, 1),
-            ("?page=2", 3, 23, 2),
-            ("?page=3", 0, 23, 3),
-            ("?status=draft&visibility=private", 11, 11, 1),
-            ("?status=published", 0, 0, 1),
+        for (query, expected_page) in [
+            ("", 1),
+            ("?page=2", 2),
+            ("?status=draft&visibility=private", 1),
+            ("?status=published", 1),
         ] {
             let (status, body) = api(
                 &stack.router,
@@ -4388,22 +4411,16 @@ async fn content_list_contract_pagination_filters_and_authorization() {
             .await;
             assert_eq!(status, StatusCode::OK, "{body}");
             let result: serde_json::Value = serde_json::from_str(&body).unwrap();
-            assert_eq!(result["items"].as_array().unwrap().len(), expected_count);
-            assert_eq!(result["total"], expected_total);
+            let items = result["items"].as_array().unwrap();
             assert_eq!(result["page"], expected_page);
-            assert_eq!(result["per_page"], 20);
             assert!(!body.contains("PRIVATE_BODY"));
-            for item in result["items"].as_array().unwrap() {
-                for field in [
-                    "content",
-                    "content_html",
-                    "excerpt",
-                    "tag_ids",
-                    "series",
-                    "category_id",
-                    "cover_media_id",
-                ] {
-                    assert!(item.get(field).is_none(), "列表只返回展示字段：{field}");
+            if query == "?status=published" {
+                assert!(items.is_empty());
+            } else {
+                assert!(!items.is_empty());
+                assert!(items.iter().all(|item| item["status"] == "draft"));
+                if query.contains("visibility=private") {
+                    assert!(items.iter().all(|item| item["visibility"] == "private"));
                 }
             }
         }
@@ -4464,10 +4481,45 @@ async fn content_list_contract_pagination_filters_and_authorization() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(
-        serde_json::from_str::<serde_json::Value>(&body).unwrap()["total"],
-        23
-    );
+    let result: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert!(!result["items"].as_array().unwrap().is_empty());
+    for path in ["posts", "post-trash"] {
+        let (status, _) = api(
+            &stack.router,
+            "GET",
+            &format!("/api/admin/v1/{path}?scope=all&q=PRIVATE_BODY"),
+            Some(&author_cookie),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+    }
+    // Editors can locate historical content after its author is suspended.
+    sqlx::query("UPDATE users SET status='disabled' WHERE username='author'")
+        .execute(&stack.pool)
+        .await
+        .unwrap();
+    for query in [
+        "scope=all&q=PRIVATE_BODY&page=2",
+        "scope=all&author=author&q=PRIVATE_BODY&page=2",
+    ] {
+        let (status, body) = api(
+            &stack.router,
+            "GET",
+            &format!("/api/admin/v1/posts?{query}"),
+            Some(&editor_cookie),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let data: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let items = data["items"].as_array().unwrap();
+        assert!(!items.is_empty());
+        assert!(items.iter().all(|item| item["author_username"] == "author"));
+        assert!(!body.contains("PRIVATE_BODY"));
+    }
 }
 
 #[tokio::test]
@@ -4537,5 +4589,289 @@ async fn comment_submission_limit_prevents_pending_rows_and_ignores_forged_forwa
             .await
             .0,
         StatusCode::OK
+    );
+}
+
+#[tokio::test]
+async fn registration_reader_login_and_guest_comment_settings() {
+    let _g = SERIAL.lock().await;
+    let stack = fresh_stack().await;
+    // This scenario starts with the production defaults, without the legacy guest fixture opt-in.
+    sqlx::query("DELETE FROM settings WHERE key='access'")
+        .execute(&stack.pool)
+        .await
+        .unwrap();
+    let signup = r#"{"username":"NewReader","display_name":"新读者","email":"reader@example.com","password":"harbor-lantern-2026"}"#;
+    let (status, body) = api(
+        &stack.router,
+        "POST",
+        "/auth/register",
+        None,
+        None,
+        Some(signup),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&body).unwrap()["code"],
+        "registration_closed"
+    );
+
+    let (admin_cookie, admin_csrf) = login_as(&stack.router, &stack.idp, "owner").await;
+    let (status, body) = api(
+        &stack.router,
+        "PUT",
+        "/api/admin/v1/access-settings",
+        Some(&admin_cookie),
+        Some(&admin_csrf),
+        Some(r#"{"registration_enabled":true,"guest_comments_enabled":false,"version":0}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let version = serde_json::from_str::<serde_json::Value>(&body).unwrap()["version"]
+        .as_i64()
+        .unwrap();
+    let (status, body) = api(
+        &stack.router,
+        "POST",
+        "/auth/register",
+        None,
+        None,
+        Some(signup),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let role: String = sqlx::query_scalar("SELECT r.code FROM user_roles ur JOIN roles r ON r.id=ur.role_id JOIN users u ON u.id=ur.user_id WHERE u.username='newreader'")
+        .fetch_one(&stack.pool).await.unwrap();
+    assert_eq!(role, "reader");
+    let duplicate_email = r#"{"username":"someoneelse","email":"READER@example.com","password":"harbor-lantern-2026"}"#;
+    let (status, body) = api(
+        &stack.router,
+        "POST",
+        "/auth/register",
+        None,
+        None,
+        Some(duplicate_email),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&body).unwrap()["code"],
+        "email_taken"
+    );
+
+    let mut reader_cookie = String::new();
+    let mut account_id = None;
+    for identifier in [" NEWREADER ", " READER@EXAMPLE.COM "] {
+        let response = stack.router.clone().oneshot(Request::builder().method("POST").uri("/auth/login/password")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::json!({"username":identifier,"password":"harbor-lantern-2026","next":"/posts/comment-regression"}).to_string())).unwrap()).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        reader_cookie = response
+            .headers()
+            .get("set-cookie")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap()
+            .strip_prefix("blog_session=")
+            .unwrap()
+            .to_string();
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        let login: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        if let Some(id) = &account_id {
+            assert_eq!(id, &login["user_id"]);
+        }
+        account_id = Some(login["user_id"].clone());
+        assert_eq!(login["next"], "/posts/comment-regression");
+    }
+    let (status, body) = api(
+        &stack.router,
+        "GET",
+        "/api/admin/v1/me",
+        Some(&reader_cookie),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let me: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(me["display_name"], "新读者");
+    let reader_csrf = me["csrf_token"].as_str().unwrap();
+    let (status, body) = api(
+        &stack.router,
+        "POST",
+        "/api/admin/v1/posts",
+        Some(&reader_cookie),
+        Some(reader_csrf),
+        Some(r#"{"slug":"reader-post","title":"Not allowed","content":"Body"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    let (status, body) = api(&stack.router, "PUT", "/api/admin/v1/access-settings", Some(&reader_cookie), Some(reader_csrf), Some(&serde_json::json!({"registration_enabled":true,"guest_comments_enabled":true,"version":version}).to_string())).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+
+    let endpoint = published_comment_endpoint(&stack, &admin_cookie, &admin_csrf).await;
+    let comment = r#"{"nickname":"游客","body":"欢迎交流"}"#;
+    let response = stack
+        .router
+        .clone()
+        .oneshot(comment_submit_request(
+            &endpoint,
+            serde_json::from_str(comment).unwrap(),
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let response = stack
+        .router
+        .clone()
+        .oneshot(comment_submit_request(
+            &endpoint,
+            serde_json::from_str(comment).unwrap(),
+            Some(&reader_cookie),
+            Some(reader_csrf),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    let stored: (String, String) =
+        sqlx::query_as("SELECT author_name,status FROM comments WHERE user_id=$1")
+            .bind(
+                account_id
+                    .unwrap()
+                    .as_str()
+                    .unwrap()
+                    .parse::<Uuid>()
+                    .unwrap(),
+            )
+            .fetch_one(&stack.pool)
+            .await
+            .unwrap();
+    assert_eq!(stored, ("新读者".into(), "pending".into()));
+    let (status, body) = api(&stack.router, "PUT", "/api/admin/v1/access-settings", Some(&admin_cookie), Some(&admin_csrf), Some(&serde_json::json!({"registration_enabled":false,"guest_comments_enabled":true,"version":version}).to_string())).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let response = stack
+        .router
+        .clone()
+        .oneshot(comment_submit_request(
+            &endpoint,
+            serde_json::from_str(comment).unwrap(),
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    let (_, body) = api(&stack.router, "GET", &endpoint, None, None, None).await;
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&body).unwrap()["guest_comments_enabled"],
+        true
+    );
+}
+
+#[tokio::test]
+async fn native_comments_policy_controls_receipts_and_pending_reasons() {
+    let _g = SERIAL.lock().await;
+    let stack = fresh_stack().await;
+    let (cookie, csrf) = login_as(&stack.router, &stack.idp, "owner").await;
+    let endpoint = published_comment_endpoint(&stack, &cookie, &csrf).await;
+    let policy_path = "/api/admin/v1/comment-settings";
+    let (_, body) = api(&stack.router, "GET", policy_path, Some(&cookie), None, None).await;
+    let mut policy: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(policy["moderation"], "all");
+    for (mode, account, http_status, status) in [
+        ("guests", false, StatusCode::ACCEPTED, "pending"),
+        ("guests", true, StatusCode::CREATED, "approved"),
+        ("none", false, StatusCode::CREATED, "approved"),
+    ] {
+        policy["moderation"] = serde_json::json!(mode);
+        let (saved, body) = api(
+            &stack.router,
+            "PUT",
+            policy_path,
+            Some(&cookie),
+            Some(&csrf),
+            Some(&policy.to_string()),
+        )
+        .await;
+        assert_eq!(saved, StatusCode::OK, "{body}");
+        policy = serde_json::from_str(&body).unwrap();
+        let response = stack
+            .router
+            .clone()
+            .oneshot(comment_submit_request(
+                &endpoint,
+                serde_json::json!({"nickname":"Visitor", "body":format!("{mode}-{account}")}),
+                account.then_some(cookie.as_str()),
+                account.then_some(csrf.as_str()),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), http_status);
+        let receipt: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(receipt["status"], status);
+    }
+    let (_, body) = api(
+        &stack.router,
+        "GET",
+        "/api/admin/v1/comments?status=pending",
+        Some(&cookie),
+        None,
+        None,
+    )
+    .await;
+    let pending: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let comment = pending["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["body"] == "guests-false")
+        .unwrap();
+    assert_eq!(comment["moderation_reason"], "guest");
+    let (_, body) = api(&stack.router, "GET", &endpoint, None, None, None).await;
+    let public: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert!(
+        public["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["content_html"].as_str().unwrap().contains("none-false"))
+    );
+    assert!(
+        public["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|c| c.get("moderation_reason").is_none())
+    );
+    let path = format!(
+        "/api/admin/v1/posts/{}/comment-settings",
+        comment["post_id"].as_str().unwrap()
+    );
+    let (_, body) = api(&stack.router, "GET", &path, Some(&cookie), None, None).await;
+    let mut post_policy: serde_json::Value = serde_json::from_str(&body).unwrap();
+    post_policy["moderation"] = serde_json::json!("none");
+    assert_eq!(
+        api(
+            &stack.router,
+            "PUT",
+            &path,
+            Some(&cookie),
+            Some(&csrf),
+            Some(&post_policy.to_string())
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
     );
 }

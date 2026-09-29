@@ -15,7 +15,7 @@
   {% set related = get_posts(limit=4, category=post.category.slug) %}
   {% if related.items | length > 1 or (related.items | length == 1 and related.items[0].slug != post.slug) %}<section class="related"><h2>同类文章</h2><ul>{% for item in related.items %}{% if item.slug != post.slug %}<li><a href="{{ item.url | url }}">{{ item.title }}</a></li>{% endif %}{% endfor %}</ul></section>{% endif %}
 {% endif %}
-<section class="comments" data-comments-slug="{{ post.slug }}" aria-label="文章评论"><noscript>启用 JavaScript 后可阅读及提交评论。</noscript></section>
+<section class="comments" data-comments-slug="{{ post.slug }}" aria-label="文章评论" hidden></section>
 <link rel="stylesheet" href="/assets/comments.css">
 <script src="/assets/comments.js" defer></script>
 {% endblock %}

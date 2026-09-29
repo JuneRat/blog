@@ -346,6 +346,8 @@ async fn settings_and_category_audit_failures_restore_values_versions_and_logo_r
     let mid = Uuid::now_v7();
     sqlx::query("INSERT INTO media(id,path,filename,mime_type,size,width,height,checksum_sha256) VALUES($1,'objects/logo.png','logo.png','image/png',1,1,1,repeat('a',64))").bind(mid).execute(&pool).await.unwrap();
     let site = SiteSettingsValue {
+        home_page_size: None,
+        navigation: vec![],
         time_zone: None,
         title: Some("Site".into()),
         description: None,
@@ -390,6 +392,8 @@ async fn settings_and_category_audit_failures_restore_values_versions_and_logo_r
     );
     assert!(categories.delete(cid, 2, context(actor)).await.is_err());
     let without_logo = SiteSettingsValue {
+        home_page_size: None,
+        navigation: vec![],
         time_zone: None,
         logo_media_id: None,
         ..site.clone()

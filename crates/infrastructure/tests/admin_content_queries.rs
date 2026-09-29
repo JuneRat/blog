@@ -3,160 +3,131 @@ use application::content_queries::ContentListRequest;
 use application::ports::{AdminPageQuery, AdminPostQuery};
 use infrastructure::PostgresAdminContentQuery;
 
-fn request(
-    page: i64,
-    trash: bool,
-    status: Option<&str>,
-    visibility: Option<&str>,
-) -> ContentListRequest {
-    ContentListRequest {
-        page,
-        trash,
-        status: status.map(str::to_owned),
-        visibility: visibility.map(str::to_owned),
-    }
-}
-
 #[tokio::test]
-async fn lists_bound_rows_filter_totals_and_break_timestamp_ties_by_id() {
-    let pool = common::fresh_database("blog_admin_content_queries_test").await;
+async fn search_returns_matching_content_across_pages_and_scopes() {
+    use std::collections::HashSet;
+    let pool = common::fresh_database("blog_content_search_test").await;
     let author = common::seed_user(&pool, "author").await;
-    let other = common::seed_user(&pool, "other").await;
+    let disabled = common::seed_user(&pool, "disabled-author").await;
+    sqlx::query("UPDATE users SET status='disabled' WHERE id=$1")
+        .bind(disabled)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let query = PostgresAdminContentQuery::new(common::database(pool.clone()));
+    let fixture_size = application::content_queries::CONTENT_PER_PAGE + 1;
     for table in ["posts", "pages"] {
         let (column, value) = if table == "posts" {
-            ("author_id,", "$1,")
+            ("author_id,", "$2,")
         } else {
             ("", "")
         };
-        let sql = format!("INSERT INTO {table} ({column} id, slug, title, content, content_html, content_render_version, status, visibility, published_at, updated_at, deleted_at)
-            SELECT {value} gen_random_uuid(), 'item-' || i, '标题 ' || i, repeat('body', 10000), '<p>body</p>', 1,
-            CASE WHEN i % 2 = 0 THEN 'published' ELSE 'draft' END,
-            CASE WHEN i % 2 = 0 THEN 'private' ELSE 'public' END,
-            '2026-01-01'::timestamptz, '2026-01-01'::timestamptz,
-            CASE WHEN i > 45 THEN '2026-02-01'::timestamptz END
-            FROM generate_series(1, 48) i");
-        let mut query = sqlx::query(&sql);
+        let sql = format!("INSERT INTO {table} ({column} id,slug,title,content,content_html,content_render_version)
+            SELECT {value} gen_random_uuid(),'match-' || i,'Title ' || i,'Body 跨页 Needle','',1 FROM generate_series(1,$1::int) i RETURNING id");
+        let mut seed = sqlx::query_scalar::<_, uuid::Uuid>(&sql).bind(fixture_size as i32);
         if table == "posts" {
-            query = query.bind(author);
+            seed = seed.bind(author);
         }
-        query.execute(&pool).await.unwrap();
-    }
-    sqlx::query("INSERT INTO posts (id, author_id, slug, content_html, content_render_version) VALUES (gen_random_uuid(), $1, 'other-author', '', 1)")
-        .bind(other).execute(&pool).await.unwrap();
-    let query = PostgresAdminContentQuery::new(common::database(pool.clone()));
-    for is_post in [true, false] {
-        let mut all_ids = Vec::new();
-        for (page, count) in [(1, 20), (2, 20), (3, 5), (4, 0)] {
-            let request = request(page, false, None, None);
-            let (ids, total): (Vec<_>, _) = if is_post {
-                let filter = request.try_into().unwrap();
-                let (rows, total) = AdminPostQuery::list(&query, author, &filter).await.unwrap();
-                assert!(rows.iter().all(|r| r.author_id == author));
-                (rows.into_iter().map(|r| r.id).collect(), total)
-            } else {
-                let filter = request.try_into().unwrap();
-                let (rows, total) = AdminPageQuery::list(&query, &filter).await.unwrap();
-                (rows.into_iter().map(|r| r.id).collect(), total)
+        let expected: HashSet<_> = seed.fetch_all(&pool).await.unwrap().into_iter().collect();
+        let unrelated = format!("INSERT INTO {table} ({column} id,slug,title,content,content_html,content_render_version)
+            SELECT {value} gen_random_uuid(),'unrelated-' || i,'Other','No match','',1 FROM generate_series(1,$1::int) i");
+        let mut seed = sqlx::query(&unrelated).bind(fixture_size as i32);
+        if table == "posts" {
+            seed = seed.bind(author);
+        }
+        seed.execute(&pool).await.unwrap();
+        let mut ordered = Vec::new();
+        let mut found = HashSet::new();
+        for page in [1, 2] {
+            let request = ContentListRequest {
+                page,
+                q: Some("  跨页 needle ".into()),
+                ..Default::default()
             };
-            assert_eq!(total, 45);
-            assert_eq!(ids.len(), count);
-            all_ids.extend(ids);
-        }
-        assert!(
-            all_ids.windows(2).all(|ids| ids[0] > ids[1]),
-            "同时间戳跨页不能重复或乱序"
-        );
-        for (request, expected) in [
-            (request(1, false, Some("published"), Some("private")), 22),
-            (request(1, false, Some("published"), Some("public")), 0),
-            (request(1, true, None, None), 3),
-            (request(1, true, Some("published"), Some("private")), 2),
-        ] {
-            let (count, total) = if is_post {
-                let filter = request.try_into().unwrap();
-                let (rows, total) = AdminPostQuery::list(&query, author, &filter).await.unwrap();
-                assert!(
-                    rows.iter()
-                        .all(|r| filter.status().is_none_or(|s| r.status == s)
-                            && filter.visibility().is_none_or(|s| r.visibility == s))
-                );
-                (rows.len(), total)
-            } else {
-                let filter = request.try_into().unwrap();
-                let (rows, total) = AdminPageQuery::list(&query, &filter).await.unwrap();
-                assert!(
-                    rows.iter()
-                        .all(|r| filter.status().is_none_or(|s| r.status == s)
-                            && filter.visibility().is_none_or(|s| r.visibility == s))
-                );
-                (rows.len(), total)
-            };
-            assert_eq!(total, expected);
-            assert_eq!(count as i64, expected.min(20));
-        }
-    }
-    assert_eq!(
-        AdminPostQuery::list(
-            &query,
-            other,
-            &request(1, false, None, None).try_into().unwrap()
-        )
-        .await
-        .unwrap()
-        .1,
-        1
-    );
-    assert_eq!(
-        AdminPostQuery::list(
-            &query,
-            uuid::Uuid::now_v7(),
-            &request(1, false, None, None).try_into().unwrap()
-        )
-        .await
-        .unwrap()
-        .1,
-        0
-    );
-}
-
-#[tokio::test]
-async fn summaries_reject_unknown_persisted_status_and_visibility() {
-    let pool = common::fresh_database("blog_invalid_content_summary_test").await;
-    let author = common::seed_user(&pool, "author").await;
-    sqlx::query("INSERT INTO posts(id,author_id,slug,content_html,content_render_version) VALUES(gen_random_uuid(),$1,'post','',1)")
-        .bind(author)
-        .execute(&pool)
-        .await
-        .unwrap();
-    sqlx::query("INSERT INTO pages(id,slug,content_html,content_render_version) VALUES(gen_random_uuid(),'page','',1)")
-        .execute(&pool)
-        .await
-        .unwrap();
-    let query = PostgresAdminContentQuery::new(common::database(pool.clone()));
-    for table in ["posts", "pages"] {
-        for (column, reset) in [("status", "draft"), ("visibility", "public")] {
-            // Simulate data from an incompatible schema; never emit unknown states as valid DTOs.
-            sqlx::raw_sql(&format!("ALTER TABLE {table} DROP CONSTRAINT {table}_{column}_check; UPDATE {table} SET {column}='unknown'"))
-                .execute(&pool).await.unwrap();
-            let error = if table == "posts" {
-                AdminPostQuery::list(
-                    &query,
-                    author,
-                    &ContentListRequest::default().try_into().unwrap(),
-                )
-                .await
-                .unwrap_err()
-            } else {
-                AdminPageQuery::list(&query, &ContentListRequest::default().try_into().unwrap())
+            let ids: Vec<_> = if table == "posts" {
+                AdminPostQuery::list(&query, None, &request.try_into().unwrap())
                     .await
-                    .unwrap_err()
+                    .unwrap()
+                    .0
+                    .into_iter()
+                    .map(|row| row.id)
+                    .collect()
+            } else {
+                AdminPageQuery::list(&query, &request.try_into().unwrap())
+                    .await
+                    .unwrap()
+                    .0
+                    .into_iter()
+                    .map(|row| row.id)
+                    .collect()
             };
-            assert!(matches!(error, application::UseCaseError::Repository(_)));
-            sqlx::raw_sql(&format!("UPDATE {table} SET {column}='{reset}'"))
-                .execute(&pool)
-                .await
-                .unwrap();
+            for id in ids {
+                ordered.push(id);
+                assert!(found.insert(id), "跨页内容不应重复");
+            }
         }
+        assert_eq!(found, expected);
+        assert!(
+            ordered.windows(2).all(|pair| pair[0] > pair[1]),
+            "相同更新时间按 ID 稳定排序"
+        );
     }
+    let category = uuid::Uuid::now_v7();
+    sqlx::query("INSERT INTO categories(id,slug,name) VALUES($1,'category','Category')")
+        .bind(category)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let target: uuid::Uuid = sqlx::query_scalar("INSERT INTO posts(id,author_id,slug,content,content_html,content_render_version,category_id)
+        VALUES(gen_random_uuid(),$1,'historical','Needle','',1,$2) RETURNING id")
+        .bind(disabled).bind(category).fetch_one(&pool).await.unwrap();
+    let request = ContentListRequest {
+        q: Some("needle".into()),
+        category_id: Some(category),
+        ..Default::default()
+    };
+    let rows = AdminPostQuery::list(&query, Some(disabled), &request.clone().try_into().unwrap())
+        .await
+        .unwrap()
+        .0;
+    assert_eq!(
+        rows.iter().map(|row| row.id).collect::<Vec<_>>(),
+        vec![target]
+    );
+    assert!(
+        rows.iter()
+            .all(|row| row.author_username == "disabled-author")
+    );
+    assert!(
+        AdminPostQuery::list(&query, Some(author), &request.clone().try_into().unwrap())
+            .await
+            .unwrap()
+            .0
+            .is_empty()
+    );
+    sqlx::query("UPDATE posts SET deleted_at=now() WHERE id=$1")
+        .bind(target)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(
+        AdminPostQuery::list(&query, Some(disabled), &request.clone().try_into().unwrap())
+            .await
+            .unwrap()
+            .0
+            .is_empty()
+    );
+    let trash = ContentListRequest {
+        trash: true,
+        ..request
+    };
+    let restored = AdminPostQuery::list(&query, Some(disabled), &trash.try_into().unwrap())
+        .await
+        .unwrap()
+        .0;
+    assert_eq!(
+        restored.iter().map(|row| row.id).collect::<Vec<_>>(),
+        vec![target]
+    );
     pool.close().await;
 }

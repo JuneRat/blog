@@ -55,7 +55,7 @@ async fn policy_defaults_merges_and_conflicts_are_atomic() {
         0
     );
     sqlx::query(
-        "INSERT INTO settings(key,value) VALUES('comments','{\"enabled\":false,\"other\":true}')",
+        "INSERT INTO settings(key,value) VALUES('comments','{\"enabled\":false,\"moderation\":\"first_comment\"}')",
     )
     .execute(&pool)
     .await
@@ -70,7 +70,7 @@ async fn policy_defaults_merges_and_conflicts_are_atomic() {
             .fetch_one(&pool)
             .await
             .unwrap(),
-        json!({"enabled":false,"other":true,"ip_retention_days":90})
+        json!({"enabled":false,"moderation":"first_comment","ip_retention_days":90})
     );
     assert!(matches!(
         store.save(value, Some(actor).into()).await,

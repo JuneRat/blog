@@ -10,7 +10,7 @@
 - Node.js 22；pnpm 版本以 [apps/admin/package.json](../apps/admin/package.json) 的 `packageManager` 为准。
 - PostgreSQL 18，可通过 Docker 启动；开发数据库和检查脚本需要 Python 3。
 
-以下命令除明确说明外均在仓库根目录运行。初次建库、创建 Owner 和启动站点的完整流程见[快速开始](../README.md#快速开始)。
+以下命令除明确说明外均在仓库根目录运行。初次建库、创建 Admin 和启动站点的完整流程见[快速开始](../README.md#快速开始)。
 
 ```bash
 ./scripts/dev-db.sh
@@ -37,7 +37,7 @@ export DATABASE_URL=postgres://blog:blog@127.0.0.1:5432/blog_phase1
 cargo run -p server -- migrate
 cargo run -p server -- user create sun --display-name Sun
 cargo run -p server -- user passwd --user sun
-cargo run -p server -- role assign --user sun --role owner
+cargo run -p server -- role assign --user sun --role admin
 ```
 
 连接串按实际本机端口和凭据调整。后续命令在同一 shell 使用该 `DATABASE_URL`。用户/角色命令会同步权限目录和内置角色；`migrate` 只负责结构，不重建 HTML 或创建账号。
@@ -52,7 +52,7 @@ cargo test -p server --test command_assembly owner_bootstrap_uses_new_identity_b
 
 `sqlx-test-support` 仅为数据库集成测试提供原始连接池访问，不进入默认生产构建；单独运行 infrastructure 的数据库测试时须显式启用，`cargo test --workspace` 由 server 测试依赖启用。
 
-验收链路为：空库迁移、权限初始化、CLI 创建 Owner、密码登录、资料更新保持登录、改密撤销旧会话。`PUT /api/admin/v1/me/profile` 提交展示名、纯文本简介和必填 `expected_version`，详见[管理 API](admin-api.md)。资料表单与账号启停已接入后台。`cargo test -p server --test installation_http` 另验证真实进程的首次安装、登录、重启续装、配置文件与原子 Owner 保护。新库恢复会撤销全部会话；各批次定向测试不能替代 `check.sh` 的全量检查。
+验收链路为：空库迁移、权限初始化、CLI 创建 Admin、密码登录、资料更新保持登录、改密撤销旧会话。`PUT /api/admin/v1/me/profile` 提交展示名、纯文本简介和必填 `expected_version`，详见[管理 API](admin-api.md)。资料表单与账号启停已接入后台。`cargo test -p server --test installation_http` 另验证真实进程的首次安装、登录、重启续装、配置文件与原子 Admin 保护。新库恢复会撤销全部会话；各批次定向测试不能替代 `check.sh` 的全量检查。
 
 媒体批次在同一独立实例验证：
 
@@ -134,13 +134,13 @@ blog user create sun --display-name "Sun"
 blog user passwd --user sun
 blog user show sun
 blog role list
-blog role assign --user sun --role owner
+blog role assign --user sun --role admin
 blog role remove --user sun --role author
 ```
 
 `user passwd` 默认隐藏输入并二次确认，`--password-stdin` 可从 stdin 读取，`--clear` 关闭密码登录；不接受明文密码命令行参数。设置或清除密码会撤销已有会话，最后登录方式保护仍然生效。
 
-身份管理 CLI 依赖本机 shell 信任，可执行引导操作；文章命令仍按选定用户的权限检查。角色委派、最后 Owner 等结构性规则见[身份与权限](identity-and-admin.md)。
+身份管理 CLI 依赖本机 shell 信任，可执行引导操作；文章命令仍按选定用户的权限检查。角色委派、最后 Admin 等结构性规则见[身份与权限](identity-and-admin.md)。
 
 ### OAuth
 
@@ -156,7 +156,7 @@ blog oauth bindings --user sun
 
 `secret_ref` 是提供商密钥所在的环境变量名，需通过运行服务的环境注入。提供商回调地址为 `BLOG_PUBLIC_BASE_URL/auth/callback/{provider}`。绑定前核对稳定的 OIDC `sub` 或 GitHub 数值用户 ID，邮箱不用于自动关联账号；未绑定身份不能登录。添加配置不代表已验证提供商可用性。
 
-`add-oidc/add-github` 内部携带读取时的配置版本；并发冲突报错后需重新执行。提供商命名空间变更与最后可登录 Owner 检查在同一身份锁和事务内进行，失败不改配置或审计；该检查不探测外部服务或密钥，完整边界见[身份与后台](identity-and-admin.md#4-oauth-与-oidc)。
+`add-oidc/add-github` 内部携带读取时的配置版本；并发冲突报错后需重新执行。提供商命名空间变更与最后可登录 Admin 检查在同一身份锁和事务内进行，失败不改配置或审计；该检查不探测外部服务或密钥，完整边界见[身份与后台](identity-and-admin.md#4-oauth-与-oidc)。
 
 ### 媒体维护
 

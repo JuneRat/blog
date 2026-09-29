@@ -17,7 +17,7 @@ vi.mock("../src/api", async (original) => {
 
 const profile: Me = {
   user_id: "u-profile", username: "author", display_name: "原展示名", bio: "原简介", version: 7,
-  avatar_media_id: null, avatar_url: null, permissions: [], csrf_token: "csrf", channel: "session",
+  avatar_media_id: null, avatar_url: null, permissions: ["user.manage"], csrf_token: "csrf", channel: "session",
 };
 
 beforeEach(() => {

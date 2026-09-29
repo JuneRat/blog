@@ -39,6 +39,8 @@ pub enum SiteSettingsSource {
 /// site 分组的管理视图：生效值 + 来源 + 并发版本。
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct SiteSettingsView {
+    pub home_page_size: i64,
+    pub navigation: Vec<crate::navigation::NavigationItem>,
     pub time_zone: String,
     pub time_zones: Vec<String>,
     pub title: String,
@@ -53,6 +55,8 @@ pub struct SiteSettingsView {
 }
 
 pub struct SaveSiteSettingsCmd {
+    pub home_page_size: Option<i64>,
+    pub navigation: Option<Vec<crate::navigation::NavigationItem>>,
     /// 旧客户端缺省时保留现有时区，避免标题编辑意外重置预约时区。
     pub time_zone: Option<String>,
     pub title: String,
@@ -252,7 +256,25 @@ impl SettingsInteractor {
                 .as_ref()
                 .and_then(|record| record.value.time_zone.clone()),
         };
+        let navigation =
+            crate::navigation::validate_navigation(cmd.navigation.unwrap_or_else(|| {
+                current
+                    .as_ref()
+                    .map(|record| record.value.navigation.clone())
+                    .unwrap_or_default()
+            }))?;
+        let home_page_size = cmd
+            .home_page_size
+            .or_else(|| {
+                current
+                    .as_ref()
+                    .and_then(|record| record.value.home_page_size)
+            })
+            .map(crate::site_info::validate_home_page_size)
+            .transpose()?;
         let value = SiteSettingsValue {
+            home_page_size,
+            navigation,
             time_zone,
             title: Some(title),
             description: Some(description),
@@ -269,6 +291,8 @@ impl SettingsInteractor {
             && record.value.description == value.description
             && record.value.logo_media_id == value.logo_media_id
             && record.value.time_zone == value.time_zone
+            && record.value.navigation == value.navigation
+            && record.value.home_page_size == value.home_page_size
         {
             return Ok(self.view_of(record.value.clone(), record.version));
         }
@@ -297,6 +321,8 @@ impl SettingsInteractor {
         match self.store.find_site().await? {
             Some(record) => Ok(self.view_of(record.value, record.version)),
             None => Ok(SiteSettingsView {
+                home_page_size: self.fallback.home_page_size,
+                navigation: vec![],
                 time_zone: self.fallback.time_zone.clone(),
                 time_zones: self.time_zones.names(),
                 title: self.fallback.title.clone(),
@@ -312,6 +338,8 @@ impl SettingsInteractor {
     fn view_of(&self, value: SiteSettingsValue, version: i64) -> SiteSettingsView {
         let info = effective_site(&value, &self.fallback);
         SiteSettingsView {
+            home_page_size: info.home_page_size,
+            navigation: value.navigation,
             time_zone: info.time_zone,
             time_zones: self.time_zones.names(),
             title: info.title,

@@ -36,3 +36,7 @@ pub mod rendering_budget;
 pub mod rendering_observer;
 
 pub mod retention;
+
+pub mod navigation;
+
+pub mod registration;

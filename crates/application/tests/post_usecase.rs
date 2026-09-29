@@ -573,7 +573,7 @@ impl FakeRbacStore {
             .lock()
             .unwrap()
             .iter()
-            .filter(|(_, slug)| slug == "owner")
+            .filter(|(_, slug)| slug == "admin")
             .count() as i64
     }
 }
@@ -650,8 +650,8 @@ impl RbacStore for FakeRbacStore {
         role_slug: &str,
         _audit_actor: application::audit::AuditContext,
     ) -> Result<(), UseCaseError> {
-        if role_slug == "owner" && self.owners() <= 1 {
-            return Err(UseCaseError::LastOwnerProtected);
+        if role_slug == "admin" && self.owners() <= 1 {
+            return Err(UseCaseError::LastAdminProtected);
         }
         self.assignments
             .lock()
@@ -694,7 +694,7 @@ impl RbacStore for FakeRbacStore {
         Ok(rows)
     }
 
-    async fn loginable_owner_count(&self) -> Result<i64, UseCaseError> {
+    async fn loginable_admin_count(&self) -> Result<i64, UseCaseError> {
         // Fake 身份没有登录方式概念：owner 分配数即「可登录 Owner」数。
         Ok(self.owners())
     }
@@ -1237,33 +1237,33 @@ async fn author_cannot_publish_others_posts_without_any() {
 }
 
 #[tokio::test]
-async fn last_owner_cannot_be_removed() {
+async fn last_admin_cannot_be_removed() {
     let f = fixture().await;
     let bootstrap = Actor::bootstrap_cli();
     f.roles
-        .assign_to_username(&bootstrap, "author", "owner")
+        .assign_to_username(&bootstrap, "author", "admin")
         .await
         .unwrap();
 
     // 唯一 Owner：移除被拒（存储侧最后 Owner 保护）。
     let err = f
         .roles
-        .remove_from_username(&bootstrap, "author", "owner")
+        .remove_from_username(&bootstrap, "author", "admin")
         .await
         .unwrap_err();
     assert!(
-        matches!(err, UseCaseError::LastOwnerProtected),
+        matches!(err, UseCaseError::LastAdminProtected),
         "最后 Owner 保护：{err:?}"
     );
 
     // 出现第二个 Owner 后，移除其中一个允许。
     f.roles
-        .assign_to_username(&bootstrap, "editor", "owner")
+        .assign_to_username(&bootstrap, "editor", "admin")
         .await
         .unwrap();
     assert!(
         f.roles
-            .remove_from_username(&bootstrap, "author", "owner")
+            .remove_from_username(&bootstrap, "author", "admin")
             .await
             .is_ok()
     );
@@ -1367,14 +1367,14 @@ async fn assign_role_requires_role_manage() {
 #[tokio::test]
 async fn owner_grant_requires_dedicated_ownership_permission() {
     let f = fixture().await;
-    // 除 ownership.manage 外持有全部已注册权限的会话：仍不能授予 Owner。
+    // 除 admin.manage 外持有全部已注册权限的会话：仍不能授予 Owner。
     let without_ownership: Vec<&'static str> = all_registered_permissions()
         .into_iter()
-        .filter(|key| *key != "ownership.manage")
+        .filter(|key| *key != "admin.manage")
         .collect();
     let err = f
         .roles
-        .assign_to_username(&session_actor_with(without_ownership), "author", "owner")
+        .assign_to_username(&session_actor_with(without_ownership), "author", "admin")
         .await
         .unwrap_err();
     assert!(
@@ -1382,13 +1382,13 @@ async fn owner_grant_requires_dedicated_ownership_permission() {
         "普通角色分配不能授予 Owner：{err:?}"
     );
 
-    // 持有 ownership.manage 后允许。
+    // 持有 admin.manage 后允许。
     assert!(
         f.roles
             .assign_to_username(
                 &session_actor_with(all_registered_permissions()),
                 "author",
-                "owner"
+                "admin"
             )
             .await
             .is_ok()

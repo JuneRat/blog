@@ -257,7 +257,7 @@ async fn empty_database_installs_once_logs_in_and_restarts_from_saved_config() {
         me["permissions"]
             .as_array()
             .unwrap()
-            .contains(&json!("ownership.manage"))
+            .contains(&json!("admin.manage"))
     );
     let policy = client()
         .get(format!("{}/api/admin/v1/settings/retention", server.url))
@@ -542,7 +542,7 @@ async fn committed_installation_with_a_remaining_journal_is_verified_then_cleane
     let installation_id = journal["installation_id"].as_str().unwrap().to_owned();
     // Reproduce a crash after the real DB transaction commits, before the
     // server can clean the journal or activate its router.
-    let owner = application::installation::InitialOwner::prepare(
+    let owner = application::installation::InitialAdmin::prepare(
         "first-writer",
         PASSWORD,
         &infrastructure::Argon2PasswordHasher::with_defaults(),
@@ -558,6 +558,8 @@ async fn committed_installation_with_a_remaining_journal_is_verified_then_cleane
         &installation_id,
         &owner,
         &application::ports::SiteSettingsValue {
+            home_page_size: None,
+            navigation: vec![],
             time_zone: None,
             title: None,
             description: None,
@@ -773,7 +775,7 @@ async fn toml_bootstrap_is_saved_once_and_runtime_edits_survive_restart() {
 async fn competing_bootstraps_commit_exactly_one_owner_and_marker() {
     let pool = common::fresh_database("blog_install_atomic_test").await;
     let hasher = infrastructure::Argon2PasswordHasher::with_defaults();
-    let first = application::installation::InitialOwner::prepare(
+    let first = application::installation::InitialAdmin::prepare(
         "first-writer",
         PASSWORD,
         &hasher,
@@ -781,7 +783,7 @@ async fn competing_bootstraps_commit_exactly_one_owner_and_marker() {
     )
     .await
     .unwrap();
-    let second = application::installation::InitialOwner::prepare(
+    let second = application::installation::InitialAdmin::prepare(
         "second-writer",
         PASSWORD,
         &hasher,
@@ -790,6 +792,8 @@ async fn competing_bootstraps_commit_exactly_one_owner_and_marker() {
     .await
     .unwrap();
     let site = application::ports::SiteSettingsValue {
+        home_page_size: None,
+        navigation: vec![],
         time_zone: None,
         title: None,
         description: None,

@@ -171,3 +171,11 @@ pub fn content_queries(pool: &Database) -> Arc<application::content_queries::Con
         Arc::new(infrastructure::PostgresUserRepository::new(pool.clone())),
     ))
 }
+
+pub fn registration(pool: &Database) -> Arc<application::registration::RegistrationInteractor> {
+    Arc::new(application::registration::RegistrationInteractor::new(
+        Arc::new(infrastructure::PostgresRegistrationStore::new(pool.clone())),
+        Arc::new(infrastructure::Argon2PasswordHasher::with_defaults()),
+        Arc::new(SystemClock),
+    ))
+}

@@ -534,7 +534,7 @@ impl application::ports::RbacStore for NoopRbac {
     ) -> Result<Vec<(Uuid, String)>, UseCaseError> {
         Ok(vec![])
     }
-    async fn loginable_owner_count(&self) -> Result<i64, UseCaseError> {
+    async fn loginable_admin_count(&self) -> Result<i64, UseCaseError> {
         Ok(0)
     }
 }

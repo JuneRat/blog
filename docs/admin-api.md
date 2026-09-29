@@ -28,11 +28,11 @@
 | `GET /api/install` | 需 `X-Install-Token`；`{ "database_configured": false, "public_base_url": null }`；续装时仅说明配置已保存，不返回数据库地址、账号密码或安装码 |
 | `POST /api/install` | `{ "database_url": "postgres://…", "public_base_url": "https://blog.example.com", "username": "sun", "password": "…" }`；成功返回 `{ "redirect": "/admin/" }` |
 
-GET 和 POST 都必须带启动终端显示的 `X-Install-Token`，并执行 Origin 检查（请求带 Origin 时必须同源）。未知字段、无效 JSON、超过 16 KiB、弱密码、非空库等返回 400 `invalid_request`；错误安装码/跨源返回 403；同时正在处理安装时返回 429 `rate_limited`。响应均 no-store，包含请求编号。续装沿用已保存数据库和站点地址，输入不能覆盖；部署设置的 `BLOG_PUBLIC_BASE_URL` 优先。配置文件不保存账号明文密码或安装码，Owner 与安装完成审计同事务提交。
+GET 和 POST 都必须带启动终端显示的 `X-Install-Token`，并执行 Origin 检查（请求带 Origin 时必须同源）。未知字段、无效 JSON、超过 16 KiB、弱密码、非空库等返回 400 `invalid_request`；错误安装码/跨源返回 403；同时正在处理安装时返回 429 `rate_limited`。响应均 no-store，包含请求编号。续装沿用已保存数据库和站点地址，输入不能覆盖；部署设置的 `BLOG_PUBLIC_BASE_URL` 优先。配置文件不保存账号明文密码或安装码，Admin 与安装完成审计同事务提交。
 
 ## 审计日志
 
-后台入口 `/admin/audit-logs`，接口 `GET /api/admin/v1/audit-logs`，独立要求 `audit.read`；默认仅 Owner 持有。未登录返回 401，无权限返回 403。不提供写入、编辑或清除接口。
+后台入口 `/admin/audit-logs`，接口 `GET /api/admin/v1/audit-logs`，独立要求 `audit.read`；默认仅 Admin 持有。未登录返回 401，无权限返回 403。不提供写入、编辑或清除接口。
 
 | 查询参数 | 规则 |
 |---|---|
@@ -78,7 +78,7 @@ GET 和 POST 都必须带启动终端显示的 `X-Install-Token`，并执行 Ori
 
 | 方法与路径 | 行为 |
 |---|---|
-| `GET /posts` | 当前用户文章摘要分页；显式 `?author=用户名` 需 `post.read_any` |
+| `GET /posts` | 默认本人文章摘要分页；`scope=all` 或显式 `author=用户名` 需 `post.read_any` |
 | `POST /posts` | 创建草稿，返回 201 和详情 |
 | `GET /posts/{id}` | 详情，包含 Markdown `content` 和 `excerpt` |
 | `PATCH /posts/{id}` | 编辑并返回详情；编辑已发布文章会直接更新线上内容 |
@@ -87,13 +87,15 @@ GET 和 POST 都必须带启动终端显示的 `X-Install-Token`，并执行 Ori
 | `POST /posts/{id}/unpublish` | 撤回、取消预约或解除归档，回到草稿；需撤回权限 |
 | `POST /posts/{id}/archive` | 归档，返回详情；沿用 `post.unpublish` / `post.unpublish_any` |
 | `POST /posts/{id}/trash` | 移入回收站，返回详情 |
-| `GET /post-trash?page=1` | 回收站分页，可带 `author`；返回 `items/total/page/per_page` |
+| `GET /post-trash?page=1` | 回收站分页，支持与文章列表相同的筛选；返回 `items/total/page/per_page` |
 | `POST /posts/{id}/restore` | 一律恢复为草稿，返回详情 |
 | `POST /posts/{id}/purge` | 永久删除回收站文章，返回 204 |
 
 普通文章、页面及两类回收站列表统一返回 `{ "items": [...], "total": 23, "page": 1, "per_page": 20 }`。`page` 默认 1，每页固定 20 条，超出末页返回空 `items` 与实际总数；零、负数及会导致偏移溢出的页码返回 400。可选筛选 `status=draft|scheduled|published|archived`、`visibility=public|private`，非法值返回 400。普通列表按 `updated_at DESC, id DESC`，回收站按 `deleted_at DESC, id DESC`；总数与当前页属于同一数据库快照，跨次翻页不冻结内容集合。
 
-列表条目只含 `id/slug/title/status/visibility/version/published_at/updated_at`，文章另含 `author_id`。正文、摘要、标签、分类、系列与封面元数据只由详情端点返回。后台筛选变化回到首页；内容写入使全部分页缓存失效，当前页删空时回到有效页。Post CLI 的 `post list` 同样支持 `--page`、`--status`、`--visibility`，每次输出一页及总数。
+服务端搜索 `q` 在分页前筛选全部授权记录：对标题、slug、Markdown 正文进行不区分大小写的字面子串匹配，文章另含摘要；两端空白移除，最多 200 个 Unicode 字符，空值不筛选。`%`、`_` 不作通配符。文章及文章回收站另支持 `category_id=UUID`（直接归属分类）与 `scope=mine|all`（默认 mine）；`all` 需 `post.read_any`，可再组合 `author=用户名`。显式作者参数兼容原接口，同样要求 `post.read_any`，可查询停用或软删除账号留下的文章；不会因此恢复其登录能力。
+
+列表条目只含 `id/slug/title/status/visibility/version/published_at/updated_at`，文章另含 `author_id/author_username`。正文、摘要、标签、分类、系列与封面元数据只由详情端点返回。后台筛选变化回到首页，搜索、作者、分类、状态和页码写入 URL；刷新及从编辑器返回列表保留条件，同一登录会话中的菜单返回也恢复最近列表。内容写入使全部分页缓存失效，当前页删空时回到有效页。Post CLI 的 `post list` 同样支持 `--page`、`--status`、`--visibility`，每次输出一页及总数。
 
 创建字段为 `slug`、`title`、`excerpt`、`content`、`visibility`、`tag_ids`、`category_id`、`series`、`cover_media_id`。`slug` 可省略生成临时值，草稿允许未完成的标题与正文；发布要求见[内容生命周期](content-lifecycle.md)。`series` 为数组，例如 `[{ "series_id": "UUID", "position": 0 }]`，省略时为空数组。position 省略时为 0，范围为 0–2147483647，同一系列内可重复；数组内不能重复指定同一系列 ID。文章详情使用相同数组格式。
 
@@ -129,7 +131,7 @@ Page 没有作者，使用站点级 `page.*` 权限。
 | `POST /pages/{id}/restore` | 一律恢复为草稿；`page.delete`，JSON 必须含 `expected_version` |
 | `POST /pages/{id}/purge` | 永久删除回收站页面；`page.purge`，JSON 必须含 `expected_version`，成功 204 |
 
-创建字段为 `slug`、`title`、`content`、`visibility`；编辑改用 `new_slug` 并可带 `expected_version`。公开地址为 `/{slug}`，系统保留路径不可用，首次预约或发布后 slug 锁定。详情包含 `deleted`，正常列表与 GET 详情排除回收站记录。永久删除权限默认仅授予 Owner，普通删除与恢复授予 Editor；旧 `DELETE /pages/{id}` 已移除。
+创建字段为 `slug`、`title`、`content`、`visibility`；编辑改用 `new_slug` 并可带 `expected_version`。公开地址为 `/{slug}`，系统保留路径不可用，首次预约或发布后 slug 锁定。详情包含 `deleted`，正常列表与 GET 详情排除回收站记录。永久删除权限默认仅授予 Admin，普通删除与恢复授予 Editor；旧 `DELETE /pages/{id}` 已移除。
 
 ## 标签、分类与系列
 
@@ -156,16 +158,16 @@ Page 没有作者，使用站点级 `page.*` 权限。
 |---|---|
 | `GET /users?limit=…&offset=…` | 分页查询，返回用户数组；`user.manage` 或 `role.manage` |
 | `POST /users` | 创建用户：`username`，可带 `email`、`display_name`；`user.manage` |
-| `PUT /users/{id}/status` | UUID 定位；`status: "active" / "disabled"`、必填正整数 `expected_version`；需 `user.manage`，目标持有 Owner 时另需 `ownership.manage` |
+| `PUT /users/{id}/status` | UUID 定位；`status: "active" / "disabled"`、必填正整数 `expected_version`；需 `user.manage`，目标持有 Admin 时另需 `admin.manage` |
 | `GET /roles` | 角色列表，`user.manage` 或 `role.manage` |
 | `PUT /users/{username}/roles/{role}` | 分配角色，成功 204 |
 | `DELETE /users/{username}/roles/{role}` | 移除角色，成功 204 |
 
 创建用户响应的 `created_at` 使用 RFC 3339 字符串，与其它 HTTP 时间字段一致。
 
-用户查询默认取 50 条，最多 200 条，负 offset 收敛为 0。角色变更需要 `role.manage`，授予范围不能超出操作者权限，Owner 变更额外需要 `ownership.manage`，最后 Owner 保护仍生效。用户与角色请求体上限为 4 KiB。当前 API 不提供自定义角色编辑、OAuth 提供商配置或管理员强制重置密码；后两者使用受控 CLI。
+用户查询默认取 50 条，最多 200 条，负 offset 收敛为 0。角色变更需要 `role.manage`，授予范围不能超出操作者权限，Admin 变更额外需要 `admin.manage`，最后 Admin 保护仍生效。用户与角色请求体上限为 4 KiB。当前 API 不提供自定义角色编辑、OAuth 提供商配置或管理员强制重置密码；后两者使用受控 CLI。
 
-用户列表包含 `status` 和编辑 `version`；状态与登录方式分开显示，停用不删除密码、外部身份、角色或文章。状态 PUT 成功返回 `{ "id": "UUID", "status": "disabled", "version": 4 }`。实际启用或停用同事务递增 `version/auth_version`、删除全部持久会话、追加 `user.status.update` 审计；启用后必须重新登录。相同状态且版本匹配时不写入、不撤销会话、不重复审计；旧版本仍返回 409 `version_conflict`。最后可登录 Owner 不能停用，返回 403 `last_owner`；软删除账号不能在此恢复，返回 404。未知状态或字段拒绝。后台 `/admin/users` 提供确认操作；允许停用本人，但仍执行最后 Owner 保护，成功后本人会话失效。
+用户列表包含 `status` 和编辑 `version`；状态与登录方式分开显示，停用不删除密码、外部身份、角色或文章。状态 PUT 成功返回 `{ "id": "UUID", "status": "disabled", "version": 4 }`。实际启用或停用同事务递增 `version/auth_version`、删除全部持久会话、追加 `user.status.update` 审计；启用后必须重新登录。相同状态且版本匹配时不写入、不撤销会话、不重复审计；旧版本仍返回 409 `version_conflict`。最后可登录 Admin 不能停用，返回 403 `last_admin`；软删除账号不能在此恢复，返回 404。未知状态或字段拒绝。后台 `/admin/users` 提供确认操作；允许停用本人，但仍执行最后 Admin 保护，成功后本人会话失效。
 
 ## 设置
 
@@ -173,8 +175,8 @@ Page 没有作者，使用站点级 `page.*` 权限。
 
 | 方法与路径 | 行为 / 载荷 |
 |---|---|
-| `GET /settings/site` | 标题、描述、logo、`time_zone`、可选 IANA 名称 `time_zones`、生效来源和版本 |
-| `PUT /settings/site` | `title`、`description`、`logo_media_id`、`time_zone`、`expected_version` |
+| `GET /settings/site` | 标题、描述、logo、`home_page_size`、`navigation`、`time_zone`、可选 IANA 名称 `time_zones`、生效来源和版本 |
+| `PUT /settings/site` | `title`、`description`、`logo_media_id`、`home_page_size`、`navigation`、`time_zone`、`expected_version` |
 | `GET /settings/theme` | 所选 slug、生效 slug、来源、版本与可用主题 |
 | `PUT /settings/theme` | `slug`、`expected_version` |
 | `GET /settings/retention` | 评论 IP 与审计的保留天数及两组版本 |
@@ -182,7 +184,11 @@ Page 没有作者，使用站点级 `page.*` 权限。
 
 `time_zone` 是 IANA 名称（例如 `Asia/Shanghai`），保存后无需重启，`/me` 和公开评论列表读取当前值。未知时区返回 400；旧客户端省略或传 `null` 时保留已保存的时区。时区变更沿用 site 行的版本检查和审计。
 
-`site` 其它字段是整组替换，省略或传 `null` 的 logo 会被清除；新 logo 要求图片存在且未移入回收站，原有引用可继续保留。未配置的设置版本为 0。保留期默认各 180 天，范围 1–36,500 整数天；更新只合并两项字段并保留其他 JSON 设置，两组版本任一过期返回 409。未知字段拒绝，相同值不增版。评论全站开关与 IP 保留期共享 comments 分组版本。清理由独立维护命令执行，HTTP 不提供立即清理接口。`/settings/oauth` 等未知分组返回 404。生效优先级见[配置参考](configuration.md)。
+`home_page_size` 是首页每页文章数，范围 1–100 的整数，默认 20。保存后立即生效；省略或 null 保留已保存的值。仅影响前台首页，后台列表和目录页的分页规则不变。
+
+`navigation` 是有序数组，单项为 `{ "label": "关于", "page_slug": "about", "placement": "header" }`。位置为 header/footer，每个位置按数组顺序展示；最多 20 项，名称 trim 后为 1–40 字符且无控制字符，目标必须为合法且非系统保留的 Page slug，同一位置不可重复目标。允许预先配置尚未公开的页面，公开渲染只输出当时可读的目标。省略或 null 保留已有导航，`[]` 清空；与站点设置共用版本及事务审计。
+
+`site` 除首页每页数量、时区和导航外的字段是整组替换，省略或传 `null` 的 logo 会被清除；新 logo 要求图片存在且未移入回收站，原有引用可继续保留。未配置的设置版本为 0。保留期默认各 180 天，范围 1–36,500 整数天；更新只合并两项字段并保留其他 JSON 设置，两组版本任一过期返回 409。未知字段拒绝，相同值不增版。评论全站开关与 IP 保留期共享 comments 分组版本。清理由独立维护命令执行，HTTP 不提供立即清理接口。`/settings/oauth` 等未知分组返回 404。生效优先级见[配置参考](configuration.md)。
 
 ## 媒体
 
@@ -226,7 +232,7 @@ Page 没有作者，使用站点级 `page.*` 权限。
 |---|---|
 | 400 | `invalid_request`（含使用 `AdminAuth` 的管理写入 CSRF 校验失败） |
 | 401 | `unauthenticated`、`invalid_credentials`；带 `WWW-Authenticate: Session` |
-| 403 | `forbidden`（含退出/自助改密的 CSRF 失败）、`last_owner` |
+| 403 | `forbidden`（含退出/自助改密的 CSRF 失败）、`last_admin` |
 | 404 | `not_found` |
 | 409 | `version_conflict`、`conflict`、`username_taken`、`email_taken`、`category_in_use` |
 | 429 | `rate_limited`；带 `Retry-After` |
@@ -240,3 +246,12 @@ Page 没有作者，使用站点级 `page.*` 权限。
 完成日志记录方法、路径、状态、耗时和已验证的 actor，不记录 query、Cookie、token 或正文。应用错误复用请求上下文编号，媒体上传的错误体与 x-request-id 响应头保持一致。这是请求追踪能力，不能替代角色变更、身份绑定等动作级审计；审计交付范围见[路线图](product-roadmap.md)。
 
 时间展示：文章、页面、媒体和评论的时间字段均为带偏移的 RFC 3339 字符串；后台按照 `/me.time_zone` 显示，不解析展示文本。媒体和评论时间不再返回旧的 `YYYY-MM-DD HH:mm UTC` 格式。
+
+### 注册与参与设置
+
+- `GET /auth/register`：公开返回 `{enabled}`，响应不缓存。
+- `POST /auth/register`：`{username, display_name?, email, password}`；成功 201，默认分配 reader。注册关闭返回 403 `registration_closed`，用户名/邮箱重复返回 409。沿用密码策略、同源校验和请求限流。
+- `POST /auth/login/password` 的 `username` 字段现在接受用户名或邮箱；两者不区分大小写，归属同一账号的失败限流。
+- `GET/PUT /api/admin/v1/access-settings`：要求 `settings.manage`，字段为 `registration_enabled`、`guest_comments_enabled`、`version`。默认两个开关均关闭，更新需匹配版本。
+- 公开评论列表附带 `guest_comments_enabled`。游客评论关闭时匿名提交返回 401；登录账号仍可按当前审核策略提交评论；评论 API 的策略和回执见[原生评论](comments.md#接口)。
+- 内置角色为 admin、editor、author、reader。admin 拥有完整权限，editor 可创建及管理全部文章，author 管理本人文章，reader 仅可评论及管理本人资料。保护错误码为 `last_admin`，用户列表标记为 `is_last_loginable_admin`。

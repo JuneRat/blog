@@ -17,7 +17,7 @@ export const commentsApi = {
     }),
   reply: (item: CommentItem, body: string) =>
     request(
-      s.messageResult,
+      s.commentSubmissionResult,
       `/api/v1/posts/${encodeURIComponent(item.post_slug)}/comments`,
       {
         method: "POST",

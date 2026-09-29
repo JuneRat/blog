@@ -25,7 +25,7 @@
   {% endif %}
   <div class="content">{{ post.content_html | safe }}</div>
 </article>
-<section class="comments" data-comments-slug="{{ post.slug }}" aria-label="文章评论"><noscript>启用 JavaScript 后可阅读及提交评论。</noscript></section>
+<section class="comments" data-comments-slug="{{ post.slug }}" aria-label="文章评论" hidden></section>
 <link rel="stylesheet" href="/assets/comments.css">
 <script src="/assets/comments.js" defer></script>
 {% endblock %}

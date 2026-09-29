@@ -1,7 +1,7 @@
 import { formatDateTime, useTimeZone } from "../timeZone";
 import { invalidateAfterWrite } from "../queryEffects";
 import { statusLabel } from "../components/ContentLifecycleControls";
-import { Alert, App as AntdApp, Button, Flex, Input, Space, Table, Typography } from "antd";
+import { Alert, App as AntdApp, Button, Flex, Space, Table, Typography } from "antd";
 import type { TableProps } from "antd";
 import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
@@ -10,6 +10,7 @@ import { permissionMessageOf } from "../apiError";
 import { useAuth } from "../auth";
 import { useContentList } from "../useContentList";
 import { ContentListFilters, ContentPagination } from "../components/ContentListControls";
+import { PostScopeFilters } from "../components/PostScopeFilters";
 import { navigate, paths } from "../router";
 import type { PostSummary } from "../types";
 
@@ -55,23 +56,13 @@ export function PostListScreen() {
     });
   }
 
-  const [searchKeyword, setSearchKeyword] = useState("");
-  const rawPosts = posts.data?.items ?? [];
-  const displayedPosts = rawPosts.filter((post) => {
-    if (!searchKeyword.trim()) return true;
-    const kw = searchKeyword.trim().toLowerCase();
-    return (
-      (post.title && post.title.toLowerCase().includes(kw)) ||
-      (post.slug && post.slug.toLowerCase().includes(kw))
-    );
-  });
-
   const columns: TableProps<PostSummary>["columns"] = [
     {
       title: "标题",
       dataIndex: "title",
       render: (title: string) => <Typography.Text strong>{title || "（无标题）"}</Typography.Text>,
     },
+    { title: "作者", dataIndex: "author_username" },
     {
       title: "状态",
       dataIndex: "status",
@@ -119,7 +110,7 @@ export function PostListScreen() {
         >
           编辑
         </Button>
-        {canTrash && (
+        {canTrash && (post.author_id === me?.user_id || me?.permissions.includes("post.delete_any")) && (
           <Button
             type="text"
             danger
@@ -137,7 +128,7 @@ export function PostListScreen() {
 
   return (
     <>
-      <Typography.Title level={3}>我的文章</Typography.Title>
+      <Typography.Title level={3}>{filter.scope === "all" || filter.author ? "全部文章" : "我的文章"}</Typography.Title>
 
       {errorText !== null && (
         <Alert type="error" showIcon title={errorText} style={{ marginBottom: 16 }} />
@@ -152,22 +143,16 @@ export function PostListScreen() {
         )}
       </Flex>
 
+      <PostScopeFilters filter={filter} onChange={setFilter} />
       <Flex justify="space-between" align="flex-start" wrap gap={12}>
         <ContentListFilters filter={filter} onChange={setFilter} />
-        <Input
-          placeholder="搜索当前页标题或 slug…"
-          allowClear
-          value={searchKeyword}
-          onChange={(e) => setSearchKeyword(e.target.value)}
-          style={{ width: 220, marginBottom: 16 }}
-        />
       </Flex>
 
       <Table<PostSummary>
         rowKey="id"
         size="middle"
         loading={posts.isFetching}
-        dataSource={displayedPosts}
+        dataSource={posts.data?.items ?? []}
         columns={columns}
         pagination={false}
         // 保留迁移前的语义：整行点击进入该文章的编辑页。
@@ -179,9 +164,9 @@ export function PostListScreen() {
           emptyText:
             errorText !== null
               ? "文章加载失败。"
-              : searchKeyword.trim() && displayedPosts.length === 0
+              : filter.q
                 ? "没有匹配搜索条件的文章。"
-                : filter.status || filter.visibility
+                : filter.status || filter.visibility || filter.category_id || filter.author
                   ? "没有符合筛选条件的文章。"
                   : `还没有文章。${canCreate ? "点击「新建草稿」开始。" : ""}`,
         }}

@@ -102,6 +102,7 @@ struct IndexContext<'a> {
     site: &'a SiteInfo,
     seo: &'a SeoMeta,
     posts: &'a [PostCard],
+    pagination: &'a application::public_site::IndexPagination,
 }
 
 #[derive(serde::Serialize)]
@@ -339,8 +340,14 @@ impl MiniJinjaThemeRenderer {
         site: &SiteInfo,
         seo: &SeoMeta,
         posts: &[PostCard],
+        pagination: &application::public_site::IndexPagination,
     ) -> Result<String, UseCaseError> {
-        let ctx = IndexContext { site, seo, posts };
+        let ctx = IndexContext {
+            site,
+            seo,
+            posts,
+            pagination,
+        };
         self.render("index.html", ctx, &site.time_zone)
     }
 
@@ -465,6 +472,8 @@ mod tests {
     async fn auxiliary_templates_escape_html_regardless_of_extension() {
         let runtime = super::RenderingRuntime::default();
         let site = application::site_info::SiteInfo {
+            home_page_size: application::site_info::DEFAULT_HOME_PAGE_SIZE,
+            navigation: vec![],
             time_zone: "UTC".into(),
             title: "Site".into(),
             description: String::new(),
@@ -518,6 +527,7 @@ mod tests {
                     &site,
                     &application::seo::SeoMeta::home(&site, &base),
                     std::slice::from_ref(&post),
+                    &Default::default(),
                 )
                 .await
                 .unwrap();
@@ -554,7 +564,7 @@ mod tests {
             ),
             (
                 "index",
-                "{% if posts | length == 50 %}{{ posts[49].missing }}{% endif %}",
+                "{% if pagination.next_url %}{{ missing }}{% endif %}",
                 "maximum-first/index.html",
             ),
             ("post", "{{ post.category.name }}", "empty/post.html"),

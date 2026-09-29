@@ -70,3 +70,5 @@ pub use comment_rendering::COMMENT_RENDER_VERSION;
 pub mod image_inspection;
 
 pub mod retention;
+
+pub use persistence::PostgresRegistrationStore;

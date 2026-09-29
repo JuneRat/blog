@@ -19,3 +19,5 @@
 .comment-body blockquote { margin-left: 0; padding-left: 1rem; border-left: 3px solid #8885; }
 .comment-toolbar { display: flex; flex-wrap: wrap; }
 .comment-preview { padding: .75rem; border: 1px solid #8885; border-radius: 4px; }
+
+[data-comments-slug] fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }

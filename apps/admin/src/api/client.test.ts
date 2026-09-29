@@ -182,7 +182,7 @@ describe("HTTP response boundary", () => {
   });
 
   it("reply omits the nickname placeholder", async () => {
-    const fetcher = respond(jsonResponse({ message: "已提交，等待审核" }, 202));
+    const fetcher = respond(jsonResponse({ message: "已提交，等待审核", status: "pending" }, 202));
     await commentsApi.reply(
       { id: "comment", post_slug: "first" } as Parameters<
         typeof commentsApi.reply

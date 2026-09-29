@@ -17,7 +17,7 @@ pub enum RoleAction {
         #[arg(long)]
         role: String,
     },
-    /// 移除用户的角色（最后一个有效 Owner 会被拒绝）
+    /// 移除用户的角色（最后一个有效 Admin 会被拒绝）
     Remove {
         #[arg(long)]
         user: String,

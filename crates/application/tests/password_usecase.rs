@@ -291,6 +291,7 @@ impl application::ports::PasswordCredentialStore for FakeUserRepo {
         }
         let hash = self.hash_of(user.id);
         Ok(hash.map(|password_hash| PasswordCredential {
+            username: username.to_owned(),
             user_id: user.id,
             password_hash,
             auth_version: user.auth_version,

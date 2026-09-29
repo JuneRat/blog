@@ -197,3 +197,6 @@ a {
   vertical-align: -0.4em;
   margin-right: 0.35em;
 }
+
+.page-navigation, .pagination { display: flex; flex-wrap: wrap; gap: 1rem; align-items: center; margin-block: 1rem; }
+.page-navigation:empty { display: none; }

@@ -33,7 +33,7 @@
 | 文档 | 负责的内容 |
 |---|---|
 | [开发指南](development.md) | 本地环境、CLI、前端联调、检查命令与测试库 |
-| [首次安装](installation.md) | 安装向导、初始 Owner、连接配置保存与中断恢复 |
+| [首次安装](installation.md) | 安装向导、初始 Admin、连接配置保存与中断恢复 |
 | [Docker Compose 部署](docker-compose.md) | 镜像构建与交付、持久卷、安装、健康检查和部署维护 |
 | [Compose 备份恢复](compose-backup.md) | 容器内工具、完整备份包、隔离核验、加密仓库与定时任务 |
 | [后台开发指南](admin-development.md) | 组件、表单、查询缓存、失效与前端测试约定 |
@@ -47,7 +47,7 @@
 | [迁移演进](schema-migrations.md) | 不可变迁移、共享清单、SQL 生成、升级与跨版本恢复 |
 | [容量验证](public-read-capacity.md) | 查询路径、连接池对比和独立测试库上的持续混合读写压测 |
 | [探针、日志与指标](observability.md) | 健康端点、JSON 日志、指标访问及 Prometheus 抓取 |
-| [身份、权限与后台](identity-and-admin.md) | 认证、授权、会话、Owner 保护与后台交互约束 |
+| [身份、权限与后台](identity-and-admin.md) | 认证、授权、会话、Admin 保护与后台交互约束 |
 | [管理 API](admin-api.md) | 当前路由、请求形态、版本与错误约定 |
 | [主题与渲染](themes-and-rendering.md) | 模板契约、HTML 派生、执行预算、主题与 SEO |
 | [运维与恢复](operations-and-recovery.md) | 当前工具的操作步骤、验证范围与限制 |

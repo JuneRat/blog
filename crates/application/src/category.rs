@@ -1,7 +1,7 @@
 //! 分类用例：创建、更新（改名/描述/移动父节点）、删除与目录读取。
 //!
 //! 权限约定（docs/identity-and-admin.md §2）：
-//! - 目录管理动作要求 `category.manage`（Owner 与 Editor 内置持有）；
+//! - 目录管理动作要求 `category.manage`（Admin 与 Editor 内置持有）；
 //! - 目录读取对已认证会话开放（文章编辑器选择分类需要）；
 //! - 文章与分类的**关联**走文章编辑授权（post.update/post.update_any）。
 //!

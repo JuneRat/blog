@@ -64,6 +64,8 @@ export class NavigationHistory {
     return { ...this.browser.history.state, [STATE_KEY]: position };
   }
 
+  getURL = (): string => this.current.url;
+
   getPathname = (): string => new URL(this.current.url).pathname;
 
   subscribe = (listener: () => void): (() => void) => {

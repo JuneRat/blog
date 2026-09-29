@@ -1,6 +1,19 @@
 //! 站点生效信息与字段级回退规则；供设置、公开展示和 SEO 共用。
 
+use crate::navigation::validate_navigation as validate_initial_navigation;
 use crate::ports::SiteSettingsValue;
+
+pub const DEFAULT_HOME_PAGE_SIZE: i64 = 20;
+pub const MAX_HOME_PAGE_SIZE: i64 = 100;
+
+pub fn validate_home_page_size(size: i64) -> Result<i64, crate::UseCaseError> {
+    if !(1..=MAX_HOME_PAGE_SIZE).contains(&size) {
+        return Err(crate::UseCaseError::Invalid(format!(
+            "首页每页文章数须为 1–{MAX_HOME_PAGE_SIZE} 的整数"
+        )));
+    }
+    Ok(size)
+}
 
 /// 站点基础信息：一次渲染的生效值。
 ///
@@ -9,6 +22,8 @@ use crate::ports::SiteSettingsValue;
 /// 解析见 [`effective_site`]。
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SiteInfo {
+    pub home_page_size: i64,
+    pub navigation: Vec<crate::navigation::NavigationLink>,
     pub time_zone: String,
     pub title: String,
     pub description: String,
@@ -19,6 +34,8 @@ pub struct SiteInfo {
 impl Default for SiteInfo {
     fn default() -> Self {
         Self {
+            home_page_size: DEFAULT_HOME_PAGE_SIZE,
+            navigation: vec![],
             time_zone: "UTC".into(),
             title: "Sun's Blog".into(),
             description: "一个 Rust 博客".into(),
@@ -41,6 +58,11 @@ pub fn initial_site_settings(
     .map_err(|e| crate::UseCaseError::Invalid(e.to_string()))?
     .into_parts();
     Ok(SiteSettingsValue {
+        home_page_size: value
+            .home_page_size
+            .map(validate_home_page_size)
+            .transpose()?,
+        navigation: validate_initial_navigation(value.navigation)?,
         time_zone: value.time_zone,
         title: value.title.map(|_| title),
         description: value.description.map(|_| description),
@@ -69,6 +91,8 @@ pub fn effective_site(value: &SiteSettingsValue, fallback: &SiteInfo) -> SiteInf
         .unwrap_or_else(|| fallback.description.clone());
     // logo 只来自已保存的媒体 ID，不使用装配回退值；媒体引用有效性由保存路径校验。
     SiteInfo {
+        home_page_size: value.home_page_size.unwrap_or(fallback.home_page_size),
+        navigation: vec![],
         time_zone: value
             .time_zone
             .clone()
@@ -85,6 +109,8 @@ mod tests {
 
     fn fallback() -> SiteInfo {
         SiteInfo {
+            home_page_size: crate::site_info::DEFAULT_HOME_PAGE_SIZE,
+            navigation: vec![],
             time_zone: "UTC".into(),
             title: "默认标题".into(),
             description: "默认描述".into(),
@@ -94,6 +120,8 @@ mod tests {
 
     fn stored(title: Option<&str>, description: Option<&str>) -> SiteSettingsValue {
         SiteSettingsValue {
+            home_page_size: None,
+            navigation: vec![],
             time_zone: None,
             title: title.map(str::to_string),
             description: description.map(str::to_string),
@@ -105,6 +133,8 @@ mod tests {
     fn logo_media_id_becomes_a_public_url() {
         let logo = uuid::Uuid::now_v7();
         let value = SiteSettingsValue {
+            home_page_size: None,
+            navigation: vec![],
             time_zone: None,
             title: Some("t".into()),
             description: Some("d".into()),

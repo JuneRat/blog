@@ -42,6 +42,6 @@ HTML 上限的 Post/Page 校验模板，拒绝重复输出正文等明显超预�
 | Post/Page 状态、版本前提、系列完整重排与分类防环 | [内容提交与目录](content-lifecycle.md#3-提交版本与完整读取) |
 | 媒体锁顺序、历史引用、回收站与正式文件清理 | [媒体生命周期](content-lifecycle.md#6-媒体引用与独立公开链接) |
 | 评论身份、父子关系、审核、删除占位与恢复 | [评论](comments.md) |
-| 用户编辑版本、认证版本、Owner 与登录方式保护 | [身份与后台](identity-and-admin.md) |
+| 用户编辑版本、认证版本、Admin 与登录方式保护 | [身份与后台](identity-and-admin.md) |
 
 评论使用 `CommentBody` 与 `CommentNickname` 值类型，账号名称在服务端取得并规范化。评论每次有效提交独立建行，不提供提交去重或幂等键；请求重试与删除操作的 HTTP 语义只在[评论接口](comments.md#接口)维护。

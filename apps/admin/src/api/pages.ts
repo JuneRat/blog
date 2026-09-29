@@ -79,8 +79,8 @@ export const pagesApi = {
       },
     ),
 
-  listPageTrash: (page = 1): Promise<PageTrash> =>
-    request(s.pagePage, `/api/admin/v1/page-trash?page=${page}`),
+  listPageTrash: (page = 1, filter: Partial<ContentListFilter> = {}): Promise<PageTrash> =>
+    request(s.pagePage, `/api/admin/v1/page-trash${contentQuery({ ...filter, page })}`),
 
   trashPage: (id: string, expectedVersion: number): Promise<PageDetail> =>
     request(

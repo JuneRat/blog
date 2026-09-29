@@ -151,3 +151,13 @@ pub async fn connect_with_config(
         .await
         .map(infrastructure::test_support::pool)
 }
+
+pub fn registration(pool: &sqlx::PgPool) -> Arc<application::registration::RegistrationInteractor> {
+    Arc::new(application::registration::RegistrationInteractor::new(
+        Arc::new(infrastructure::PostgresRegistrationStore::new(database(
+            pool.clone(),
+        ))),
+        Arc::new(infrastructure::Argon2PasswordHasher::with_defaults()),
+        Arc::new(infrastructure::SystemClock),
+    ))
+}

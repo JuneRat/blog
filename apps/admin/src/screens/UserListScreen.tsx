@@ -29,10 +29,10 @@ const USER_PAGE_LIMIT = 200;
  * 当作正常交互；路由守卫同理只改善体验。所有写操作都走受保护的 API
  * （会话 + CSRF），并按业务码给出精确文案：
  * - `username_taken` / `email_taken`：创建失败的具体原因；
- * - `last_owner`：解释最后一个可登录 Owner 为何不能被移除；
- * - `forbidden`：可能是缺少 ownership.manage 或超出委派上限。
+ * - `last_admin`：解释最后一个可登录 Admin 为何不能被移除；
+ * - `forbidden`：可能是缺少 admin.manage 或超出委派上限。
  *
- * 这些文案统一用**内联 Alert 而不是 message 吐司**：冲突、权限与最后 Owner
+ * 这些文案统一用**内联 Alert 而不是 message 吐司**：冲突、权限与最后 Admin
  * 的说明需要停留在屏幕上，3 秒后自动消失会让人来不及看清。
  */
 function messageOf(error: unknown): string {
@@ -42,13 +42,13 @@ function messageOf(error: unknown): string {
         return "用户名已被占用，请换一个。";
       case "email_taken":
         return "邮箱已被其他账号使用，请换一个或留空。";
-      case "last_owner":
-        return "这是最后一个可登录的 Owner，不能停用或移除其 Owner 角色；请先确保另一个 Owner 可以登录。";
+      case "last_admin":
+        return "这是最后一个可登录的 Admin，不能停用或移除其 Admin 角色；请先确保另一个 Admin 可以登录。";
       case "version_conflict":
         return "账号已在其他位置更新，请核对最新列表后重试。";
       case "forbidden":
         return withRequestId(
-          "没有权限执行该操作：可能缺少 ownership.manage，或超出了你的委派上限（不能授予自己不具备的权限）。",
+          "没有权限执行该操作：可能缺少 admin.manage，或超出了你的委派上限（不能授予自己不具备的权限）。",
           error.requestId,
         );
       default:
@@ -95,7 +95,7 @@ export function UserListScreen() {
 
   const canManageUsers = me?.permissions.includes("user.manage") ?? false;
   const canManageRoles = me?.permissions.includes("role.manage") ?? false;
-  const canOwnership = me?.permissions.includes("ownership.manage") ?? false;
+  const canAdminship = me?.permissions.includes("admin.manage") ?? false;
   const canAdminister = canManageUsers || canManageRoles;
 
   /**
@@ -197,7 +197,7 @@ export function UserListScreen() {
       }
     } catch (e) {
       setError(messageOf(e));
-      if (e instanceof ApiError && (e.code === "version_conflict" || e.code === "last_owner")) {
+      if (e instanceof ApiError && (e.code === "version_conflict" || e.code === "last_admin")) {
         await load();
       }
     } finally {
@@ -237,26 +237,26 @@ export function UserListScreen() {
             <Typography.Text type="secondary">（无）</Typography.Text>
           )}
           {user.roles.map((role) => {
-            const lastOwner = role === "owner" && user.is_last_loginable_owner;
+            const lastAdmin = role === "admin" && user.is_last_loginable_admin;
             return (
               <Tag key={role}>
                 {role}
-                {lastOwner && (
+                {lastAdmin && (
                   <Typography.Text
                     type="secondary"
-                    title="最后一个可登录的 Owner"
+                    title="最后一个可登录的 Admin"
                   >
-                    （最后 Owner）
+                    （最后 Admin）
                   </Typography.Text>
                 )}
                 {canManageRoles && (
                   <Button
                     type="link"
                     size="small"
-                    disabled={busy || lastOwner || user.deleted || user.status === "disabled"}
+                    disabled={busy || lastAdmin || user.deleted || user.status === "disabled"}
                     title={
-                      lastOwner
-                        ? "这是最后一个可登录的 Owner，不能移除其 Owner 角色"
+                      lastAdmin
+                        ? "这是最后一个可登录的 Admin，不能移除其 Admin 角色"
                         : undefined
                     }
                     aria-label={`移除 ${user.username} 的角色 ${role}`}
@@ -294,8 +294,8 @@ export function UserListScreen() {
       key: "statusAction",
       render: (_value, user) => {
         const disabling = user.status === "active";
-        const protectedOwner = user.roles.includes("owner") && !canOwnership;
-        const disabled = busy || user.deleted || protectedOwner || (disabling && user.is_last_loginable_owner);
+        const protectedAdmin = user.roles.includes("admin") && !canAdminship;
+        const disabled = busy || user.deleted || protectedAdmin || (disabling && user.is_last_loginable_admin);
         return (
           <Popconfirm
             title={disabling ? `停用 ${user.username}？` : `启用 ${user.username}？`}
@@ -310,8 +310,8 @@ export function UserListScreen() {
           >
             <Button danger={disabling} disabled={disabled}
               aria-label={`${disabling ? "停用" : "启用"} ${user.username}`}
-              title={user.is_last_loginable_owner ? "不能停用最后一个可登录的 Owner"
-                : protectedOwner ? "操作 Owner 需要所有权管理权限" : undefined}>
+              title={user.is_last_loginable_admin ? "不能停用最后一个可登录的 Admin"
+                : protectedAdmin ? "操作 Admin 需要管理员管理权限" : undefined}>
               {disabling ? "停用" : "启用"}
             </Button>
           </Popconfirm>
@@ -338,8 +338,8 @@ export function UserListScreen() {
         const assignable = (roles.data ?? []).filter(
           (role) =>
             !user.roles.includes(role.slug) &&
-            // 授予 Owner 需要专门的所有权权限；没有就不展示该选项。
-            (role.slug !== "owner" || canOwnership),
+            // 授予 Admin 需要专门的管理员管理权限；没有就不展示该选项。
+            (role.slug !== "admin" || canAdminship),
         );
         if (assignable.length === 0) {
           return <Typography.Text type="secondary">暂无可分配角色</Typography.Text>;
@@ -370,8 +370,8 @@ export function UserListScreen() {
     );
   }
 
-  // 最后一个「可登录」Owner 的判定来自后端的**全局**结果（`is_last_loginable_owner`），
-  // 不看当前页：另一个可登录 Owner 落在后续页时，按页推断会把它误判成最后 Owner。
+  // 最后一个「可登录」Admin 的判定来自后端的**全局**结果（`is_last_loginable_admin`），
+  // 不看当前页：另一个可登录 Admin 落在后续页时，按页推断会把它误判成最后 Admin。
   // 界面据此提前禁用移除，后端执行时仍会在排他锁下复核（前端不是安全边界）。
   return (
     <>

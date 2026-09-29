@@ -57,6 +57,23 @@ pub fn api_datetime(at: OffsetDateTime) -> String {
 }
 
 /// 列表页模板数据契约。
+/// 首页分页链接由应用层产生，主题不自行拼接地址。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct IndexPagination {
+    pub page: i64,
+    pub previous_url: Option<String>,
+    pub next_url: Option<String>,
+}
+impl Default for IndexPagination {
+    fn default() -> Self {
+        Self {
+            page: 1,
+            previous_url: None,
+            next_url: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct PostCard {
     pub title: String,
@@ -283,26 +300,59 @@ impl PublicSiteInteractor {
         }
     }
 
-    pub async fn render_index(&self, limit: i64) -> Result<String, UseCaseError> {
-        let site = self.site_info().await;
+    async fn render_site_info(&self) -> Result<SiteInfo, UseCaseError> {
+        let record = match self.settings.find_site().await {
+            Ok(Some(record)) => record,
+            Ok(None) | Err(_) => return Ok(self.fallback.clone()),
+        };
+        let mut site = effective_site(&record.value, &self.fallback);
+        let items = crate::navigation::validate_navigation(record.value.navigation)?;
+        if !items.is_empty() {
+            let slugs: Vec<_> = items.iter().map(|item| item.page_slug.clone()).collect();
+            let visible = self.pages.public_navigation_slugs(&slugs).await?;
+            site.navigation = items
+                .into_iter()
+                .filter(|item| visible.contains(&item.page_slug))
+                .map(|item| crate::navigation::NavigationLink {
+                    label: item.label,
+                    url: crate::seo::page_path(&item.page_slug),
+                    placement: item.placement,
+                })
+                .collect();
+        }
+        Ok(site)
+    }
+
+    pub async fn render_index(&self, page: i64) -> Result<String, UseCaseError> {
+        let site = self.render_site_info().await?;
         let dates = self.time_zones.resolve(&site.time_zone)?;
-        let summaries: Vec<PostCard> = self
-            .posts
-            .list_public(limit, 0)
-            .await?
+        let page_size = crate::site_info::validate_home_page_size(site.home_page_size)?;
+        let (page, offset) = public_pagination(page, page_size)?;
+        let mut rows = self.posts.list_public(page_size + 1, offset).await?;
+        if page > 1 && rows.is_empty() {
+            return Err(UseCaseError::NotFound("文章分页".into()));
+        }
+        let has_next = rows.len() > page_size as usize;
+        rows.truncate(page_size as usize);
+        let pagination = IndexPagination {
+            page,
+            previous_url: (page > 1).then(|| crate::seo::index_path(page - 1)),
+            next_url: has_next.then(|| crate::seo::index_path(page + 1)),
+        };
+        let summaries: Vec<PostCard> = rows
             .into_iter()
             .map(|post| PostCard::in_time_zone(post, dates.as_ref()))
             .collect();
-        let seo = SeoMeta::home(&site, &self.base_url);
+        let seo = SeoMeta::home_page(&site, &self.base_url, page);
         self.active_theme()
             .await?
-            .render_index(&site, &seo, &summaries)
+            .render_index(&site, &seo, &summaries, &pagination)
             .await
     }
 
     /// 渲染公开文章详情；不满足公开条件一律 NotFound（知道 slug 不等于有权读取）。
     pub async fn render_post(&self, slug: &str) -> Result<String, UseCaseError> {
-        let site = self.site_info().await;
+        let site = self.render_site_info().await?;
         let dates = self.time_zones.resolve(&site.time_zone)?;
         let detail = self
             .posts
@@ -360,7 +410,7 @@ impl PublicSiteInteractor {
     /// 保留路径在这里再次拒绝：即使历史数据或迁移绕过了创建/发布校验，
     /// 也不能让页面顶掉 `/admin`、`/api` 等系统入口。
     pub async fn render_page(&self, slug: &str) -> Result<String, UseCaseError> {
-        let site = self.site_info().await;
+        let site = self.render_site_info().await?;
         let dates = self.time_zones.resolve(&site.time_zone)?;
         if is_reserved_root_slug(slug) {
             return Err(UseCaseError::NotFound(format!("页面 {slug}")));
@@ -390,7 +440,7 @@ impl PublicSiteInteractor {
     /// 草稿/私密/回收站文章即使挂着该标签也不出现。页码越界渲染空页
     /// （不报错——分页导航按总数链接，越界通常是并发撤文，属正常状态）。
     pub async fn render_tag(&self, slug: &str, page: i64) -> Result<String, UseCaseError> {
-        let site = self.site_info().await;
+        let site = self.render_site_info().await?;
         let dates = self.time_zones.resolve(&site.time_zone)?;
         let tag = self
             .tags
@@ -429,7 +479,7 @@ impl PublicSiteInteractor {
     /// 渲染公开分类页 /categories/{slug}?page=N（直接归属，不含子树）。
     /// 语义与标签页一致：未知 slug 404；只列公开已发布文章；越界页为空页。
     pub async fn render_category(&self, slug: &str, page: i64) -> Result<String, UseCaseError> {
-        let site = self.site_info().await;
+        let site = self.render_site_info().await?;
         let dates = self.time_zones.resolve(&site.time_zone)?;
         let category = self
             .categories
@@ -468,7 +518,7 @@ impl PublicSiteInteractor {
     /// 渲染公开系列页 /series/{slug}?page=N：按 position、post_id 稳定排序。
     /// 过滤非公开内容；展示的阅读序号按公开成员连续编号，与排序权重分开。
     pub async fn render_series(&self, slug: &str, page: i64) -> Result<String, UseCaseError> {
-        let site = self.site_info().await;
+        let site = self.render_site_info().await?;
         let dates = self.time_zones.resolve(&site.time_zone)?;
         let series = self
             .series

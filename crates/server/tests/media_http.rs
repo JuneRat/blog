@@ -232,6 +232,7 @@ async fn fresh_stack() -> Stack {
     let media = common::media_interactor(pool.clone(), common::media_dir("http"));
 
     let auth_state = AuthState {
+        registration: common::registration(&pool),
         admission: Arc::new(infrastructure::InMemoryRequestAdmission::default()),
         auth: auth.clone(),
         passwords: passwords.clone(),
@@ -267,6 +268,8 @@ async fn fresh_stack() -> Stack {
             )),
             Arc::new(SystemClock),
             application::site_info::SiteInfo {
+                home_page_size: application::site_info::DEFAULT_HOME_PAGE_SIZE,
+                navigation: vec![],
                 time_zone: "UTC".into(),
                 title: "测试站点".into(),
                 description: "集成测试".into(),

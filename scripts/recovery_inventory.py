@@ -124,4 +124,5 @@ def validate_relations(pg, database=None):
 
 
 def owner_count(pg, database=None):
-    return int(pg.query("SELECT count(DISTINCT u.id) FROM users u JOIN user_roles ur ON ur.user_id=u.id JOIN roles r ON r.id=ur.role_id WHERE r.code='owner' AND u.status='active' AND u.deleted_at IS NULL AND (u.password_hash IS NOT NULL OR EXISTS(SELECT 1 FROM oauth_accounts oa WHERE oa.user_id=u.id))", database))
+    # Inspect legacy backups before migration as well as current admin-only data.
+    return int(pg.query("SELECT count(DISTINCT u.id) FROM users u JOIN user_roles ur ON ur.user_id=u.id JOIN roles r ON r.id=ur.role_id WHERE r.code IN ('admin','owner') AND u.status='active' AND u.deleted_at IS NULL AND (u.password_hash IS NOT NULL OR EXISTS(SELECT 1 FROM oauth_accounts oa WHERE oa.user_id=u.id))", database))

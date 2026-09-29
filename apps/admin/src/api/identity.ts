@@ -18,6 +18,10 @@ import type {
 } from "./generated";
 
 export const identityApi = {
+  registrationStatus: () => request(s.registrationStatus, "/auth/register"),
+  register: (input: Wire.RegistrationInput) => request(s.messageResult, "/auth/register", {method: "POST", body: json<Wire.RegistrationInput>(input)}),
+  accessSettings: () => request(s.accessSettings, "/api/admin/v1/access-settings"),
+  saveAccessSettings: (input: Wire.AccessSettings) => request(s.accessSettings, "/api/admin/v1/access-settings", {method: "PUT", body: json<Wire.AccessSettings>(input)}),
   me: (): Promise<Me> => request(s.me, "/api/admin/v1/me"),
 
   setOwnAvatar: (avatarMediaId: string | null, expectedVersion: number): Promise<Profile> =>

@@ -66,7 +66,7 @@ async fn audit_permission_is_independent_and_checked_before_validation_or_storag
     for role in BUILTIN_ROLES {
         assert_eq!(
             role.permissions.contains(&"audit.read"),
-            role.slug == "owner"
+            role.slug == "admin"
         );
     }
 }

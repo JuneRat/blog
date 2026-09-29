@@ -392,7 +392,7 @@ async fn admin_posts(
 ) -> (Vec<application::content_queries::AdminPostSummary>, i64) {
     application::ports::AdminPostQuery::list(
         &infrastructure::PostgresAdminContentQuery::new(common::database(pool.clone())),
-        author,
+        Some(author),
         &application::content_queries::ContentListRequest {
             trash,
             ..Default::default()

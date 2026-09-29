@@ -55,7 +55,7 @@ export const queryKeys = {
  * 上一条用例取到的数据被下一条当成「已有缓存」，于是请求不再发出、断言莫名通过。
  */
 export function createQueryClient(): QueryClient {
-  return new QueryClient({
+  const client = new QueryClient({
     defaultOptions: {
       queries: {
         /**
@@ -78,4 +78,7 @@ export function createQueryClient(): QueryClient {
       },
     },
   });
+  // Remember the last list while a long editing session has no mounted list observer.
+  client.setQueryDefaults(["list-filter"], { gcTime: Infinity });
+  return client;
 }

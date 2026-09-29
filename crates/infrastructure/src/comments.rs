@@ -91,7 +91,25 @@ async fn global_policy(
             .as_bool()
             .ok_or_else(|| UseCaseError::Repository("comments.enabled 不是布尔值".into()))?,
     };
-    Ok((CommentPolicy { enabled, version }, value))
+    let moderation = match value.get("moderation") {
+        None => ModerationMode::All,
+        Some(serde_json::Value::String(mode)) => {
+            ModerationMode::parse(mode).map_err(|e| UseCaseError::DataCorrupt(e.into()))?
+        }
+        Some(_) => {
+            return Err(UseCaseError::DataCorrupt(
+                "comments.moderation 不是字符串".into(),
+            ));
+        }
+    };
+    Ok((
+        CommentPolicy {
+            enabled,
+            moderation: Some(moderation),
+            version,
+        },
+        value,
+    ))
 }
 fn public_comment(r: PgRow) -> PublicComment {
     let status: &str = r.get("status");
@@ -133,6 +151,7 @@ fn comment(r: PgRow) -> Result<CommentDto, UseCaseError> {
         ip_address: r.get("ip_address"),
         is_author: r.get("is_author"),
         status: status(&r)?,
+        moderation_reason: r.get("moderation_reason"),
         version: r.get("version"),
         created_at: application::public_site::api_datetime(r.get("created_at")),
     })
@@ -161,6 +180,9 @@ impl CommentRepository for PostgresCommentRepository {
         let post_id: Uuid = post.get("id");
         let enabled =
             global_policy(&mut tx).await?.0.enabled && post.get::<bool, _>("comments_enabled");
+        let guest_comments_enabled = crate::persistence::registration::access_policy(&mut *tx)
+            .await?
+            .guest_comments_enabled;
         // Materialize visibility once for root validation, count and page. The
         // LEFT JOIN retains totals even for an empty or out-of-range page.
         let filter = "c.post_id=$1 AND c.root_id IS NOT DISTINCT FROM $2::uuid";
@@ -184,6 +206,7 @@ impl CommentRepository for PostgresCommentRepository {
             .collect();
         tx.commit().await.map_err(db)?;
         Ok(PublicCommentPage {
+            guest_comments_enabled,
             items,
             total,
             enabled,
@@ -194,14 +217,27 @@ impl CommentRepository for PostgresCommentRepository {
         slug: &str,
         client: Option<IpAddr>,
         cmd: NewComment,
-    ) -> Result<(), UseCaseError> {
+    ) -> Result<CommentStatus, UseCaseError> {
         let html = self.renderer.render_comment(cmd.body.as_str()).await?;
         let mut tx = self.pool.begin().await.map_err(db)?;
         // Shared lock also protects the default policy when no settings row exists.
         crate::locks::acquire(&mut *tx, crate::locks::COMMENT_POLICY, true)
             .await
             .map_err(db)?;
-        let global_enabled = global_policy(&mut tx).await?.0.enabled;
+        if matches!(cmd.author, CommentAuthor::Guest(_)) {
+            crate::locks::acquire(&mut *tx, crate::locks::ACCESS_POLICY, true)
+                .await
+                .map_err(db)?;
+            if !crate::persistence::registration::access_policy(&mut *tx)
+                .await?
+                .guest_comments_enabled
+            {
+                return Err(UseCaseError::Unauthenticated);
+            }
+        }
+        let policy = global_policy(&mut tx).await?.0;
+        let global_enabled = policy.enabled;
+        let mode = policy.moderation.unwrap_or_default();
         let post = sqlx::query(&format!(
             "SELECT p.id,p.comments_enabled FROM posts p WHERE p.slug=$1 AND {PUBLIC} FOR SHARE"
         ))
@@ -214,6 +250,7 @@ impl CommentRepository for PostgresCommentRepository {
         let mut context = CommentSubmission {
             post_id,
             global_enabled,
+            moderation: domain::comment::SubmissionDecision::ReviewAll,
             post_enabled: post.get("comments_enabled"),
             reply: None,
         };
@@ -233,6 +270,20 @@ impl CommentRepository for PostgresCommentRepository {
             };
             context.reply = Some(ReplyContext { parent, root });
         }
+        let account = matches!(cmd.author, CommentAuthor::Account(_));
+        let has_manual_approval = if let (
+            ModerationMode::FirstComment,
+            CommentAuthor::Account(id),
+        ) = (mode, &cmd.author)
+        {
+            // Keep the proof valid through commit if a moderator concurrently withdraws it.
+            sqlx::query_scalar::<_, Uuid>("SELECT id FROM comments WHERE user_id=$1 AND status='approved' AND moderation_reason='manual_approval' LIMIT 1 FOR SHARE")
+                .bind(id).fetch_optional(&mut *tx).await.map_err(db)?.is_some()
+        } else {
+            false
+        };
+        let decision = mode.decide(account, has_manual_approval);
+        context.moderation = decision;
         let author = match cmd.author {
             CommentAuthor::Account(id) => {
                 let account = sqlx::query("SELECT display_name,username FROM users WHERE id=$1 AND status='active' AND deleted_at IS NULL FOR SHARE")
@@ -254,13 +305,14 @@ impl CommentRepository for PostgresCommentRepository {
         let comment = Comment::submit(context, author, cmd.body)
             .map_err(domain_error)?
             .snapshot();
-        sqlx::query("INSERT INTO comments(id,post_id,parent_id,root_id,user_id,author_name,author_email,ip_address,content,content_html,content_render_version,status,version) VALUES($1,$2,$3,$4,$5,$6,$7,$8::text::inet,$9,$10,$11,$12,$13)")
+        sqlx::query("INSERT INTO comments(id,post_id,parent_id,root_id,user_id,author_name,author_email,ip_address,content,content_html,content_render_version,status,version,moderation_reason) VALUES($1,$2,$3,$4,$5,$6,$7,$8::text::inet,$9,$10,$11,$12,$13,$14)")
             .bind(comment.id).bind(comment.post_id).bind(comment.parent_id).bind(comment.root_id).bind(comment.user_id).bind(&comment.nickname)
             .bind(&comment.email).bind(client.map(|v|v.to_string())).bind(&comment.body).bind(html).bind(COMMENT_RENDER_VERSION)
-            .bind(comment.status.as_str()).bind(comment.version)
+            .bind(comment.status.as_str()).bind(comment.version).bind(decision.reason())
             .execute(&mut *tx).await.map_err(db)?;
-        append_audit_log(&mut tx, AuditEntry {actor_id:comment.user_id, ip_address:client, action:"comment.create", target_type:"comment", target_id:&comment.id.to_string(), metadata:json!({"post_id":comment.post_id,"parent_id":comment.parent_id,"root_id":comment.root_id,"version":comment.version})}).await?;
-        tx.commit().await.map_err(db)
+        append_audit_log(&mut tx, AuditEntry {actor_id:comment.user_id, ip_address:client, action:"comment.create", target_type:"comment", target_id:&comment.id.to_string(), metadata:json!({"post_id":comment.post_id,"parent_id":comment.parent_id,"root_id":comment.root_id,"version":comment.version,"status":comment.status.as_str(),"reason":decision.reason()})}).await?;
+        tx.commit().await.map_err(db)?;
+        Ok(comment.status)
     }
     async fn list(
         &self,
@@ -285,7 +337,7 @@ impl CommentRepository for PostgresCommentRepository {
         .fetch_one(&mut *tx)
         .await
         .map_err(db)?;
-        let items = sqlx::query(&format!("SELECT c.id,c.post_id,c.parent_id,c.root_id,c.author_name,c.author_email,host(c.ip_address) AS ip_address,c.content,c.content_html,c.status,c.version,c.created_at,p.slug AS post_slug,p.title AS post_title,COALESCE(c.user_id=p.author_id,false) AS is_author,parent.author_name AS parent_nickname FROM comments c JOIN posts p ON p.id=c.post_id LEFT JOIN comments parent ON parent.id=c.parent_id WHERE {filter} ORDER BY c.created_at DESC,c.id DESC LIMIT 20 OFFSET $5"))
+        let items = sqlx::query(&format!("SELECT c.id,c.post_id,c.parent_id,c.root_id,c.author_name,c.author_email,host(c.ip_address) AS ip_address,c.content,c.content_html,c.status,c.moderation_reason,c.version,c.created_at,p.slug AS post_slug,p.title AS post_title,COALESCE(c.user_id=p.author_id,false) AS is_author,parent.author_name AS parent_nickname FROM comments c JOIN posts p ON p.id=c.post_id LEFT JOIN comments parent ON parent.id=c.parent_id WHERE {filter} ORDER BY c.created_at DESC,c.id DESC LIMIT 20 OFFSET $5"))
             .bind(scope.all).bind(scope.user_id).bind(status.map(CommentStatus::as_str)).bind(post).bind((page-1)*20).fetch_all(&mut *tx).await.map_err(db)?.into_iter().map(comment).collect::<Result<Vec<_>, _>>()?;
         tx.commit().await.map_err(db)?;
         Ok(CommentPage {
@@ -315,19 +367,31 @@ impl CommentRepository for PostgresCommentRepository {
         let current = comment.status();
         if comment.moderate(version, action).map_err(domain_error)? {
             let next = comment.status();
+            let reason = match next {
+                CommentStatus::Approved => "manual_approval",
+                CommentStatus::Pending
+                    if matches!(current, CommentStatus::Spam | CommentStatus::Trash) =>
+                {
+                    "restored"
+                }
+                CommentStatus::Pending => "manual_review",
+                CommentStatus::Spam => "spam",
+                CommentStatus::Trash => "trash",
+            };
             let result = sqlx::query(
-                "UPDATE comments SET status=$2,version=version+1,updated_at=now() WHERE id=$1 AND version=$3",
+                "UPDATE comments SET status=$2,moderation_reason=$4,version=version+1,updated_at=now() WHERE id=$1 AND version=$3",
             )
             .bind(id)
             .bind(next.as_str())
             .bind(version)
+            .bind(reason)
             .execute(&mut *tx)
             .await
             .map_err(db)?;
             if result.rows_affected() != 1 {
                 return Err(UseCaseError::VersionConflict);
             }
-            append_audit_log(&mut tx, AuditEntry { actor_id:Some(scope.user_id), ip_address:scope.ip_address, action:"comment.moderate", target_type:"comment", target_id:&id.to_string(), metadata:json!({"from":current.as_str(),"to":next.as_str(),"version":version+1}) }).await?;
+            append_audit_log(&mut tx, AuditEntry { actor_id:Some(scope.user_id), ip_address:scope.ip_address, action:"comment.moderate", target_type:"comment", target_id:&id.to_string(), metadata:json!({"from":current.as_str(),"to":next.as_str(),"reason":reason,"version":version+1}) }).await?;
         }
         tx.commit().await.map_err(db)
     }
@@ -344,6 +408,7 @@ impl CommentRepository for PostgresCommentRepository {
             scope.authorize_post(row.get("author_id"))?;
             (
                 CommentPolicy {
+                    moderation: None,
                     enabled: row.get("comments_enabled"),
                     version: row.get("version"),
                 },
@@ -359,7 +424,8 @@ impl CommentRepository for PostgresCommentRepository {
             if update.version != current.version {
                 return Err(UseCaseError::VersionConflict);
             }
-            if current.enabled == update.enabled {
+            let moderation = update.moderation.or(current.moderation);
+            if current.enabled == update.enabled && current.moderation == moderation {
                 current
             } else {
                 if let Some(post) = post {
@@ -367,6 +433,7 @@ impl CommentRepository for PostgresCommentRepository {
                         .bind(post).bind(update.enabled).execute(&mut *tx).await.map_err(db)?;
                 } else {
                     value["enabled"] = json!(update.enabled);
+                    value["moderation"] = json!(moderation.unwrap_or_default().as_str());
                     sqlx::query("INSERT INTO settings(key,value) VALUES('comments',$1) ON CONFLICT(key) DO UPDATE SET value=$1,version=settings.version+1,updated_at=now()")
                         .bind(value).execute(&mut *tx).await.map_err(db)?;
                 }
@@ -384,11 +451,12 @@ impl CommentRepository for PostgresCommentRepository {
                         target_id: &post
                             .map(|id| id.to_string())
                             .unwrap_or_else(|| "comments".into()),
-                        metadata: json!({"enabled":update.enabled,"version":current.version+1}),
+                        metadata: json!({"enabled":update.enabled,"moderation":moderation.map(ModerationMode::as_str),"version":current.version+1}),
                     },
                 )
                 .await?;
                 CommentPolicy {
+                    moderation,
                     enabled: update.enabled,
                     version: current.version + 1,
                 }

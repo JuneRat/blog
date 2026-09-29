@@ -408,7 +408,7 @@ it("评论开关使用编辑器版本并保留未保存正文，保存后衔接�
   render(<App />);
   await screen.findByDisplayValue(post.title);
   fireEvent.change(input("正文（Markdown）"), {target:{value:"未保存正文"}});
-  const toggle = screen.getByRole("switch",{name:"允许此文章新评论"});
+  const toggle = screen.getByRole("switch",{name:"允许此文章评论"});
   await waitFor(() => expect(toggle.hasAttribute("disabled")).toBe(false));
   fireEvent.click(toggle);
   await waitFor(() => expect(commentsApi.savePolicy).toHaveBeenCalledWith({enabled:false,version:1},post.id));
@@ -425,7 +425,7 @@ it("评论开关读取到更新版本时不能替编辑器接受并发正文变�
   vi.mocked(api.updatePost).mockRejectedValue(new ApiError(409,"版本冲突","version_conflict"));
   render(<App />);
   await screen.findByDisplayValue(post.title);
-  const toggle = screen.getByRole("switch",{name:"允许此文章新评论"});
+  const toggle = screen.getByRole("switch",{name:"允许此文章评论"});
   await waitFor(() => expect(toggle.hasAttribute("disabled")).toBe(false));
   fireEvent.click(toggle);
   await waitFor(() => expect(commentsApi.savePolicy).toHaveBeenCalledWith({enabled:false,version:1},post.id));

@@ -204,14 +204,14 @@ class Acceptance(SiteScenario):
         require(re.fullmatch(r"[0-9a-f]{64}", self.installation_id) is not None,
                 "database must retain the installation completion marker")
         require(self.query("SELECT count(*) FROM audit_logs WHERE action='installation.complete'") == "1",
-                "first Owner and installation completion must be audited once")
+                "first administrator and installation completion must be audited once")
 
 
     def identity(self):
         self.admin = Client(self.origin)
         me = self.admin.login(self.password)
-        require({"ownership.manage", "audit.read", "settings.manage"} <= set(me["permissions"]),
-                "installed Owner must receive the permission registry")
+        require({"admin.manage", "audit.read", "settings.manage"} <= set(me["permissions"]),
+                "installed administrator must receive the permission registry")
         self.admin.json("PUT", API + "/me/profile", {
             "display_name": "Acceptance Owner", "bio": "安装与恢复验收", "expected_version": me["version"],
         })

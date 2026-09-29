@@ -60,7 +60,7 @@ const NAV: MenuProps["items"] = [
 
 /** 路由 → 面包屑末级标题。 */
 const TITLES: Record<Route["name"], string> = {
-  list: "我的文章",
+  list: "文章",
   comments: "评论管理",
   postTrash: "文章回收站",
   postNew: "新建草稿",
@@ -119,7 +119,7 @@ function selectedKey(route: Route): string {
   }
 }
 
-export function AdminLayout({ children }: { children: ReactNode }) {
+export function AdminLayout({ children, readerOnly = false }: { children: ReactNode; readerOnly?: boolean }) {
   const queryClient = useQueryClient();
   const { token } = theme.useToken();
   const route = useRoute();
@@ -183,7 +183,7 @@ export function AdminLayout({ children }: { children: ReactNode }) {
 
   return (
     <Layout style={{ minHeight: "100vh" }}>
-      <Sider theme="light" breakpoint="lg" collapsedWidth={0} width={208}>
+      {!readerOnly && <Sider theme="light" breakpoint="lg" collapsedWidth={0} width={208}>
         <div style={{ padding: "18px 20px" }}>
           <Typography.Text strong>博客后台</Typography.Text>
         </div>
@@ -194,7 +194,7 @@ export function AdminLayout({ children }: { children: ReactNode }) {
           defaultOpenKeys={["content", "taxonomy", "system"]}
           onClick={({ key }) => goTo(key)}
         />
-      </Sider>
+      </Sider>}
       <Layout>
         <Header
           style={{
@@ -206,7 +206,7 @@ export function AdminLayout({ children }: { children: ReactNode }) {
             borderBottom: `1px solid ${token.colorBorderSecondary}`,
           }}
         >
-          <Breadcrumb items={[{ title: "博客后台" }, { title: TITLES[route.name] }]} />
+          <Breadcrumb items={readerOnly ? [{ title: "个人中心" }] : [{ title: "博客后台" }, { title: TITLES[route.name] }]} />
           <Flex gap={12} align="center">
             <Button type="link" href="/" target="_blank" style={{ paddingInline: 8 }}>
               查看站点 ↗

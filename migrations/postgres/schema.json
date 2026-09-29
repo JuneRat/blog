@@ -11,6 +11,16 @@
       "version": 2,
       "file": "0002_admin_query_indexes.sql",
       "checksum": "ab5c19a56f489afa5f2ac30704b49e0b7277f2443d11e8513691cecfc1bf5f029e458adbf0b299024b6c89879855bee9"
+    },
+    {
+      "version": 3,
+      "file": "0003_reader_registration.sql",
+      "checksum": "7f67ad83363c131f54e042628c146a4af1da1d7c7309d2159eb41e51011d87032aa70e0544fc41da6e2e754da522d185"
+    },
+    {
+      "version": 4,
+      "file": "0004_comment_moderation.sql",
+      "checksum": "4c019801f7a5d532630f22d742853946252c072b18c19c27e72e23e8c96cbcda1096d8b62b489750573c214029063681"
     }
   ],
   "tables": {

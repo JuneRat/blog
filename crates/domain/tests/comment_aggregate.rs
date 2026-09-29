@@ -11,6 +11,7 @@ fn context() -> CommentSubmission {
     CommentSubmission {
         post_id: Uuid::now_v7(),
         global_enabled: true,
+        moderation: domain::comment::SubmissionDecision::ReviewAll,
         post_enabled: true,
         reply: None,
     }
@@ -36,7 +37,7 @@ fn with_status(status: CommentStatus) -> Comment {
 }
 
 #[test]
-fn guest_and_account_comments_always_start_pending_and_have_distinct_ids() {
+fn all_review_policy_keeps_guest_and_account_comments_pending() {
     let context = context();
     let guest = submit(context).unwrap().snapshot();
     let user_id = UserId::generate();
@@ -64,6 +65,32 @@ fn guest_and_account_comments_always_start_pending_and_have_distinct_ids() {
     assert_eq!(account.nickname, "Owner");
     assert_eq!(account.user_id, Some(user_id.0));
     assert_eq!(account.email, None);
+}
+
+#[test]
+fn submission_policy_distinguishes_guests_and_manually_approved_accounts() {
+    use CommentStatus::{Approved, Pending};
+    use domain::comment::{ModerationMode::*, SubmissionDecision::*};
+    for (mode, account, approved_before, expected, status) in [
+        (All, true, true, ReviewAll, Pending),
+        (All, false, false, ReviewAll, Pending),
+        (Guests, false, false, ReviewGuest, Pending),
+        (Guests, true, false, RegisteredAccount, Approved),
+        (FirstComment, true, false, ReviewFirstComment, Pending),
+        (FirstComment, true, true, TrustedAccount, Approved),
+        (FirstComment, false, true, ReviewGuest, Pending),
+        (None, false, false, Unmoderated, Approved),
+        (None, true, false, Unmoderated, Approved),
+    ] {
+        let decision = mode.decide(account, approved_before);
+        assert_eq!(decision, expected);
+        let comment = submit(CommentSubmission {
+            moderation: decision,
+            ..context()
+        })
+        .unwrap();
+        assert_eq!(comment.status(), status);
+    }
 }
 
 #[test]

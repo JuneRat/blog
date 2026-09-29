@@ -114,7 +114,7 @@ export function PageListScreen() {
           emptyText:
             errorText !== null
               ? "页面加载失败。"
-              : filter.status || filter.visibility
+              : filter.q || filter.status || filter.visibility
                 ? "没有符合筛选条件的页面。"
                 : `还没有页面。${canCreate ? "点击「新建页面」开始。" : ""}`,
         }}

@@ -45,7 +45,7 @@
 
 用户禁用/软删除不自动隐藏其文章、评论和媒体。有文章、媒体或评论引用时拒绝物理删除用户；允许物理删除时，OAuth 绑定、角色分配和会话随之清理。头像使用 `avatar_media_id` 外键，普通资料及头像编辑维护 `version`，不因此递增 `auth_version`。
 
-账号启用/停用要求编辑版本匹配，在身份事务锁内保护最后可登录 Owner。实际状态变化递增 `version/auth_version` 并删除既有会话；重新启用必须重新登录，旧会话不能复活。相同状态与版本不产生写入。状态、会话撤销及审计同事务提交。
+账号启用/停用要求编辑版本匹配，在身份事务锁内保护最后可登录 Admin。实际状态变化递增 `version/auth_version` 并删除既有会话；重新启用必须重新登录，旧会话不能复活。相同状态与版本不产生写入。状态、会话撤销及审计同事务提交。
 
 OAuth/OIDC 的 provider 固定到可信实例，subject 使用稳定外部账号标识；不按相同邮箱自动合并账号。提供商授权码流程、state/nonce 校验、绑定前核验、最后登录方式和最后管理员保护由应用完成，相关身份变更在共享事务锁内检查。
 
@@ -134,7 +134,7 @@ Post/Page 统一使用 draft、scheduled、published、archived 四种状态，�
 - 根评论分页，后代按 root_id 平铺在第二级，parent_id 用于展示“回复谁”。
 - 数据库复合外键保证父级和根属于同篇文章，CHECK 保证空值形态及不引用自身。应用验证根本身没有父级；post_id/parent_id/root_id 创建后不可修改，父评论必须已存在。
 
-评论状态为 pending、approved、spam、trash；所有新评论和后台回复默认 pending，从 spam/trash 恢复也统一回 pending。普通审核不通过可移入 trash，不保留 rejected 状态。
+评论状态为 pending、approved、spam、trash；新评论和后台回复按全站审核策略处理，未配置时为 pending，从 spam/trash 恢复也统一回 pending。普通审核不通过可移入 trash，不保留 rejected 状态。
 
 删除只把本条评论移入 trash，不删除或重新审核子评论。已删除节点仍有可见后代时，公开列表保留“该评论已删除”占位，并隐藏昵称、作者标记、原文与 HTML；pending/spam 祖先仍有可见后代时保留匿名的“该评论暂不可用”占位。根已删除也不应让已通过审核的后代消失。单独物理删除被 parent_id/root_id 引用的节点会被外键拒绝；文章永久删除时可以清理整棵树。
 
@@ -144,11 +144,11 @@ Post/Page 统一使用 draft、scheduled、published、archived 四种状态，�
 
 评论保存源文、清洗 HTML 和渲染规则版本，按正文相同的提交与重建规则维护。评论不嵌入媒体，因此不写入 media_refs。昵称保持纯文本，并保存登录用户或游客提交时的展示快照；游客邮箱可选且仅作私密联系信息，不用于身份认证。
 
-不保留评论提交 `request_id`、`client_hash`，不实现评论去重或评论提交频率限制。每次有效提交独立创建待审核记录，包括网络重试后再次提交；HTTP 请求追踪编号与认证登录限流不属于这项移除范围。
+不保留评论提交 `request_id`、`client_hash`，不实现评论去重。评论提交接入公共请求限流，每次获准提交的有效请求独立创建记录，包括网络重试后再次提交。
 
 ### 开关与隐私
 
-全站 `settings.comments.enabled` 与 `posts.comments_enabled` 默认均为 true，只有同时开启才允许新评论/回复；关闭只停止提交，仍展示已通过历史评论。不建立 `comment_settings` 或 `post_comment_settings`。修改全站开关递增该设置组版本，修改单篇开关递增 posts.version；评论编辑/审核使用自己的 version，不递增文章版本。
+全站 `settings.comments.enabled` 与 `posts.comments_enabled` 默认均为 true，只有同时开启才允许新评论/回复；任一开关关闭时停止提交并隐藏前台整个评论区域，历史评论仍保留，重新开启后恢复显示。不建立 `comment_settings` 或 `post_comment_settings`。`settings.comments.moderation` 支持 all/guests/first_comment/none，默认 all；详见[审核策略](comments.md#审核策略)。`comments.moderation_reason` 保存当前处理原因，人工通过记录使用 manual_approval。修改全站开关或审核策略递增该设置组版本，修改单篇开关递增 posts.version；评论编辑/审核使用自己的 version，不递增文章版本。
 
 `author_email` 和 `ip_address` 不进入公开响应，只允许授权后台读取。IP 用可空 inet 保存单个 IPv4/IPv6 主机地址，未知或离线导入时留空；编辑、审核不覆盖提交来源。HTTP 层只从配置的可信代理解析真实来源，不信任任意转发头，也不使用数据库连接 IP。默认 180 天后清空评论 IP，保留正文、关系和审核状态。
 
@@ -163,7 +163,8 @@ Post/Page 统一使用 draft、scheduled、published、archived 四种状态，�
 | oauth | 非敏感提供商配置及秘密引用；秘密本身留在部署秘密存储 |
 | comments | enabled 默认 true、ip_retention_days 默认 180 |
 | audit | retention_days 默认 180 |
-| installation | 仅安装流程写入的完成标记（安装 ID、首个 Owner ID）；无后台编辑入口，不存凭据 |
+| access | 注册及游客评论开关（默认关闭），独立版本控制 |
+| installation | 仅安装流程写入的完成标记（安装 ID、首个 Admin ID）；无后台编辑入口，不存凭据 |
 
 `audit_logs` 保存 actor_id、来源 IP、action、target_type、文本 target_id、脱敏 metadata 对象及 created_at。目标既可能是 UUID，也可能是设置/权限键，因此 target_id 使用 text。操作者和目标是历史快照，不建立业务外键。
 
@@ -171,7 +172,7 @@ Post/Page 统一使用 draft、scheduled、published、archived 四种状态，�
 
 应用运行账号只能按需读取/追加审计，不允许 UPDATE/DELETE/TRUNCATE；默认 180 天保留期的删除由单独授权的维护身份执行。运行账号授权、维护任务和可信代理配置需随实现交付，DDL 不自动配置这些能力。该表不保证抵御数据库管理员篡改。
 
-后台读取独立检查 `audit.read`（默认仅 Owner）；支持动作、账号、目标及时间筛选，按时间和 ID 倒序游标分页。HTTP 写入的审计上下文显式传入事务，与评论共用可信代理解析规则；缺失或未知 IP 留空。记录和 IP 随审计保留期一起清理，不复制到摘要。当前实现及 API 见[数据库实现参考](database-current.md#8-审计基础)和[审计接口](admin-api.md#审计日志)。
+后台读取独立检查 `audit.read`（默认仅 Admin）；支持动作、账号、目标及时间筛选，按时间和 ID 倒序游标分页。HTTP 写入的审计上下文显式传入事务，与评论共用可信代理解析规则；缺失或未知 IP 留空。记录和 IP 随审计保留期一起清理，不复制到摘要。当前实现及 API 见[数据库实现参考](database-current.md#8-审计基础)和[审计接口](admin-api.md#审计日志)。
 
 ## 7. 持久会话
 

@@ -1,4 +1,4 @@
-import { Button, Flex, Select, Typography } from "antd";
+import { Button, Flex, Input, Select, Typography } from "antd";
 import { useId } from "react";
 import type { ContentListFilter, ContentPage, Visibility } from "../types";
 import { statusLabel } from "./ContentLifecycleControls";
@@ -9,12 +9,15 @@ export function ContentListFilters({ filter, onChange }: {
 }) {
   const id = useId();
   return <Flex gap={12} wrap style={{ marginBottom: 16 }}>
+    <Input.Search id={`${id}-search`} key={filter.q ?? ""} aria-label="搜索内容" placeholder="搜索全部标题、slug 或正文…"
+      defaultValue={filter.q ?? ""} allowClear style={{ width: 280 }} enterButton="搜索"
+      onSearch={q => onChange({ ...filter, q: q.trim() || undefined })} />
     <Select id={`${id}-status`} aria-label="筛选状态" style={{ minWidth: 140 }} value={filter.status ?? ""}
       options={[{ value: "", label: "全部状态" }, ...["draft", "scheduled", "published", "archived"].map(value => ({ value, label: statusLabel(value) }))]}
-      onChange={status => onChange({ status: status || undefined, visibility: filter.visibility })} />
+      onChange={status => onChange({ ...filter, status: status || undefined })} />
     <Select<Visibility | ""> id={`${id}-visibility`} aria-label="筛选可见性" style={{ minWidth: 140 }} value={filter.visibility ?? ""}
       options={[{ value: "", label: "全部可见性" }, { value: "public", label: "公开" }, { value: "private", label: "私有" }]}
-      onChange={visibility => onChange({ status: filter.status, visibility: visibility || undefined })} />
+      onChange={visibility => onChange({ ...filter, visibility: visibility || undefined })} />
   </Flex>;
 }
 

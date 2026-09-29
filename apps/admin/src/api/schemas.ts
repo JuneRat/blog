@@ -55,6 +55,7 @@ export const pageDetail = object<Wire.PageDetail>()({
   content: string,
 });
 export const postSummary = object<Wire.PostSummary>()({
+  author_username: string,
   ...pageSummary.shape,
   author_id: string,
 });
@@ -63,7 +64,8 @@ export const seriesPlacement = object<Wire.SeriesPlacement>()({
   position: count.max(2147483647),
 });
 export const postDetail = object<Wire.PostDetail>()({
-  ...postSummary.shape,
+  ...pageSummary.shape,
+  author_id: string,
   tag_ids: z.array(string),
   category_id: nullable,
   series: z.array(seriesPlacement),
@@ -93,7 +95,7 @@ export const adminUser = object<Wire.AdminUser>()({
   version: count,
   deleted: z.boolean(),
   can_login: z.boolean(),
-  is_last_loginable_owner: z.boolean(),
+  is_last_loginable_admin: z.boolean(),
   password_enabled: z.boolean(),
   external_identities: count,
   roles: z.array(string),
@@ -157,7 +159,12 @@ export const reorderSeriesResult = object<Wire.ReorderSeriesResult>()({
   series_version: count,
   ordered_post_ids: z.array(string),
 });
+export const navigationItem = object<Wire.NavigationItem>()({
+  label: string, page_slug: string, placement: z.enum(["header", "footer"]),
+});
 export const siteSettings = object<Wire.SiteSettings>()({
+  home_page_size: count,
+  navigation: z.array(navigationItem),
   time_zone: string,
   time_zones: z.array(string),
   title: string,
@@ -240,6 +247,7 @@ export const auditPage = object<Wire.AuditPage>()({
   next_cursor: nullable,
 });
 export const commentItem = object<Wire.CommentItem>()({
+  moderation_reason: nullable,
   id: string,
   post_id: string,
   post_slug: string,
@@ -263,6 +271,7 @@ export const commentPage = object<Wire.CommentPage>()({
   enabled: z.boolean(),
 });
 export const commentPolicy = object<Wire.CommentPolicy>()({
+  moderation: z.enum(['all', 'guests', 'first_comment', 'none']).nullish(),
   enabled: z.boolean(),
   version: count,
 });
@@ -270,4 +279,13 @@ export const previewResult = object<Wire.PreviewResult>()({
   content_html: string,
 });
 export const messageResult = object<Wire.MessageResult>()({ message: string });
+export const commentSubmissionResult = object<Wire.CommentSubmissionResult>()({
+  message: string,
+  status: z.enum(['pending', 'approved']),
+});
 export const array = z.array;
+
+export const registrationStatus = object<Wire.RegistrationStatus>()({ enabled: z.boolean() });
+export const accessSettings = object<Wire.AccessSettings>()({
+  registration_enabled: z.boolean(), guest_comments_enabled: z.boolean(), version: count,
+});

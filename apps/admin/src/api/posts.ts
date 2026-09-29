@@ -19,6 +19,7 @@ export const postsApi = {
   listTrash: (
     page = 1,
     author?: string,
+    filter: Partial<ContentListFilter> = {},
   ): Promise<{
     items: PostSummary[];
     total: number;
@@ -27,7 +28,7 @@ export const postsApi = {
   }> =>
     request(
       s.postPage,
-      `/api/admin/v1/post-trash?page=${page}${author ? `&author=${encodeURIComponent(author)}` : ""}`,
+      `/api/admin/v1/post-trash${contentQuery({ ...filter, page, author })}`,
     ),
 
   trashPost: (id: string, expectedVersion: number): Promise<PostDetail> =>

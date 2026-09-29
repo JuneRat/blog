@@ -93,6 +93,8 @@ impl SecureRandom for TestRandom {
 
 fn site_fallback() -> SiteInfo {
     SiteInfo {
+        home_page_size: application::site_info::DEFAULT_HOME_PAGE_SIZE,
+        navigation: vec![],
         time_zone: "UTC".into(),
         title: FALLBACK_TITLE.into(),
         description: FALLBACK_DESCRIPTION.into(),
@@ -119,6 +121,13 @@ async fn build(pool: PgPool) -> Stack {
     let rbac = Arc::new(PostgresRbacStore::new(common::database(pool.clone())));
     let roles = Arc::new(RoleInteractor::new(rbac.clone(), user_repo.clone()));
     roles.sync_registry().await.expect("同步权限目录失败");
+    sqlx::query("INSERT INTO roles(id,code,name) VALUES($1,'account-manager','Account manager')")
+        .bind(Uuid::now_v7())
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO role_permissions(role_id,permission_code) SELECT id,unnest(ARRAY['user.manage','role.manage','settings.manage']) FROM roles WHERE code='account-manager'")
+        .execute(&pool).await.unwrap();
     let users = Arc::new(UserInteractor::new(
         application::identity::UserStores {
             query: user_repo.clone(),
@@ -133,8 +142,8 @@ async fn build(pool: PgPool) -> Stack {
     // admin 持有 settings.manage；editor/author 不持有（内容权限集）。
     let mut ids = std::collections::HashMap::new();
     for (username, role) in [
-        ("admin", Some("admin")),
-        ("owner", Some("owner")),
+        ("admin", Some("account-manager")),
+        ("owner", Some("admin")),
         ("editor", Some("editor")),
         ("author", Some("author")),
     ] {
@@ -330,6 +339,7 @@ async fn build(pool: PgPool) -> Stack {
     );
 
     let auth_state = AuthState {
+        registration: common::registration(&pool),
         admission: Arc::new(infrastructure::InMemoryRequestAdmission::default()),
         auth: auth.clone(),
         passwords: passwords.clone(),
@@ -1196,7 +1206,7 @@ async fn page_trash_hides_public_entries_and_only_purge_releases_slug() {
     )
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
-    sqlx::query("INSERT INTO user_roles(user_id,role_id) SELECT u.id,r.id FROM users u CROSS JOIN roles r WHERE u.username='admin' AND r.code='owner'")
+    sqlx::query("INSERT INTO user_roles(user_id,role_id) SELECT u.id,r.id FROM users u CROSS JOIN roles r WHERE u.username='admin' AND r.code='admin'")
         .execute(&stack.pool).await.unwrap();
     let (owner_cookie, owner_csrf) = login_as(&stack, "admin").await;
     for (version, expected) in [(2, StatusCode::CONFLICT), (3, StatusCode::NO_CONTENT)] {
@@ -1516,4 +1526,48 @@ async fn oversize_settings_body_is_rejected_before_parsing() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+}
+
+#[tokio::test]
+async fn site_presentation_settings_are_saved_and_preserved_when_omitted() {
+    let _g = SERIAL.lock().await;
+    let stack = fresh_stack().await;
+    let (cookie, csrf) = login_as(&stack, "admin").await;
+    let presentation = json!({
+        "home_page_size": 7,
+        "navigation": [
+            {"label":"关于","page_slug":"about","placement":"header"},
+            {"label":"联系","page_slug":"contact","placement":"footer"}
+        ]
+    });
+    let mut input = presentation.clone();
+    input["title"] = json!("Site");
+    input["description"] = json!("");
+    input["expected_version"] = json!(0);
+    let (status, saved) = put(
+        &stack.router,
+        "/api/admin/v1/settings/site",
+        &cookie,
+        &csrf,
+        input,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    let (_, loaded, _) = get(&stack.router, "/api/admin/v1/settings/site", Some(&cookie)).await;
+    for key in ["home_page_size", "navigation"] {
+        assert_eq!(loaded[key], presentation[key]);
+    }
+    let (status, preserved) = put(
+        &stack.router,
+        "/api/admin/v1/settings/site",
+        &cookie,
+        &csrf,
+        json!({"title":"Renamed","description":"","expected_version":loaded["version"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    for key in ["home_page_size", "navigation"] {
+        assert_eq!(preserved[key], presentation[key]);
+    }
+    stack.pool.close().await;
 }

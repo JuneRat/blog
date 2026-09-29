@@ -1,4 +1,4 @@
-//! 后台列表专用 SQL：只投影展示字段，不读取 Markdown、HTML 或关联集合。
+//! 后台列表专用 SQL：只投影展示字段；正文仅参与搜索谓词，不加载写聚合或正文结果。
 use super::sql::map_sqlx_error;
 use application::content_queries::{
     AdminPageSummary, AdminPostSummary, PageListFilter, PostListFilter,
@@ -24,7 +24,7 @@ impl PostgresAdminContentQuery {
 impl AdminPostQuery for PostgresAdminContentQuery {
     async fn list(
         &self,
-        author_id: Uuid,
+        author_id: Option<Uuid>,
         filter: &PostListFilter,
     ) -> Result<(Vec<AdminPostSummary>, i64), UseCaseError> {
         let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
@@ -34,14 +34,20 @@ impl AdminPostQuery for PostgresAdminContentQuery {
             .map_err(map_sqlx_error)?;
         let (total,): (i64,) = sqlx::query_as(
             "SELECT count(*) FROM posts
-             WHERE author_id = $1 AND (deleted_at IS NOT NULL) = $2
+             WHERE ($1::uuid IS NULL OR author_id = $1) AND (deleted_at IS NOT NULL) = $2
              AND ($3::text IS NULL OR status = $3)
-             AND ($4::text IS NULL OR visibility = $4)",
+             AND ($4::text IS NULL OR visibility = $4)
+             AND ($5::text IS NULL OR strpos(lower(title), lower($5)) > 0
+                  OR strpos(lower(slug), lower($5)) > 0 OR strpos(lower(content), lower($5)) > 0
+                  OR strpos(lower(coalesce(excerpt, '')), lower($5)) > 0)
+             AND ($6::uuid IS NULL OR category_id = $6)",
         )
         .bind(author_id)
         .bind(filter.trash())
         .bind(filter.status().map(|status| status.as_str()))
         .bind(filter.visibility().map(Visibility::as_str))
+        .bind(filter.q())
+        .bind(filter.category_id())
         .fetch_one(&mut *tx)
         .await
         .map_err(map_sqlx_error)?;
@@ -51,15 +57,21 @@ impl AdminPostQuery for PostgresAdminContentQuery {
         } else {
             "updated_at"
         };
-        let rows = sqlx::query(&format!("SELECT id, slug, title, status, visibility, version, published_at, updated_at, author_id
-             FROM posts WHERE author_id = $1 AND (deleted_at IS NOT NULL) = $2
-             AND ($3::text IS NULL OR status = $3)
+        let rows = sqlx::query(&format!("SELECT posts.id, posts.slug, title, posts.status, visibility, posts.version, published_at, posts.updated_at, author_id, users.username AS author_username
+             FROM posts JOIN users ON users.id = posts.author_id WHERE ($1::uuid IS NULL OR author_id = $1) AND (posts.deleted_at IS NOT NULL) = $2
+             AND ($3::text IS NULL OR posts.status = $3)
              AND ($4::text IS NULL OR visibility = $4)
-             ORDER BY {order} DESC, id DESC LIMIT $5 OFFSET $6"))
+             AND ($5::text IS NULL OR strpos(lower(title), lower($5)) > 0
+                  OR strpos(lower(slug), lower($5)) > 0 OR strpos(lower(content), lower($5)) > 0
+                  OR strpos(lower(coalesce(excerpt, '')), lower($5)) > 0)
+             AND ($6::uuid IS NULL OR category_id = $6)
+             ORDER BY posts.{order} DESC, posts.id DESC LIMIT $7 OFFSET $8"))
             .bind(author_id)
             .bind(filter.trash())
             .bind(filter.status().map(|status| status.as_str()))
             .bind(filter.visibility().map(Visibility::as_str))
+        .bind(filter.q())
+        .bind(filter.category_id())
             .bind(filter.limit())
             .bind(filter.offset())
             .fetch_all(&mut *tx)
@@ -82,6 +94,7 @@ impl AdminPostQuery for PostgresAdminContentQuery {
                     published_at: row.try_get("published_at").map_err(map_sqlx_error)?,
                     updated_at: row.try_get("updated_at").map_err(map_sqlx_error)?,
                     author_id: row.try_get("author_id").map_err(map_sqlx_error)?,
+                    author_username: row.try_get("author_username").map_err(map_sqlx_error)?,
                 })
             })
             .collect::<Result<Vec<_>, UseCaseError>>()?;
@@ -104,11 +117,14 @@ impl AdminPageQuery for PostgresAdminContentQuery {
         let (total,): (i64,) = sqlx::query_as(
             "SELECT count(*) FROM pages WHERE (deleted_at IS NOT NULL) = $1
              AND ($2::text IS NULL OR status = $2)
-             AND ($3::text IS NULL OR visibility = $3)",
+             AND ($3::text IS NULL OR visibility = $3)
+             AND ($4::text IS NULL OR strpos(lower(title), lower($4)) > 0
+                  OR strpos(lower(slug), lower($4)) > 0 OR strpos(lower(content), lower($4)) > 0)",
         )
         .bind(filter.trash())
         .bind(filter.status().map(|status| status.as_str()))
         .bind(filter.visibility().map(Visibility::as_str))
+        .bind(filter.q())
         .fetch_one(&mut *tx)
         .await
         .map_err(map_sqlx_error)?;
@@ -123,11 +139,14 @@ impl AdminPageQuery for PostgresAdminContentQuery {
              FROM pages WHERE (deleted_at IS NOT NULL) = $1
              AND ($2::text IS NULL OR status = $2)
              AND ($3::text IS NULL OR visibility = $3)
-             ORDER BY {order} DESC, id DESC LIMIT $4 OFFSET $5"
+             AND ($4::text IS NULL OR strpos(lower(title), lower($4)) > 0
+                  OR strpos(lower(slug), lower($4)) > 0 OR strpos(lower(content), lower($4)) > 0)
+             ORDER BY {order} DESC, id DESC LIMIT $5 OFFSET $6"
         ))
         .bind(filter.trash())
         .bind(filter.status().map(|status| status.as_str()))
         .bind(filter.visibility().map(Visibility::as_str))
+        .bind(filter.q())
         .bind(filter.limit())
         .bind(filter.offset())
         .fetch_all(&mut *tx)

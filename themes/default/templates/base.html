@@ -22,6 +22,8 @@
     {% if site.logo_url %}<img class="site-logo" src="{{ site.logo_url | url }}" alt="{{ site.title }}">{% endif %}
     <h1><a href="/">{{ site.title }}</a></h1>
     <p class="site-description">{{ site.description }}</p>
+    <nav class="page-navigation" aria-label="页面导航">{% for item in site.navigation %}{% if item.placement == 'header' %}<a href="{{ item.url | url }}">{{ item.label }}</a>{% endif %}{% endfor %}<a href="/admin/">账号</a>
+</nav>
   </header>
   <main>
     {% block content %}{% endblock %}
@@ -29,6 +31,7 @@
   <footer class="site-footer">
     <p><a href="/feed.xml">RSS</a> · <a href="/sitemap.xml">Sitemap</a></p>
     <p>Powered by blog（Rust / PostgreSQL / MiniJinja）</p>
+    <nav class="page-navigation" aria-label="页脚导航">{% for item in site.navigation %}{% if item.placement == 'footer' %}<a href="{{ item.url | url }}">{{ item.label }}</a>{% endif %}{% endfor %}</nav>
   </footer>
 </body>
 </html>

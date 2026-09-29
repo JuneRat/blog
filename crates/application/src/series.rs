@@ -1,7 +1,7 @@
 //! 系列用例：目录管理与并发安全重排。
 //!
 //! 权限约定（docs/identity-and-admin.md §2、content-lifecycle.md §3）：
-//! - 目录动作（创建/更新/删除/重排）要求 `series.manage`（Owner 与 Editor）；
+//! - 目录动作（创建/更新/删除/重排）要求 `series.manage`（Admin 与 Editor）；
 //! - 目录读取对已认证会话开放；
 //! - 重排会修改文章的 post_series.position：**每篇涉及文章仍按文章授权核验**
 //!   （post.update own / post.update_any any）——Author 不能借重排改他人文章；
@@ -271,7 +271,7 @@ impl SeriesInteractor {
     }
 
     /// 管理目录视图：系列全部成员（含他人草稿/私密——重排会改动它们的位置，
-    /// 目录必须完整）。要求 series.manage（持有者 Owner/Editor 均具备 post.read_any）。
+    /// 目录必须完整）。要求 series.manage（持有者 Admin/Editor 均具备 post.read_any）。
     pub async fn members(
         &self,
         actor: &Actor,
@@ -283,7 +283,7 @@ impl SeriesInteractor {
         let series = self.load(target_slug).await?;
         let members = self.series.members_of(series.id()).await?;
         // 逐篇核验读取权限：成员目录携带他人草稿/私密的标题、slug 与状态——
-        // 这些正是 post.read/post.read_any 的保护对象。内置角色（Owner/Editor）
+        // 这些正是 post.read/post.read_any 的保护对象。内置角色（Admin/Editor）
         // 恰好同时持有 series.manage 与读取权限，但自定义角色可能只有前者；
         // 权限按动作核验，不以内置角色的同时持有为依据。
         // 任一成员不可读即**整次拒绝**：残缺目录会让重排（完整排列契约）

@@ -1,5 +1,5 @@
 //! Empty-database installation. No existing account, including a deleted or
-//! disabled Owner, can make a database eligible for installation again.
+//! disabled Admin, can make a database eligible for installation again.
 
 use crate::schema_contract::SchemaContract;
 
@@ -7,7 +7,7 @@ use application::{
     UseCaseError,
     audit::AuditContext,
     identity::{BUILTIN_ROLES, PERMISSION_REGISTRY},
-    installation::InitialOwner,
+    installation::InitialAdmin,
 };
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
@@ -124,7 +124,7 @@ pub async fn initialize(
     database: &crate::Database,
     schema_contract: &SchemaContract,
     installation_id: &str,
-    owner: &InitialOwner,
+    admin: &InitialAdmin,
     site: &application::ports::SiteSettingsValue,
     audit: AuditContext,
 ) -> Result<(), UseCaseError> {
@@ -148,7 +148,7 @@ pub async fn initialize(
     .map_err(database_error)?;
     ensure_empty(&mut tx, schema_contract).await?;
     // Initial values become ordinary runtime settings in the same transaction
-    // as the first Owner. Subsequent startups never reapply deployment defaults.
+    // as the first Admin. Subsequent startups never reapply deployment defaults.
     if site.title.is_some() || site.description.is_some() {
         sqlx::query("INSERT INTO settings(key,value) VALUES('site',jsonb_strip_nulls($1))")
             .bind(serde_json::json!({"schema_version":1,"title":site.title,"description":site.description}))
@@ -184,22 +184,22 @@ pub async fn initialize(
     sqlx::query(
         "INSERT INTO users(id,username,password_hash,created_at,updated_at) VALUES($1,$2,$3,$4,$4)",
     )
-    .bind(owner.id)
-    .bind(&owner.username)
-    .bind(&owner.password_hash)
-    .bind(owner.created_at)
+    .bind(admin.id)
+    .bind(&admin.username)
+    .bind(&admin.password_hash)
+    .bind(admin.created_at)
     .execute(&mut *tx)
     .await
     .map_err(database_error)?;
     sqlx::query(
-        "INSERT INTO user_roles(user_id,role_id) SELECT $1,id FROM roles WHERE code='owner'",
+        "INSERT INTO user_roles(user_id,role_id) SELECT $1,id FROM roles WHERE code='admin'",
     )
-    .bind(owner.id)
+    .bind(admin.id)
     .execute(&mut *tx)
     .await
     .map_err(database_error)?;
     sqlx::query("INSERT INTO settings(key,value) VALUES('installation',$1)")
-        .bind(serde_json::json!({"id":installation_id,"owner_id":owner.id}))
+        .bind(serde_json::json!({"id":installation_id,"admin_id":admin.id}))
         .execute(&mut *tx)
         .await
         .map_err(database_error)?;
@@ -208,8 +208,8 @@ pub async fn initialize(
         audit,
         "installation.complete",
         "user",
-        &owner.id.to_string(),
-        serde_json::json!({"role":"owner","version":1}),
+        &admin.id.to_string(),
+        serde_json::json!({"role":"admin","version":1}),
     )
     .await?;
     tx.commit().await.map_err(database_error)

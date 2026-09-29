@@ -394,3 +394,6 @@ h1, h2, p {
     flex-wrap: wrap;
   }
 }
+
+.page-navigation, .pagination { display: flex; flex-wrap: wrap; gap: 1rem; align-items: center; margin-block: 1rem; }
+.page-navigation:empty { display: none; }

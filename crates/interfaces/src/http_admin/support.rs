@@ -30,6 +30,9 @@ pub struct VersionBody {
 
 #[derive(Deserialize, Default)]
 pub struct ListQuery {
+    pub q: Option<String>,
+    pub scope: Option<String>,
+    pub category_id: Option<uuid::Uuid>,
     pub author: Option<String>,
     pub page: Option<i64>,
     pub status: Option<String>,
@@ -42,6 +45,9 @@ impl ListQuery {
             status: self.status,
             visibility: self.visibility,
             trash,
+            q: self.q,
+            scope: self.scope,
+            category_id: self.category_id,
         }
     }
 }

@@ -1,13 +1,13 @@
 //! 用户与角色管理 API：本人资料、账号列表/创建/启停、角色列表与分配。
 //!
 //! 本层只做传输映射，**不重复实现权限判断**：授权边界（`user.manage` /
-//! `role.manage` / `ownership.manage`）、委派上限与最后 Owner 保护都由
+//! `role.manage` / `admin.manage`）、委派上限与最后 Admin 保护都由
 //! `UserInteractor` / `RoleInteractor` 及 RBAC 存储在锁内执行。
 //!
 //! 统一的 `AdminAuth` 提取器负责会话 + CSRF/Origin；错误经 `admin_error`
 //! 映射成 `{error, code, request_id}`。冲突码是界面分支的依据：
-//! `username_taken` / `email_taken` 定位到创建表单字段，`last_owner` 解释
-//! 为什么移除 Owner 角色被拒（与 `forbidden` 区分）。
+//! `username_taken` / `email_taken` 定位到创建表单字段，`last_admin` 解释
+//! 为什么移除 Admin 角色被拒（与 `forbidden` 区分）。
 
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;

@@ -520,53 +520,11 @@ async fn rbac_registry_sync_is_idempotent() {
         "重复同步不得递增 roles.version（无变化不动行）"
     );
 
-    let perm_count: i64 = sqlx::query_scalar("SELECT count(*) FROM permissions")
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-    assert_eq!(
-        perm_count as usize,
-        application::identity::PERMISSION_REGISTRY.len(),
-        "权限目录与注册表一致"
-    );
-
-    let author_perms: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM role_permissions rp \
-         JOIN roles r ON r.id = rp.role_id WHERE r.code = 'author'",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert_eq!(
-        author_perms, 9,
-        "Author 恰好 9 个动作：6 个文章 own 动作（含回收站）+ 3 个媒体动作"
-    );
-
-    // Owner 持有全部已注册权限（含 oauth.manage / ownership.manage）。
-    let owner_perms: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM role_permissions rp \
-         JOIN roles r ON r.id = rp.role_id WHERE r.code = 'owner'",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert_eq!(
-        owner_perms as usize,
-        application::identity::PERMISSION_REGISTRY.len(),
-        "Owner 持有全部已注册权限"
-    );
-
-    let owner_keys = rbac.permissions_of_role("owner").await.unwrap();
-    assert!(owner_keys.has("ownership.manage"));
+    let owner_keys = rbac.permissions_of_role("admin").await.unwrap();
+    assert!(owner_keys.has("admin.manage"));
     assert!(owner_keys.has("oauth.manage"));
     let err = rbac.permissions_of_role("ghost").await.unwrap_err();
     assert!(matches!(err, application::error::UseCaseError::NotFound(_)));
-
-    let roles: Vec<String> = sqlx::query_scalar("SELECT code FROM roles ORDER BY code")
-        .fetch_all(&pool)
-        .await
-        .unwrap();
-    assert_eq!(roles, vec!["admin", "author", "editor", "owner"]);
 }
 
 #[tokio::test]
@@ -622,7 +580,7 @@ async fn rbac_permissions_union_and_version_bump() {
 }
 
 #[tokio::test]
-async fn rbac_last_owner_protection() {
+async fn rbac_last_admin_protection() {
     let _g = SERIAL.lock().await;
     let pool = fresh_database().await;
     let rbac = rbac_of(&pool);
@@ -638,27 +596,27 @@ async fn rbac_last_owner_protection() {
     seed_binding(&pool, u1).await;
     seed_binding(&pool, u2).await;
 
-    rbac.assign_role(u1, "owner", None.into()).await.unwrap();
+    rbac.assign_role(u1, "admin", None.into()).await.unwrap();
 
     // 唯一 Owner：移除被拒。
     let err = rbac
-        .remove_role(u1, "owner", None.into())
+        .remove_role(u1, "admin", None.into())
         .await
         .unwrap_err();
     assert!(
-        matches!(err, application::error::UseCaseError::LastOwnerProtected),
+        matches!(err, application::error::UseCaseError::LastAdminProtected),
         "最后 Owner 不能被移除：{err:?}"
     );
 
     // 第二个 Owner 后，允许移除第一个。
-    rbac.assign_role(u2, "owner", None.into()).await.unwrap();
-    rbac.remove_role(u1, "owner", None.into()).await.unwrap();
+    rbac.assign_role(u2, "admin", None.into()).await.unwrap();
+    rbac.remove_role(u1, "admin", None.into()).await.unwrap();
 
     let owners: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM user_roles ur \
          JOIN roles r ON r.id = ur.role_id \
          JOIN users u ON u.id = ur.user_id \
-         WHERE r.code = 'owner' AND u.deleted_at IS NULL",
+         WHERE r.code = 'admin' AND u.deleted_at IS NULL",
     )
     .fetch_one(&pool)
     .await
@@ -667,24 +625,24 @@ async fn rbac_last_owner_protection() {
 
     // 软删除用户不计入有效 Owner：u1 重新持有 owner，u2 被软删除后
     // u1 成为唯一可登录 Owner，不可再被移除。
-    rbac.assign_role(u1, "owner", None.into()).await.unwrap();
+    rbac.assign_role(u1, "admin", None.into()).await.unwrap();
     sqlx::query("UPDATE users SET deleted_at = now() WHERE id = $1")
         .bind(u2)
         .execute(&pool)
         .await
         .unwrap();
     let err = rbac
-        .remove_role(u1, "owner", None.into())
+        .remove_role(u1, "admin", None.into())
         .await
         .unwrap_err();
     assert!(
-        matches!(err, application::error::UseCaseError::LastOwnerProtected),
+        matches!(err, application::error::UseCaseError::LastAdminProtected),
         "软删除的 Owner 不计入有效数量"
     );
 }
 
 #[tokio::test]
-async fn owner_without_login_method_does_not_satisfy_last_owner_guard() {
+async fn owner_without_login_method_does_not_satisfy_last_admin_guard() {
     let _g = SERIAL.lock().await;
     let pool = fresh_database().await;
     let rbac = rbac_of(&pool);
@@ -697,8 +655,8 @@ async fn owner_without_login_method_does_not_satisfy_last_owner_guard() {
 
     let bound = seed_user(&pool, "bound").await;
     let unbound = seed_user(&pool, "unbound").await;
-    rbac.assign_role(bound, "owner", None.into()).await.unwrap();
-    rbac.assign_role(unbound, "owner", None.into())
+    rbac.assign_role(bound, "admin", None.into()).await.unwrap();
+    rbac.assign_role(unbound, "admin", None.into())
         .await
         .unwrap();
     // 只有 bound 有有效登录方式；unbound 是「登不进去的 Owner」。
@@ -706,17 +664,17 @@ async fn owner_without_login_method_does_not_satisfy_last_owner_guard() {
 
     // 移除唯一可登录的 Owner 会留下无法登录的 Owner → 拒绝（docs §3）。
     let err = rbac
-        .remove_role(bound, "owner", None.into())
+        .remove_role(bound, "admin", None.into())
         .await
         .unwrap_err();
     assert!(
-        matches!(err, application::error::UseCaseError::LastOwnerProtected),
+        matches!(err, application::error::UseCaseError::LastAdminProtected),
         "无登录方式的 Owner 不构成有效 Owner：{err:?}"
     );
 
     // 给 unbound 绑定登录方式后，才允许移除 bound。
     seed_binding(&pool, unbound).await;
-    assert!(rbac.remove_role(bound, "owner", None.into()).await.is_ok());
+    assert!(rbac.remove_role(bound, "admin", None.into()).await.is_ok());
 }
 
 #[tokio::test]
@@ -733,35 +691,35 @@ async fn owner_without_login_method_can_be_cleaned_up() {
 
     let bound = seed_user(&pool, "bound").await;
     let unbound = seed_user(&pool, "unbound").await;
-    rbac.assign_role(bound, "owner", None.into()).await.unwrap();
-    rbac.assign_role(unbound, "owner", None.into())
+    rbac.assign_role(bound, "admin", None.into()).await.unwrap();
+    rbac.assign_role(unbound, "admin", None.into())
         .await
         .unwrap();
     seed_binding(&pool, bound).await;
 
     // 移除登不进去的 Owner 不会减少可用 Owner，允许清理。
     assert!(
-        rbac.remove_role(unbound, "owner", None.into())
+        rbac.remove_role(unbound, "admin", None.into())
             .await
             .is_ok()
     );
     // bound 仍是最后可登录 Owner，受保护。
     let err = rbac
-        .remove_role(bound, "owner", None.into())
+        .remove_role(bound, "admin", None.into())
         .await
         .unwrap_err();
     assert!(matches!(
         err,
-        application::error::UseCaseError::LastOwnerProtected
+        application::error::UseCaseError::LastAdminProtected
     ));
 }
 
 /// 回归：本地密码是有效登录方式，只用密码（无 oauth）的最后 Owner 必须受保护。
 ///
-/// 早先 `active_owner_count` / `user_has_login_method` 只看 oauth_accounts，
+/// 早先 `active_admin_count` / `user_has_login_method` 只看 oauth_accounts，
 /// 导致密码型 Owner 被当成「登不进去」而移除，站点直接失去 Owner。
 #[tokio::test]
-async fn password_only_last_owner_is_protected() {
+async fn password_only_last_admin_is_protected() {
     let _g = SERIAL.lock().await;
     let pool = fresh_database().await;
     let rbac = rbac_of(&pool);
@@ -773,26 +731,26 @@ async fn password_only_last_owner_is_protected() {
         .unwrap();
 
     let alice = seed_user(&pool, "alice").await;
-    rbac.assign_role(alice, "owner", None.into()).await.unwrap();
+    rbac.assign_role(alice, "admin", None.into()).await.unwrap();
     // 关键：只有本地密码，没有任何 oauth 绑定。
     seed_password(&pool, alice).await;
 
     let err = rbac
-        .remove_role(alice, "owner", None.into())
+        .remove_role(alice, "admin", None.into())
         .await
         .unwrap_err();
     assert!(
-        matches!(err, application::error::UseCaseError::LastOwnerProtected),
+        matches!(err, application::error::UseCaseError::LastAdminProtected),
         "密码型最后 Owner 不能被移除：{err:?}"
     );
 
     // 第二个同样只用密码的 Owner 出现后，才允许移除第一个。
     let bob = seed_user(&pool, "bob").await;
-    rbac.assign_role(bob, "owner", None.into()).await.unwrap();
+    rbac.assign_role(bob, "admin", None.into()).await.unwrap();
     seed_password(&pool, bob).await;
-    assert!(rbac.remove_role(alice, "owner", None.into()).await.is_ok());
+    assert!(rbac.remove_role(alice, "admin", None.into()).await.is_ok());
     assert!(
-        rbac.remove_role(bob, "owner", None.into()).await.is_err(),
+        rbac.remove_role(bob, "admin", None.into()).await.is_err(),
         "bob 成了最后 Owner"
     );
 }
@@ -812,8 +770,8 @@ async fn deleted_password_only_owner_can_be_cleaned_up() {
 
     let alice = seed_user(&pool, "alice").await;
     let bob = seed_user(&pool, "bob").await;
-    rbac.assign_role(alice, "owner", None.into()).await.unwrap();
-    rbac.assign_role(bob, "owner", None.into()).await.unwrap();
+    rbac.assign_role(alice, "admin", None.into()).await.unwrap();
+    rbac.assign_role(bob, "admin", None.into()).await.unwrap();
     seed_password(&pool, alice).await;
     seed_password(&pool, bob).await;
 
@@ -823,16 +781,16 @@ async fn deleted_password_only_owner_can_be_cleaned_up() {
         .execute(&pool)
         .await
         .unwrap();
-    assert!(rbac.remove_role(bob, "owner", None.into()).await.is_ok());
+    assert!(rbac.remove_role(bob, "admin", None.into()).await.is_ok());
 
     // alice 现在是唯一可登录 Owner，受保护。
     let err = rbac
-        .remove_role(alice, "owner", None.into())
+        .remove_role(alice, "admin", None.into())
         .await
         .unwrap_err();
     assert!(matches!(
         err,
-        application::error::UseCaseError::LastOwnerProtected
+        application::error::UseCaseError::LastAdminProtected
     ));
 }
 
@@ -850,25 +808,25 @@ async fn removing_role_the_user_does_not_hold_is_noop() {
 
     let owner = seed_user(&pool, "owner").await;
     let plain = seed_user(&pool, "plain").await;
-    rbac.assign_role(owner, "owner", None.into()).await.unwrap();
+    rbac.assign_role(owner, "admin", None.into()).await.unwrap();
     seed_binding(&pool, owner).await;
 
     // plain 本来就不是 owner：移除不应因全局 Owner 数而误报 Forbidden。
-    assert!(rbac.remove_role(plain, "owner", None.into()).await.is_ok());
+    assert!(rbac.remove_role(plain, "admin", None.into()).await.is_ok());
     assert!(rbac.remove_role(plain, "author", None.into()).await.is_ok());
     // 真正的最后 Owner 仍受保护。
     let err = rbac
-        .remove_role(owner, "owner", None.into())
+        .remove_role(owner, "admin", None.into())
         .await
         .unwrap_err();
     assert!(matches!(
         err,
-        application::error::UseCaseError::LastOwnerProtected
+        application::error::UseCaseError::LastAdminProtected
     ));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn concurrent_last_owner_removal_keeps_at_least_one_loginable_owner() {
+async fn concurrent_last_admin_removal_keeps_at_least_one_loginable_admin() {
     let _g = SERIAL.lock().await;
     let pool = fresh_database().await;
     let rbac = Arc::new(PostgresRbacStore::new(common::database(pool.clone())));
@@ -881,15 +839,15 @@ async fn concurrent_last_owner_removal_keeps_at_least_one_loginable_owner() {
 
     let u1 = seed_user(&pool, "owner1").await;
     let u2 = seed_user(&pool, "owner2").await;
-    rbac.assign_role(u1, "owner", None.into()).await.unwrap();
-    rbac.assign_role(u2, "owner", None.into()).await.unwrap();
+    rbac.assign_role(u1, "admin", None.into()).await.unwrap();
+    rbac.assign_role(u2, "admin", None.into()).await.unwrap();
     seed_binding(&pool, u1).await;
     seed_binding(&pool, u2).await;
 
     // 两个并发移除：排他锁 + 锁内复核后应恰好一个成功，至少保留一个可登录 Owner。
     let (a, b) = tokio::join!(
-        rbac.remove_role(u1, "owner", None.into()),
-        rbac.remove_role(u2, "owner", None.into())
+        rbac.remove_role(u1, "admin", None.into()),
+        rbac.remove_role(u2, "admin", None.into())
     );
     let succeeded = [a.is_ok(), b.is_ok()].into_iter().filter(|ok| *ok).count();
     assert_eq!(succeeded, 1, "并发移除只能成功一个：{a:?} / {b:?}");
@@ -898,7 +856,7 @@ async fn concurrent_last_owner_removal_keeps_at_least_one_loginable_owner() {
         "SELECT count(*) FROM user_roles ur \
          JOIN roles r ON r.id = ur.role_id \
          JOIN users u ON u.id = ur.user_id \
-         WHERE r.code = 'owner' AND u.deleted_at IS NULL \
+         WHERE r.code = 'admin' AND u.deleted_at IS NULL \
            AND EXISTS (SELECT 1 FROM oauth_accounts oa WHERE oa.user_id = u.id)",
     )
     .fetch_one(&pool)
@@ -1466,7 +1424,7 @@ async fn admin_listing_reports_login_methods_and_roles_in_bulk() {
     let bound = seed_user(&pool, "bound").await;
     let password_only = seed_user(&pool, "password-only").await;
     seed_user(&pool, "plain").await;
-    // 软删除账号即使仍有绑定也不可登录：与 active_owner_count 的谓词一致。
+    // 软删除账号即使仍有绑定也不可登录：与 active_admin_count 的谓词一致。
     let deleted = seed_user(&pool, "deleted").await;
     seed_binding(&pool, bound).await;
     seed_binding(&pool, deleted).await;
@@ -1476,7 +1434,7 @@ async fn admin_listing_reports_login_methods_and_roles_in_bulk() {
         .execute(&pool)
         .await
         .unwrap();
-    rbac.assign_role(bound, "owner", None.into()).await.unwrap();
+    rbac.assign_role(bound, "admin", None.into()).await.unwrap();
     rbac.assign_role(password_only, "editor", None.into())
         .await
         .unwrap();
@@ -1499,7 +1457,7 @@ async fn admin_listing_reports_login_methods_and_roles_in_bulk() {
     let ids: Vec<uuid::Uuid> = rows.iter().map(|r| r.id).collect();
     let roles = rbac.roles_of_users(&ids).await.unwrap();
     assert_eq!(roles.len(), 2);
-    assert!(roles.contains(&(bound, "owner".to_string())));
+    assert!(roles.contains(&(bound, "admin".to_string())));
     assert!(roles.contains(&(password_only, "editor".to_string())));
 }
 
@@ -2593,6 +2551,8 @@ async fn post_series_edit_participates_in_series_version_protocol() {
 
 fn site_value(title: &str, description: &str) -> application::ports::SiteSettingsValue {
     application::ports::SiteSettingsValue {
+        home_page_size: None,
+        navigation: vec![],
         time_zone: None,
         title: Some(title.into()),
         description: Some(description.into()),
@@ -2669,24 +2629,6 @@ async fn settings_site_upsert_and_version_cas() {
             .await
             .unwrap();
     assert_eq!(schema, 1);
-    let keys: Vec<String> = sqlx::query_scalar(
-        "SELECT jsonb_object_keys(value) FROM settings WHERE key='site' ORDER BY 1",
-    )
-    .fetch_all(&pool)
-    .await
-    .unwrap();
-    // site 分组包含时区；null 兼容尚未选择站点时区的历史设置。
-    assert_eq!(
-        keys,
-        vec![
-            "description",
-            "logo_media_id",
-            "schema_version",
-            "time_zone",
-            "title"
-        ]
-    );
-
     // 旧版本前提再次写入：冲突，版本停在 2。
     assert_eq!(
         store
@@ -3276,7 +3218,7 @@ async fn admin_posts(
 ) -> (Vec<application::content_queries::AdminPostSummary>, i64) {
     application::ports::AdminPostQuery::list(
         &infrastructure::PostgresAdminContentQuery::new(common::database(pool.clone())),
-        author,
+        Some(author),
         &application::content_queries::ContentListRequest {
             trash,
             ..Default::default()

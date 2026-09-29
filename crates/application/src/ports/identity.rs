@@ -12,6 +12,8 @@ use domain::identity::UserSnapshot;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PasswordCredential {
     pub user_id: Uuid,
+    /// Canonical account name, shared by username and email login throttling.
+    pub username: String,
     /// PHC 格式的 Argon2id 字符串（算法与参数自描述）。
     pub password_hash: String,
     /// 读取时的认证修订号，会话签发绑定它，避免并发改密后用旧口令建会话。
@@ -20,8 +22,8 @@ pub struct PasswordCredential {
 
 /// 账号管理列表行：用户基本字段 + 是否仍有登录方式。
 ///
-/// 「是否可登录」是最后 Owner 保护判定的输入（docs §3），界面据此在移除 Owner
-/// 角色前给出提示；因此它必须与 `PostgresRbacStore::active_owner_count` 用同一套
+/// 「是否可登录」是最后 Admin 保护判定的输入（docs §3），界面据此在移除 Admin
+/// 角色前给出提示；因此它必须与 `PostgresRbacStore::active_admin_count` 用同一套
 /// 定义——active 且未软删除，并且有匹配已配置提供商的外部身份或本地密码。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AdminUserRow {
@@ -39,7 +41,7 @@ pub struct AdminUserRow {
 }
 
 impl AdminUserRow {
-    /// active 且未软删除并至少一种登录方式：与最后 Owner 判定同义。
+    /// active 且未软删除并至少一种登录方式：与最后 Admin 判定同义。
     pub fn can_login(&self) -> bool {
         self.status == domain::identity::UserStatus::Active
             && !self.deleted
@@ -100,8 +102,8 @@ pub trait AccountAdministration: Send + Sync {
         audit_actor: crate::audit::AuditContext,
     ) -> Result<(), UseCaseError>;
 
-    /// 原子校验当前权限、目标版本及全局 Owner 事实，调用 identity::policy 复核；并发身份变更不能绕过最后 Owner 保护。
-    /// 需 user.manage；目标持有 owner 时另需 ownership.manage。
+    /// 原子校验当前权限、目标版本及全局 Admin 事实，调用 identity::policy 复核；并发身份变更不能绕过最后 Admin 保护。
+    /// 需 user.manage；目标持有 admin 时另需 admin.manage。
     /// 实际变更同事务递增 version/auth_version、撤销会话并记录审计；
     /// 相同状态且版本匹配时不写入，软删除账号不能通过此入口恢复。
     async fn change_status(
@@ -180,7 +182,7 @@ pub trait PasswordCredentialStore: Send + Sync {
     /// 无效用户在查询层排除，登录失败路径因此无法区分「不存在」与「已停用」。
     async fn find_password_credential(
         &self,
-        username: &str,
+        identifier: &str,
     ) -> Result<Option<PasswordCredential>, UseCaseError>;
 
     /// 按 id 读取当前哈希（供自助改密重新认证；未设置返回 None）。
@@ -240,7 +242,7 @@ pub trait RbacStore: Send + Sync {
         audit_actor: crate::audit::AuditContext,
     ) -> Result<(), UseCaseError>;
 
-    /// 移除角色分配；调用 identity::policy 并原子复核最后可登录 Owner，不能被并发身份变更绕过。
+    /// 移除角色分配；调用 identity::policy 并原子复核最后可登录 Admin，不能被并发身份变更绕过。
     async fn remove_role(
         &self,
         user_id: Uuid,
@@ -257,12 +259,12 @@ pub trait RbacStore: Send + Sync {
     /// 管理列表一次读整页账号的角色；逐个 `roles_of_user` 会退化成 N+1 查询。
     async fn roles_of_users(&self, user_ids: &[Uuid]) -> Result<Vec<(Uuid, String)>, UseCaseError>;
 
-    /// 全站「可登录」Owner 数：未软删除、持有 owner 角色、且仍有登录方式。
+    /// 全站「可登录」Admin 数：未软删除、持有 admin 角色、且仍有登录方式。
     ///
     /// 这是**全局**计数，不受管理列表分页影响。列表接口用它判断某个账号是不是
-    /// 最后一个可登录 Owner；若前端按当前页推断，另一个 Owner 落在后续页时就会
-    /// 被误判并错误禁用移除。与 `remove_role` 的最后 Owner 保护使用同一谓词。
-    async fn loginable_owner_count(&self) -> Result<i64, UseCaseError>;
+    /// 最后一个可登录 Admin；若前端按当前页推断，另一个 Admin 落在后续页时就会
+    /// 被误判并错误禁用移除。与 `remove_role` 的最后 Admin 保护使用同一谓词。
+    async fn loginable_admin_count(&self) -> Result<i64, UseCaseError>;
 }
 
 /// 会话 cookie 名（前后端共享契约）。
@@ -369,8 +371,8 @@ pub trait OAuthConfigStore: Send + Sync {
         Ok(self.read().await?.providers)
     }
     /// 版本前提先于同值判断。设置变化与审计原子提交；删除身份命名空间时，
-    /// 与账号/角色/凭据变更串行化，保留至少一个配置层面可登录 Owner。
-    /// 尚未创建 Owner 的安装/CLI 引导可维护配置。返回本次提交版本。
+    /// 与账号/角色/凭据变更串行化，保留至少一个配置层面可登录 Admin。
+    /// 尚未创建 Admin 的安装/CLI 引导可维护配置。返回本次提交版本。
     async fn save(
         &self,
         providers: &[ProviderConfig],

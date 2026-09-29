@@ -72,6 +72,10 @@ pub fn app_router(state: AppState, assets: HttpAssets, config: HttpConfig) -> Ro
     let media_read = crate::http_media::MediaReadState {
         media: state.admin.media.clone(),
     };
+    let access = crate::http_registration::admin_router(crate::http_registration::AccessState {
+        registration: state.auth.registration.clone(),
+        admin: state.admin.clone(),
+    });
     let app = mount_theme_assets(public_router(state.public), assets.themes)
         .merge(crate::http_auth::auth_router(state.auth))
         .merge(crate::http_auth::admin_router(state.admin.clone()))
@@ -87,7 +91,8 @@ pub fn app_router(state: AppState, assets: HttpAssets, config: HttpConfig) -> Ro
         .merge(comments)
         .merge(content_preview)
         .merge(retention)
-        .merge(audit);
+        .merge(audit)
+        .merge(access);
     mount_admin_spa(app, Some(assets.admin_dist))
         .layer(middleware::from_fn(crate::http_support::request_context))
         .layer(axum::Extension(crate::http_client_ip::TrustedProxies(
@@ -201,9 +206,14 @@ async fn admin_cache_headers(req: Request, next: Next) -> Response {
     response
 }
 
-async fn index(State(state): State<PublicSiteState>) -> Response {
-    match state.site.render_index(50).await {
+async fn index(
+    State(state): State<PublicSiteState>,
+    Query(query): Query<TagPageQuery>,
+) -> Response {
+    match state.site.render_index(query.page.unwrap_or(1)).await {
         Ok(html) => Html(html).into_response(),
+        Err(UseCaseError::NotFound(_)) => (StatusCode::NOT_FOUND, "文章分页不存在").into_response(),
+        Err(UseCaseError::Invalid(message)) => (StatusCode::BAD_REQUEST, message).into_response(),
         Err(e) => server_error(e),
     }
 }

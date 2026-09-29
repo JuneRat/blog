@@ -1,6 +1,8 @@
 pub use crate::ports::CommentRepository;
 use crate::{error::UseCaseError, identity::Actor, ports::CommentRenderer};
-pub use domain::comment::{CommentBody, CommentNickname, CommentStatus, ModerationAction};
+pub use domain::comment::{
+    CommentBody, CommentNickname, CommentStatus, ModerationAction, ModerationMode,
+};
 use serde::{Deserialize, Serialize};
 use std::{net::IpAddr, sync::Arc};
 use uuid::Uuid;
@@ -22,6 +24,7 @@ pub struct CommentDto {
     pub body: String,
     pub is_author: bool,
     pub status: CommentStatus,
+    pub moderation_reason: Option<String>,
     pub version: i64,
     pub created_at: String,
 }
@@ -41,13 +44,15 @@ pub struct PublicComment {
 }
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PublicCommentPage {
+    pub guest_comments_enabled: bool,
     pub items: Vec<PublicComment>,
     pub total: i64,
     pub enabled: bool,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone)]
 pub struct CommentPolicy {
+    /// Global only. Omission on update preserves the current strategy.
+    pub moderation: Option<ModerationMode>,
     pub enabled: bool,
     pub version: i64,
 }
@@ -119,7 +124,7 @@ impl CommentInteractor {
         actor: Option<&Actor>,
         client: Option<IpAddr>,
         cmd: SubmitComment,
-    ) -> Result<(), UseCaseError> {
+    ) -> Result<CommentStatus, UseCaseError> {
         if let Some(actor) = actor {
             actor.ensure_write_channel()?;
         }
@@ -200,6 +205,13 @@ impl CommentInteractor {
     ) -> Result<CommentPolicy, UseCaseError> {
         if update.is_some() {
             actor.ensure_write_channel()?;
+        }
+        if post.is_some()
+            && update
+                .as_ref()
+                .is_some_and(|policy| policy.moderation.is_some())
+        {
+            return Err(UseCaseError::Invalid("审核策略只能在全站设置中修改".into()));
         }
         let mut scope = if post.is_none() {
             if !actor.has_permission("settings.manage") {

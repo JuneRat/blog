@@ -439,4 +439,49 @@ CREATE INDEX media_trash_idx ON media (created_at DESC, id DESC) WHERE deleted_a
 CREATE INDEX audit_logs_actor_time_idx ON audit_logs (actor_id, created_at DESC, id DESC);
 CREATE INDEX audit_logs_action_time_idx ON audit_logs (action, created_at DESC, id DESC);
 
+-- Migration: 0003_reader_registration.sql
+-- Preserve existing accounts and grants while retiring the owner role.
+DO $$
+DECLARE old_role uuid; admin_role uuid;
+BEGIN
+    SELECT id INTO old_role FROM roles WHERE code = 'owner';
+    SELECT id INTO admin_role FROM roles WHERE code = 'admin';
+    IF old_role IS NOT NULL THEN
+        IF admin_role IS NULL THEN
+            UPDATE roles SET code = 'admin', name = 'Administrator', version = version + 1 WHERE id = old_role;
+        ELSE
+            INSERT INTO user_roles(user_id, role_id)
+                SELECT user_id, admin_role FROM user_roles WHERE role_id = old_role
+                ON CONFLICT DO NOTHING;
+            INSERT INTO role_permissions(role_id, permission_code)
+                SELECT admin_role, permission_code FROM role_permissions WHERE role_id = old_role
+                ON CONFLICT DO NOTHING;
+            DELETE FROM user_roles WHERE role_id = old_role;
+            DELETE FROM role_permissions WHERE role_id = old_role;
+            DELETE FROM roles WHERE id = old_role;
+            UPDATE roles SET version = version + 1 WHERE id = admin_role;
+        END IF;
+    END IF;
+END $$;
+INSERT INTO permissions(code, name) SELECT 'admin.manage', '管理管理员'
+    FROM permissions WHERE code = 'ownership.manage' ON CONFLICT DO NOTHING;
+INSERT INTO role_permissions(role_id, permission_code)
+    SELECT role_id, 'admin.manage' FROM role_permissions WHERE permission_code = 'ownership.manage'
+    ON CONFLICT DO NOTHING;
+DELETE FROM permissions WHERE code = 'ownership.manage';
+UPDATE settings SET value = (value - 'owner_id') || jsonb_build_object('admin_id', value->'owner_id'),
+    version = version + 1 WHERE key = 'installation' AND value ? 'owner_id';
+
+-- Migration: 0004_comment_moderation.sql
+-- Preserve historical manual approvals when enabling first-comment moderation.
+ALTER TABLE comments ADD COLUMN moderation_reason text;
+UPDATE comments SET moderation_reason = CASE status
+    WHEN 'approved' THEN 'manual_approval'
+    WHEN 'pending' THEN 'manual_review'
+    WHEN 'spam' THEN 'spam'
+    WHEN 'trash' THEN 'trash'
+END;
+CREATE INDEX comments_manual_approval_user_idx ON comments (user_id)
+    WHERE user_id IS NOT NULL AND status = 'approved' AND moderation_reason = 'manual_approval';
+
 COMMIT;

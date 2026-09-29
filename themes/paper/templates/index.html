@@ -13,4 +13,9 @@
   {% endfor %}
 </div>
 {% else %}<p class="empty">还没有公开文章。</p>{% endif %}
+<nav class="pagination" aria-label="文章分页">
+  {% if pagination.previous_url %}<a rel="prev" href="{{ pagination.previous_url | url }}">上一页</a>{% endif %}
+  <span>第 {{ pagination.page }} 页</span>
+  {% if pagination.next_url %}<a rel="next" href="{{ pagination.next_url | url }}">下一页</a>{% endif %}
+</nav>
 {% endblock %}

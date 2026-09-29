@@ -160,7 +160,7 @@ const ROLE_KEYS: &[(&str, &[&str])] = &[
             "tag.manage",
             "user.manage",
             "role.manage",
-            "ownership.manage",
+            "admin.manage",
             "post.create",
             "post.read",
             "post.read_any",
@@ -255,7 +255,7 @@ impl RbacStore for FakeRbacStore {
         Ok(Vec::new())
     }
 
-    async fn loginable_owner_count(&self) -> Result<i64, UseCaseError> {
+    async fn loginable_admin_count(&self) -> Result<i64, UseCaseError> {
         Ok(1)
     }
 }

@@ -63,13 +63,13 @@ impl ObservedFilter {
 impl AdminPostQuery for QuerySpy {
     async fn list(
         &self,
-        author: Uuid,
+        author: Option<Uuid>,
         filter: &PostListFilter,
     ) -> Result<(Vec<AdminPostSummary>, i64), UseCaseError> {
-        self.0.lock().unwrap().push((
-            Some(author),
-            ObservedFilter::of(filter, |status| status.as_str()),
-        ));
+        self.0
+            .lock()
+            .unwrap()
+            .push((author, ObservedFilter::of(filter, |status| status.as_str())));
         Ok((vec![], 41))
     }
 }
@@ -185,6 +185,7 @@ async fn page_metadata_and_validated_filters_reach_storage() {
         status: Some("scheduled".into()),
         visibility: Some("private".into()),
         trash: true,
+        ..Default::default()
     };
     let result = queries
         .posts(&reader, reader.user_id, request.clone())
@@ -213,6 +214,7 @@ async fn unauthorized_invalid_filters_are_rejected_before_validation() {
         status: Some("active".into()),
         visibility: Some("secret".into()),
         trash: false,
+        ..Default::default()
     };
     assert!(matches!(
         queries
@@ -298,14 +300,12 @@ async fn author_lookup_authorizes_before_resolving_and_preserves_target_rules() 
             inactive.status = domain::identity::UserStatus::Disabled;
         }
         *spy.2.lock().unwrap() = Some(inactive);
-        assert!(matches!(
-            queries
-                .posts_by_author(&any, Some("author"), Default::default())
-                .await,
-            Err(UseCaseError::Forbidden)
-        ));
+        queries
+            .posts_by_author(&any, Some("author"), Default::default())
+            .await
+            .unwrap();
     }
-    assert_eq!(spy.0.lock().unwrap().len(), before);
+    assert_eq!(spy.0.lock().unwrap().len(), before + 2);
 }
 
 #[tokio::test]
@@ -329,4 +329,35 @@ async fn corrupt_stored_author_is_distinct_from_invalid_request() {
         Err(UseCaseError::DataCorrupt(_))
     ));
     assert!(spy.0.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn all_scope_requires_read_any_and_applies_to_trash_too() {
+    let spy = Arc::new(QuerySpy::default());
+    let queries = ContentQueries::new(spy.clone(), spy.clone(), spy.clone());
+    for trash in [false, true] {
+        let request = ContentListRequest {
+            scope: Some("all".into()),
+            q: Some(" body ".into()),
+            trash,
+            ..Default::default()
+        };
+        assert!(matches!(
+            queries
+                .posts_by_author(&actor(&["post.read"]), None, request.clone())
+                .await,
+            Err(UseCaseError::Forbidden)
+        ));
+        assert!(spy.0.lock().unwrap().is_empty());
+        queries
+            .posts_by_author(&actor(&["post.read_any"]), None, request)
+            .await
+            .unwrap();
+        assert_eq!(spy.0.lock().unwrap().pop().unwrap().0, None);
+    }
+    let invalid = ContentListRequest {
+        q: Some("字".repeat(201)),
+        ..Default::default()
+    };
+    assert!(PostListFilter::try_from(invalid).is_err());
 }

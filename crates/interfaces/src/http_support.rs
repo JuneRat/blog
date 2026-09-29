@@ -231,7 +231,7 @@ pub const ADMIN_ERROR_CODES: &[&str] = &[
     "username_taken",
     "email_taken",
     "category_in_use",
-    "last_owner",
+    "last_admin",
     "not_found",
     "forbidden",
     "external_error",
@@ -255,8 +255,8 @@ pub fn conflict_error_code(kind: ConflictKind) -> &'static str {
 ///
 /// 关键用例是 409：`version_conflict` 可以用最新 version 重试覆盖，
 /// `conflict`（slug 等唯一性冲突）重试无用；username/email 另有专属码。
-/// `last_owner` 用 403：调用者可能持有 `ownership.manage`，被拒是因为会失去
-/// 最后一个可登录 Owner，前端需要显示与「无权操作」不同的原因。
+/// `last_admin` 用 403：调用者可能持有 `admin.manage`，被拒是因为会失去
+/// 最后一个可登录 Admin，前端需要显示与「无权操作」不同的原因。
 pub fn admin_error_code(e: &UseCaseError) -> &'static str {
     match e {
         UseCaseError::Unauthenticated => "unauthenticated",
@@ -266,7 +266,8 @@ pub fn admin_error_code(e: &UseCaseError) -> &'static str {
         UseCaseError::VersionConflict => "version_conflict",
         UseCaseError::Conflict(kind) => conflict_error_code(*kind),
         UseCaseError::CategoryInUse { .. } => "category_in_use",
-        UseCaseError::LastOwnerProtected => "last_owner",
+        UseCaseError::LastAdminProtected => "last_admin",
+        UseCaseError::RegistrationClosed => "registration_closed",
         UseCaseError::NotFound(_) => "not_found",
         UseCaseError::Forbidden => "forbidden",
         UseCaseError::External(_) => "external_error",
@@ -291,7 +292,9 @@ pub fn admin_error_status(e: &UseCaseError) -> StatusCode {
         UseCaseError::Conflict(_)
         | UseCaseError::VersionConflict
         | UseCaseError::CategoryInUse { .. } => StatusCode::CONFLICT,
-        UseCaseError::LastOwnerProtected => StatusCode::FORBIDDEN,
+        UseCaseError::LastAdminProtected | UseCaseError::RegistrationClosed => {
+            StatusCode::FORBIDDEN
+        }
         UseCaseError::NotFound(_) => StatusCode::NOT_FOUND,
         UseCaseError::Forbidden => StatusCode::FORBIDDEN,
         UseCaseError::External(_) => StatusCode::BAD_GATEWAY,
@@ -388,7 +391,7 @@ mod tests {
                 },
                 "category_in_use",
             ),
-            (UseCaseError::LastOwnerProtected, "last_owner"),
+            (UseCaseError::LastAdminProtected, "last_admin"),
             (UseCaseError::NotFound("x".into()), "not_found"),
             (UseCaseError::Forbidden, "forbidden"),
             (UseCaseError::External("x".into()), "external_error"),
@@ -410,7 +413,7 @@ mod tests {
                 StatusCode::TOO_MANY_REQUESTS,
             ),
             (UseCaseError::Forbidden, StatusCode::FORBIDDEN),
-            (UseCaseError::LastOwnerProtected, StatusCode::FORBIDDEN),
+            (UseCaseError::LastAdminProtected, StatusCode::FORBIDDEN),
             (
                 UseCaseError::Repository("x".into()),
                 StatusCode::INTERNAL_SERVER_ERROR,

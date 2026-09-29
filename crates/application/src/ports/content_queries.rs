@@ -9,7 +9,7 @@ use uuid::Uuid;
 pub trait AdminPostQuery: Send + Sync {
     async fn list(
         &self,
-        author_id: Uuid,
+        author_id: Option<Uuid>,
         filter: &PostListFilter,
     ) -> Result<(Vec<AdminPostSummary>, i64), UseCaseError>;
 }

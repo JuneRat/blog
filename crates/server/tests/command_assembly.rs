@@ -88,7 +88,7 @@ async fn owner_bootstrap_uses_new_identity_baseline() {
     ));
     assert_success(cli(
         &database_url,
-        &["role", "assign", "--user", "first-owner", "--role", "owner"],
+        &["role", "assign", "--user", "first-owner", "--role", "admin"],
         None,
         invalid_url,
     ));
@@ -107,7 +107,7 @@ async fn owner_bootstrap_uses_new_identity_baseline() {
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(row, (3, 2, true, "owner".into()));
+    assert_eq!(row, (3, 2, true, "admin".into()));
     let migrations: Vec<i64> =
         sqlx::query_scalar("SELECT version FROM _sqlx_migrations ORDER BY version")
             .fetch_all(&pool)

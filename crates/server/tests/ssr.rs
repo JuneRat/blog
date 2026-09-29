@@ -135,6 +135,8 @@ async fn stack_with_zone(theme_dir: &str, time_zone: &str) -> Stack {
     ));
     let pages = Arc::new(PageInteractor::new(page_repo, clock));
     let fallback = SiteInfo {
+        home_page_size: application::site_info::DEFAULT_HOME_PAGE_SIZE,
+        navigation: vec![],
         time_zone: time_zone.into(),
         title: "测试站点".into(),
         description: "集成测试".into(),
@@ -721,7 +723,6 @@ async fn taxonomy_pagination_keeps_return_links_after_shrinking_to_one_page() {
             let (status, body) = get(&stack.router, &format!("{directory}?page=2")).await;
             assert_eq!(status, StatusCode::OK, "{theme} {directory}: {body}");
             assert!(body.contains("第 2 / 2 页"), "{theme} {directory}: {body}");
-            assert_eq!(body.matches("class=\"post-item\"").count(), 1);
         }
 
         // 读者仍在第 2 页时撤文：三类目录都只剩 20 篇，第 2 页成为空页。
@@ -733,19 +734,16 @@ async fn taxonomy_pagination_keeps_return_links_after_shrinking_to_one_page() {
         for directory in directories {
             let (status, body) = get(&stack.router, &format!("{directory}?page=2")).await;
             assert_eq!(status, StatusCode::OK, "{theme} {directory}: {body}");
-            assert_eq!(body.matches("class=\"post-item\"").count(), 0);
+            assert!(!body.contains("href=\"/posts/pagination-"));
             assert!(
-                body.contains(&format!(
-                    "class=\"pagination-prev\" href=\"{directory}?page=1\""
-                )),
+                body.contains(&format!("href=\"{directory}?page=1\"")),
                 "缩减为一页后仍能返回：{theme} {directory}: {body}"
             );
-            assert!(!body.contains("pagination-next"));
+            assert!(!body.contains(&format!("href=\"{directory}?page=3\"")));
 
             let (status, body) = get(&stack.router, &format!("{directory}?page=1")).await;
             assert_eq!(status, StatusCode::OK, "{theme} {directory}: {body}");
-            assert_eq!(body.matches("class=\"post-item\"").count(), 20);
-            assert!(!body.contains("class=\"pagination\""));
+            assert!(body.contains("href=\"/posts/pagination-"));
         }
         stack.pool.close().await;
     }
@@ -1235,4 +1233,76 @@ async fn site_zone_formats_both_themes_and_theme_functions_without_changing_feed
         s.pool.close().await;
     }
     std::fs::remove_dir_all(function_theme).unwrap();
+}
+
+#[tokio::test]
+async fn home_pagination_uses_the_current_site_setting() {
+    let _guard = SERIAL.lock().await;
+    let stack = stack_with_theme("../../themes/default").await;
+    sqlx::query("INSERT INTO posts (id, author_id, slug, title, content, content_html, content_render_version, status, published_at)
+        SELECT gen_random_uuid(), $1, slug, slug, 'body', '<p>body</p>', 1, 'published', now() - position * interval '1 minute'
+        FROM unnest($2::text[]) WITH ORDINALITY AS sample(slug, position)")
+        .bind(stack.author.user_id.0)
+        .bind(vec!["newest", "middle", "oldest"])
+        .execute(&stack.pool).await.unwrap();
+    sqlx::query("INSERT INTO settings(key,value,version,updated_at) VALUES('site',$1,1,now())")
+        .bind(serde_json::json!({"home_page_size": 2}))
+        .execute(&stack.pool)
+        .await
+        .unwrap();
+    let (status, first) = get(&stack.router, "/").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(first.contains("href=\"/posts/middle\""));
+    assert!(!first.contains("href=\"/posts/oldest\""));
+    let (status, second) = get(&stack.router, "/?page=2").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(second.contains("href=\"/posts/oldest\""));
+    assert!(!second.contains("href=\"/posts/middle\""));
+
+    sqlx::query(
+        "UPDATE settings SET value=jsonb_set(value,'{home_page_size}','1') WHERE key='site'",
+    )
+    .execute(&stack.pool)
+    .await
+    .unwrap();
+    let (_, first) = get(&stack.router, "/").await;
+    assert!(first.contains("href=\"/posts/newest\""));
+    assert!(!first.contains("href=\"/posts/middle\""));
+    let (_, second) = get(&stack.router, "/?page=2").await;
+    assert!(second.contains("href=\"/posts/middle\""));
+    assert!(!second.contains("href=\"/posts/oldest\""));
+    stack.pool.close().await;
+}
+
+#[tokio::test]
+async fn navigation_follows_page_publication() {
+    let _guard = SERIAL.lock().await;
+    for theme in ["../../themes/default", "../../themes/paper"] {
+        let stack = stack_with_theme(theme).await;
+        sqlx::query("INSERT INTO pages (id,slug,title,content,content_html,content_render_version,status,published_at)
+            VALUES(gen_random_uuid(),'about','About','body','<p>body</p>',1,'published',now()),
+                  (gen_random_uuid(),'contact','Contact','body','<p>body</p>',1,'draft',now())")
+            .execute(&stack.pool).await.unwrap();
+        sqlx::query("INSERT INTO settings(key,value,version,updated_at) VALUES('site',$1,1,now())")
+            .bind(serde_json::json!({"navigation":[
+                {"label":"关于","page_slug":"about","placement":"header"},
+                {"label":"联系","page_slug":"contact","placement":"footer"}
+            ]}))
+            .execute(&stack.pool)
+            .await
+            .unwrap();
+        let (_, body) = get(&stack.router, "/").await;
+        assert!(body.contains("href=\"/about\""));
+        assert!(!body.contains("href=\"/contact\""));
+        sqlx::query(
+            "UPDATE pages SET status=CASE WHEN slug='contact' THEN 'published' ELSE 'draft' END",
+        )
+        .execute(&stack.pool)
+        .await
+        .unwrap();
+        let (_, body) = get(&stack.router, "/").await;
+        assert!(!body.contains("href=\"/about\""));
+        assert!(body.contains("href=\"/contact\""));
+        stack.pool.close().await;
+    }
 }

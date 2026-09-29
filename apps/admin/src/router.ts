@@ -176,3 +176,8 @@ const getPathname = (): string => getHistory().getPathname();
 export function useRoute(): Route {
   return parseRoute(useSyncExternalStore(subscribe, getPathname));
 }
+
+const getURL = (): string => getHistory().getURL();
+export function useLocation(): string {
+  return useSyncExternalStore(subscribe, getURL);
+}

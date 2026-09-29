@@ -30,3 +30,6 @@ pub use taxonomy::{
 
 pub(crate) use identity::acquire_identity_lock;
 pub(crate) use media::{media_ids_for, sync_media_refs};
+
+pub(crate) mod registration;
+pub use registration::PostgresRegistrationStore;

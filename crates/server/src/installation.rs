@@ -5,7 +5,7 @@ use crate::config::{DeploymentConfig, InstallJournal};
 use application::{
     UseCaseError,
     audit::AuditContext,
-    installation::{InitialOwner, InstallInfo, InstallInput, Installer, validate_database_url},
+    installation::{InitialAdmin, InstallInfo, InstallInput, Installer, validate_database_url},
     ports::SecureRandom,
 };
 use axum::{Router, extract::Request};
@@ -61,7 +61,7 @@ impl Installer for Setup {
         if live.pool.borrow().is_some() {
             return Err(UseCaseError::NotFound("安装入口已关闭".into()));
         }
-        let owner = InitialOwner::prepare(
+        let admin = InitialAdmin::prepare(
             &input.username,
             &input.password,
             &infrastructure::Argon2PasswordHasher::with_defaults(),
@@ -163,7 +163,7 @@ impl Installer for Setup {
                 &pool,
                 &schema_contract,
                 &saved.installation_id,
-                &owner,
+                &admin,
                 &initial_site,
                 audit,
             )

@@ -21,7 +21,9 @@
       {% if site.logo_url %}<img class="site-logo" src="{{ site.logo_url | url }}" alt="{{ site.title }}">{% endif %}
       <a class="brand" href="/">{{ site.title }}</a>
       <p class="subtitle">{{ site.description }}</p>
-      <nav aria-label="主导航"><a href="/">首页</a><a href="/feed.xml">订阅 RSS</a><a href="/sitemap.xml">站点地图</a></nav>
+      <nav aria-label="主导航"><a href="/">首页</a><a href="/feed.xml">订阅 RSS</a><a href="/sitemap.xml">站点地图</a><a href="/admin/">账号</a>
+</nav>
+      <nav class="page-navigation" aria-label="页面导航">{% for item in site.navigation %}{% if item.placement == 'header' %}<a href="{{ item.url | url }}">{{ item.label }}</a>{% endif %}{% endfor %}</nav>
     </header>
     <div class="layout">
       <main id="content">{% block content %}{% endblock %}</main>
@@ -33,7 +35,10 @@
         <section><h2>关于本站</h2><p>{{ site.description }}</p></section>
       </aside>
     </div>
-    <footer class="footer"><span>© {{ site.title }}</span><span><a href="/feed.xml">RSS</a> · <a href="/sitemap.xml">Sitemap</a></span></footer>
+    <footer class="footer">
+      <span>© {{ site.title }}</span><span><a href="/feed.xml">RSS</a> · <a href="/sitemap.xml">Sitemap</a></span>
+      <nav class="page-navigation" aria-label="页脚导航">{% for item in site.navigation %}{% if item.placement == 'footer' %}<a href="{{ item.url | url }}">{{ item.label }}</a>{% endif %}{% endfor %}</nav>
+    </footer>
   </div>
 </body>
 </html>

@@ -902,6 +902,16 @@ impl PostgresPublishedPageQuery {
 
 #[async_trait]
 impl PublishedPageQuery for PostgresPublishedPageQuery {
+    async fn public_navigation_slugs(&self, slugs: &[String]) -> Result<Vec<String>, UseCaseError> {
+        sqlx::query_scalar(&format!(
+            "SELECT p.slug FROM pages p WHERE p.slug = ANY($1) AND {PAGE_PUBLIC_PREDICATE}"
+        ))
+        .bind(slugs)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_sqlx_error)
+    }
+
     async fn find_public_by_slug(
         &self,
         slug: &str,

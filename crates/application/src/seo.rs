@@ -159,6 +159,14 @@ pub fn series_url(base: &PublicBaseUrl, slug: &str, page: i64) -> String {
     base.join(&series_path(slug, page))
 }
 
+pub fn index_path(page: i64) -> String {
+    if page <= 1 {
+        "/".into()
+    } else {
+        format!("/?page={page}")
+    }
+}
+
 pub fn feed_url(base: &PublicBaseUrl) -> String {
     base.join("/feed.xml")
 }
@@ -211,6 +219,14 @@ impl SeoMeta {
     /// 首页：标题即站点标题，描述取站点描述。
     pub fn home(site: &SiteInfo, base: &PublicBaseUrl) -> Self {
         Self::build(site, base, None, None, "/", "website")
+    }
+
+    pub fn home_page(site: &SiteInfo, base: &PublicBaseUrl, page: i64) -> Self {
+        let mut meta = Self::build(site, base, None, None, &index_path(page), "website");
+        if page > 1 {
+            meta.title = format!("第 {page} 页 - {}", site.title);
+        }
+        meta
     }
 
     /// 文章详情：描述优先摘要，缺失时回退站点描述。
@@ -300,6 +316,8 @@ mod tests {
 
     fn site() -> SiteInfo {
         SiteInfo {
+            home_page_size: crate::site_info::DEFAULT_HOME_PAGE_SIZE,
+            navigation: vec![],
             time_zone: "UTC".into(),
             title: "站点名".into(),
             description: "站点描述".into(),

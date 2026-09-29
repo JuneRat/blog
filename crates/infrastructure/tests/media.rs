@@ -258,6 +258,8 @@ async fn avatar_and_site_logo_preserve_old_trashed_refs_and_reject_new_ones() {
     let settings = PostgresSettingsStore::new(common::database(pool.clone()));
     let now = OffsetDateTime::now_utc();
     let site = SiteSettingsValue {
+        home_page_size: None,
+        navigation: vec![],
         time_zone: None,
         title: Some("Site".into()),
         description: Some("Description".into()),
@@ -302,6 +304,8 @@ async fn avatar_and_site_logo_preserve_old_trashed_refs_and_reject_new_ones() {
         .await
         .unwrap();
     let empty_site = SiteSettingsValue {
+        home_page_size: None,
+        navigation: vec![],
         time_zone: None,
         logo_media_id: None,
         ..site.clone()

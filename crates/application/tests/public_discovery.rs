@@ -155,6 +155,8 @@ impl SettingsStore for Settings {
         Ok(Some(SiteSettingsRecord {
             version: 1,
             value: SiteSettingsValue {
+                home_page_size: None,
+                navigation: vec![],
                 time_zone: None,
                 title: Some("  DB & title  ".into()),
                 description: Some("".into()),
@@ -181,6 +183,7 @@ impl ThemeRenderer for NoTheme {
         _: &SiteInfo,
         _: &SeoMeta,
         _: &[PostCard],
+        _: &IndexPagination,
     ) -> Result<String, UseCaseError> {
         panic!("syndication must not use theme rendering")
     }
@@ -237,6 +240,8 @@ fn site(sources: Arc<Sources>, settings_fail: bool) -> PublicSiteInteractor {
             fail: settings_fail,
         }),
         SiteInfo {
+            home_page_size: application::site_info::DEFAULT_HOME_PAGE_SIZE,
+            navigation: vec![],
             time_zone: "UTC".into(),
             title: "fallback".into(),
             description: "fallback description".into(),

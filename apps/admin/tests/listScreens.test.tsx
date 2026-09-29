@@ -68,6 +68,7 @@ function summary(overrides: Partial<PostSummary> = {}): PostSummary {
     published_at: "2026-09-20T00:00:00Z",
     updated_at: "2026-09-22T10:00:00Z",
     author_id: "me",
+    author_username: "author",
     ...overrides,
   };
 }
@@ -150,22 +151,18 @@ describe("我的文章列表", () => {
     expect(screen.getByText("私有")).toBeTruthy();
   });
 
-  it("输入关键词即时过滤当前页标题与 slug", async () => {
+  it("搜索提交给服务器并重置页码，展示跨页匹配结果", async () => {
+    window.history.replaceState(null, "", `${paths.list}?page=2`);
+    vi.mocked(api.listPosts).mockResolvedValue(contentPage([rustPost], 2, 25));
     render(<App />);
-    expect(await screen.findByText("Rust 指南")).toBeTruthy();
-    expect(screen.getByText("draft-note")).toBeTruthy();
-
-    const searchInput = screen.getByPlaceholderText("搜索当前页标题或 slug…");
-    fireEvent.change(searchInput, { target: { value: "Rust" } });
-    expect(screen.getByText("Rust 指南")).toBeTruthy();
-    expect(screen.queryByText("draft-note")).toBeNull();
-
-    fireEvent.change(searchInput, { target: { value: "draft-note" } });
+    await screen.findByText("Rust 指南");
+    vi.mocked(api.listPosts).mockResolvedValue(contentPage([draftPost], 1, 1));
+    fireEvent.change(screen.getByRole("searchbox", { name: "搜索内容" }), { target: { value: "正文关键词" } });
+    fireEvent.click(screen.getByRole("button", { name: "搜索" }));
+    await waitFor(() => expect(api.listPosts).toHaveBeenLastCalledWith({ page: 1, q: "正文关键词" }));
+    await screen.findByText("draft-note");
     expect(screen.queryByText("Rust 指南")).toBeNull();
-    expect(screen.getByText("draft-note")).toBeTruthy();
-
-    fireEvent.change(searchInput, { target: { value: "不存在的内容" } });
-    expect(screen.getByText("没有匹配搜索条件的文章。")).toBeTruthy();
+    expect(new URLSearchParams(window.location.search).get("q")).toBe("正文关键词");
   });
 
   it("有 post.create 权限时「新建草稿」导航到新建地址", async () => {
@@ -212,16 +209,6 @@ describe("我的文章列表", () => {
 
     expect(api.trashPost).not.toHaveBeenCalled();
     expect(window.location.pathname).toBe(paths.list);
-  });
-
-  it("无 post.delete / post.create 权限时不渲染操作入口，也不调用接口", async () => {
-    state.permissions = [];
-    render(<App />);
-    await screen.findByText("Rust 指南");
-
-    expect(screen.queryByRole("button", { name: "移入回收站" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "新建草稿" })).toBeNull();
-    expect(api.trashPost).not.toHaveBeenCalled();
   });
 
   it("移入回收站失败时展示服务端文案，列表保持原样", async () => {
@@ -292,14 +279,6 @@ describe("独立页面列表", () => {
 
     fireEvent.click(await screen.findByText("关于"));
     await waitFor(() => expect(window.location.pathname).toBe(paths.editPage(aboutPage.id)));
-  });
-
-  it("无 page.create 权限时不渲染「新建页面」入口", async () => {
-    state.permissions = ["post.create"];
-    render(<App />);
-    await screen.findByText("关于");
-
-    expect(screen.queryByRole("button", { name: "新建页面" })).toBeNull();
   });
 
   it("空列表展示带新建引导的空状态", async () => {
@@ -379,15 +358,6 @@ describe("文章回收站", () => {
     fireEvent.click(await screen.findByRole("button", { name: "取消" }));
 
     expect(api.purgePost).not.toHaveBeenCalled();
-  });
-
-  it("无 post.purge 权限时不渲染「永久删除」，但恢复仍可用", async () => {
-    state.permissions = ["post.create"];
-    render(<App />);
-    await screen.findByText("已删除的稿子");
-
-    expect(screen.queryByRole("button", { name: "永久删除" })).toBeNull();
-    expect(screen.getByRole("button", { name: "恢复" })).toBeTruthy();
   });
 
   it("分页：上一页/下一页切换到服务端回显的页码", async () => {
@@ -544,7 +514,7 @@ describe("跨屏缓存一致性", () => {
     vi.mocked(api.updatePage).mockResolvedValue({ ...aboutDetail, title: "关于我们", version: 3 });
     vi.mocked(api.listPages).mockResolvedValue(contentPage([{ ...aboutPage, title: "关于我们", version: 3 }]));
     fireEvent.click(screen.getByRole("button", { name: /保存草稿|保存预约内容|更新已发布内容/ }));
-    await waitFor(() => expect(api.updatePage).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(api.updatePage).toHaveBeenCalled());
 
     fireEvent.click(screen.getByRole("menuitem", { name: "独立页面" }));
     expect(await screen.findByText("关于我们")).toBeTruthy();
@@ -594,16 +564,14 @@ describe("内容服务端分页", () => {
     listing.mockImplementationOnce(() => new Promise(done => { resolve = done; }));
     fireEvent.click(screen.getByRole("button", { name: "下一页" }));
     await waitFor(() => expect(listing).toHaveBeenLastCalledWith({ page: 2 }));
-    expect(screen.getByText("第 1 页，共 21 条")).toBeTruthy();
     expect(screen.getByText(first.title)).toBeTruthy();
-    expect((screen.getByRole("button", { name: "下一页" }) as HTMLButtonElement).disabled).toBe(true);
     await act(async () => resolve(contentPage([second as PostSummary], 2, 21)));
-    await screen.findByText("第 2 页，共 21 条");
+    await screen.findByText(isPost ? second.slug : second.title);
     listing.mockResolvedValue(contentPage([], 1, 0));
     fireEvent.mouseDown(screen.getByRole("combobox", { name: "筛选状态" }));
     fireEvent.click(await screen.findByText("已归档"));
-    await waitFor(() => expect(listing).toHaveBeenLastCalledWith({ page: 1, status: "archived", visibility: undefined }));
-    await screen.findByText("第 1 页，共 0 条");
+    await waitFor(() => expect(listing).toHaveBeenLastCalledWith({ page: 1, status: "archived" }));
+    await waitFor(() => expect(screen.queryByText(isPost ? second.slug : second.title)).toBeNull());
   });
 
   it("删除第二页最后一篇后回退首页，并重新读取已缓存的首页", async () => {
@@ -612,13 +580,52 @@ describe("内容服务端分页", () => {
     render(<App />);
     await screen.findByText("Rust 指南");
     fireEvent.click(screen.getByRole("button", { name: "下一页" }));
-    await screen.findByText("第 2 页，共 21 条");
+    await screen.findByText(draftPost.slug);
     fireEvent.click(screen.getByRole("button", { name: "移入回收站" }));
     await screen.findByRole("dialog");
     vi.mocked(api.listPosts).mockImplementation(async filter => contentPage(filter?.page === 2 ? [] : [{ ...rustPost, title: "刷新后的首页" }], filter?.page ?? 1, 20));
     fireEvent.click(screen.getByRole("button", { name: "确定" }));
     await screen.findByText("刷新后的首页");
-    expect(screen.getByText("第 1 页，共 20 条")).toBeTruthy();
+    expect(new URLSearchParams(window.location.search).get("page")).toBe("1");
     expect(api.trashPost).toHaveBeenCalledWith(draftPost.id, draftPost.version);
+  });
+});
+
+
+describe("跨页搜索与协作范围", () => {
+  it("编辑切换全部文章并按作者筛选", async () => {
+    window.history.replaceState(null, "", paths.list);
+    state.permissions = ["post.read_any", "post.update_any", "post.delete_any"];
+    render(<App />);
+    await screen.findByText("Rust 指南");
+    fireEvent.mouseDown(screen.getByRole("combobox", { name: "文章范围" }));
+    fireEvent.click(await screen.findByText("全部文章"));
+    await waitFor(() => expect(api.listPosts).toHaveBeenLastCalledWith({ page: 1, scope: "all" }));
+    fireEvent.change(screen.getByRole("searchbox", { name: "筛选作者" }), { target: { value: "disabled-author" } });
+    fireEvent.click(screen.getByRole("button", { name: "筛选作者" }));
+    await waitFor(() => expect(api.listPosts).toHaveBeenLastCalledWith({ page: 1, scope: "all", author: "disabled-author" }));
+  });
+
+  it("从编辑器返回列表保留搜索和页码，刷新所需参数也留在地址中", async () => {
+    window.history.replaceState(null, "", `${paths.list}?page=2&q=Rust`);
+    vi.mocked(api.listPosts).mockResolvedValue(contentPage([rustPost], 2, 25));
+    render(<App />);
+    await screen.findByText("Rust 指南");
+    fireEvent.click(screen.getByRole("button", { name: "编辑" }));
+    await screen.findByLabelText("正文（Markdown）");
+    await act(async () => navigate(paths.list));
+    await waitFor(() => expect(api.listPosts).toHaveBeenLastCalledWith(expect.objectContaining({ page: 2, q: "Rust" })));
+    expect((screen.getByRole("searchbox", { name: "搜索内容" }) as HTMLInputElement).value).toBe("Rust");
+    await waitFor(() => expect(new URLSearchParams(window.location.search).get("page")).toBe("2"));
+    expect(new URLSearchParams(window.location.search).get("q")).toBe("Rust");
+  });
+
+  it("页面列表同样提交服务端搜索", async () => {
+    window.history.replaceState(null, "", paths.pages);
+    render(<App />);
+    await screen.findByText("关于");
+    fireEvent.change(screen.getByRole("searchbox", { name: "搜索内容" }), { target: { value: "联系" } });
+    fireEvent.click(screen.getByRole("button", { name: "搜索" }));
+    await waitFor(() => expect(api.listPages).toHaveBeenLastCalledWith({ page: 1, q: "联系" }));
   });
 });

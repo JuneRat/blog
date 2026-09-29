@@ -527,17 +527,17 @@ impl OAuthConfigStore for PostgresOAuthConfigStore {
             .map_err(|e| UseCaseError::Repository(e.to_string()))?
             .ok_or(UseCaseError::VersionConflict)?;
         if removes_namespace {
-            // 已有 Owner 时，变更后的配置必须仍能对应至少一个 active Owner。
-            // 空库/分步 CLI 引导尚无 Owner 时允许维护配置，不调用外部身份服务。
-            let has_owner: bool = sqlx::query_scalar(
+            // 已有 Admin 时，变更后的配置必须仍能对应至少一个 active Admin。
+            // 空库/分步 CLI 引导尚无 Admin 时允许维护配置，不调用外部身份服务。
+            let has_admin: bool = sqlx::query_scalar(
                 "SELECT EXISTS (SELECT 1 FROM user_roles ur JOIN roles r ON r.id=ur.role_id \
-                 WHERE r.code='owner')",
+                 WHERE r.code='admin')",
             )
             .fetch_one(&mut *tx)
             .await
             .map_err(|e| UseCaseError::Repository(e.to_string()))?;
-            if has_owner && PostgresRbacStore::active_owner_count(&mut *tx).await? == 0 {
-                return Err(UseCaseError::LastOwnerProtected);
+            if has_admin && PostgresRbacStore::active_admin_count(&mut *tx).await? == 0 {
+                return Err(UseCaseError::LastAdminProtected);
             }
         }
         record_change(

@@ -86,6 +86,7 @@ impl From<PostDto> for PostDetailJson {
 #[derive(serde::Serialize, ts_rs::TS)]
 #[ts(rename = "PostSummary")]
 struct PostListJson {
+    author_username: String,
     id: Uuid,
     slug: String,
     title: String,
@@ -99,6 +100,7 @@ struct PostListJson {
 impl From<AdminPostSummary> for PostListJson {
     fn from(dto: AdminPostSummary) -> Self {
         Self {
+            author_username: dto.author_username,
             id: dto.id,
             slug: dto.slug,
             title: dto.title,

@@ -31,14 +31,14 @@ pub trait Installer: Send + Sync {
 }
 
 /// Only validated account data and a PHC hash cross the persistence boundary.
-pub struct InitialOwner {
+pub struct InitialAdmin {
     pub id: Uuid,
     pub username: String,
     pub password_hash: String,
     pub created_at: OffsetDateTime,
 }
 
-impl InitialOwner {
+impl InitialAdmin {
     pub async fn prepare(
         username: &str,
         password: &str,

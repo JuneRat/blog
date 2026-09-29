@@ -3,6 +3,7 @@ use crate::UseCaseError;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum PublicRequest {
     OAuthStart,
+    Registration,
     CommentSubmit,
     CommentPreview,
 }

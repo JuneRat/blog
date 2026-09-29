@@ -184,10 +184,34 @@ pub(crate) async fn validate(
     for (scenario, count, optional, page, total_pages) in [
         ("empty", 0, false, 1, 1),
         ("minimal", 1, false, 1, 1),
-        ("maximum-first", 50, true, 1, 3),
-        ("maximum-middle", 50, true, 2, 3),
-        ("maximum-last", 50, true, 3, 3),
-        ("maximum-body", 50, true, 1, 3),
+        (
+            "maximum-first",
+            application::site_info::MAX_HOME_PAGE_SIZE as usize,
+            true,
+            1,
+            3,
+        ),
+        (
+            "maximum-middle",
+            application::site_info::MAX_HOME_PAGE_SIZE as usize,
+            true,
+            2,
+            3,
+        ),
+        (
+            "maximum-last",
+            application::site_info::MAX_HOME_PAGE_SIZE as usize,
+            true,
+            3,
+            3,
+        ),
+        (
+            "maximum-body",
+            application::site_info::MAX_HOME_PAGE_SIZE as usize,
+            true,
+            1,
+            3,
+        ),
     ] {
         let fixtures = Arc::new(Fixtures { count, optional });
         let data = Arc::new(ThemeData::new(
@@ -197,13 +221,23 @@ pub(crate) async fn validate(
         ));
         let theme = runtime.theme_renderer(renderer.clone().with_data(data));
         let site = SiteInfo {
+            home_page_size: application::site_info::MAX_HOME_PAGE_SIZE,
+            navigation: if optional {
+                vec![application::navigation::NavigationLink {
+                    label: "About <site>".into(),
+                    url: "/about".into(),
+                    placement: application::navigation::NavigationPlacement::Header,
+                }]
+            } else {
+                vec![]
+            },
             time_zone: "UTC".into(),
             title: "主题校验 <站点>".into(),
             description: "示例描述 & 内容".into(),
             logo_url: optional.then(|| "/media/00000000-0000-0000-0000-000000000001".into()),
         };
         let posts: Vec<PostCard> = fixtures
-            .rows(50, 0)
+            .rows(site.home_page_size, 0)
             .into_iter()
             .map(PostCard::from)
             .collect();
@@ -302,7 +336,17 @@ pub(crate) async fn validate(
         check(
             "index.html",
             theme
-                .render_index(&site, &SeoMeta::home(&site, &base), &posts)
+                .render_index(
+                    &site,
+                    &SeoMeta::home_page(&site, &base, page),
+                    &posts,
+                    &application::public_site::IndexPagination {
+                        page,
+                        previous_url: (page > 1).then(|| application::seo::index_path(page - 1)),
+                        next_url: (page < total_pages)
+                            .then(|| application::seo::index_path(page + 1)),
+                    },
+                )
                 .await,
         )?;
         check(

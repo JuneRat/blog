@@ -10,7 +10,7 @@ import type { AdminUser, Me, RoleSummary } from "../src/types";
  * 用户与角色管理界面回归：
  * - 权限边界：无 user.manage/role.manage 时不发起任何账号请求；
  * - 冲突码消费者：username_taken / email_taken 定位到具体文案；
- * - 最后可登录 Owner：列表标记 + 禁用移除，后端 last_owner 也有专属文案；
+ * - 最后可登录 Admin：列表标记 + 禁用移除，后端 last_admin 也有专属文案；
  * - 改自己的角色成功后主动刷新 `/me` 的权限与资料版本。
  *
  * `auth` 用可变 hoisted 对象，便于每个用例切换权限与当前用户。
@@ -60,7 +60,7 @@ function user(overrides: Partial<AdminUser> = {}): AdminUser {
     version: 7,
     deleted: false,
     can_login: true,
-    is_last_loginable_owner: false,
+    is_last_loginable_admin: false,
     password_enabled: true,
     external_identities: 0,
     roles: ["author"],
@@ -69,8 +69,8 @@ function user(overrides: Partial<AdminUser> = {}): AdminUser {
 }
 
 const roles: RoleSummary[] = [
-  { slug: "owner", name: "Owner", description: null, builtin: true, permission_count: 21 },
-  { slug: "admin", name: "Administrator", description: null, builtin: true, permission_count: 3 },
+  { slug: "admin", name: "Administrator", description: null, builtin: true, permission_count: 21 },
+  { slug: "reader", name: "Reader", description: null, builtin: true, permission_count: 0 },
   { slug: "editor", name: "Editor", description: null, builtin: true, permission_count: 10 },
 ];
 
@@ -137,10 +137,10 @@ describe("用户与角色管理", () => {
     expect(screen.queryByRole("button", { name: "停用 author" })).toBeNull();
   });
 
-  it("最后 Owner、无所有权权限及已删除账号禁用状态操作", async () => {
-    auth.me = me(["user.manage", "ownership.manage"]);
+  it("最后 Admin、无所有权权限及已删除账号禁用状态操作", async () => {
+    auth.me = me(["user.manage", "admin.manage"]);
     vi.mocked(api.listUsers).mockResolvedValue([
-      user({ username: "last", is_last_loginable_owner: true, roles: ["owner"] }),
+      user({ username: "last", is_last_loginable_admin: true, roles: ["admin"] }),
       user({ id: "deleted", username: "deleted", deleted: true }),
     ]);
     const view = render(<App />);
@@ -192,51 +192,51 @@ describe("用户与角色管理", () => {
     );
   });
 
-  it("后端标记为最后一个可登录 Owner 时禁用移除并给出解释", async () => {
+  it("后端标记为最后一个可登录 Admin 时禁用移除并给出解释", async () => {
     const owner = user({
       id: "u-owner",
       username: "owner",
-      roles: ["owner"],
-      is_last_loginable_owner: true,
+      roles: ["admin"],
+      is_last_loginable_admin: true,
     });
     vi.mocked(api.listUsers).mockResolvedValue([owner]);
     render(<App />);
 
-    const remove = await screen.findByRole("button", { name: "移除 owner 的角色 owner" });
+    const remove = await screen.findByRole("button", { name: "移除 owner 的角色 admin" });
     expect((remove as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByText(/最后 Owner/)).toBeTruthy();
+    expect(screen.getByText(/最后 Admin/)).toBeTruthy();
   });
 
-  it("另一个可登录 Owner 在后续页时不禁用移除（后端全局判定，不按页推断）", async () => {
-    // 当前页只有一个 Owner，但后端计数表明还有别的可登录 Owner：
-    // 分页列表不能据此把它误判成最后 Owner。
+  it("另一个可登录 Admin 在后续页时不禁用移除（后端全局判定，不按页推断）", async () => {
+    // 当前页只有一个 Admin，但后端计数表明还有别的可登录 Admin：
+    // 分页列表不能据此把它误判成最后 Admin。
     vi.mocked(api.listUsers).mockResolvedValue([
-      user({ id: "u-owner", username: "owner", roles: ["owner"], is_last_loginable_owner: false }),
+      user({ id: "u-owner", username: "owner", roles: ["admin"], is_last_loginable_admin: false }),
     ]);
     vi.mocked(api.removeRole).mockResolvedValue(null);
     render(<App />);
 
-    const remove = await screen.findByRole("button", { name: "移除 owner 的角色 owner" });
+    const remove = await screen.findByRole("button", { name: "移除 owner 的角色 admin" });
     expect((remove as HTMLButtonElement).disabled).toBe(false);
     await act(async () => {
       fireEvent.click(remove);
     });
-    expect(vi.mocked(api.removeRole)).toHaveBeenCalledWith("owner", "owner");
+    expect(vi.mocked(api.removeRole)).toHaveBeenCalledWith("owner", "admin");
   });
 
-  it("后端 last_owner 竞态仍有专属文案", async () => {
+  it("后端 last_admin 竞态仍有专属文案", async () => {
     vi.mocked(api.listUsers).mockResolvedValue([
-      user({ id: "u-owner", username: "owner", roles: ["owner"] }),
+      user({ id: "u-owner", username: "owner", roles: ["admin"] }),
     ]);
     render(<App />);
 
-    const remove = await screen.findByRole("button", { name: "移除 owner 的角色 owner" });
+    const remove = await screen.findByRole("button", { name: "移除 owner 的角色 admin" });
     vi.mocked(api.removeRole).mockRejectedValue(
-      new ApiError(403, "不能移除最后一个可登录的 Owner", "last_owner", "req-3"),
+      new ApiError(403, "不能移除最后一个可登录的 Admin", "last_admin", "req-3"),
     );
     fireEvent.click(remove);
     await waitFor(() =>
-      expect(screen.getByText(/这是最后一个可登录的 Owner/)).toBeTruthy(),
+      expect(screen.getByText(/这是最后一个可登录的 Admin/)).toBeTruthy(),
     );
   });
 

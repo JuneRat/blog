@@ -1,5 +1,6 @@
 //! PostgreSQL advisory-lock registry. Keys are cross-process protocol identifiers;
 //! changes require a coordinated restart. Lock order: docs/locking.md.
+pub(crate) const ACCESS_POLICY: (i32, i32) = (1129270605, 4);
 pub(crate) const IDENTITY: (i32, i32) = (2048001, 1);
 pub(crate) const SESSIONS: (i32, i32) = (2048002, 1);
 pub(crate) const CATEGORY_TREE: (i32, i32) = (2048003, 1);
@@ -32,6 +33,7 @@ mod tests {
     #[test]
     fn independent_protocols_have_distinct_keys() {
         let keys = [
+            ACCESS_POLICY,
             IDENTITY,
             SESSIONS,
             CATEGORY_TREE,

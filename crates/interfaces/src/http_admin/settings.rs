@@ -12,12 +12,52 @@ use axum::{Json, Router, middleware};
 use serde::Deserialize;
 use uuid::Uuid;
 
+#[derive(serde::Serialize, Deserialize, ts_rs::TS)]
+#[serde(rename_all = "lowercase")]
+enum NavigationPlacement {
+    Header,
+    Footer,
+}
+
+#[derive(serde::Serialize, Deserialize, ts_rs::TS)]
+struct NavigationItem {
+    label: String,
+    page_slug: String,
+    placement: NavigationPlacement,
+}
+impl From<NavigationItem> for application::navigation::NavigationItem {
+    fn from(item: NavigationItem) -> Self {
+        Self {
+            label: item.label,
+            page_slug: item.page_slug,
+            placement: match item.placement {
+                NavigationPlacement::Header => application::navigation::NavigationPlacement::Header,
+                NavigationPlacement::Footer => application::navigation::NavigationPlacement::Footer,
+            },
+        }
+    }
+}
+impl From<application::navigation::NavigationItem> for NavigationItem {
+    fn from(item: application::navigation::NavigationItem) -> Self {
+        Self {
+            label: item.label,
+            page_slug: item.page_slug,
+            placement: match item.placement {
+                application::navigation::NavigationPlacement::Header => NavigationPlacement::Header,
+                application::navigation::NavigationPlacement::Footer => NavigationPlacement::Footer,
+            },
+        }
+    }
+}
+
 /// 站点与主题设置的请求体限制。
 const SETTINGS_BODY_LIMIT: usize = 16 * 1024;
 
 #[derive(serde::Serialize, ts_rs::TS)]
 #[ts(rename = "SiteSettings")]
 struct SiteSettingsJson {
+    home_page_size: i64,
+    navigation: Vec<NavigationItem>,
     time_zone: String,
     time_zones: Vec<String>,
     title: String,
@@ -34,6 +74,13 @@ struct SiteSettingsJson {
 impl From<&SiteSettingsView> for SiteSettingsJson {
     fn from(view: &SiteSettingsView) -> Self {
         Self {
+            home_page_size: view.home_page_size,
+            navigation: view
+                .navigation
+                .clone()
+                .into_iter()
+                .map(Into::into)
+                .collect(),
             time_zone: view.time_zone.clone(),
             time_zones: view.time_zones.clone(),
             title: view.title.clone(),
@@ -52,6 +99,8 @@ impl From<&SiteSettingsView> for SiteSettingsJson {
 #[derive(Deserialize, Default, ts_rs::TS)]
 #[ts(rename = "SaveSiteSettingsInput", optional_fields = nullable)]
 pub struct SaveSiteSettingsBody {
+    pub home_page_size: Option<i64>,
+    navigation: Option<Vec<NavigationItem>>,
     pub time_zone: Option<String>,
     #[serde(default)]
     pub title: String,
@@ -153,6 +202,10 @@ async fn put_site_settings(
         .save_site(
             &actor,
             SaveSiteSettingsCmd {
+                home_page_size: body.home_page_size,
+                navigation: body
+                    .navigation
+                    .map(|items| items.into_iter().map(Into::into).collect()),
                 time_zone: body.time_zone,
                 title: body.title,
                 description: body.description,
@@ -168,6 +221,8 @@ async fn put_site_settings(
 }
 
 pub(crate) fn export_contract(out: &mut Vec<String>) {
+    crate::http_contract::declare::<NavigationPlacement>(out);
+    crate::http_contract::declare::<NavigationItem>(out);
     crate::http_contract::declare::<SiteSettingsJson>(out);
     crate::http_contract::declare::<SaveSiteSettingsBody>(out);
     crate::http_contract::declare::<SaveThemeSettingsBody>(out);

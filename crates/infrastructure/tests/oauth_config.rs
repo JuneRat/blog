@@ -60,7 +60,7 @@ async fn owner(pool: &PgPool, name: &str, password: bool, issuer: Option<&str>) 
             .unwrap();
     }
     rbac(pool)
-        .assign_role(id, "owner", None.into())
+        .assign_role(id, "admin", None.into())
         .await
         .unwrap();
     id
@@ -132,7 +132,7 @@ async fn concurrent_configuration_updates_conflict_and_noops_keep_version_and_au
 }
 
 #[tokio::test]
-async fn removing_or_changing_the_last_owners_namespace_rolls_back() {
+async fn removing_or_changing_the_last_admins_namespace_rolls_back() {
     let _guard = SERIAL.lock().await;
     let pool = database().await;
     let store = configs(&pool);
@@ -146,7 +146,7 @@ async fn removing_or_changing_the_last_owners_namespace_rolls_back() {
     for next in [vec![], vec![provider("idp", "https://replacement.example")]] {
         assert!(matches!(
             store.save(&next, before.version, None.into()).await,
-            Err(UseCaseError::LastOwnerProtected)
+            Err(UseCaseError::LastAdminProtected)
         ));
         assert_eq!(store.read().await.unwrap(), before);
         assert_eq!(audit_count(&pool).await, 1);
@@ -154,13 +154,13 @@ async fn removing_or_changing_the_last_owners_namespace_rolls_back() {
     // 同一 issuer 的另一入口仍然能够匹配原绑定；更换入口 id 不改变身份键。
     let alias = provider("other-entry", "https://idp.example");
     store.save(&[alias], 1, None.into()).await.unwrap();
-    assert_eq!(rbac(&pool).loginable_owner_count().await.unwrap(), 1);
+    assert_eq!(rbac(&pool).loginable_admin_count().await.unwrap(), 1);
     PostgresUserRepository::new(common::database(pool.clone()))
         .set_password_hash(owner_id, "$fallback-password", None.into())
         .await
         .unwrap();
     store.save(&[], 2, None.into()).await.unwrap();
-    assert_eq!(rbac(&pool).loginable_owner_count().await.unwrap(), 1);
+    assert_eq!(rbac(&pool).loginable_admin_count().await.unwrap(), 1);
 }
 
 #[tokio::test]
@@ -186,14 +186,14 @@ async fn disabled_deleted_and_unconfigured_owners_are_not_fallbacks() {
         .execute(&pool)
         .await
         .unwrap();
-    assert_eq!(rbac(&pool).loginable_owner_count().await.unwrap(), 1);
+    assert_eq!(rbac(&pool).loginable_admin_count().await.unwrap(), 1);
     assert!(matches!(
         store.save(&[], 1, None.into()).await,
-        Err(UseCaseError::LastOwnerProtected)
+        Err(UseCaseError::LastAdminProtected)
     ));
     assert!(matches!(
-        rbac(&pool).remove_role(live, "owner", None.into()).await,
-        Err(UseCaseError::LastOwnerProtected)
+        rbac(&pool).remove_role(live, "admin", None.into()).await,
+        Err(UseCaseError::LastAdminProtected)
     ));
     let rows = PostgresUserRepository::new(common::database(pool.clone()))
         .list_admin(20, 0)
@@ -218,7 +218,7 @@ async fn provider_removal_and_owner_role_removal_share_the_identity_lock() {
     let roles = rbac(&pool);
     let (config, role) = tokio::join!(
         store.save(&[], 1, None.into()),
-        roles.remove_role(local, "owner", None.into()),
+        roles.remove_role(local, "admin", None.into()),
     );
     assert_ne!(
         config.is_ok(),
@@ -226,10 +226,10 @@ async fn provider_removal_and_owner_role_removal_share_the_identity_lock() {
         "只允许一个破坏备用入口：{config:?}, {role:?}"
     );
     assert!(
-        matches!(config, Err(UseCaseError::LastOwnerProtected))
-            || matches!(role, Err(UseCaseError::LastOwnerProtected))
+        matches!(config, Err(UseCaseError::LastAdminProtected))
+            || matches!(role, Err(UseCaseError::LastAdminProtected))
     );
-    assert_eq!(roles.loginable_owner_count().await.unwrap(), 1);
+    assert_eq!(roles.loginable_admin_count().await.unwrap(), 1);
 }
 
 #[tokio::test]
@@ -278,10 +278,10 @@ async fn configuration_waits_for_identity_changes_and_rechecks_the_committed_own
     identity.commit().await.unwrap();
     assert!(matches!(
         pending.await.unwrap(),
-        Err(UseCaseError::LastOwnerProtected)
+        Err(UseCaseError::LastAdminProtected)
     ));
     assert_eq!(configs(&pool).read().await.unwrap().version, 1);
-    assert_eq!(rbac(&pool).loginable_owner_count().await.unwrap(), 1);
+    assert_eq!(rbac(&pool).loginable_admin_count().await.unwrap(), 1);
 }
 
 #[tokio::test]
@@ -303,7 +303,7 @@ async fn provider_removal_and_password_clear_cannot_remove_all_owner_access() {
         config.is_ok(),
         matches!(password, Ok(ClearPasswordOutcome::Cleared))
     );
-    assert_eq!(rbac(&pool).loginable_owner_count().await.unwrap(), 1);
+    assert_eq!(rbac(&pool).loginable_admin_count().await.unwrap(), 1);
 }
 
 #[tokio::test]

@@ -8,6 +8,7 @@ import {
   Flex,
   Form,
   Input,
+  InputNumber,
   Row,
   Select,
   Space,
@@ -21,6 +22,8 @@ import { useCallback, useEffect, useState } from "react";
 import { ApiError, settingsApi, themeSettingsApi } from "../api";
 import { permissionMessageOf } from "../apiError";
 import { useAuth } from "../auth";
+import { AccessSettingsForm } from "../components/AccessSettingsForm";
+import { NavigationEditor } from "../components/NavigationEditor";
 import { CoverPicker } from "../components/CoverPicker";
 import { RetentionSettingsForm } from "../components/RetentionSettingsForm";
 import { queryKeys } from "../queryClient";
@@ -34,6 +37,8 @@ const TITLE_MAX = 200;
 const DESCRIPTION_MAX = 500;
 
 interface Draft {
+  homePageSize: number | null;
+  navigation: SiteSettings["navigation"];
   timeZone: string;
   title: string;
   description: string;
@@ -41,7 +46,7 @@ interface Draft {
   logoMediaId: string | null;
 }
 
-const EMPTY_DRAFT: Draft = { timeZone: "UTC", title: "", description: "", logoMediaId: null };
+const EMPTY_DRAFT: Draft = { homePageSize: null, navigation: [], timeZone: "UTC", title: "", description: "", logoMediaId: null };
 
 /**
  * 站点设置屏（site 分组：标题与描述）。
@@ -111,6 +116,8 @@ export function SettingsScreen() {
     (view: SiteSettings) => {
       setSettings(view);
       writeDraft({
+        homePageSize: view.home_page_size,
+        navigation: view.navigation,
         timeZone: view.time_zone,
         title: view.title,
         description: view.description,
@@ -123,7 +130,7 @@ export function SettingsScreen() {
   /** 表单镜像与服务器值的差异：用于离开确认（见 src/unsaved.tsx）。 */
   const dirty =
     settings !== null &&
-    (draft.timeZone !== settings.time_zone ||
+    (draft.homePageSize !== settings.home_page_size || JSON.stringify(draft.navigation) !== JSON.stringify(settings.navigation) || draft.timeZone !== settings.time_zone ||
       draft.title !== settings.title ||
       draft.description !== settings.description ||
       draft.logoMediaId !== settings.logo_media_id);
@@ -159,11 +166,17 @@ export function SettingsScreen() {
         setError(`站点描述长度不能超过 ${DESCRIPTION_MAX} 字符。`);
         return;
       }
+      if (submitted.homePageSize === null) {
+        setError("请输入首页每页文章数。");
+        return;
+      }
       setError(null);
       setNotice(null);
       setBusy(true);
       try {
         const saved = await settingsApi.save({
+          home_page_size: submitted.homePageSize,
+          navigation: submitted.navigation,
           time_zone: submitted.timeZone,
           title,
           description,
@@ -176,6 +189,8 @@ export function SettingsScreen() {
         // 界面却提示「已保存」。保留时明确提示尚有未提交内容。
         const current = readDraft();
         const merged: Draft = {
+          homePageSize: current.homePageSize === submitted.homePageSize ? saved.home_page_size : current.homePageSize,
+          navigation: JSON.stringify(current.navigation) === JSON.stringify(submitted.navigation) ? saved.navigation : current.navigation,
           timeZone: current.timeZone === submitted.timeZone ? saved.time_zone : current.timeZone,
           title: current.title === submitted.title ? saved.title : current.title,
           description:
@@ -188,7 +203,8 @@ export function SettingsScreen() {
               : current.logoMediaId,
         };
         const pendingEdits =
-          merged.timeZone !== saved.time_zone ||
+          merged.homePageSize !== saved.home_page_size ||
+          JSON.stringify(merged.navigation) !== JSON.stringify(saved.navigation) || merged.timeZone !== saved.time_zone ||
           merged.title !== saved.title ||
           merged.description !== saved.description ||
           merged.logoMediaId !== saved.logo_media_id;
@@ -353,6 +369,11 @@ export function SettingsScreen() {
                         disabled={busy || conflict !== null}
                         label="站点 logo"
                       />
+                      <Form.Item name="homePageSize" label="首页每页文章数"
+                        rules={[{ required: true, type: "integer", min: 1, max: 100, message: "请输入 1–100 的整数。" }]}>
+                        <InputNumber min={1} max={100} precision={0} />
+                      </Form.Item>
+                      <Form.Item name="navigation" label="页面导航"><NavigationEditor /></Form.Item>
                       {conflict === null && (
                         // 用文案切换而不是 Button 的 loading：见 PostEditScreen 的同名说明。
                         <Button type="primary" htmlType="submit" disabled={busy}>
@@ -404,6 +425,9 @@ export function SettingsScreen() {
                 <ThemeSettingsForm />
               </div>
             ),
+          },
+          {
+            key: "access", label: "账号与评论", children: <AccessSettingsForm />,
           },
           {
             key: "retention",

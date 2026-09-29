@@ -23,6 +23,7 @@ pub struct AdminPostSummary {
     pub published_at: Option<OffsetDateTime>,
     pub updated_at: OffsetDateTime,
     pub author_id: Uuid,
+    pub author_username: String,
 }
 
 #[derive(Debug, Clone)]
@@ -63,6 +64,9 @@ pub struct ContentListRequest {
     pub status: Option<String>,
     pub visibility: Option<String>,
     pub trash: bool,
+    pub q: Option<String>,
+    pub scope: Option<String>,
+    pub category_id: Option<Uuid>,
 }
 
 impl Default for ContentListRequest {
@@ -72,6 +76,9 @@ impl Default for ContentListRequest {
             status: None,
             visibility: None,
             trash: false,
+            q: None,
+            scope: None,
+            category_id: None,
         }
     }
 }
@@ -83,6 +90,8 @@ pub struct ContentListFilter<S> {
     status: Option<S>,
     visibility: Option<Visibility>,
     trash: bool,
+    q: Option<String>,
+    category_id: Option<Uuid>,
 }
 
 pub type PostListFilter = ContentListFilter<PostStatus>;
@@ -110,11 +119,20 @@ impl<S: Copy> ContentListFilter<S> {
                 Visibility::parse(value).ok_or_else(|| UseCaseError::Invalid("无效的可见性".into()))
             })
             .transpose()?;
+        let q = request
+            .q
+            .map(|q| q.trim().to_owned())
+            .filter(|q| !q.is_empty());
+        if q.as_ref().is_some_and(|q| q.chars().count() > 200) {
+            return Err(UseCaseError::Invalid("搜索词不能超过 200 字符".into()));
+        }
         Ok(Self {
             page: request.page,
             status,
             visibility,
             trash: request.trash,
+            q,
+            category_id: request.category_id,
         })
     }
 
@@ -135,6 +153,12 @@ impl<S: Copy> ContentListFilter<S> {
     }
     pub fn trash(&self) -> bool {
         self.trash
+    }
+    pub fn q(&self) -> Option<&str> {
+        self.q.as_deref()
+    }
+    pub fn category_id(&self) -> Option<Uuid> {
+        self.category_id
     }
 }
 
@@ -174,13 +198,27 @@ impl ContentQueries {
     /// 显式作者筛选先检查 read_any，再解析用户名；普通列表与回收站共用。
     /// 缺省/空字符串代表本人。即使显式指定本人用户名，也要求 read_any，
     /// 无 read_any 者不会触发作者查询，无法探测账号。持有 read_any 者可区分
-    /// 不存在、非法及不可用的目标作者；这是管理查询的授权范围。
+    /// 不存在、非法的目标作者；停用账号的历史文章仍可管理。
     pub async fn posts_by_author(
         &self,
         actor: &Actor,
         author: Option<&str>,
         request: ContentListRequest,
     ) -> Result<ContentPage<AdminPostSummary>, UseCaseError> {
+        if request.scope.as_deref() == Some("all") {
+            if !actor.has_permission("post.read_any") {
+                return Err(UseCaseError::Forbidden);
+            }
+            if author.is_none_or(|name| name.is_empty()) {
+                return self.list_posts(None, request).await;
+            }
+        } else if request
+            .scope
+            .as_deref()
+            .is_some_and(|scope| scope != "mine")
+        {
+            return Err(UseCaseError::Invalid("scope 只支持 mine/all".into()));
+        }
         let author = match author.filter(|name| !name.is_empty()) {
             None => actor.user_id,
             Some(name) => {
@@ -196,9 +234,7 @@ impl ContentQueries {
                     .ok_or_else(|| UseCaseError::NotFound(format!("用户 {name}")))?;
                 let user = domain::identity::User::reconstitute(snapshot)
                     .map_err(|error| UseCaseError::DataCorrupt(error.to_string()))?;
-                if !user.is_active() {
-                    return Err(UseCaseError::Forbidden);
-                }
+                // 停用/软删除账号不撤回文章；有 read_any 的编辑仍可接管其内容。
                 user.id()
             }
         };
@@ -213,8 +249,16 @@ impl ContentQueries {
         request: ContentListRequest,
     ) -> Result<ContentPage<AdminPostSummary>, UseCaseError> {
         authorize_own_or_any(actor, "post.read", "post.read_any", author)?;
+        self.list_posts(Some(author.0), request).await
+    }
+
+    async fn list_posts(
+        &self,
+        author: Option<Uuid>,
+        request: ContentListRequest,
+    ) -> Result<ContentPage<AdminPostSummary>, UseCaseError> {
         let filter = PostListFilter::try_from(request)?;
-        let (items, total) = self.posts.list(author.0, &filter).await?;
+        let (items, total) = self.posts.list(author, &filter).await?;
         Ok(ContentPage {
             items,
             total,

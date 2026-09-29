@@ -41,12 +41,14 @@ describe("内容管理 API 的稳定身份契约", () => {
     { path: "/posts", method: "GET", run: () => api.listPosts() },
     { path: "/pages", method: "GET", run: () => api.listPages() },
     { path: "/posts?page=2&status=draft&visibility=private&author=a%26b", method: "GET", run: () => api.listPosts({ page: 2, status: "draft", visibility: "private", author: "a&b" }) },
+    { path: `/posts?page=1&q=body%26slug&scope=all&category_id=${id}`, method: "GET", run: () => api.listPosts({ page: 1, q: "body&slug", scope: "all", category_id: id }) },
     { path: "/pages?page=3&status=published", method: "GET", run: () => api.listPages({ page: 3, status: "published" }) },
     { path: "/post-trash?page=2", method: "GET", run: () => api.listTrash(2) },
+    { path: "/post-trash?page=2&q=body&scope=all&author=disabled", method: "GET", run: () => api.listTrash(2, "disabled", { q: "body", scope: "all" }) },
     { path: "/posts", method: "POST", run: () => api.createPost({ title: "新文章", content: "正文", visibility: "public" }) },
     { path: "/pages", method: "POST", run: () => api.createPage({ title: "新页面", content: "正文", visibility: "public" }) },
   ])("列表和新建使用 v1 的 ID 契约：$method $path", async ({ path, method, run }) => {
-    const fetch = vi.fn().mockResolvedValue(jsonResponse(method === "GET" ? { items: [postResponse()], total: 1, page: 1, per_page: 20 } : postResponse()));
+    const fetch = vi.fn().mockResolvedValue(jsonResponse(method === "GET" ? { items: [{ ...postResponse(), author_username: "author" }], total: 1, page: 1, per_page: 20 } : postResponse()));
     vi.stubGlobal("fetch", fetch);
     await run();
     const [url, init] = fetch.mock.calls[0] as [string, RequestInit];

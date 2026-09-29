@@ -4,7 +4,7 @@
 
 ## 领域模型与分层
 
-[domain::comment::Comment](../crates/domain/src/comment.rs) 是单条评论聚合，与 `content` 并列。它持有身份、作者快照、源文、父/根 ID、审核状态和版本，负责新评论进入 pending、回复关系校验、审核转换及版本前提；文章和其他评论只通过 ID 关联，不把整棵讨论树装入聚合。创建后源文、作者与关系不可通过聚合修改。数据库重建入口校验快照但不重新规范化旧正文；读取的快照是副本，不能修改聚合内部状态。
+[domain::comment::Comment](../crates/domain/src/comment.rs) 是单条评论聚合，与 `content` 并列。它持有身份、作者快照、源文、父/根 ID、审核状态和版本，负责按策略确定新评论状态、回复关系校验、审核转换及版本前提；文章和其他评论只通过 ID 关联，不把整棵讨论树装入聚合。创建后源文、作者与关系不可通过聚合修改。数据库重建入口校验快照但不重新规范化旧正文；读取的快照是副本，不能修改聚合内部状态。
 
 [应用用例](../crates/application/src/comments.rs) 负责输入校验、可信账号身份、写入渠道和权限范围。`CommentRepository` 是业务提交端口：适配器在一致的文章开关、账号和父/根事实下调用领域行为，继续在同一事务提交评论、版本及审计。PostgreSQL 的具体锁与 SQL 留在[基础设施](../crates/infrastructure/src/comments.rs)；这些事务语义要求适用于其他适配器。HTML、来源 IP、时间戳和审计记录由基础设施维护。
 
@@ -18,9 +18,26 @@
 
 公开响应只有服务端清洗的 `content_html`，不返回 Markdown 源文、邮箱或 IP。昵称、错误和占位文案使用文本节点。后台在授权范围内可读取源文、邮箱及提交来源 IP；它们不进入审计摘要。
 
-所有新评论，包括后台回复，均为 pending，成功返回「已提交，等待审核」。同一页面内翻页、重开回复、网络失败和会话失效会保留未提交的昵称、邮箱与正文；成功后清空正文，刷新或离开页面不保存草稿。
+新评论和后台回复统一按全站审核策略处理。待审返回 202、`status: pending` 和「已提交，等待审核」；直接发布返回 201、`status: approved` 和「评论已发布」，前台随后重新读取列表。同一页面内翻页、重开回复、网络失败和会话失效会保留未提交的昵称、邮箱与正文；成功后清空正文，刷新或离开页面不保存草稿。
 
-没有评论提交去重或频率限制，也没有 `request_id`、`client_hash` 字段。每次有效请求独立创建待审核记录，网络结果不明确时由用户决定是否重试，可能产生重复评论。HTTP 请求追踪编号与登录限流仍保留。
+评论提交使用已有的公共请求限流，超过额度返回 429。没有提交去重或 `request_id`、`client_hash` 字段，每次获准提交的有效请求独立创建记录；网络结果不明确时由用户决定是否重试，可能产生重复评论。
+
+## 审核策略
+
+后台「设置 → 账号与评论」集中管理全站评论开关、审核策略和游客评论权限；单篇开关仍在文章编辑器中。`settings.comments.moderation` 支持：
+
+| 策略 | 值 | 新提交的处理 |
+|---|---|---|
+| 全部审核（默认） | `all` | 所有账号和游客均待审 |
+| 仅游客审核 | `guests` | 游客待审，登录账号直接发布 |
+| 首次评论审核 | `first_comment` | 账号尚无有效人工通过记录时待审；已有记录则直接发布，游客始终待审 |
+| 无需审核 | `none` | 所有获准提交的评论直接发布 |
+
+首次评论审核在全站按登录账号的 `user_id` 判断，只认可仍为 approved 且 `moderation_reason = manual_approval` 的评论。游客自行填写的邮箱、昵称，以及此前自动发布的评论不构成审核记录。最后一条有效人工通过记录被退回、标记垃圾、移入回收站或随文章永久删除后，后续评论再次待审。管理员和作者回复也适用当前策略。
+
+策略只影响新提交，不自动处理已有待审评论。后台展示当前待审原因：全站要求审核（`all_comments`）、游客（`guest`）、账号首次审核（`first_comment`）、人工退回（`manual_review`）、垃圾/回收站恢复（`restored`）。原因随人工状态变更更新，只在后台返回。创建和审核的审计同时记录处理结果与原因。
+
+升级迁移 `0004_comment_moderation.sql` 为已有 approved 评论保留人工通过资格，为已有 pending 评论填充人工待审原因，不修改原状态、业务版本或时间；未配置策略的站点继续全部审核。
 
 ## 回复、审核和回收站
 
@@ -34,11 +51,11 @@
 
 ## 开关、可见性与事务
 
-全站 `settings.comments.enabled` 与单篇 `posts.comments_enabled` 默认 true，两者均开启才允许提交。关闭只停止新增，已通过的历史评论继续展示。没有覆盖值时不预建全站设置行，返回 version 0；实际保存变化后递增设置组版本，并保留同组其他字段。
+全站 `settings.comments.enabled` 与单篇 `posts.comments_enabled` 默认 true，两者均开启才允许提交。任一开关关闭时，前台隐藏整个评论区域（含历史评论、标题和表单），并停止新增；历史数据保留，重新开启后恢复显示。评论区域初始隐藏，等待同源 API 确认已开启后再显示。没有覆盖值时不预建全站设置行，返回 version 0；实际保存变化后递增设置组版本，并保留同组其他字段。
 
 单篇开关使用文章当前 version，修改后递增 posts.version。后台编辑器使用自身已加载版本保存开关，成功后接收该次更新的新版本并保留未保存正文；它不会用独立设置查询读到的新版本跳过文章冲突。评论提交/审核只改变评论，不递增文章版本。
 
-公开读取、计数、提交都要求文章已发布、公开、未进回收站且发布时间已到，否则 404。所有评论 API 响应禁用缓存。创建、审核及两个开关的更新与审计同事务提交，审计失败整体回滚。提交与关闭开关通过事务锁排序，父评论审核与回复写入也互斥。
+公开读取、计数、提交都要求文章已发布、公开、未进回收站且发布时间已到，否则 404。所有评论 API 响应禁用缓存。创建、审核及两个开关的更新与审计同事务提交，审计失败整体回滚。提交与开关/策略变更通过事务锁排序，父评论审核与回复写入也互斥；首次评论审核使用的人工通过记录在提交结束前保持有效。游客还须满足 `settings.access.guest_comments_enabled`，无需审核也不会绕过关闭的评论开关或游客权限。
 
 ## 请求与来源地址
 
@@ -54,17 +71,17 @@ IP 以可空 inet 保存主机地址，审核不覆盖提交 IP。默认保留 1
 
 | 方法与路径 | 参数与行为 |
 |---|---|
-| `GET /api/v1/posts/{slug}/comments` | `page=1`；`root_id=UUID` 读取某根全部后代；返回 `{items,total,enabled}`，total 含必要占位 |
-| `POST /api/v1/posts/{slug}/comments` | `{body,nickname?,email?,parent_id?}`；游客必须提供昵称；202 待审核回执；登录身份由会话决定 |
+| `GET /api/v1/posts/{slug}/comments` | `page=1`；`root_id=UUID` 读取某根全部后代；返回 `{items,total,enabled,guest_comments_enabled,time_zone}`，total 含必要占位 |
+| `POST /api/v1/posts/{slug}/comments` | `{body,nickname?,email?,parent_id?}`；游客必须提供昵称；202 待审或 201 已发布回执 `{message,status}`；登录身份由会话决定 |
 | `POST /api/v1/comments/preview` | `{body}`；返回 `{content_html}`，不写数据库 |
 | `GET /api/admin/v1/comments` | `page=1&status=pending&post_id=UUID`；状态和文章筛选可省略 |
 | `POST /api/admin/v1/comments/{id}` | `{version,status}`，status 为 pending/approved/spam/trash；204 |
-| `GET /api/admin/v1/comment-settings` | 全站开关 `{enabled,version}`；未配置时 `{enabled:true,version:0}` |
-| `PUT /api/admin/v1/comment-settings` | `{enabled,version}`，返回保存结果 |
+| `GET /api/admin/v1/comment-settings` | 全站策略 `{enabled,moderation,version}`；未配置时 `{enabled:true,moderation:"all",version:0}` |
+| `PUT /api/admin/v1/comment-settings` | `{enabled,moderation?,version}`，省略 moderation 保留原策略；返回保存结果 |
 | `GET /api/admin/v1/posts/{id}/comment-settings` | `{enabled,version}`，version 是当前文章版本 |
-| `PUT /api/admin/v1/posts/{id}/comment-settings` | `{enabled,version}`，返回保存结果 |
+| `PUT /api/admin/v1/posts/{id}/comment-settings` | `{enabled,version}`，返回保存结果；不允许设置审核策略 |
 
-公开节点字段为 id、parent_id、root_id、parent_nickname、nickname、content_html、is_author、placeholder、deleted、created_at。被隐藏的直接父级不提供 parent_nickname。后台节点另含文章信息、body、author_email、ip_address、status、version；不直接返回数据库整行。
+公开节点字段为 id、parent_id、root_id、parent_nickname、nickname、content_html、is_author、placeholder、deleted、created_at。被隐藏的直接父级不提供 parent_nickname。后台节点另含文章信息、body、author_email、ip_address、status、moderation_reason、version；不直接返回数据库整行。
 
 ## 重建与验证
 

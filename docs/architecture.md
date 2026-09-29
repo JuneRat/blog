@@ -35,7 +35,7 @@ flowchart TD
 
 [后台 SPA](../apps/admin/package.json) 不属于 Cargo workspace。它使用 React、TypeScript、Vite、Ant Design 和 TanStack Query，通过管理 API 访问同一应用层；公开主题与后台组件各自独立。
 
-首次安装属于部署生命周期：`application::installation` 定义输入、初始凭据校验及安装端口，`interfaces::http_install` 提供内嵌页面和 HTTP 边界，`server::installation` 发布 TOML 和临时恢复日志并装配站点，`infrastructure::installation` 实现空库检查和原子权限/Owner 初始化。日志先安全落盘，再发布 TOML；数据库完成标记、初始站点设置与 Owner 同事务提交。提交后清理日志，失败只记警告，由后续启动核对标记后重试；动态路由原地切换，随后才启动预约发布任务。完成状态由数据库保存，正常部署不依赖安装日志。故障续装与部署边界见[首次安装](installation.md)。
+首次安装属于部署生命周期：`application::installation` 定义输入、初始凭据校验及安装端口，`interfaces::http_install` 提供内嵌页面和 HTTP 边界，`server::installation` 发布 TOML 和临时恢复日志并装配站点，`infrastructure::installation` 实现空库检查和原子权限/Admin 初始化。日志先安全落盘，再发布 TOML；数据库完成标记、初始站点设置与 Admin 同事务提交。提交后清理日志，失败只记警告，由后续启动核对标记后重试；动态路由原地切换，随后才启动预约发布任务。完成状态由数据库保存，正常部署不依赖安装日志。故障续装与部署边界见[首次安装](installation.md)。
 
 ## 模块与公开契约
 
@@ -56,7 +56,7 @@ flowchart TD
 
 [持久化入口](../crates/infrastructure/src/persistence/mod.rs) 同样显式导出适配器，内部拆为 `connection`、`content`、`content_queries`、`identity`、`media`、`taxonomy`、`sql`。行映射、SQL 错误映射和事务 helper 保持私有或限定可见性；媒体引用锁、身份锁按实际复用范围在基础设施内部共享。数据库连接与事务对象不进入应用端口。装配根使用不透明的 `Database` 句柄：连接、迁移、安装、恢复隔离标记及连接池指标都通过 infrastructure 的接口访问，生产 API 不公开 `PgPool` 或 `sqlx::Error`。SQLx 仅作为 server 的测试依赖；`sqlx-test-support` feature 只供集成测试注入/观察同一个真实池，默认运行构建不启用。
 
-身份规则分为纯判断与事务执行：`application::identity::policy` 负责账号状态变更的权限/版本/幂等顺序及最后可登录 Owner 阈值；`domain::identity::LoginMethods` 负责登录方式保留规则。基础设施在统一身份排他锁内重新读取事实后调用规则，继续在同一事务撤销会话、维护版本与追加审计。后台账号提示复用相同规则，展示数据不能作为写入授权凭据。
+身份规则分为纯判断与事务执行：`application::identity::policy` 负责账号状态变更的权限/版本/幂等顺序及最后可登录 Admin 阈值；`domain::identity::LoginMethods` 负责登录方式保留规则。基础设施在统一身份排他锁内重新读取事实后调用规则，继续在同一事务撤销会话、维护版本与追加审计。后台账号提示复用相同规则，展示数据不能作为写入授权凭据。
 
 评论以 `domain::comment::Comment` 表达独立的单条聚合，通过 ID 关联文章和父/根评论。创建、回复关系、审核转换和版本前提由聚合校验；应用解析输入并确定可信身份与授权范围，`CommentRepository` 适配器在事务内读取并保护关联事实后调用聚合，原子持久化与审计。后台查询投影为带 `CommentStatus` 的 `CommentDto`，公开投影按隐私契约裁剪，接口层保持既有状态字符串。聚合不加载整棵讨论树，也不持有 HTML、IP 或数据库事务，详见[原生评论](comments.md#领域模型与分层)。
 

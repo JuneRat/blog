@@ -47,6 +47,8 @@ impl std::fmt::Display for ConflictKind {
 
 #[derive(Debug, thiserror::Error)]
 pub enum UseCaseError {
+    #[error("本站暂未开放注册")]
+    RegistrationClosed,
     #[error("未找到：{0}")]
     NotFound(String),
 
@@ -59,12 +61,12 @@ pub enum UseCaseError {
     #[error("{0} 已被占用")]
     Conflict(ConflictKind),
 
-    /// 会移除最后一个「可登录」Owner 的操作被拒绝（docs/identity-and-admin.md §3）。
+    /// 会移除最后一个「可登录」Admin 的操作被拒绝（docs/identity-and-admin.md §3）。
     ///
-    /// 与「没有权限」区分开：调用者可能确实持有 `ownership.manage`，只是这次操作
-    /// 会让站点失去唯一能登录的 Owner。前端必须能解释原因，而不是显示“无权操作”。
-    #[error("不能停用或移除最后一个可登录的 Owner")]
-    LastOwnerProtected,
+    /// 与「没有权限」区分开：调用者可能确实持有 `admin.manage`，只是这次操作
+    /// 会让站点失去唯一能登录的 Admin。前端必须能解释原因，而不是显示“无权操作”。
+    #[error("不能停用或移除最后一个可登录的 Admin")]
+    LastAdminProtected,
 
     /// 删除仍被引用或仍含子分类的分类被拒绝（引用保护）。
     ///
@@ -82,7 +84,7 @@ pub enum UseCaseError {
 
     /// 凭据无效：用户名不存在、密码错误或账号不可登录，统一返回同一错误，
     /// 不区分具体原因（避免用户名枚举）。HTTP 层映射 401。
-    #[error("用户名或密码不正确")]
+    #[error("用户名、邮箱或密码不正确")]
     InvalidCredentials,
 
     /// 登录失败次数超过阈值后的临时锁定；`retry_after_secs` 供 HTTP `Retry-After`。

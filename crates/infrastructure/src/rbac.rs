@@ -1,7 +1,7 @@
 //! PostgreSQL RBAC 适配器：权限目录同步、角色分配与授权查询。
 //!
 //! 身份/角色变更遵守统一事务锁协议（docs/identity-and-admin.md §3）：
-//! 排他 pg_advisory_xact_lock(2048001, 1) 内完成变更与 Owner 检查；
+//! 排他 pg_advisory_xact_lock(2048001, 1) 内完成变更与 Admin 检查；
 //! 角色分配/移除递增 users.version。
 
 use crate::audit::record_change;
@@ -10,7 +10,7 @@ use sqlx::{Executor, PgPool, Row};
 use uuid::Uuid;
 
 use application::error::UseCaseError;
-use application::identity::{BuiltinRoleDef, OWNER_ROLE_SLUG, PermissionDescriptor};
+use application::identity::{ADMIN_ROLE_SLUG, BuiltinRoleDef, PermissionDescriptor};
 use application::ports::{RbacStore, RoleDto};
 use domain::identity::PermissionSet;
 
@@ -51,13 +51,13 @@ impl PostgresRbacStore {
         Ok(row.map(|r| r.0))
     }
 
-    /// 未删除、仍持有 owner 角色、且仍有有效登录方式的用户数。
-    /// docs §3：可能减少有效 Owner 的操作在排他锁下检查至少保留一个「可登录」Owner。
+    /// 未删除、仍持有 admin 角色、且仍有有效登录方式的用户数。
+    /// docs §3：可能减少有效 Admin 的操作在排他锁下检查至少保留一个「可登录」Admin。
     ///
     /// 「有效登录方式」= 至少一条匹配当前提供商的 oauth_accounts **或** 本地密码
     /// （`users.password_hash IS NOT NULL`）。两者是对等登录方式，缺一不可，
-    /// 否则只用密码的 Owner 会被判成「登不进去」而被移除，站点直接失去 Owner。
-    pub(crate) async fn active_owner_count(
+    /// 否则只用密码的 Admin 会被判成「登不进去」而被移除，站点直接失去 Admin。
+    pub(crate) async fn active_admin_count(
         executor: impl Executor<'_, Database = sqlx::Postgres>,
     ) -> Result<i64, UseCaseError> {
         let (count,): (i64,) = sqlx::query_as(&format!(
@@ -65,7 +65,7 @@ impl PostgresRbacStore {
              FROM user_roles ur \
              JOIN roles r ON r.id = ur.role_id \
              JOIN users u ON u.id = ur.user_id \
-             WHERE r.code = 'owner' AND u.status = 'active' AND u.deleted_at IS NULL \
+             WHERE r.code = 'admin' AND u.status = 'active' AND u.deleted_at IS NULL \
                AND (u.password_hash IS NOT NULL \
                     OR EXISTS (SELECT 1 FROM oauth_accounts oa WHERE oa.user_id = u.id \
                                AND {CONFIGURED_EXTERNAL_IDENTITY}))",
@@ -76,7 +76,7 @@ impl PostgresRbacStore {
         Ok(count)
     }
 
-    /// 用户是否实际持有某角色（决定移除时是否触发最后 Owner 保护）。
+    /// 用户是否实际持有某角色（决定移除时是否触发最后 Admin 保护）。
     async fn user_holds_role(
         executor: impl Executor<'_, Database = sqlx::Postgres>,
         user_id: Uuid,
@@ -94,9 +94,9 @@ impl PostgresRbacStore {
 
     /// 目标用户是否仍有有效登录方式（已配置的外部身份或本地密码至少其一）。
     ///
-    /// 返回 false 会让 `remove_role` 跳过最后 Owner 保护——对，这是有意的：
-    /// 「登不进去的 Owner」不构成有效 Owner，可以被清理。因此这个谓词必须
-    /// 与 `active_owner_count` 用同一套定义，否则两处判定会互相矛盾。
+    /// 返回 false 会让 `remove_role` 跳过最后 Admin 保护——对，这是有意的：
+    /// 「登不进去的 Admin」不构成有效 Admin，可以被清理。因此这个谓词必须
+    /// 与 `active_admin_count` 用同一套定义，否则两处判定会互相矛盾。
     pub(crate) async fn user_has_login_method(
         executor: impl Executor<'_, Database = sqlx::Postgres>,
         user_id: Uuid,
@@ -396,13 +396,13 @@ impl RbacStore for PostgresRbacStore {
 
         let holds_role = Self::user_holds_role(&mut *tx, user_id, role_id).await?;
 
-        // 最后 Owner 保护：目标确实持有 owner 且仍有登录方式时，
-        // 于排他锁内复核至少保留一个「可登录」Owner（移除登不进去的 Owner 不受限）。
-        if holds_role && role_slug == OWNER_ROLE_SLUG {
+        // 最后 Admin 保护：目标确实持有 admin 且仍有登录方式时，
+        // 于排他锁内复核至少保留一个「可登录」Admin（移除登不进去的 Admin 不受限）。
+        if holds_role && role_slug == ADMIN_ROLE_SLUG {
             let target_has_login = Self::user_has_login_method(&mut *tx, user_id).await?;
             if target_has_login {
-                let owners = Self::active_owner_count(&mut *tx).await?;
-                application::identity::policy::ensure_owner_removal_allowed(owners)?;
+                let owners = Self::active_admin_count(&mut *tx).await?;
+                application::identity::policy::ensure_admin_removal_allowed(owners)?;
             }
         }
 
@@ -490,8 +490,8 @@ impl RbacStore for PostgresRbacStore {
         Ok(rows)
     }
 
-    async fn loginable_owner_count(&self) -> Result<i64, UseCaseError> {
+    async fn loginable_admin_count(&self) -> Result<i64, UseCaseError> {
         // 复用 `remove_role` 保护使用的同一私有查询与谓词，避免两处定义漂移。
-        Self::active_owner_count(&self.pool).await
+        Self::active_admin_count(&self.pool).await
     }
 }

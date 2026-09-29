@@ -89,6 +89,7 @@ pub async fn build_router(
         config.public_base_url.as_str().into(),
     );
     let auth_state = AuthState {
+        registration: assembly::registration(pool),
         admission: Arc::new(infrastructure::InMemoryRequestAdmission::default()),
         auth: auth.clone(),
         passwords: passwords.clone(),

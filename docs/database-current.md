@@ -8,7 +8,7 @@
 
 迁移仅支持空库或已应用新基线的数据库。入口检测到旧 users 结构时明确拒绝，SQLx 仍检查迁移历史及校验和；不会自动 DROP、清空历史或跳过校验。不要手工导入设计稿后再运行迁移。开发时先用[独立空库](development.md#新基线的隔离验证)，其余模块适配后再显式重建原开发库。
 
-SQLx 为初始迁移包事务，因此该文件没有额外的 BEGIN/COMMIT。重复执行已成功应用的新基线不重复建表。DDL 不创建账号；权限目录和内置角色由应用可信注册表在身份命令或启动时同步。`migrate` 命令本身不创建 Owner。
+SQLx 为初始迁移包事务，因此该文件没有额外的 BEGIN/COMMIT。重复执行已成功应用的新基线不重复建表。DDL 不创建账号；权限目录和内置角色由应用可信注册表在身份命令或启动时同步。`migrate` 命令本身不创建 Admin。
 
 所有普通命令共用 `migrate_schema` 执行或校验结构，`migrate` CLI 也只处理结构。文章、页面和评论的旧版本 HTML 由 `rebuild-html` 显式分批重建，不作为启动副作用；`rebuild-html --dry-run` 使用只读 `verify_schema`，不会建表或执行迁移。空库没有派生记录，身份维护命令不依赖主题和内容渲染。
 
@@ -31,11 +31,11 @@ SQLx 为初始迁移包事务，因此该文件没有额外的 BEGIN/COMMIT。�
 - OAuth 以 `(provider, subject)` 为主键，不存外部邮箱、access token 或 refresh token。提供商邮箱可以参与协议读取，但不作为本站身份或合并账号的依据。
 - roles 使用稳定 `code`，permissions 直接以 `code` 为主键，role_permissions 保存 `permission_code`。角色 DTO 仍用 `slug` 字段承载角色 code；权限来自当前角色并集，不保存在会话中。
 - 角色分配变更递增 users.version，保持 auth_version；同一个 Cookie 的下一次请求读取最新权限。重复分配/移除不存在的分配不增版。
-- 角色、凭据和 OAuth 配置变更使用统一身份事务锁，保留最后可登录 Owner 和最后登录方式保护。可登录 Owner 必须 active、未删除，并有本地密码或与当前提供商命名空间匹配的外部绑定；不探测外部服务在线或密钥是否有效。配置组使用独立版本做 CAS，规则见[身份与后台](identity-and-admin.md#4-oauth-与-oidc)。
+- 角色、凭据和 OAuth 配置变更使用统一身份事务锁，保留最后可登录 Admin 和最后登录方式保护。可登录 Admin 必须 active、未删除，并有本地密码或与当前提供商命名空间匹配的外部绑定；不探测外部服务在线或密钥是否有效。配置组使用独立版本做 CAS，规则见[身份与后台](identity-and-admin.md#4-oauth-与-oidc)。
 
-本人资料通过 `PUT /api/admin/v1/me/profile` 更新展示名和简介，必填 expected_version，冲突拒绝覆盖。返回同一提交的新版本，登录态不变。后台 `/admin/profile` 已接入资料表单；`/admin/users` 已提供版本控制的账号启停。状态变更与角色操作共用身份排他锁，复核当前权限和最后可登录 Owner，递增 `version/auth_version`、撤销全部会话并追加审计；启用后旧会话仍失效，软删除账号不能在此恢复。
+本人资料通过 `PUT /api/admin/v1/me/profile` 更新展示名和简介，必填 expected_version，冲突拒绝覆盖。返回同一提交的新版本，登录态不变。后台 `/admin/profile` 已接入资料表单；`/admin/users` 已提供版本控制的账号启停。状态变更与角色操作共用身份排他锁，复核当前权限和最后可登录 Admin，递增 `version/auth_version`、撤销全部会话并追加审计；启用后旧会话仍失效，软删除账号不能在此恢复。
 
-[首次安装](installation.md)已接入：未配置数据库时跳转安装页，终端安装码保护提交。初始化权限、内置角色、首个用户/密码/Owner、完成标记与审计同事务创建，用户 version/auth_version 均从 1 起；本地连接配置先保存，崩溃后按完成标记恢复。受控 CLI 仍可分步引导，已有数据不允许重新安装。`settings.installation` 是部署完成标记，没有普通设置编辑入口；不新增数据库表。
+[首次安装](installation.md)已接入：未配置数据库时跳转安装页，终端安装码保护提交。初始化权限、内置角色、首个用户/密码/Admin、完成标记与审计同事务创建，用户 version/auth_version 均从 1 起；本地连接配置先保存，崩溃后按完成标记恢复。受控 CLI 仍可分步引导，已有数据不允许重新安装。`settings.installation` 是部署完成标记，没有普通设置编辑入口；不新增数据库表。
 
 ## 4. 内容、目录与并发关系
 
@@ -77,7 +77,7 @@ PostgreSQL 校验在同一 UPDATE 中核对当前用户状态、认证快照、�
 
 默认使用拥有本站结构的非超级用户账号，启动自动迁移，日常业务与保留期维护复用连接；审计追加规则由应用代码保证。scripts/database-roles.sql 保留可选的运行账号只追加授权和独立保留期维护身份。会话签发/活跃刷新/单次退出和失败登录属于运行或安全事件，不作为这里的成功业务变更审计。HTTP 写入经可信边界提取来源 IP，并通过显式 AuditContext 随操作者传到写事务；CLI/系统和未知来源保留空 IP。直接 SQL 和数据库管理员操作不受应用事务审计保证。
 
-后台 `/admin/audit-logs` 与 `GET /api/admin/v1/audit-logs` 已提供只读查询，独立要求 `audit.read`，默认仅授予 Owner。可按动作、账号、目标及时间组合筛选，以 `(created_at,id)` 倒序游标翻页，不做全表总数统计。显示当前账号展示名和历史 actor_id，账号被物理删除也不丢失记录；空 actor 表示无关联账号，可能是访客、系统或 CLI。摘要以文本展示，查询不返回凭据或完整业务对象。响应 `no-store`；保留期继续约束可读历史，接口契约见[审计 API](admin-api.md#审计日志)。
+后台 `/admin/audit-logs` 与 `GET /api/admin/v1/audit-logs` 已提供只读查询，独立要求 `audit.read`，默认仅授予 Admin。可按动作、账号、目标及时间组合筛选，以 `(created_at,id)` 倒序游标翻页，不做全表总数统计。显示当前账号展示名和历史 actor_id，账号被物理删除也不丢失记录；空 actor 表示无关联账号，可能是访客、系统或 CLI。摘要以文本展示，查询不返回凭据或完整业务对象。响应 `no-store`；保留期继续约束可读历史，接口契约见[审计 API](admin-api.md#审计日志)。
 
 ## 原生评论
 

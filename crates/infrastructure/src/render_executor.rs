@@ -368,12 +368,18 @@ impl ThemeRenderer for ThemeExecutor {
         site: &SiteInfo,
         seo: &SeoMeta,
         posts: &[PostCard],
+        pagination: &application::public_site::IndexPagination,
     ) -> Result<String, UseCaseError> {
         let renderer = self.renderer.clone();
-        let (site, seo, posts) = (site.clone(), seo.clone(), posts.to_vec());
+        let (site, seo, posts, pagination) = (
+            site.clone(),
+            seo.clone(),
+            posts.to_vec(),
+            pagination.clone(),
+        );
         self.runtime
             .execute(RenderPool::Theme, "theme.index", move || {
-                renderer.render_index(&site, &seo, &posts)
+                renderer.render_index(&site, &seo, &posts, &pagination)
             })
             .await
     }
@@ -751,6 +757,8 @@ mod tests {
             MiniJinjaThemeRenderer::load(std::path::Path::new("../../themes/default")).unwrap(),
         );
         let site = SiteInfo {
+            home_page_size: application::site_info::DEFAULT_HOME_PAGE_SIZE,
+            navigation: vec![],
             time_zone: "UTC".into(),
             title: "测试站点".into(),
             description: "渲染执行器测试".into(),

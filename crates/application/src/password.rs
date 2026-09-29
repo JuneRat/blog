@@ -3,7 +3,7 @@
 //! 契约见 docs/identity-and-admin.md §7：
 //! - 「用户不存在」「密码错误」「账号已停用」返回同一个 [`UseCaseError::InvalidCredentials`]，
 //!   且未知用户也执行一次等价开销的哈希校验，避免用错误文案或响应时间枚举用户名。
-//! - 失败按用户名与客户端地址分别计数；成功登录只清空用户名计数，
+//! - 失败按账号与客户端地址分别计数；成功登录只清空用户名计数，
 //!   避免攻击者用自己的账号反复把来源地址的计数清零。
 //! - 设置/清除密码需 `user.manage`；清除若会移除最后一种登录方式则拒绝。
 //! - 自助改密必须由已认证会话发起并重新提供当前密码；成功后轮换该用户全部会话。
@@ -65,44 +65,50 @@ impl PasswordInteractor {
         // 回跳路径先校验：非法值必须在任何写入（含签发会话）之前失败，避免留下孤儿会话。
         let next = crate::auth::sanitize_next(next)?.to_string();
 
-        let subjects = throttle_subjects(&throttle_username(username), client_key);
-        // 预占必须在校验之前：只做事后计数的话，并发请求会在任何一次失败被记录之前
-        // 全部通过检查，阈值形同虚设（N 个并发请求 = N 次 Argon2 猜测机会）。
+        let normalized = domain::identity::normalize_username(username)
+            .ok()
+            .or_else(|| {
+                domain::identity::Email::new(username)
+                    .ok()
+                    .map(|email| email.into_string())
+            });
+        let credential = match normalized.as_deref() {
+            Some(identifier) => {
+                self.deps
+                    .credentials
+                    .find_password_credential(identifier)
+                    .await?
+            }
+            None => None,
+        };
+        let account = credential
+            .as_ref()
+            .map(|c| c.username.clone())
+            .unwrap_or_else(|| throttle_username(username));
+        let subjects = throttle_subjects(&account, client_key);
         let reservation = self.reserve_all(&subjects)?;
-
-        match self.verify_login(username, password).await? {
-            Some((credential, normalized)) => {
-                // 成功：账号维度清空计数，来源地址维度只归还预占（实现按主体区分）。
-                reservation.finish(true)?;
-                self.finish_login(&normalized, password, credential, next, ip_address)
-                    .await
-            }
-            None => {
-                reservation.finish(false)?;
-                Err(UseCaseError::InvalidCredentials)
-            }
+        if self.verify_login(credential.as_ref(), password).await? {
+            reservation.finish(true)?;
+            self.finish_login(
+                &account,
+                password,
+                credential.ok_or(UseCaseError::InvalidCredentials)?,
+                next,
+                ip_address,
+            )
+            .await
+        } else {
+            reservation.finish(false)?;
+            Err(UseCaseError::InvalidCredentials)
         }
     }
 
-    /// 校验口令并返回凭据；`None` 表示凭据错误。任何内部错误都会先归还预占。
     async fn verify_login(
         &self,
-        username: &str,
+        credential: Option<&crate::ports::PasswordCredential>,
         password: &str,
-    ) -> Result<Option<(crate::ports::PasswordCredential, String)>, UseCaseError> {
-        // 用户名形状非法与「不存在」不可区分：一律走统一失败路径。
-        let normalized = domain::identity::normalize_username(username).ok();
-        let credential = match normalized.as_deref() {
-            Some(normalized) => {
-                self.deps
-                    .credentials
-                    .find_password_credential(normalized)
-                    .await
-            }
-            None => Ok(None),
-        };
-        let credential = credential?;
-        let verified = match credential.as_ref() {
+    ) -> Result<bool, UseCaseError> {
+        match credential {
             Some(credential) => {
                 self.deps
                     .hasher
@@ -120,11 +126,6 @@ impl PasswordInteractor {
                     .map(|_| false),
                 Err(e) => Err(e),
             },
-        };
-        match verified {
-            Ok(true) => Ok(credential.zip(normalized)),
-            Ok(false) => Ok(None),
-            Err(e) => Err(e),
         }
     }
 

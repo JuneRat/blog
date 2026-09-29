@@ -312,6 +312,17 @@ pub struct PublicPageDetail {
 
 #[async_trait]
 pub trait PublishedPageQuery: Send + Sync {
+    /// 仅返回给定目标中当前可公开的 slug，不向导航暴露正文。
+    async fn public_navigation_slugs(&self, slugs: &[String]) -> Result<Vec<String>, UseCaseError> {
+        let mut visible = Vec::new();
+        for slug in slugs {
+            if self.find_public_by_slug(slug).await?.is_some() {
+                visible.push(slug.clone());
+            }
+        }
+        Ok(visible)
+    }
+
     /// 只返回已发布、公开、未软删除且发布时间已到的页面。
     async fn find_public_by_slug(
         &self,

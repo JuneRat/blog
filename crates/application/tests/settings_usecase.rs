@@ -107,6 +107,8 @@ fn content_actor() -> Actor {
 
 fn fallback() -> SiteInfo {
     SiteInfo {
+        home_page_size: application::site_info::DEFAULT_HOME_PAGE_SIZE,
+        navigation: vec![],
         time_zone: "UTC".into(),
         title: "默认标题".into(),
         description: "默认描述".into(),
@@ -116,6 +118,8 @@ fn fallback() -> SiteInfo {
 
 fn stored(title: Option<&str>, description: Option<&str>) -> SiteSettingsValue {
     SiteSettingsValue {
+        home_page_size: None,
+        navigation: vec![],
         time_zone: None,
         title: title.map(str::to_string),
         description: description.map(str::to_string),
@@ -125,6 +129,8 @@ fn stored(title: Option<&str>, description: Option<&str>) -> SiteSettingsValue {
 
 fn cmd(title: &str, description: &str, expected_version: Option<i64>) -> SaveSiteSettingsCmd {
     SaveSiteSettingsCmd {
+        home_page_size: None,
+        navigation: None,
         time_zone: None,
         title: title.into(),
         description: description.into(),
@@ -155,6 +161,8 @@ async fn read_falls_back_to_assembly_when_not_configured() {
     assert_eq!(
         view,
         SiteSettingsView {
+            home_page_size: fallback().home_page_size,
+            navigation: vec![],
             time_zone: "UTC".into(),
             time_zones: vec!["UTC".into()],
             title: "默认标题".into(),
@@ -377,6 +385,8 @@ async fn new_interactor_over_same_store_keeps_configuration() {
 
 fn logo_cmd(logo: uuid::Uuid, expected_version: Option<i64>) -> SaveSiteSettingsCmd {
     SaveSiteSettingsCmd {
+        home_page_size: None,
+        navigation: None,
         time_zone: None,
         title: "站点标题".into(),
         description: "站点描述".into(),

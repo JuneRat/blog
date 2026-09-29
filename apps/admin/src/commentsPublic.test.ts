@@ -1,6 +1,6 @@
 import script from '../../../crates/interfaces/assets/comments.js?raw';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { fireEvent, waitFor } from '@testing-library/dom';
+import { fireEvent, isInaccessible, waitFor } from '@testing-library/dom';
 const response = (data: unknown, status=200) => ({ ok:status<400,status,json:async()=>data });
 let fetcher: ReturnType<typeof vi.fn>;
 beforeEach(() => {
@@ -9,16 +9,19 @@ beforeEach(() => {
 });
 afterEach(()=>{vi.unstubAllGlobals();document.body.replaceChildren();});
 it('renders server-sanitized HTML while keeping malicious nicknames as text', async()=>{
-  fetcher.mockResolvedValueOnce(response({},401)).mockResolvedValueOnce(response({enabled:true,total:1,items:[{
+  fetcher.mockResolvedValueOnce(response({},401)).mockResolvedValueOnce(response({enabled:true,guest_comments_enabled:true,total:1,items:[{
     id:'root',nickname:'<img src=x onerror=alert(1)>',content_html:'&lt;script&gt;alert(1)&lt;/script&gt;\nSecond line',created_at:'today',is_author:false,
   }]}));
   window.eval(script);
+  const discussion = document.querySelector('[data-comments-slug]')!;
+  expect(isInaccessible(discussion)).toBe(true);
   await waitFor(()=>expect(document.querySelector('.comment-body')?.textContent).toBe('<script>alert(1)</script>\nSecond line'));
+  expect(isInaccessible(discussion)).toBe(false);
   expect(document.querySelector('img,script')).toBeNull();
   expect(document.querySelector('strong')?.textContent).toBe('<img src=x onerror=alert(1)>');
 });
 it('keeps draft after network failure, shows pending receipt and never publishes optimistically', async()=>{
-  fetcher.mockResolvedValueOnce(response({},401)).mockResolvedValueOnce(response({enabled:true,total:0,items:[]}));
+  fetcher.mockResolvedValueOnce(response({},401)).mockResolvedValueOnce(response({enabled:true,guest_comments_enabled:true,total:0,items:[]}));
   window.eval(script);
   await waitFor(()=>expect(document.querySelector('form')).not.toBeNull());
   (document.querySelector('input') as HTMLInputElement).value='Guest';
@@ -37,7 +40,7 @@ it('keeps draft after network failure, shows pending receipt and never publishes
   expect(document.querySelector('.comment-item')).toBeNull();
 });
 it('removes discussion and submission form after withdrawn post returns 404', async()=>{
-  fetcher.mockResolvedValueOnce(response({},401)).mockResolvedValueOnce(response({enabled:true,total:21,items:[]}));
+  fetcher.mockResolvedValueOnce(response({},401)).mockResolvedValueOnce(response({enabled:true,guest_comments_enabled:true,total:21,items:[]}));
   window.eval(script);
   await waitFor(()=>expect(document.querySelector('form')).not.toBeNull());
   fetcher.mockResolvedValueOnce(response({error:'文章不存在'},404));
@@ -46,15 +49,21 @@ it('removes discussion and submission form after withdrawn post returns 404', as
   await waitFor(()=>expect(document.querySelector('form')).toBeNull());
   expect(document.body.textContent).toContain('文章不存在');
 });
-it('closed discussions show history without a submission form',async()=>{
-  fetcher.mockResolvedValueOnce(response({},401)).mockResolvedValueOnce(response({enabled:false,total:0,items:[]}));
+it('hides the entire discussion when a refresh reports comments are closed', async () => {
+  const history = { total: 1, guest_comments_enabled: true, items: [
+    { id: 'root', nickname: 'Reader', content_html: 'Historical comment', created_at: 'today', is_author: false },
+  ] };
+  fetcher.mockResolvedValueOnce(response({}, 401)).mockResolvedValueOnce(response({ ...history, enabled: true }));
   window.eval(script);
-  await waitFor(()=>expect(document.body.textContent).toContain('新评论已关闭'));
-  expect(document.querySelector('form')).toBeNull();
+  const discussion = document.querySelector('[data-comments-slug]')!;
+  await waitFor(() => expect(isInaccessible(discussion)).toBe(false));
+  fetcher.mockResolvedValueOnce(response({ ...history, enabled: false }));
+  fireEvent.click([...document.querySelectorAll('button')].find(button => button.textContent === '查看回复')!);
+  await waitFor(() => expect(isInaccessible(discussion)).toBe(true));
 });
 
 it('renders the trusted author badge separately from visitor-controlled nicknames', async()=>{
-  fetcher.mockResolvedValueOnce(response({},401)).mockResolvedValueOnce(response({enabled:true,total:2,items:[
+  fetcher.mockResolvedValueOnce(response({},401)).mockResolvedValueOnce(response({enabled:true,guest_comments_enabled:true,total:2,items:[
     {id:'guest',nickname:'Sun · 作者',content_html:'Guest',created_at:'today',is_author:false},
     {id:'author',nickname:'Sun',content_html:'Author',created_at:'today',is_author:true},
   ]}));
@@ -69,7 +78,7 @@ it('renders the trusted author badge separately from visitor-controlled nickname
 });
 
 it('preserves the main draft while paging through comments', async()=>{
-  const page = {enabled:true,total:21,items:[]};
+  const page = {enabled:true,guest_comments_enabled:true,total:21,items:[]};
   fetcher.mockResolvedValueOnce(response({},401)).mockResolvedValueOnce(response(page));
   window.eval(script);
   await waitFor(()=>expect(document.querySelector('form')).not.toBeNull());
@@ -96,7 +105,7 @@ it('preserves the main draft while paging through comments', async()=>{
 });
 
 it('preserves reply drafts when reopening the form and returning from another page', async()=>{
-  const firstPage = {enabled:true,total:21,items:[{id:'root',nickname:'Reader',content_html:'Root',created_at:'today',is_author:false}]};
+  const firstPage = {enabled:true,guest_comments_enabled:true,total:21,items:[{id:'root',nickname:'Reader',content_html:'Root',created_at:'today',is_author:false}]};
   fetcher.mockResolvedValueOnce(response({},401)).mockResolvedValueOnce(response(firstPage));
   window.eval(script);
   await waitFor(()=>expect(document.querySelector('.comment-item')).not.toBeNull());
@@ -109,7 +118,7 @@ it('preserves reply drafts when reopening the form and returning from another pa
   expect(document.querySelector('.comment-item form')).toBe(form);
   expect(form.querySelector('textarea')!.value).toBe('回复草稿');
 
-  fetcher.mockResolvedValueOnce(response({enabled:true,total:21,items:[]}));
+  fetcher.mockResolvedValueOnce(response({enabled:true,guest_comments_enabled:true,total:21,items:[]}));
   fireEvent.click([...document.querySelectorAll('button')].find(b=>b.textContent==='下一页')!);
   await waitFor(()=>expect(document.body.textContent).toContain('第 2 页'));
   fetcher.mockResolvedValueOnce(response(firstPage));
@@ -121,7 +130,7 @@ it('preserves reply drafts when reopening the form and returning from another pa
 
 it('keeps the draft on session expiry and waits for explicit guest resubmission', async()=>{
   fetcher.mockResolvedValueOnce(response({display_name:'Author',csrf_token:'old-token'}))
-    .mockResolvedValueOnce(response({enabled:true,total:0,items:[]}));
+    .mockResolvedValueOnce(response({enabled:true,guest_comments_enabled:true,total:0,items:[]}));
   window.eval(script);
   await waitFor(()=>expect(document.querySelector('form')).not.toBeNull());
   const form = document.querySelector('form')!;
@@ -147,7 +156,7 @@ it('keeps the draft on session expiry and waits for explicit guest resubmission'
 
 it('does not switch to a guest identity when rechecking the session fails', async()=>{
   fetcher.mockResolvedValueOnce(response({display_name:'Author',csrf_token:'old-token'}))
-    .mockResolvedValueOnce(response({enabled:true,total:0,items:[]}));
+    .mockResolvedValueOnce(response({enabled:true,guest_comments_enabled:true,total:0,items:[]}));
   window.eval(script);
   await waitFor(()=>expect(document.querySelector('form')).not.toBeNull());
   const form = document.querySelector('form')!;
@@ -164,7 +173,7 @@ it.each([500, 'offline', 'pending'] as const)('loads public comments independent
   if (failure === 'pending') fetcher.mockImplementationOnce(() => new Promise(() => {}));
   else if (failure === 'offline') fetcher.mockRejectedValueOnce(new Error('offline'));
   else fetcher.mockResolvedValueOnce(response({}, failure));
-  fetcher.mockResolvedValueOnce(response({enabled:true,total:1,items:[
+  fetcher.mockResolvedValueOnce(response({enabled:true,guest_comments_enabled:true,total:1,items:[
     {id:'root',nickname:'Reader',content_html:'Public comment',created_at:'today'},
   ]}));
   window.eval(script);
@@ -185,7 +194,7 @@ it.each([500, 'offline', 'pending'] as const)('loads public comments independent
 });
 
 it.each(['load', 'submit', 'page'])('isolates unavailable threads during %s and preserves every draft', async action => {
-  fetcher.mockResolvedValueOnce(response({},401)).mockResolvedValueOnce(response({enabled:true,total:2,items:[
+  fetcher.mockResolvedValueOnce(response({},401)).mockResolvedValueOnce(response({enabled:true,guest_comments_enabled:true,total:2,items:[
     {id:'one',nickname:'One',content_html:'First',created_at:'today'},
     {id:'two',nickname:'Two',content_html:'Second',created_at:'today'},
   ]}));
@@ -202,7 +211,7 @@ it.each(['load', 'submit', 'page'])('isolates unavailable threads during %s and 
   });
   const show = [...one.querySelectorAll('button')].find(b=>b.textContent==='查看回复')!;
   if (action === 'page') {
-    fetcher.mockResolvedValueOnce(response({enabled:true,total:21,items:[]}));
+    fetcher.mockResolvedValueOnce(response({enabled:true,guest_comments_enabled:true,total:21,items:[]}));
     fireEvent.click(show);
     await waitFor(()=>expect(one.querySelector('.comment-pagination')).not.toBeNull());
   }
@@ -220,7 +229,7 @@ it.each(['load', 'submit', 'page'])('isolates unavailable threads during %s and 
 });
 
 it.each(['replies', 'root list'])('restores an unavailable reply through %s without losing its draft', async recovery => {
-  const firstPage = {enabled:true,total:21,items:[
+  const firstPage = {enabled:true,guest_comments_enabled:true,total:21,items:[
     {id:'root',nickname:'Reader',content_html:'Root',created_at:'today'},
   ]};
   fetcher.mockResolvedValueOnce(response({},401)).mockResolvedValueOnce(response(firstPage));
@@ -239,10 +248,10 @@ it.each(['replies', 'root list'])('restores an unavailable reply through %s with
   expect(fetcher.mock.calls.filter(([,options])=>options?.method==='POST')).toHaveLength(1);
 
   if (recovery === 'replies') {
-    fetcher.mockResolvedValueOnce(response({enabled:true,total:0,items:[]}));
+    fetcher.mockResolvedValueOnce(response({enabled:true,guest_comments_enabled:true,total:0,items:[]}));
     fireEvent.click([...document.querySelectorAll('button')].find(b=>b.textContent==='查看回复')!);
   } else {
-    fetcher.mockResolvedValueOnce(response({enabled:true,total:21,items:[]}));
+    fetcher.mockResolvedValueOnce(response({enabled:true,guest_comments_enabled:true,total:21,items:[]}));
     fireEvent.click([...document.querySelectorAll('button')].find(b=>b.textContent==='下一页')!);
     await waitFor(()=>expect(document.body.textContent).toContain('第 2 页'));
     fetcher.mockResolvedValueOnce(response(firstPage));
@@ -265,7 +274,7 @@ it.each(['replies', 'root list'])('restores an unavailable reply through %s with
 });
 
 it('keeps a deleted root anonymous and flattens nested replies with their direct target', async()=>{
-  fetcher.mockResolvedValueOnce(response({},401)).mockResolvedValueOnce(response({enabled:true,total:1,items:[
+  fetcher.mockResolvedValueOnce(response({},401)).mockResolvedValueOnce(response({enabled:true,guest_comments_enabled:true,total:1,items:[
     {id:'root',nickname:'must not display',content_html:'must not display',placeholder:true,deleted:true,is_author:true,created_at:'today'},
   ]}));
   window.eval(script);
@@ -273,7 +282,7 @@ it('keeps a deleted root anonymous and flattens nested replies with their direct
   expect(document.body.textContent).not.toContain('must not display');
   expect(document.querySelector('.comment-author-badge')).toBeNull();
   expect([...document.querySelector('.comment-item')!.querySelectorAll('button')].some(b=>b.textContent==='回复')).toBe(false);
-  fetcher.mockResolvedValueOnce(response({enabled:true,total:2,items:[
+  fetcher.mockResolvedValueOnce(response({enabled:true,guest_comments_enabled:true,total:2,items:[
     {id:'child',root_id:'root',parent_id:'root',parent_nickname:null,nickname:'A',content_html:'<p>Child</p>',created_at:'today'},
     {id:'nested',root_id:'root',parent_id:'child',parent_nickname:'A',nickname:'B',content_html:'<p><strong>Nested</strong></p>',created_at:'today'},
   ]}));
@@ -294,7 +303,7 @@ it('keeps a deleted root anonymous and flattens nested replies with their direct
 });
 
 it('previews with the server renderer and preserves optional private email', async()=>{
-  fetcher.mockResolvedValueOnce(response({},401)).mockResolvedValueOnce(response({enabled:true,total:0,items:[]}));
+  fetcher.mockResolvedValueOnce(response({},401)).mockResolvedValueOnce(response({enabled:true,guest_comments_enabled:true,total:0,items:[]}));
   window.eval(script);
   await waitFor(()=>expect(document.querySelector('form')).not.toBeNull());
   const form = document.querySelector('form')!;
@@ -316,7 +325,7 @@ it('previews with the server renderer and preserves optional private email', asy
 });
 
 it('formats comment timestamps in the server site zone for anonymous readers', async()=>{
-  fetcher.mockResolvedValueOnce(response({},401)).mockResolvedValueOnce(response({enabled:false,total:1,time_zone:'Asia/Shanghai',items:[{
+  fetcher.mockResolvedValueOnce(response({},401)).mockResolvedValueOnce(response({enabled:true,guest_comments_enabled:false,total:1,time_zone:'Asia/Shanghai',items:[{
     id:'root',nickname:'Guest',content_html:'Hello',created_at:'2026-09-28T17:30:00Z',is_author:false,
   }]}));
   window.eval(script);
@@ -324,4 +333,45 @@ it('formats comment timestamps in the server site zone for anonymous readers', a
   expect(document.querySelector('time')?.textContent).toContain('01:30:00');
   expect(document.querySelector('time')?.textContent).toContain('(Asia/Shanghai)');
   expect(document.querySelector('time')?.dateTime).toBe('2026-09-28T17:30:00Z');
+});
+
+it('refreshes published comments from the server and retains the publication receipt if refresh fails', async () => {
+  fetcher.mockResolvedValueOnce(response({}, 401)).mockResolvedValueOnce(response({ enabled: true, guest_comments_enabled: true, total: 0, items: [] }));
+  window.eval(script);
+  await waitFor(() => expect(document.querySelector('form')).not.toBeNull());
+  const form = document.querySelector('form')!;
+  form.querySelector('input')!.value = 'Guest';
+  form.querySelector('textarea')!.value = '**Published**';
+  fetcher.mockResolvedValueOnce(response({ message: '评论已发布', status: 'approved' }, 201))
+    .mockResolvedValueOnce(response({ enabled: true, guest_comments_enabled: true, total: 1, items: [
+      { id: 'published', nickname: 'Guest', content_html: '<p><strong>Published</strong></p>', created_at: 'today', is_author: false },
+    ] }));
+  fireEvent.submit(form);
+  await waitFor(() => expect(document.querySelector('.comment-body')?.textContent).toBe('Published'));
+  expect(form.textContent).toContain('评论已发布');
+  expect(form.querySelector('textarea')!.value).toBe('');
+  form.querySelector('textarea')!.value = 'Another comment';
+  fetcher.mockResolvedValueOnce(response({ message: '评论已发布', status: 'approved' }, 201)).mockRejectedValueOnce(new Error('offline'));
+  fireEvent.submit(form);
+  await waitFor(() => expect(form.textContent).toContain('评论已发布，但列表刷新失败'));
+  expect(form.querySelector('textarea')!.value).toBe('');
+});
+
+it('opens the reply list when a reply is published immediately', async () => {
+  fetcher.mockResolvedValueOnce(response({}, 401)).mockResolvedValueOnce(response({ enabled: true, guest_comments_enabled: true, total: 1, items: [
+    { id: 'root', nickname: 'Reader', content_html: 'Discussion', created_at: 'today', is_author: false },
+  ] }));
+  window.eval(script);
+  await waitFor(() => expect(document.querySelector('.comment-body')?.textContent).toBe('Discussion'));
+  fireEvent.click([...document.querySelectorAll('button')].find(b => b.textContent === '回复')!);
+  const form = document.querySelector('.comment-item form')!;
+  form.querySelector('input')!.value = 'Guest';
+  form.querySelector('textarea')!.value = 'Published reply';
+  fetcher.mockResolvedValueOnce(response({ message: '评论已发布', status: 'approved' }, 201))
+    .mockResolvedValueOnce(response({ enabled: true, guest_comments_enabled: true, total: 1, items: [
+      { id: 'child', parent_id: 'root', parent_nickname: 'Reader', nickname: 'Guest', content_html: '<p>Published reply</p>', created_at: 'today', is_author: false },
+    ] }));
+  fireEvent.submit(form);
+  await waitFor(() => expect(document.querySelector('.comment-replies')?.textContent).toContain('Published reply'));
+  expect(fetcher).toHaveBeenLastCalledWith('/api/v1/posts/hello/comments?page=1&root_id=root', expect.objectContaining({ cache: 'no-store' }));
 });
