@@ -1,5 +1,6 @@
 """Container-independent checks for archive trust boundaries and retention failures."""
 import io
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -14,7 +15,72 @@ from unittest.mock import patch
 import compose_recovery as tool
 
 
+def make_transport(path, content=b"age-encryption.org/v1\ntransport-only-test"):
+    path.write_bytes(content)
+    tool.transport_path(path).write_text(json.dumps({
+        "format": 1, "archive": path.name, "site_id": "a" * 64,
+        "size": len(content), "sha256": hashlib.sha256(content).hexdigest(),
+    }))
+
+
 class ArchiveTests(unittest.TestCase):
+    def test_missing_public_key_fails_before_reading_deployment_context(self):
+        with patch.dict(os.environ, {"BLOG_BACKUP_RECIPIENT": ""}), patch.object(tool, "context") as context:
+            with self.assertRaises(tool.RecoveryError):
+                tool.preflight()
+            context.assert_not_called()
+
+    def test_recovery_material_excludes_unneeded_secrets(self):
+        environment = {
+            "RESTIC_PASSWORD": "remote-password", "AWS_SECRET_ACCESS_KEY": "aws-key",
+            "DATABASE_URL": "postgres://old:secret@db/site", "BLOG_POSTGRES_PASSWORD": "admin-password",
+            "GH_SECRET": "unused-secret", "CUSTOM_OAUTH_SECRET": "used-secret",
+            "BLOG_DB_MAX_CONNECTIONS": "9", "TZ": "Asia/Shanghai", "UNRELATED_TOKEN": "unrelated",
+        }
+        self.assertEqual(tool.recovery_environment(environment, ["CUSTOM_OAUTH_SECRET"]), {
+            "CUSTOM_OAUTH_SECRET": "used-secret", "BLOG_DB_MAX_CONNECTIONS": "9", "TZ": "Asia/Shanghai",
+        })
+        config = {"database": {"url": "old-secret", "max_connections": 9},
+                  "maintenance": {"database_url": "other-secret"}, "server": {"public_base_url": "https://blog.test"}}
+        safe = tool.recovery_config(config)
+        self.assertNotIn("old-secret", json.dumps(safe))
+        self.assertNotIn("other-secret", json.dumps(safe))
+        self.assertEqual(safe["database"], {"max_connections": 9})
+        self.assertEqual(config["database"]["url"], "old-secret")
+
+    def test_reserved_or_missing_oauth_reference_is_rejected(self):
+        for ref in ("RESTIC_PASSWORD", "AWS_SECRET_ACCESS_KEY", "DATABASE_URL", "BLOG_APP_PASSWORD", "PGPASSWORD", "PATH"):
+            with self.subTest(ref=ref), self.assertRaises(tool.RecoveryError):
+                tool.recovery_environment({ref: "secret"}, [ref])
+        with self.assertRaises(tool.RecoveryError):
+            tool.recovery_environment({}, ["CUSTOM_SECRET"])
+
+    def test_transport_detects_damage_missing_marker_and_symlinks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "blog-20260928T000000Z-123456abcdef.tar.gz.age"
+            make_transport(path)
+            self.assertEqual(tool.verify_transport(path)["site_id"], "a" * 64)
+            path.write_bytes(path.read_bytes()[:-1])
+            with self.assertRaises(tool.RecoveryError):
+                tool.verify_transport(path)
+            make_transport(path)
+            tool.transport_path(path).unlink()
+            with self.assertRaises(tool.RecoveryError):
+                tool.verify_transport(path)
+            make_transport(path)
+            path.unlink()
+            path.symlink_to(tool.transport_path(path))
+            with self.assertRaises(tool.RecoveryError):
+                tool.verify_transport(path)
+
+    def test_sync_uploads_the_pair_without_decryption(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "blog-20260928T000000Z-123456abcdef.tar.gz.age"
+            make_transport(path)
+            with patch.object(tool, "restic") as restic, patch.object(tool, "unpack", side_effect=AssertionError("needs key")):
+                tool.sync(path)
+            self.assertEqual(restic.call_args_list[0].args[0][-2:], [str(path), str(tool.transport_path(path))])
+
     def test_container_environment_distinguishes_unset_and_empty(self):
         self.assertEqual(tool.container_environment(["DATABASE_URL", "EMPTY=", "TOKEN=a=b"]),
                          {"EMPTY": "", "TOKEN": "a=b"})
@@ -29,15 +95,17 @@ class ArchiveTests(unittest.TestCase):
                 "BLOG_TIME_ZONE": "Asia/Shanghai", "TZ": "Europe/London", "PATH": "/source/bin",
             }))
             with patch.object(tool, "unpack") as unpack, patch.object(tool, "host_owned"), \
+                    patch.dict(os.environ, {"BLOG_BACKUP_TMPFS_SIZE": "4g"}), \
                     patch.object(tool, "Path", side_effect=lambda value: target if value == "/target" else Path(value)):
                 unpack.return_value.__enter__.return_value = (
                     root, {"secret_refs": [], "backup_id": "test"}, deployment,
-                    {"image_id": "blog:test", "ops_image": "blog-ops:test"},
+                    {"image_id": "blog:test", "ops_image": "blog-ops:test", "recipient": "age1example"},
                 )
                 tool.prepare("backup.tar.gz")
             env = (target / ".env").read_text()
             self.assertIn('BLOG_TIME_ZONE="Asia/Shanghai"', env)
             self.assertIn('TZ="Europe/London"', env)
+            self.assertIn('BLOG_BACKUP_TMPFS_SIZE="4g"', env)
             self.assertNotIn("PATH=", env)
 
     def test_rejects_unsafe_tar_before_writing_any_member(self):
@@ -82,39 +150,95 @@ class ArchiveTests(unittest.TestCase):
     def test_remote_failure_preserves_all_local_archives(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            names = [f"blog-20260928T00000{i}Z-123456abcdef.tar.gz" for i in range(3)]
+            names = [f"blog-20260928T00000{i}Z-123456abcdef.tar.gz.age" for i in range(3)]
             for name in names:
-                (root / name).write_bytes(b"backup")
+                make_transport(root / name)
             with patch.object(tool, "BACKUPS", root), patch.dict(os.environ, {
                 "RESTIC_REPOSITORY": "/remote", "BLOG_BACKUP_KEEP": "1",
             }), patch.object(tool, "sync", side_effect=tool.RecoveryError("remote failed")):
                 with self.assertRaises(tool.RecoveryError):
                     tool.finalize(names[-1])
-            self.assertEqual(sorted(p.name for p in root.iterdir()), names)
+            self.assertEqual(sorted(p.name for p in root.iterdir()), sorted(names + [name + ".json" for name in names]))
 
     def test_retention_keeps_unrelated_files_and_symlinks(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            old = root / "blog-20260928T000000Z-123456abcdef.tar.gz"
-            new = root / "blog-20260928T000001Z-123456abcdef.tar.gz"
+            old = root / "blog-20260928T000000Z-123456abcdef.tar.gz.age"
+            new = root / "blog-20260928T000001Z-123456abcdef.tar.gz.age"
             for path in (old, new, root / "manual.tar.gz"):
-                path.write_bytes(b"backup")
-            link = root / "blog-20260928T000002Z-123456abcdef.tar.gz"
+                make_transport(path)
+            link = root / "blog-20260928T000002Z-123456abcdef.tar.gz.age"
             link.symlink_to(root / "manual.tar.gz")
             with patch.object(tool, "BACKUPS", root), patch.dict(os.environ, {
                 "RESTIC_REPOSITORY": "", "BLOG_BACKUP_KEEP": "1",
             }), patch("sys.stdout", new=io.StringIO()):
                 tool.finalize(new.name)
             self.assertFalse(old.exists())
+            self.assertFalse(tool.transport_path(old).exists())
             self.assertTrue(new.exists())
             self.assertTrue(link.is_symlink())
             self.assertTrue((root / "manual.tar.gz").exists())
+
+    def test_orphan_ciphertext_and_legacy_backups_are_not_pruned(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            old = root / "blog-20260928T000000Z-123456abcdef.tar.gz.age"
+            new = root / "blog-20260928T000001Z-123456abcdef.tar.gz.age"
+            old.write_bytes(b"interrupted-before-marker")
+            legacy = root / "blog-20260928T000000Z-123456abcdef.tar.gz"
+            legacy.write_bytes(b"legacy")
+            make_transport(new)
+            with patch.object(tool, "BACKUPS", root), patch.dict(os.environ, {"RESTIC_REPOSITORY": "", "BLOG_BACKUP_KEEP": "1"}):
+                tool.finalize(new.name)
+            self.assertTrue(old.exists())
+            self.assertTrue(legacy.exists())
 
     def test_dotenv_validates_keys_and_preserves_secret_characters(self):
         result = tool.dotenv({"SECRET": "a'b\\c$VALUE\nnext"})
         self.assertEqual(json.loads(result.split("=", 1)[1]).replace("$$", "$"), "a'b\\c$VALUE\nnext")
         with self.assertRaises(tool.RecoveryError):
             tool.dotenv({"BAD\nKEY": "value"})
+
+
+@unittest.skipUnless(shutil.which("age") and shutil.which("age-keygen"), "age tools required; also exercised in the ops image")
+class EncryptionTests(unittest.TestCase):
+    def test_real_encryption_decryption_and_authentication(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source"
+            deployment = source / "data/resources/deployment"
+            deployment.mkdir(parents=True)
+            (source / "sensitive.txt").write_text("a-private-post-and-oauth-secret")
+            metadata = {"format": 2, "site_id": "a" * 64, "binary_sha256": "binary-test"}
+            (deployment / "compose.json").write_text(json.dumps(metadata))
+            key, wrong = root / "key", root / "wrong"
+            for path in (key, wrong):
+                subprocess.run(["age-keygen", "-o", str(path)], check=True, capture_output=True)
+            public = subprocess.check_output(["age-keygen", "-y", str(key)], text=True).strip()
+            with patch.dict(os.environ, {"BLOG_BACKUP_RECIPIENT": public}):
+                self.assertEqual(tool.recipient(), public)
+            with patch.dict(os.environ, {"BLOG_BACKUP_RECIPIENT": "age1invalid"}):
+                with self.assertRaises(tool.RecoveryError):
+                    tool.recipient()
+            archive = root / "blog-20260928T000000Z-123456abcdef.tar.gz.age"
+            tool.encrypt_archive(source, archive, public)
+            encrypted = archive.read_bytes()
+            self.assertNotIn(b"a-private-post-and-oauth-secret", encrypted)
+            make_transport(archive, encrypted)
+            with patch.object(tool, "IDENTITY", key), patch.object(tool, "SCRATCH", root), \
+                    patch.object(tool, "binary_hash", return_value="binary-test"), \
+                    patch.object(tool.recovery, "verify", return_value={}):
+                with tool.unpack(archive) as (opened, _, _, _):
+                    self.assertEqual((opened / "sensitive.txt").read_text(), "a-private-post-and-oauth-secret")
+            for identity, content in ((wrong, encrypted), (key, encrypted[:-1]), (key, encrypted[:-1] + bytes([encrypted[-1] ^ 1]))):
+                make_transport(archive, content)  # Recomputing the public checksum cannot bypass age authentication.
+                with patch.object(tool, "IDENTITY", identity), patch.object(tool, "SCRATCH", root), \
+                        patch.object(tool.recovery, "verify") as verify:
+                    with self.assertRaises(tool.RecoveryError):
+                        with tool.unpack(archive):
+                            self.fail("invalid ciphertext accepted")
+                    verify.assert_not_called()
+            self.assertEqual(list(root.glob("blog-verify-*")), [])
 
 
 class InterruptedBackupTests(unittest.TestCase):

@@ -31,7 +31,10 @@ jobs:
         run: docker build --target ops --build-arg VCS_REF="$GITHUB_SHA" --tag blog-ops:ci --tag "blog-ops:$GITHUB_SHA" .
 
       - name: Pull the database image
-        run: docker pull postgres:18-alpine
+        run: |
+          db_image=$(sed -n 's/^    image: \(postgres:.*\)$/\1/p' compose.yaml)
+          test -n "$db_image"
+          docker pull "$db_image"
 
       - name: Verify installation, backup and isolated restore with Compose
         env:
@@ -42,8 +45,15 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         run: |
           mkdir -p release/ops release/docs release/scripts
-          docker save "blog:$GITHUB_SHA" "blog-ops:$GITHUB_SHA" postgres:18-alpine | gzip > release/blog-linux-amd64.tar.gz
+          db_image=$(sed -n 's/^    image: \(postgres:.*\)$/\1/p' compose.yaml)
+          db_image_id=$(docker image inspect "$db_image" --format '{{.Id}}')
+          # Classic docker save/load may discard RepoDigests. Use the exact saved
+          # config ID in the offline bundle instead of relying on a registry lookup.
+          docker save "blog:$GITHUB_SHA" "blog-ops:$GITHUB_SHA" "$db_image_id" | gzip > release/blog-linux-amd64.tar.gz
           cp compose.yaml .env.example release/
+          sed "s|image: $db_image|image: $db_image_id|" compose.yaml > release/compose.yaml
+          printf '%s\n' "$db_image" > release/DATABASE_IMAGE
+          printf '%s\n' "$db_image_id" > release/DATABASE_IMAGE_ID
           cp ops/postgres-init.sh release/ops/
           cp ops/blog-backup.service ops/blog-backup.timer release/ops/
           cp ops/blog-maintenance.service ops/blog-maintenance.timer release/ops/

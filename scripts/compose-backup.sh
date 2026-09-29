@@ -9,15 +9,16 @@ usage() {
     cat <<'EOF'
 Usage: sh scripts/compose-backup.sh COMMAND
   backup                         Stop blog, create backup, restart, sync and retain
-  verify ARCHIVE                 Check archive, hashes and matching application
-  restore ARCHIVE NEW_DIRECTORY   Restore into a new isolated Compose deployment
+  verify ARCHIVE IDENTITY_FILE    Decrypt and check archive with an age private key
+  restore ARCHIVE NEW_DIRECTORY IDENTITY_FILE
+                                 Restore into a new isolated Compose deployment
   check USER [--password-stdin]   Verify restored login, pages and media internally
   release                        Revoke verification sessions and start restored blog
   status                         Show last operation and available local archives
   remote-init                    Initialize the configured encrypted restic repository
   remote-list                    List remote snapshots (IDs needed for fetch)
   sync ARCHIVE_NAME               Retry uploading a local archive from backups/
-  fetch SNAPSHOT_ID              Retrieve and verify one remote backup into backups/
+  fetch SNAPSHOT_ID              Retrieve one encrypted backup pair and check its checksum
   maintenance                    Run privacy retention with the dedicated database role
   media-plan NAME.json UUID...    Create an explicit media purge plan in backups/plans/
   media-apply NAME.json --maintenance-confirmed --break-links-confirmed
@@ -48,12 +49,31 @@ ops() {
 input_archive() {
     [ -f "$1" ] && [ ! -L "$1" ] || { echo 'Archive must be a regular file.' >&2; exit 1; }
     ARCHIVE_PATH=$(CDPATH= cd "$(dirname "$1")" && pwd)/$(basename "$1")
+    ARCHIVE_NAME=$(basename "$ARCHIVE_PATH")
+    case "$ARCHIVE_NAME" in blog-*.tar.gz.age) ;; *) echo 'Use an encrypted backup; legacy archives need matching old tools.' >&2; exit 1 ;; esac
+    [ -f "$ARCHIVE_PATH.json" ] && [ ! -L "$ARCHIVE_PATH.json" ] || { echo 'The archive .json completion marker is required.' >&2; exit 1; }
+}
+input_identity() {
+    [ -f "$1" ] && [ ! -L "$1" ] || { echo 'Provide a regular age private key file.' >&2; exit 1; }
+    IDENTITY_PATH=$(CDPATH= cd "$(dirname "$1")" && pwd)/$(basename "$1")
+}
+archive_ops() {
+    ops -v "$ARCHIVE_PATH:/input/$ARCHIVE_NAME:ro" \
+        -v "$ARCHIVE_PATH.json:/input/$ARCHIVE_NAME.json:ro" \
+        -v "$IDENTITY_PATH:/run/secrets/backup-identity:ro" "$@"
+}
+context_input() {
+    dc --profile ops config --format json
+    docker inspect --format '{"Image":{{json .Image}},"Config":{"Env":{{json .Config.Env}},"Cmd":{{json .Config.Cmd}},"Entrypoint":{{json .Config.Entrypoint}}}}' "$container"
+    printf '%s\n' "$binary_hash"
 }
 
 if [ "$action" = status ]; then
     if [ -f backups/status.json ]; then cat backups/status.json; else echo 'No backup/recovery operation recorded.'; fi
     if [ -f backups/last-successful-backup.json ]; then cat backups/last-successful-backup.json; fi
-    for archive in backups/blog-*.tar.gz; do [ ! -f "$archive" ] || ls -lh "$archive"; done
+    for archive in backups/blog-*.tar.gz.age; do
+        [ ! -f "$archive" ] || [ ! -f "$archive.json" ] || ls -lh "$archive"
+    done
     exit 0
 fi
 
@@ -91,7 +111,6 @@ cleanup() {
     if [ "$restart" = 1 ]; then
         if ! dc start --wait --wait-timeout 90 blog; then code=1; phase=restart-failed; fi
     fi
-    if [ "$phase" != ops-stop-failed ]; then rm -rf backups/.context; fi
     if [ "$code" = 0 ]; then write_status success; else write_status failed; fi
     if [ "$phase" != ops-stop-failed ]; then
         rm -f backups/.operation-lock/owner
@@ -129,24 +148,15 @@ case "$action" in
         phase=preflight
         container=$(dc ps --status running -q blog)
         [ -n "$container" ] || { echo 'Backup requires a running installed blog.' >&2; exit 1; }
-        mkdir backups/.context
-        dc --profile ops config --format json > backups/.context/compose.tmp
-        mv backups/.context/compose.tmp backups/.context/compose.json
-        # Capture only immutable image identity and effective environment, not
-        # mutable health/log/host metadata from the full container inspection.
-        docker inspect --format '{"Image":{{json .Image}},"Config":{"Env":{{json .Config.Env}},"Cmd":{{json .Config.Cmd}},"Entrypoint":{{json .Config.Entrypoint}}}}' \
-            "$container" > backups/.context/container.tmp
-        mv backups/.context/container.tmp backups/.context/container.json
-        dc exec -T blog sha256sum /usr/local/bin/blog > backups/.context/binary.tmp
-        mv backups/.context/binary.tmp backups/.context/binary.sha256
-        ops ops preflight
+        binary_hash=$(dc exec -T blog sha256sum /usr/local/bin/blog)
+        context_input | ops ops preflight
         phase=stopping
         # Set before stopping so interruption or partial stop still attempts restart.
         restart=1
         dc stop blog
         phase=backup
-        archive_name=$(ops ops backup)
-        case "$archive_name" in blog-*.tar.gz) ;; *) echo 'Unexpected backup result.' >&2; exit 1 ;; esac
+        archive_name=$(context_input | ops ops backup)
+        case "$archive_name" in blog-*.tar.gz.age) ;; *) echo 'Unexpected backup result.' >&2; exit 1 ;; esac
         phase=restart
         dc start --wait --wait-timeout 90 blog
         restart=0
@@ -156,21 +166,23 @@ case "$action" in
         echo "Backup saved: $ROOT/backups/$archive_name"
         ;;
     verify)
-        [ "$#" = 1 ] || { usage >&2; exit 2; }
-        input_archive "$1"
-        phase=verify
-        ops -v "$ARCHIVE_PATH:/input/backup.tar.gz:ro" ops verify
-        ;;
-    restore)
         [ "$#" = 2 ] || { usage >&2; exit 2; }
         input_archive "$1"
+        input_identity "$2"
+        phase=verify
+        archive_ops ops verify "/input/$ARCHIVE_NAME"
+        ;;
+    restore)
+        [ "$#" = 3 ] || { usage >&2; exit 2; }
+        input_archive "$1"
+        input_identity "$3"
         # Exclusive mkdir prevents reuse of a running deployment or old volumes.
         target=$2
         [ ! -e "$target" ] && [ ! -L "$target" ] || { echo 'Restore directory must not already exist.' >&2; exit 1; }
         mkdir -m 700 "$target"
         target=$(CDPATH= cd "$target" && pwd)
         phase=prepare-restore
-        ops -v "$ARCHIVE_PATH:/input/backup.tar.gz:ro" -v "$target:/target" ops prepare
+        archive_ops -v "$target:/target" ops prepare "/input/$ARCHIVE_NAME"
         mkdir "$target/scripts" "$target/ops"
         cp compose.yaml "$target/compose.yaml"
         cp scripts/compose-backup.sh scripts/compose-init.sh "$target/scripts/"
@@ -181,18 +193,19 @@ case "$action" in
         # shell credentials from overriding the generated target .env.
         env -i PATH="$PATH" HOME="$HOME" \
             DOCKER_HOST="${DOCKER_HOST:-}" DOCKER_CONTEXT="${DOCKER_CONTEXT:-}" \
-            sh "$target/scripts/compose-backup.sh" restore-data "$ARCHIVE_PATH"
+            sh "$target/scripts/compose-backup.sh" restore-data "$ARCHIVE_PATH" "$IDENTITY_PATH"
         phase=complete
         echo "Restored into $target; run its check and release commands before starting blog."
         ;;
     restore-data)
-        [ "$#" = 1 ] && [ -f .restore.json ] || { echo 'Use restore ARCHIVE NEW_DIRECTORY.' >&2; exit 1; }
+        [ "$#" = 2 ] && [ -f .restore.json ] || { echo 'Use restore ARCHIVE NEW_DIRECTORY IDENTITY_FILE.' >&2; exit 1; }
         input_archive "$1"
+        input_identity "$2"
         phase=starting-empty-database
         # prepare generated a random project. Never run the application here.
         dc up -d --no-build --wait --wait-timeout 90 db
         phase=isolated-restore
-        ops -v "$ARCHIVE_PATH:/input/backup.tar.gz:ro" ops restore
+        archive_ops ops restore "/input/$ARCHIVE_NAME"
         ;;
     check)
         [ -f .restore.json ] && [ "$#" -ge 1 ] && [ "$#" -le 2 ] || { usage >&2; exit 2; }

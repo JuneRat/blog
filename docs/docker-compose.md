@@ -41,14 +41,18 @@ docker load -i blog-linux-amd64.tar.gz
 sh scripts/compose-init.sh
 ```
 
-在 `.env` 中将 `BLOG_IMAGE` / `BLOG_OPS_IMAGE` 分别设置为 `IMAGE` / `OPS_IMAGE` 文件内的值；数据库密码已由初始化脚本生成。随后执行 `docker compose up -d --no-build` 并按上述步骤安装。部署归档不包含源码或 Dockerfile，不能使用 `--build`。CI 归档面向 Linux amd64；ARM 主机可从源码原生构建。
+在 `.env` 中将 `BLOG_IMAGE` / `BLOG_OPS_IMAGE` 分别设置为 `IMAGE` / `OPS_IMAGE` 文件内的值；数据库密码已由初始化脚本生成。随后执行 `docker compose up -d --no-build --pull never` 并按上述步骤安装。部署归档不包含源码或 Dockerfile，不能使用 `--build`。CI 归档面向 Linux amd64；ARM 主机可从源码原生构建。
+
+源码中的基础镜像和 PostgreSQL 部署镜像均使用 `tag@sha256:...`，Dockerfile frontend 也固定 digest。发布包记录数据库的 `DATABASE_IMAGE` 和 `DATABASE_IMAGE_ID`，包内 Compose 直接引用已导入的数据库 image ID，避免旧版 Docker save/load 丢失 RepoDigests 后要求联网拉取。`SHA256SUMS` 用于核对交付文件；基础镜像固定不等于整个构建逐字节可复现，APT 软件源仍会更新。
+
+Dependabot 每周检查 Docker 基础镜像更新并提出 PR；合入前运行 Compose 验收。更新 PostgreSQL Alpine 镜像时须同步 `compose.yaml`、CI 服务和 `scripts/dev-db.sh` 的引用。镜像 digest 固定后，安全修复通过显式更新进入发布，不能只靠重复构建。
 
 本地验证同一镜像：
 
 ```sh
 docker build -t blog:local .
 docker build --target ops -t blog-ops:local .
-docker pull postgres:18-alpine
+docker pull "$(sed -n 's/^    image: \(postgres:.*\)$/\1/p' compose.yaml)"
 python3 -B scripts/test_compose.py --image blog:local --ops-image blog-ops:local
 ```
 

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Container-side Compose recovery. Invoke through compose-backup.sh."""
 import argparse
+import copy
 from contextlib import contextmanager, redirect_stdout
 import datetime as dt
 import getpass
@@ -32,7 +33,19 @@ BACKUPS = Path("/backups")
 CONFIG = Path("/var/lib/blog/config")
 MEDIA = Path("/var/lib/blog/media")
 STATE = CONFIG / "recovered"
-ARCHIVE = re.compile(r"blog-\d{8}T\d{6}Z-[a-f0-9]{12}\.tar\.gz")
+ARCHIVE = re.compile(r"blog-\d{8}T\d{6}Z-[a-f0-9]{12}\.tar\.gz\.age")
+IDENTITY = Path("/run/secrets/backup-identity")
+# Compose mounts /tmp as tmpfs; never stage plaintext on the host backup disk.
+SCRATCH = Path("/tmp")
+APPLICATION_ENV = frozenset((
+    "BLOG_PUBLIC_BASE_URL", "BLOG_TRUSTED_PROXIES", "BLOG_SECURE_COOKIES",
+    "BLOG_TIME_ZONE", "TZ", "BLOG_LOG_FORMAT", "RUST_LOG",
+    "BLOG_DB_MAX_CONNECTIONS", "BLOG_DB_MIN_CONNECTIONS", "BLOG_DB_ACQUIRE_TIMEOUT_MS",
+    "BLOG_DB_IDLE_TIMEOUT_SECS", "BLOG_DB_MAX_LIFETIME_SECS", "BLOG_DB_STATEMENT_TIMEOUT_MS",
+    "BLOG_DB_LOCK_TIMEOUT_MS", "BLOG_DB_IDLE_IN_TRANSACTION_TIMEOUT_MS",
+    "BLOG_DB_CONNECT_RETRIES", "BLOG_DB_CONNECT_RETRY_BACKOFF_MS",
+))
+RESERVED_SECRETS = frozenset(("DATABASE_URL", "PATH", "HOME", "TZ", "RUST_LOG"))
 DATABASE = os.environ.get("BLOG_RESTORE_DATABASE", "blog_restore_site")
 
 
@@ -105,8 +118,17 @@ def read_json(path):
 
 def context():
     import tomllib
-    model = read_json(BACKUPS / ".context/compose.json")
-    actual = read_json(BACKUPS / ".context/container.json")
+    # Host pipes two JSON documents followed by the binary checksum. Full Compose
+    # settings and effective credentials are never saved to a host context file.
+    incoming = sys.stdin.read()
+    decoder = json.JSONDecoder()
+    model, end = decoder.raw_decode(incoming.lstrip())
+    incoming = incoming.lstrip()[end:].lstrip()
+    actual, end = decoder.raw_decode(incoming)
+    checksum = incoming[end:].strip().split()
+    require(len(checksum) == 2 and bool(re.fullmatch(r"[a-f0-9]{64}", checksum[0])),
+            "deployment context is missing the application checksum")
+    expected_hash = checksum[0]
     environment = container_environment(actual["Config"]["Env"])
     require(actual["Config"].get("Cmd") == ["serve"]
             and actual["Config"].get("Entrypoint") == ["/usr/local/bin/blog"],
@@ -114,7 +136,7 @@ def context():
     require(environment.get("BLOG_CONFIG_FILE") == str(CONFIG / "config.toml")
             and environment.get("BLOG_MEDIA_DIR") == str(MEDIA),
             "Compose recovery requires the standard config and media mount paths")
-    require((BACKUPS / ".context/binary.sha256").read_text().split()[0] == binary_hash(),
+    require(expected_hash == binary_hash(),
             "application and ops images differ; build/load matching images")
     configured = tomllib.loads((CONFIG / "config.toml").read_text())
     url = environment.get("DATABASE_URL") or configured.get("database", {}).get("url", "")
@@ -123,13 +145,40 @@ def context():
             "Compose backup only supports this project's db service")
     require(not list(CONFIG.glob("*.install-state.json")), "finish installation before backing up")
     refs = recovery.secret_refs(pg(selected["PGDATABASE"]))
+    recovery_environment(environment, refs)
     for ref in refs:
-        require(bool(environment.get(ref)), f"application secret reference is missing: {ref}")
         os.environ[ref] = environment[ref]
-    return model, actual, environment, selected, configured
+    return model, actual, environment, selected, configured, refs
+
+
+def recovery_environment(environment, refs):
+    for ref in refs:
+        require(bool(re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", ref))
+                and not ref.startswith(("BLOG_", "RESTIC_", "AWS_", "PG", "AGE_", "COMPOSE_"))
+                and ref not in RESERVED_SECRETS,
+                "OAuth secret_ref conflicts with a reserved deployment/backup variable")
+        require(bool(environment.get(ref)), f"application secret reference is missing: {ref}")
+    return {key: value for key, value in environment.items() if key in APPLICATION_ENV or key in refs}
+
+
+def recovery_config(configured):
+    sanitized = copy.deepcopy(configured)
+    sanitized.get("database", {}).pop("url", None)
+    sanitized.pop("maintenance", None)
+    return sanitized
+
+
+def recipient():
+    value = os.environ.get("BLOG_BACKUP_RECIPIENT", "")
+    require(bool(re.fullmatch(r"age1[0-9a-z]+", value)),
+            "configure BLOG_BACKUP_RECIPIENT with an age public key in .env; keep its private key separately")
+    # Check the key's checksum before the host stops the source application.
+    run(["age", "--encrypt", "--recipient", value], data=b"", label="backup public key validation")
+    return value
 
 
 def preflight():
+    recipient()
     context()
     retention("BLOG_BACKUP_KEEP", 7)
     retention("BLOG_BACKUP_REMOTE_KEEP", 30)
@@ -143,26 +192,25 @@ def assert_quiet(client):
 
 
 def backup():
-    model, actual, environment, selected, configured = context()
+    import toml
+    public_key = recipient()
+    model, actual, environment, selected, configured, refs = context()
     client = pg(selected["PGDATABASE"])
     assert_quiet(client)
     require(not client.query("SELECT COALESCE(shobj_description(oid,'pg_database'),'') "
                              "FROM pg_database WHERE datname=current_database()").startswith(recovery.ISOLATION_PREFIX),
             "release the isolated restore before creating a new backup")
     stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    name = f"blog-{stamp}-{secrets.token_hex(6)}.tar.gz"
-    with tempfile.TemporaryDirectory(prefix=".backup-", dir=BACKUPS) as temporary:
+    name = f"blog-{stamp}-{secrets.token_hex(6)}.tar.gz.age"
+    with tempfile.TemporaryDirectory(prefix="blog-backup-", dir=SCRATCH) as temporary:
         work = Path(temporary)
         deployment = work / "deployment"
         deployment.mkdir()
-        # Include effective container settings as well as the operator's source .env.
-        # Shell overrides and custom OAuth secret names therefore survive host loss.
-        private_write(deployment / "environment.json", json.dumps(environment))
-        shutil.copyfile("/deployment/.env", deployment / "source.env")
-        shutil.copyfile(CONFIG / "config.toml", deployment / "config.toml")
+        private_write(deployment / "environment.json", json.dumps(recovery_environment(environment, refs)))
+        private_write(deployment / "config.toml", toml.dumps(recovery_config(configured)))
         site_id = client.query("SELECT value->>'id' FROM settings WHERE key='installation'")
         require(bool(re.fullmatch(r"[a-f0-9]{64}", site_id)), "installation identity is missing")
-        metadata = {"format": 1, "binary_sha256": binary_hash(), "image_id": actual["Image"],
+        metadata = {"format": 2, "recipient": public_key, "binary_sha256": binary_hash(), "image_id": actual["Image"],
                     "image": model["services"]["blog"]["image"],
                     "ops_image": model["services"]["ops"]["image"], "site_id": site_id,
                     "project": model["name"], "created_at": now()}
@@ -175,18 +223,71 @@ def backup():
             media_dir=str(MEDIA), resource=[f"deployment={deployment}"]))
         assert_quiet(client)
         recovery.verify(output)
+        target = BACKUPS / name
         partial = BACKUPS / (name + ".partial")
+        marker = transport_path(target)
+        marker_partial = transport_path(partial)
+        require(not target.exists() and not marker.exists(), "backup already exists")
         try:
-            with tarfile.open(partial, "w:gz") as archive:
-                archive.add(output, arcname="backup")
+            encrypt_archive(output, partial, public_key)
             os.chmod(partial, 0o600)
             host_owned(partial)
             with partial.open("rb") as stream:
                 os.fsync(stream.fileno())
-            partial.rename(BACKUPS / name)
+            private_write(marker_partial, json.dumps({
+                "format": 1, "archive": name, "site_id": site_id,
+                "size": partial.stat().st_size, "sha256": digest(partial),
+            }) + "\n")
+            host_owned(marker_partial)
+            with marker_partial.open("rb") as stream:
+                os.fsync(stream.fileno())
+            partial.rename(target)
+            marker_partial.rename(marker)  # Completion marker published last.
+        except BaseException:
+            target.unlink(missing_ok=True)
+            marker.unlink(missing_ok=True)
+            raise
         finally:
             partial.unlink(missing_ok=True)
+            marker_partial.unlink(missing_ok=True)
     print(name)
+
+
+def encrypt_archive(source, target, public_key):
+    with Path(target).open("xb") as output:
+        process = subprocess.Popen(["age", "--encrypt", "--recipient", public_key],
+                                   stdin=subprocess.PIPE, stdout=output, stderr=subprocess.DEVNULL)
+        try:
+            with process.stdin:
+                with tarfile.open(fileobj=process.stdin, mode="w|gz") as archive:
+                    archive.add(source, arcname="backup")
+            require(process.wait() == 0, "backup encryption failed")
+        except BaseException:
+            process.kill()
+            process.wait()
+            raise
+
+
+def transport_path(path):
+    return Path(str(path) + ".json")
+
+
+def verify_transport(path):
+    """Ciphertext integrity only; authenticity/content verification needs the private key."""
+    path = Path(path)
+    marker = transport_path(path)
+    require(bool(ARCHIVE.fullmatch(path.name)), "use an encrypted .tar.gz.age backup; legacy backups need matching old tools")
+    require(path.is_file() and not path.is_symlink() and marker.is_file() and not marker.is_symlink(),
+            "encrypted backup and its .json completion marker are both required")
+    info = read_json(marker)
+    require(isinstance(info, dict) and set(info) == {"format", "archive", "site_id", "size", "sha256"}
+            and info["format"] == 1 and info["archive"] == path.name
+            and isinstance(info["site_id"], str) and bool(re.fullmatch(r"[a-f0-9]{64}", info["site_id"]))
+            and info["size"] == path.stat().st_size and info["sha256"] == digest(path),
+            "encrypted backup checksum or completion marker is invalid")
+    with path.open("rb") as stream:
+        require(stream.read(22) == b"age-encryption.org/v1\n", "backup is not an age archive")
+    return info
 
 
 def safe_extract(archive, destination):
@@ -214,15 +315,23 @@ def safe_extract(archive, destination):
 
 @contextmanager
 def unpack(path):
-    require(Path(path).is_file() and not Path(path).is_symlink(), "backup must be a regular file")
-    with tempfile.TemporaryDirectory(prefix=".verify-", dir=BACKUPS) as temporary:
-        safe_extract(path, Path(temporary))
+    info = verify_transport(path)
+    require(IDENTITY.is_file(), "provide the age private key file for verify/restore")
+    with tempfile.TemporaryDirectory(prefix="blog-verify-", dir=SCRATCH) as temporary:
+        plaintext = Path(temporary) / "archive.tar.gz"
+        # Finish authenticated decryption before inspecting or restoring any content.
+        result = subprocess.run(["age", "--decrypt", "--identity", str(IDENTITY), "--output", str(plaintext), str(path)],
+                                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        require(result.returncode == 0, "backup decryption failed: wrong key or damaged ciphertext")
+        safe_extract(plaintext, Path(temporary))
+        plaintext.unlink()
         root = Path(temporary) / "backup"
         manifest = recovery.verify(root)
         deployment = root / "data/resources/deployment"
         metadata = json.loads((deployment / "compose.json").read_text())
-        require(metadata.get("format") == 1 and metadata["binary_sha256"] == binary_hash(),
+        require(metadata.get("format") == 2 and metadata["binary_sha256"] == binary_hash(),
                 "backup requires its matching application and ops images")
+        require(metadata["site_id"] == info["site_id"], "backup site identity differs from completion marker")
         yield root, manifest, deployment, metadata
 
 
@@ -241,27 +350,12 @@ def dotenv(values):
 def prepare(path):
     with unpack(path) as (_, manifest, deployment, metadata):
         values = json.loads((deployment / "environment.json").read_text())
-        # Keep only settings explicitly wired into the application; image defaults
-        # such as PATH/BIND are not deployment overrides.
-        values = {key: value for key, value in values.items()
-                  if key in manifest["secret_refs"] or key in (
-                      "BLOG_PUBLIC_BASE_URL", "BLOG_TRUSTED_PROXIES", "BLOG_SECURE_COOKIES",
-                      "BLOG_TIME_ZONE", "TZ",
-                      "BLOG_LOG_FORMAT", "RUST_LOG", "IDP_SECRET", "GH_SECRET",
-                      "BLOG_DB_MAX_CONNECTIONS",
-                      "BLOG_DB_MIN_CONNECTIONS",
-                      "BLOG_DB_ACQUIRE_TIMEOUT_MS",
-                      "BLOG_DB_IDLE_TIMEOUT_SECS",
-                      "BLOG_DB_MAX_LIFETIME_SECS",
-                      "BLOG_DB_STATEMENT_TIMEOUT_MS",
-                      "BLOG_DB_LOCK_TIMEOUT_MS",
-                      "BLOG_DB_IDLE_IN_TRANSACTION_TIMEOUT_MS",
-                      "BLOG_DB_CONNECT_RETRIES",
-                      "BLOG_DB_CONNECT_RETRY_BACKOFF_MS",
-                  )}
+        values = recovery_environment(values, manifest["secret_refs"])
         app_password, maintenance_password = secrets.token_hex(32), secrets.token_hex(32)
         database = "blog_restore_" + secrets.token_hex(6)
         values.update({"BLOG_IMAGE": metadata["image_id"], "BLOG_OPS_IMAGE": metadata["ops_image"],
+                       "BLOG_BACKUP_RECIPIENT": metadata["recipient"],
+                       "BLOG_BACKUP_TMPFS_SIZE": os.environ.get("BLOG_BACKUP_TMPFS_SIZE", "2g"),
                        "COMPOSE_PROJECT_NAME": "blog-restore-" + secrets.token_hex(6),
                        "BLOG_POSTGRES_PASSWORD": secrets.token_hex(32),
                        "BLOG_OWNER_PASSWORD": secrets.token_hex(32),
@@ -297,8 +391,8 @@ def restore(path):
                                                "-f", "/opt/blog/scripts/database-roles.sql"], DATABASE)
         run(command, env=env, label="restored database grants")
         shutil.copytree(STATE / "resources/media", MEDIA, dirs_exist_ok=True)
-        # The HTTP process may read its config volume. Never leave the source's
-        # cluster/admin secrets there; the original private archive retains them.
+        # The HTTP process may read its config volume. Remove duplicate recovery
+        # settings and OAuth secrets after they have been installed in the new .env.
         shutil.rmtree(STATE / "resources/deployment")
         shutil.rmtree(STATE / "resources/media")
         # Use fresh DB credentials; preserve all other recognized deployment settings.
@@ -461,24 +555,29 @@ def restic(args):
 
 
 def sync(path):
-    with unpack(path) as (_, _, _, metadata):
-        tag = "blog-site:" + metadata["site_id"]
-        restic(["backup", "--host", "blog-compose", "--tag", tag, str(path)])
-        restic(["forget", "--host", "blog-compose", "--tag", tag, "--group-by", "host,tags", "--keep-last",
-                str(retention("BLOG_BACKUP_REMOTE_KEEP", 30)), "--prune"])
+    metadata = verify_transport(path)
+    tag = "blog-site:" + metadata["site_id"]
+    restic(["backup", "--host", "blog-compose", "--tag", tag, str(path), str(transport_path(path))])
+    restic(["forget", "--host", "blog-compose", "--tag", tag, "--group-by", "host,tags", "--keep-last",
+            str(retention("BLOG_BACKUP_REMOTE_KEEP", 30)), "--prune"])
     print("Encrypted remote copy saved.")
 
 
 def finalize(name):
     require(bool(ARCHIVE.fullmatch(name)), "invalid backup name")
+    verify_transport(BACKUPS / name)
     if os.environ.get("RESTIC_REPOSITORY"):
         sync(BACKUPS / name)
     # Prune only our completed archive names, and only after remote success (if configured).
     keep = retention("BLOG_BACKUP_KEEP", 7)
     archives = sorted((p for p in BACKUPS.iterdir() if ARCHIVE.fullmatch(p.name)
-                       and p.is_file() and not p.is_symlink()), key=lambda p: p.name, reverse=True)
+                       and p.is_file() and not p.is_symlink() and transport_path(p).is_file()),
+                      key=lambda p: p.name, reverse=True)
+    for path in archives:
+        verify_transport(path)  # Do not prune good backups when another completed pair is corrupt.
     for path in archives[keep:]:
         if path.name != name:
+            transport_path(path).unlink()
             path.unlink()
     print(json.dumps({"archive": name, "remote": bool(os.environ.get("RESTIC_REPOSITORY")), "keep": keep}))
 
@@ -487,15 +586,16 @@ def fetch(snapshot):
     require(bool(re.fullmatch(r"[a-f0-9]{8,64}", snapshot)), "use an explicit restic snapshot ID")
     with tempfile.TemporaryDirectory(prefix=".fetch-", dir=BACKUPS) as temporary:
         restic(["restore", snapshot, "--target", temporary])
-        files = [p for p in Path(temporary).rglob("*.tar.gz") if ARCHIVE.fullmatch(p.name)]
+        files = [p for p in Path(temporary).rglob("*.tar.gz.age") if ARCHIVE.fullmatch(p.name)]
         require(len(files) == 1, "snapshot must contain exactly one blog backup archive")
-        with unpack(files[0]):
-            pass
+        verify_transport(files[0])
         target = BACKUPS / files[0].name
-        require(not target.exists(), "local backup already exists: " + target.name)
+        require(not target.exists() and not transport_path(target).exists(), "local backup already exists: " + target.name)
+        for path in (files[0], transport_path(files[0])):
+            os.chmod(path, 0o600)
+            host_owned(path)
         files[0].rename(target)
-        os.chmod(target, 0o600)
-        host_owned(target)
+        transport_path(files[0]).rename(transport_path(target))
         print(target.name)
 
 
@@ -518,10 +618,10 @@ def main():
         elif args.action == "preflight": preflight()
         elif args.action == "backup": backup()
         elif args.action == "verify":
-            with unpack("/input/backup.tar.gz") as (_, manifest, _, _):
+            with unpack(args.argument) as (_, manifest, _, _):
                 print(json.dumps({"backup_id": manifest["backup_id"], "files": len(manifest["files"])}))
-        elif args.action == "prepare": prepare("/input/backup.tar.gz")
-        elif args.action == "restore": restore("/input/backup.tar.gz")
+        elif args.action == "prepare": prepare(args.argument)
+        elif args.action == "restore": restore(args.argument)
         elif args.action == "check": check(args.argument, args.password_stdin)
         elif args.action == "release": release()
         elif args.action == "finalize": finalize(args.argument)

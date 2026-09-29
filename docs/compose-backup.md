@@ -1,6 +1,6 @@
 # Compose 备份与恢复
 
-入口为 `sh scripts/compose-backup.sh`。所有配置沿用部署目录的 `.env`，脚本自动设置私有文件权限。常驻应用不安装 Python/数据库管理工具；按需运行的 ops 镜像包含同版本博客、PostgreSQL 18 客户端、恢复脚本和 restic，不挂载 Docker socket。
+入口为 `sh scripts/compose-backup.sh`。所有配置沿用部署目录的 `.env`，脚本自动设置私有文件权限。常驻应用不安装 Python/数据库管理工具；按需运行的 ops 镜像包含同版本博客、PostgreSQL 18 客户端、恢复脚本、age 和 restic，不挂载 Docker socket。
 
 ## 先准备匹配的镜像
 
@@ -14,17 +14,29 @@ docker compose build blog ops
 
 ## 备份和状态
 
+第一次备份前，在安全的管理设备生成 age 密钥，并把私钥另存到部署之外（例如离线介质或密码管理器）：
+
+```sh
+age-keygen -o /安全位置/blog-backup.key
+```
+
+将输出的公钥写入部署现有 `.env`：`BLOG_BACKUP_RECIPIENT=age1...`。只接受原生 age 公钥；私钥不写进 `.env`，也不常驻挂载。公钥缺失或无效时在停服务之前失败。定时备份、sync 和 fetch 只需要公钥或仓库凭据；`verify` / `restore` 才通过文件参数临时只读挂载私钥。私钥丢失后无法恢复对应备份，RESTIC_PASSWORD 不能代替它。[age 用法](https://github.com/FiloSottile/age#readme)
+
 ```sh
 sh scripts/compose-backup.sh backup
 sh scripts/compose-backup.sh status
-sh scripts/compose-backup.sh verify backups/blog-具体时间与编号.tar.gz
+sh scripts/compose-backup.sh verify backups/blog-具体时间与编号.tar.gz.age /安全位置/blog-backup.key
 ```
 
-备份入口会检查镜像和配置，停止本项目的 blog，确认源数据库没有其他客户端连接，导出数据库并复制媒体、已安装主题和配置。结构、媒体登记/引用及文件校验全部通过后，才原子发布 `backups/blog-*.tar.gz`。随后先启动原服务，再执行可选的异地同步及保留清理；普通失败和 TERM/INT 也会尝试重新启动原服务。
+备份入口会检查镜像、公钥和配置，停止本项目的 blog，确认源数据库没有其他客户端连接，导出数据库并复制媒体、已安装主题和配置。结构、媒体登记/引用及文件校验通过后，压缩流直接送入 age，加密完成才发布 `backups/blog-*.tar.gz.age`，最后发布同名追加 `.json` 的完成标记。两份文件必须一起保存；标记仅含格式、文件名、站点 ID、密文大小和 SHA-256，不含凭据。随后先启动原服务，再执行可选的异地同步及保留清理；普通失败和 TERM/INT 也会尝试重新启动原服务。
 
 只支持同一 Compose 项目的 `db:5432`、默认 `serve` 命令和标准配置/媒体挂载路径；命令行覆盖或改变这些容器路径会在预检中拒绝。备份前须停用外部 SQL 写入者和另行调度的维护任务；连接检查不能阻止外部程序在检查后重新连接。本脚本的备份、恢复、保留期维护与媒体清理通过同一目录锁互斥，其他运维入口也应避开备份维护窗口。
 
-备份包包含数据库、媒体、主题、源 TOML、原 `.env`、应用容器的实际环境和镜像/版本信息；环境覆盖及自定义 OAuth 密钥也能保存。**本地包包含明文秘密**，目录自动设为 700、文件为 600，只应放在受控磁盘。秘密在同一个受控恢复包中形成完整恢复材料；通用宿主机恢复流程仍可选择分开保存。异地存储通过下文 restic 加密。
+密文内包含数据库、媒体、主题、去除旧数据库/维护凭据的 TOML、允许恢复的应用环境和镜像/版本信息。不再复制原 `.env` 或完整容器环境；仅实际 OAuth `secret_ref` 引用的密钥随应用环境保存，RESTIC、AWS 和其他运维凭据均不进入恢复材料。OAuth 引用不得复用 `BLOG_*`、`RESTIC_*`、`AWS_*`、`PG*` 等部署变量名称，冲突会明确失败。
+
+导出、校验和解密的明文中间文件仅放在 ops 的 `/tmp` tmpfs 中，容器删除后消失；Compose 配置和实际容器环境通过管道传递，不写入宿主机 `.context`。默认临时空间上限为 2 GiB，可在现有 `.env` 设置 `BLOG_BACKUP_TMPFS_SIZE`；恢复解密阶段需要容纳压缩包和展开后的数据，须按数据量及可用内存预留容量，空间不足时失败且不发布完成标记。tmpfs 可能进入宿主机 swap，部署方仍应使用加密 swap 或禁用 swap。目录 700、文件 600 继续由脚本设置。
+
+Compose 内层部署元数据升级为格式 2；通用数据库备份格式未变。旧明文 `.tar.gz` 仍使用对应旧工具恢复再升级，不会被新工具转换或自动删除。旧文件原有的泄露风险仍在，需单独保护和处置。
 
 `backups/status.json` 记录最近操作、阶段、开始/结束时间、成功/失败和备份文件名；`last-successful-backup.json` 保留最近一次完整备份成功记录。默认本地保留最近 7 份，可在 `.env` 设置 `BLOG_BACKUP_KEEP`。未完成的包不会参与保留清理；异地上传失败时命令非零退出，本地包保留、旧备份不清理。
 
@@ -35,13 +47,13 @@ sh scripts/compose-backup.sh verify backups/blog-具体时间与编号.tar.gz
 新目录必须不存在，父目录须可写：
 
 ```sh
-sh scripts/compose-backup.sh restore backups/blog-具体时间与编号.tar.gz /srv/blog-restored
+sh scripts/compose-backup.sh restore backups/blog-具体时间与编号.tar.gz.age /srv/blog-restored /安全位置/blog-backup.key
 cd /srv/blog-restored
 sh scripts/compose-backup.sh check 你的管理员用户名
 sh scripts/compose-backup.sh release
 ```
 
-`restore` 创建新的部署目录、单份 `.env`、随机 Compose 项目名和独立数据卷。数据库管理员、结构所有者、普通运行账号及维护账号都使用新生成的密码；应用以受限 `blog_app` 连接。原部署不切库、不删卷、不改密码。新部署保留原站点地址与 OAuth 密钥，使用备份对应的不可变本地应用镜像 ID。原部署的完整秘密材料保留在私有备份包内，不复制到恢复后 HTTP 服务可读的配置卷。
+`restore` 先完成 age 认证解密、清单及匹配版本验证，再生成新的 `.env` 并启动独立数据库；错误密钥和损坏密文不会进入数据库导入阶段。新部署使用随机 Compose 项目名和独立数据卷。数据库管理员、结构所有者、普通运行账号及维护账号都使用新生成的密码；应用以受限 `blog_app` 连接。原部署不切库、不删卷、不改密码。新部署保留原站点地址、实际引用的 OAuth 密钥和备份公钥，使用备份对应的不可变本地应用镜像 ID。私钥不复制进新部署，OAuth 恢复材料不留在 HTTP 服务可读的配置卷。
 
 恢复只启动数据库，在新建的随机 `blog_restore_*` 库中导入，撤销备份中的会话，核对数据数量、Owner、结构及媒体引用，并写入数据库隔离标记。不要提前运行 `docker compose up` 启动应用；隔离标记会阻止普通服务开放。
 
@@ -72,17 +84,17 @@ sh scripts/compose-backup.sh backup
 sh scripts/compose-backup.sh remote-list
 ```
 
-已配置仓库时，每次成功备份自动加密上传。远端默认保留最近 30 份，按站点安装 ID 分组清理，不清理其他站点。上传失败可用 `sync blog-具体时间与编号.tar.gz` 重试。仓库密码和访问凭据须另存到服务器之外，避免服务器丢失后无法获取备份。[restic 仓库与 S3 配置](https://restic.readthedocs.io/en/stable/030_preparing_a_new_repo.html#s3-compatible-storage)
+已配置仓库时，每次成功备份自动将密文与 `.json` 完成标记一起上传到 restic。远端默认保留最近 30 份，按站点安装 ID 分组清理，不清理其他站点。上传失败可用 `sync blog-具体时间与编号.tar.gz.age` 重试。仓库密码和访问凭据须另存到服务器之外，避免服务器丢失后无法获取备份。[restic 仓库与 S3 配置](https://restic.readthedocs.io/en/stable/030_preparing_a_new_repo.html#s3-compatible-storage)
 
 整台服务器丢失后：在新机器加载匹配的交付镜像和部署文件，初始化 `.env`，填回异地仓库凭据，然后获取明确的快照 ID：
 
 ```sh
 sh scripts/compose-backup.sh remote-list
 sh scripts/compose-backup.sh fetch 快照ID
-sh scripts/compose-backup.sh restore backups/取回的文件名.tar.gz /srv/blog-restored
+sh scripts/compose-backup.sh restore backups/取回的文件名.tar.gz.age /srv/blog-restored /安全位置/blog-backup.key
 ```
 
-fetch 会解密、检查文件清单和匹配版本后才发布本地包，拒绝覆盖已有包。备份不嵌入应用镜像，必须独立保留相应交付包。加密仓库也可以是挂载磁盘，但同机副本不能覆盖整机丢失的场景。
+fetch 取回 restic 内的 age 密文和完成标记，检查文件名、大小、SHA-256 与 age 文件头后发布本地文件，拒绝覆盖已有文件。sync / fetch 不使用 age 私钥，也不声称已验证解密后的内容；公开校验和用于发现传输损坏，不能代替 age 认证解密及 `verify` / `restore` 的清单校验。备份不嵌入应用镜像，必须独立保留相应交付包。加密仓库也可以是挂载磁盘，但同机副本不能覆盖整机丢失的场景。
 
 ## 定时运行
 

@@ -209,7 +209,7 @@ def exercise(image, root, ops_image):
         wait_for(lambda: healthy("db"), "database healthcheck did not recover")
         logs = compose("logs", "--no-color", "--no-log-prefix", "blog")
         records = [json.loads(line) for line in logs.splitlines() if line.strip()]
-        require(any(record.get("span", {}).get("request_id") == request_id
+        require(any(record.get("fields", {}).get("request_id") == request_id
                     and record.get("fields", {}).get("status") == 200 for record in records),
                 "JSON completion log must contain the response request ID and status")
         require(not any(secret in logs for secret in (password, owner_password, "not-a-log-field")),
@@ -276,20 +276,43 @@ def exercise(image, root, ops_image):
         # Exercise the Docker healthcheck itself, not just a request from the host.
         require(healthy("blog"), "Docker readiness check did not pass")
         print("==> Compose: complete backup and encrypted repository round trip", flush=True)
+        # A configured application secret is preserved; unrelated backup credentials are not.
+        compose("exec", "-T", "blog", "blog", "oauth", "add-github", "--client-id", "recovery-test", "--secret-ref", "GH_SECRET")
+        identity_file = root / "test-age-key"
+        identity_file.write_text(compose("run", "--rm", "--no-deps", "--entrypoint", "age-keygen", "ops") + "\n")
+        identity_file.chmod(0o600)
+        public = compose("run", "--rm", "--no-deps", "-v", f"{identity_file}:/test-key:ro",
+                         "--entrypoint", "age-keygen", "ops", "-y", "/test-key")
         compose("--profile", "ops", "run", "--rm", "--no-deps", "--entrypoint", "python3", "ops", "-c",
                 "import toml; p='/var/lib/blog/config/config.toml'; c=toml.load(p); c['database']['max_lifetime_secs']=777; open(p,'w').write(toml.dumps(c))")
         # The local repository exercises encryption/upload/fetch without external credentials.
         # Production selects S3 through the same restic interface.
         with env_file.open("a") as stream:
-            stream.write(f"\nRESTIC_REPOSITORY=/backups/test-repository\nRESTIC_PASSWORD={secrets.token_hex(32)}\nBLOG_BACKUP_KEEP=2\nBLOG_BACKUP_REMOTE_KEEP=1\n")
+            stream.write(f"\nBLOG_BACKUP_RECIPIENT={public}\nRESTIC_REPOSITORY=/backups/test-repository\nRESTIC_PASSWORD={secrets.token_hex(32)}\nBLOG_BACKUP_KEEP=2\nBLOG_BACKUP_REMOTE_KEEP=1\n")
+            stream.write("AWS_ACCESS_KEY_ID=unused-backup-access\nAWS_SECRET_ACCESS_KEY=unused-backup-secret\n")
         operation("remote-init")
         operation("backup")
         operation("backup")
-        backups = sorted((root / "backups").glob("blog-*.tar.gz"))
+        backups = sorted((root / "backups").glob("blog-*.tar.gz.age"))
         require(len(backups) == 2, "two complete backup archives expected")
         archive = backups[-1]
         require(archive.stat().st_mode & 0o777 == 0o600, "backup archive must be private")
-        operation("verify", str(archive))
+        operation("verify", str(archive), str(identity_file))
+        require(not (root / "backups/.context").exists(), "plaintext deployment context was left on disk")
+        require(not list((root / "backups").glob(".backup-*")), "plaintext backup staging was left on disk")
+        compose("run", "--rm", "--no-deps", "-v", f"{identity_file}:/run/secrets/backup-identity:ro",
+                "--entrypoint", "python3", "ops", "-c", """
+import json, sys, tomllib
+sys.path.insert(0, '/opt/blog/scripts')
+from compose_recovery import unpack
+with unpack(sys.argv[1]) as (_, _, deployment, _):
+    assert not (deployment / 'source.env').exists()
+    env = json.loads((deployment / 'environment.json').read_text())
+    assert env['GH_SECRET']
+    assert not any(k.startswith(('RESTIC_', 'AWS_')) or k in ('DATABASE_URL', 'BLOG_POSTGRES_PASSWORD', 'BLOG_OWNER_PASSWORD') for k in env)
+    config = tomllib.loads((deployment / 'config.toml').read_text())
+    assert 'url' not in config['database'] and 'maintenance' not in config
+""", "/backups/" + archive.name)
         guest = client()
         wait_for(lambda: guest.request("GET", "/readyz"), "backup did not restart source")
         snapshots = json.loads(operation("remote-list"))
@@ -299,6 +322,8 @@ def exercise(image, root, ops_image):
         # a new container. Remove the local copy from the same filesystem view as fetch.
         compose("run", "--rm", "--no-deps", "--entrypoint", "mv", "ops",
                 "/backups/" + archive.name, "/backups/" + saved.name)
+        compose("run", "--rm", "--no-deps", "--entrypoint", "mv", "ops",
+                "/backups/" + archive.name + ".json", "/backups/" + saved.name + ".json")
         require(not archive.exists(), "backup rename did not remove original local file")
         require(any(path.endswith(archive.name) for path in snapshots[0]["paths"]),
                 "remote snapshot does not contain the latest local archive")
@@ -306,9 +331,12 @@ def exercise(image, root, ops_image):
         import hashlib
         require(hashlib.sha256(archive.read_bytes()).digest() == hashlib.sha256(saved.read_bytes()).digest(),
                 "encrypted fetch changed backup bytes")
-        damaged = root / "backups/damaged.tar.gz"
+        damaged_dir = root / "backups/damaged"
+        damaged_dir.mkdir()
+        damaged = damaged_dir / archive.name
         damaged.write_bytes(b"not a backup")
-        operation("verify", str(damaged), success=False)
+        shutil.copyfile(str(archive) + ".json", str(damaged) + ".json")
+        operation("verify", str(damaged), str(identity_file), success=False)
 
         print("==> Compose: backup failure restarts the source and preserves previous backups", flush=True)
         media_path = "/var/lib/blog/media/" + sql(f"SELECT path FROM media WHERE id='{media['id']}'")
@@ -325,7 +353,7 @@ def exercise(image, root, ops_image):
         require((root / "backups/last-successful-backup.json").is_file(), "last successful backup was lost")
 
         print("==> Compose: fresh deployment restore, isolation, login/media verification and release", flush=True)
-        operation("restore", str(archive), str(restored))
+        operation("restore", str(archive), str(restored), str(identity_file))
         restored_model = json.loads(restored_compose("config", "--format", "json"))
         restored_database = urlsplit(restored_model["services"]["blog"]["environment"]["DATABASE_URL"]).path.lstrip("/")
         for key, value in (("BLOG_DB_MAX_CONNECTIONS", "9"), ("BLOG_DB_STATEMENT_TIMEOUT_MS", "30000")):
@@ -365,9 +393,9 @@ def exercise(image, root, ops_image):
                          "import toml; assert toml.load('/var/lib/blog/config/config.toml')['database']['max_lifetime_secs'] == 777")
         print("==> Compose: a recovered site can itself be backed up and restored again", flush=True)
         operation("backup", directory=restored)
-        recovered_archives = list((restored / "backups").glob("blog-*.tar.gz"))
+        recovered_archives = list((restored / "backups").glob("blog-*.tar.gz.age"))
         require(len(recovered_archives) == 1, "recovered deployment did not create a complete backup")
-        operation("restore", str(recovered_archives[0]), str(restored_again), directory=restored)
+        operation("restore", str(recovered_archives[0]), str(restored_again), str(identity_file), directory=restored)
         print("Compose installation, telemetry, persistence, backup, encrypted copy and isolated recovery passed.", flush=True)
     finally:
         if (restored_again / ".env").is_file():

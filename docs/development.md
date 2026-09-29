@@ -8,7 +8,7 @@
 
 - Rust stable，包含 `rustfmt`、`clippy`，支持仓库使用的 Rust 2024 edition。
 - Node.js 22；pnpm 版本以 [apps/admin/package.json](../apps/admin/package.json) 的 `packageManager` 为准。
-- PostgreSQL 18，可通过 Docker 启动；检查脚本还需要 Python 3。
+- PostgreSQL 18，可通过 Docker 启动；开发数据库和检查脚本需要 Python 3。
 
 以下命令除明确说明外均在仓库根目录运行。初次建库、创建 Owner 和启动站点的完整流程见[快速开始](../README.md#快速开始)。
 
@@ -22,7 +22,7 @@ cargo run
 
 首次安装时不要预先执行 `migrate` 或注入 `DATABASE_URL`；在[安装向导](installation.md)填写空库地址即可自动初始化。已有 CLI 初始化的数据库则显式设置 `DATABASE_URL` 后启动；下方保留这条受控维护路径。
 
-数据库脚本使用容器 `blog-postgres` 和持久卷 `blog-pgdata`，只绑定本机回环地址；已有容器时直接启动。数据库连接失败时先检查 Docker 和端口。改变 `BLOG_PG_PORT` 不会修改已有容器的端口映射，也不会自动更新应用连接串。
+数据库脚本使用容器 `blog-postgres` 和持久卷 `blog-pgdata`，只绑定本机回环地址；已有容器时直接启动。默认等待 60 秒就绪，可通过 `BLOG_PG_WAIT_SECONDS` 调整；容器退出、探测超时或超过截止时间会带诊断非零退出，保留原容器和卷。数据库连接失败时先检查 Docker 和端口。改变 `BLOG_PG_PORT` 不会修改已有容器的端口映射，也不会自动更新应用连接串。
 
 已配置数据库的业务命令先执行结构迁移或校验，均不隐式重建历史 HTML；规则升级后显式执行 `cargo run -p server -- rebuild-html`，步骤见[运维](operations-and-recovery.md#html-显式重建)。安装模式只在验证安装表单与空库后执行结构迁移。用户、角色、OAuth 和媒体维护命令只加载各自需要的依赖，站点 URL 或主题配置错误不会阻止身份修复。详见[架构](architecture.md)。
 

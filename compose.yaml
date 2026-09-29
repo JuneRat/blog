@@ -2,7 +2,7 @@ name: blog
 
 services:
   db:
-    image: postgres:18-alpine
+    image: postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873
     restart: unless-stopped
     environment:
       POSTGRES_DB: blog
@@ -122,10 +122,10 @@ services:
       - blog-config:/var/lib/blog/config
       - blog-media:/var/lib/blog/media
       - ./backups:/backups
-      - ./.env:/deployment/.env:ro
     read_only: true
     tmpfs:
-      - /tmp:rw,nosuid,size=256m
+      # Plaintext backup/restore staging disappears with the one-off container.
+      - /tmp:rw,nosuid,size=${BLOG_BACKUP_TMPFS_SIZE:-2g}
     cap_drop: [ALL]
     cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETUID, SETGID, KILL]
     security_opt: [no-new-privileges:true]

@@ -47,7 +47,7 @@ TOML 可以先只配置路径、代理或 `[bootstrap]`：没有数据库连接�
 
 迁移目录须同时包含匹配的 SQL 文件与 `schema.json`；自定义路径应成套复制整个目录。路径按进程工作目录解析，生产部署可用绝对路径；Compose 镜像已设置为 `/opt/blog/migrations/postgres`。迁移文件不可改写，新增结构见[迁移演进](schema-migrations.md)。
 
-`BLOG_PG_PORT` 仅用于开发数据库脚本；`BLOG_TEST_ADMIN_URL` 仅用于集成测试，默认 `postgres://blog:blog@127.0.0.1:5432/postgres`。它们不是应用部署字段。修改数据库端口时需同步调整连接串。
+`BLOG_PG_PORT` 仅用于开发数据库脚本；`BLOG_PG_WAIT_SECONDS` 控制就绪等待，默认 60 秒，范围 1–3600 秒。脚本使用 Python 3 对 Docker 探测设置单次超时，容器退出或超过截止时间时输出有限诊断并非零退出，不删除容器或数据卷。`BLOG_TEST_ADMIN_URL` 仅用于集成测试，默认 `postgres://blog:blog@127.0.0.1:5432/postgres`。它们不是应用部署字段。修改数据库端口时需同步调整连接串。
 
 ## 时区
 
