@@ -399,7 +399,7 @@ impl TagRepository for FakeTagRepo {
         new_name: &str,
         expected_version: i64,
         _actor_id: application::audit::AuditContext,
-    ) -> Result<Option<TagSnapshot>, UseCaseError> {
+    ) -> Result<Option<TagWithUsage>, UseCaseError> {
         let mut tags = self.tags.lock().unwrap();
         let Some(tag) = tags.iter_mut().find(|t| t.id == id) else {
             return Ok(None);
@@ -407,9 +407,14 @@ impl TagRepository for FakeTagRepo {
         if tag.version != expected_version {
             return Ok(None);
         }
-        tag.name = new_name.into();
-        tag.version += 1;
-        Ok(Some(tag.clone()))
+        if tag.name != new_name {
+            tag.name = new_name.into();
+            tag.version += 1;
+        }
+        Ok(Some(TagWithUsage {
+            snapshot: tag.clone(),
+            public_post_count: 0,
+        }))
     }
 
     async fn delete(
@@ -438,10 +443,6 @@ impl TagRepository for FakeTagRepo {
             .collect();
         found.sort();
         Ok(found)
-    }
-
-    async fn public_count(&self, _id: Uuid) -> Result<i64, UseCaseError> {
-        Ok(0)
     }
 }
 
@@ -515,8 +516,12 @@ impl application::ports::SeriesRepository for FakeSeriesRepo {
     }
 }
 
-/// 分类目录 fake：文章用例只依赖 existing_id（存在性校验），恒报存在。
-struct FakeCategoryRepo;
+/// 文章关联查找恒报存在；分类更新可提供固定的已提交结果。
+#[derive(Default)]
+struct FakeCategoryRepo {
+    current: Option<domain::content::CategorySnapshot>,
+    committed: Option<application::ports::CategoryWithUsage>,
+}
 
 #[async_trait::async_trait]
 impl application::ports::CategoryRepository for FakeCategoryRepo {
@@ -532,10 +537,10 @@ impl application::ports::CategoryRepository for FakeCategoryRepo {
         &self,
         _slug: &str,
     ) -> Result<Option<domain::content::CategorySnapshot>, UseCaseError> {
-        Ok(None)
+        Ok(self.current.clone())
     }
     async fn list(&self) -> Result<Vec<application::ports::CategoryWithUsage>, UseCaseError> {
-        Ok(Vec::new())
+        Err(UseCaseError::Repository("目录查询不可用".into()))
     }
     async fn update(
         &self,
@@ -545,8 +550,8 @@ impl application::ports::CategoryRepository for FakeCategoryRepo {
         _parent_id: Option<uuid::Uuid>,
         _expected_version: i64,
         _audit_actor: application::audit::AuditContext,
-    ) -> Result<Option<domain::content::CategorySnapshot>, UseCaseError> {
-        Ok(None)
+    ) -> Result<Option<application::ports::CategoryWithUsage>, UseCaseError> {
+        Ok(self.committed.clone())
     }
     async fn delete(
         &self,
@@ -558,9 +563,6 @@ impl application::ports::CategoryRepository for FakeCategoryRepo {
     }
     async fn existing_id(&self, _id: uuid::Uuid) -> Result<bool, UseCaseError> {
         Ok(true)
-    }
-    async fn public_count(&self, _id: uuid::Uuid) -> Result<i64, UseCaseError> {
-        Ok(0)
     }
 }
 
@@ -748,7 +750,7 @@ async fn fixture() -> Fixture {
     let posts = Arc::new(PostInteractor::new(
         post_repo.clone(),
         tag_repo.clone(),
-        Arc::new(FakeCategoryRepo),
+        Arc::new(FakeCategoryRepo::default()),
         series_repo.clone(),
         clock,
         media_guard.clone(),
@@ -944,7 +946,7 @@ async fn series_inputs_are_validated_before_one_batch_lookup() {
 }
 
 #[tokio::test]
-async fn series_update_returns_committed_record_without_catalog_read() {
+async fn catalog_updates_return_committed_records_without_catalog_reads() {
     let current = domain::content::Series::new(
         "Before".into(),
         domain::content::Slug::new("guide").unwrap(),
@@ -984,6 +986,43 @@ async fn series_update_returns_committed_record_without_catalog_read() {
         .unwrap();
     assert_eq!((result.name, result.version), (saved.name, saved.version));
     assert_eq!((result.post_count, result.public_post_count), (Some(3), 1));
+
+    let current = domain::content::Category::new(
+        "Before".into(),
+        domain::content::Slug::new("category").unwrap(),
+        None,
+        None,
+        FixedClock.now(),
+    )
+    .unwrap()
+    .snapshot();
+    let saved = current.clone();
+    let categories = application::category::CategoryInteractor::new(
+        Arc::new(FakeCategoryRepo {
+            current: Some(current),
+            committed: Some(application::ports::CategoryWithUsage {
+                snapshot: saved.clone(),
+                public_post_count: 2,
+            }),
+        }),
+        Arc::new(FixedClock),
+    );
+    let result = categories
+        .update(
+            &Actor::bootstrap_cli(),
+            "category",
+            application::category::UpdateCategoryCmd {
+                name: "Before".into(),
+                expected_version: Some(1),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        (result.name, result.version, result.public_post_count),
+        (saved.name, saved.version, 2)
+    );
 }
 
 #[tokio::test]

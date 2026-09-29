@@ -1538,9 +1538,38 @@ async fn tag_rename_is_versioned_and_slug_immutable() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(renamed.name, "Rust 语言");
-    assert_eq!(renamed.version, tag.version + 1);
-    assert_eq!(renamed.slug, "rust", "slug 不随改名变化");
+    assert_eq!(renamed.snapshot.name, "Rust 语言");
+    assert_eq!(renamed.snapshot.version, tag.version + 1);
+    assert_eq!(renamed.snapshot.slug, "rust", "slug 不随改名变化");
+    let updated_at: OffsetDateTime = sqlx::query_scalar("SELECT updated_at FROM tags WHERE id=$1")
+        .bind(tag.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let unchanged = repo
+        .rename(tag.id, "Rust 语言", renamed.snapshot.version, None.into())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(unchanged, renamed);
+    assert!(
+        repo.rename(tag.id, "Rust 语言", tag.version, None.into())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let after: OffsetDateTime = sqlx::query_scalar("SELECT updated_at FROM tags WHERE id=$1")
+        .bind(tag.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(after, updated_at);
+    let audits: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM audit_logs WHERE action='tag.update'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(audits, 1);
 }
 
 #[tokio::test]
@@ -1757,7 +1786,12 @@ async fn tag_directory_listing_counts_only_public_posts() {
     let list = repo.list().await.unwrap();
     assert_eq!(list.len(), 1);
     assert_eq!(list[0].public_post_count, 1, "公开计数不含草稿与私密");
-    assert_eq!(repo.public_count(tag.id).await.unwrap(), 1);
+    let renamed = repo
+        .rename(tag.id, "Rust renamed", tag.version, None.into())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(renamed.public_post_count, 1, "提交结果包含同口径公开计数");
 
     // existing_ids：存在性校验。
     let ghost = uuid::Uuid::now_v7();
@@ -1927,13 +1961,65 @@ async fn category_move_rejects_cycles_even_indirect() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(moved.parent_id, Some(a.id));
+    assert_eq!(moved.snapshot.parent_id, Some(a.id));
     let rooted = repo
-        .update(c.id, "C", None, None, moved.version, None.into())
+        .update(c.id, "C", None, None, moved.snapshot.version, None.into())
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(rooted.parent_id, None);
+    assert_eq!(rooted.snapshot.parent_id, None);
+
+    // 合法深树不限制层数，移动根到第101层后代仍必须识别成环。
+    let mut leaf = b.id;
+    for depth in 2..=101 {
+        leaf = seed_category(&pool, "Deep", &format!("deep-{depth}"), Some(leaf))
+            .await
+            .id;
+    }
+    assert!(matches!(
+        repo.update(a.id, "A", None, Some(leaf), a.version, None.into())
+            .await,
+        Err(UseCaseError::Invalid(_))
+    ));
+
+    // 模拟旧版本留下的环：完整遍历必须终止，也不能将无关节点接入旧环。
+    sqlx::query("UPDATE categories SET parent_id=$1 WHERE id=$2")
+        .bind(leaf)
+        .bind(a.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(matches!(
+        repo.update(
+            c.id,
+            "C",
+            None,
+            Some(b.id),
+            rooted.snapshot.version,
+            None.into()
+        )
+        .await,
+        Err(UseCaseError::DataCorrupt(_))
+    ));
+    let new_child = domain::content::Category::new(
+        "New".into(),
+        Slug::new("new-child").unwrap(),
+        Some(b.id),
+        None,
+        OffsetDateTime::now_utc(),
+    )
+    .unwrap();
+    assert!(matches!(
+        repo.insert(&new_child, None.into()).await,
+        Err(UseCaseError::DataCorrupt(_))
+    ));
+    // 移回根可以修复旧环。
+    assert!(
+        repo.update(a.id, "A", None, None, a.version, None.into())
+            .await
+            .unwrap()
+            .is_some()
+    );
 }
 
 #[tokio::test]
@@ -1957,6 +2043,36 @@ async fn category_move_rejects_missing_parent_and_checks_version() {
             .is_none(),
         "过期版本不得写入"
     );
+    let saved = repo
+        .update(a.id, "Renamed", None, None, a.version, None.into())
+        .await
+        .unwrap()
+        .unwrap();
+    let unchanged = repo
+        .update(
+            a.id,
+            "Renamed",
+            None,
+            None,
+            saved.snapshot.version,
+            None.into(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(unchanged, saved, "同值更新保留版本与更新时间");
+    assert!(
+        repo.update(a.id, "Renamed", None, None, a.version, None.into())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let audits: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM audit_logs WHERE action='category.update'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(audits, 1);
 }
 
 #[tokio::test]
@@ -2110,6 +2226,14 @@ async fn post_category_saved_in_same_transaction_and_public_page_filters() {
         .unwrap();
     assert_eq!((page1.len(), total1), (1, 1));
     assert_eq!(page1[0].slug, "cat-post");
+    let category_repo =
+        infrastructure::PostgresCategoryRepository::new(common::database(pool.clone()));
+    let updated = category_repo
+        .update(cat.id, "技术改名", None, None, cat.version, None.into())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(updated.public_post_count, 1, "分类更新直接返回公开计数");
 
     let (empty, total) = cat_query
         .list_public_posts_by_category("tech", 20, 40)

@@ -1,11 +1,12 @@
 import { invalidateAfterWrite } from "../queryEffects";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { RefObject } from "react";
 import { mediaApi } from "../api";
 import { permissionMessageOf } from "../apiError";
 import type { MediaAsset } from "../types";
 import { defaultAltText, insertImageMarkdown, uploadRejection } from "../media";
+import { useEditorRequestGuard } from "../useEditorRequestGuard";
 
 /**
  * 上传一组图片，按顺序返回。
@@ -26,6 +27,8 @@ export async function uploadImages(files: File[], onUploaded: () => void): Promi
 }
 
 export interface ImageInsertion {
+  /** 同一编辑目标的封面上传共用此标识；新稿获得 ID 时保持不变。 */
+  uploadScope: string;
   busy: boolean;
   error: string | null;
   notice: string | null;
@@ -49,8 +52,17 @@ export function useImageInsertion(
   contentRef: RefObject<HTMLTextAreaElement | null>,
   readContent: () => string,
   commitContent: (next: string) => void,
+  editor: { id: string | null; loadedId: string | null },
 ): ImageInsertion {
   const queryClient = useQueryClient();
+  const target = useRef({ id: editor.id, generation: 0 });
+  if (target.current.id !== editor.id) {
+    // 新稿保存后获得 ID 仍是同一份正文，上传应继续跟随保存期间的新输入。
+    const created = target.current.id === null && editor.id === editor.loadedId;
+    target.current = { id: editor.id, generation: target.current.generation + (created ? 0 : 1) };
+  }
+  const generation = target.current.generation;
+  const beginRequest = useEditorRequestGuard(String(generation));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -62,6 +74,14 @@ export function useImageInsertion(
    * 后一批的光标位置会与先一批竞争。闸门必须在调用时就生效。
    */
   const inFlight = useRef(false);
+
+  useEffect(() => {
+    inFlight.current = false;
+    pendingSelection.current = null;
+    setBusy(false);
+    setError(null);
+    setNotice(null);
+  }, [generation]);
 
   /** 选区：textarea 不存在或尚未挂载时退化为「正文末尾」。 */
   const selection = useCallback((): { start: number; end: number } => {
@@ -112,12 +132,14 @@ export function useImageInsertion(
   const insertFiles = useCallback(
     async (files: File[]): Promise<void> => {
       if (files.length === 0 || inFlight.current) return;
+      const isCurrent = beginRequest();
       inFlight.current = true;
       setError(null);
       setNotice(null);
       setBusy(true);
       try {
         const uploaded = await uploadImages(files, () => { void invalidateAfterWrite(queryClient, "media"); });
+        if (!isCurrent()) return;
         // 多张图片按选择顺序依次插入，后一张接在前一张之后。
         let value = readContent();
         let caret = selection().start;
@@ -135,13 +157,15 @@ export function useImageInsertion(
         apply(value, caret, caret);
         setNotice(`已插入 ${uploaded.length} 张图片（尚未保存，点保存后生效）。`);
       } catch (e) {
-        setError(permissionMessageOf(e));
+        if (isCurrent()) setError(permissionMessageOf(e));
       } finally {
-        inFlight.current = false;
-        setBusy(false);
+        if (isCurrent()) {
+          inFlight.current = false;
+          setBusy(false);
+        }
       }
     },
-    [apply, queryClient, readContent, selection],
+    [apply, beginRequest, queryClient, readContent, selection],
   );
 
   const clear = useCallback((): void => {
@@ -149,5 +173,5 @@ export function useImageInsertion(
     setNotice(null);
   }, []);
 
-  return { busy, error, notice, clear, insertAsset, insertFiles };
+  return { uploadScope: String(generation), busy, error, notice, clear, insertAsset, insertFiles };
 }

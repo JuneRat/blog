@@ -106,34 +106,14 @@ impl TagInteractor {
         let expected = checked_version(tag.version(), expected_version)?;
 
         let mut tag = tag;
-        if !tag.rename(new_name).map_err(map_domain)? {
-            // 幂等改名：版本前提已校验，聚合即当前状态，只补公开计数。
-            let count = self.tags.public_count(tag.id()).await?;
-            let s = tag.snapshot();
-            return Ok(TagDto {
-                id: s.id,
-                name: s.name,
-                slug: s.slug,
-                version: s.version,
-                public_post_count: count,
-            });
-        }
+        tag.rename(new_name).map_err(map_domain)?;
         let snapshot = tag.snapshot();
         match self
             .tags
             .rename(snapshot.id, &snapshot.name, expected, actor.audit_context())
             .await?
         {
-            Some(updated) => {
-                let count = self.tags.public_count(updated.id).await?;
-                Ok(TagDto {
-                    id: updated.id,
-                    name: updated.name,
-                    slug: updated.slug,
-                    version: updated.version,
-                    public_post_count: count,
-                })
-            }
+            Some(updated) => Ok(TagDto::from_usage(&updated)),
             None => Err(UseCaseError::VersionConflict),
         }
     }

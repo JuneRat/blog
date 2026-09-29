@@ -12,12 +12,14 @@ import type { FormState } from "./form";
 export function PostMetadataFields({
   form,
   view,
+  uploadScope,
   canReadMedia,
   canUploadMedia,
   hideTitle = false,
 }: {
   form: FormInstance<FormState>;
   view: FormState;
+  uploadScope: string;
   canReadMedia: boolean;
   canUploadMedia: boolean;
   hideTitle?: boolean;
@@ -66,6 +68,7 @@ export function PostMetadataFields({
         <Input />
       </Form.Item>
       <CoverPicker
+        uploadScope={uploadScope}
         value={view.coverMediaId}
         onChange={(id) => form.setFieldValue("coverMediaId", id)}
         canReadMedia={canReadMedia}

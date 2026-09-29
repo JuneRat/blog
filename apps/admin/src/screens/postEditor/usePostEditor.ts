@@ -482,6 +482,7 @@ export function usePostEditor(id: string | null) {
     contentRef,
     () => readForm().content,
     commitContent,
+    { id, loadedId: loadedIdRef.current },
   );
 
   function onCommentSaved(next: number, previous: number): void {

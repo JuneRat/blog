@@ -16,6 +16,7 @@ import { permissionMessageOf } from "../apiError";
 import { MEDIA_ACCEPT, MEDIA_MAX_BYTES, MEDIA_PUBLIC_NOTICE, formatBytes, mediaUrl, uploadRejection } from "../media";
 import { MediaBrowser } from "./MediaBrowser";
 import type { MediaAsset } from "../types";
+import { useEditorRequestGuard } from "../useEditorRequestGuard";
 
 export interface CoverPickerProps {
   /** 已选封面媒体 id（null = 无封面）。父组件持有，选择器只上报变化。 */
@@ -29,6 +30,8 @@ export interface CoverPickerProps {
   canUploadMedia: boolean;
   disabled?: boolean;
   label?: string;
+  /** 不卸载选择器便切换编辑目标时，废弃旧目标的上传回调。 */
+  uploadScope?: string;
 }
 
 /**
@@ -48,9 +51,11 @@ export function CoverPicker({
   canUploadMedia,
   disabled = false,
   label = "封面",
+  uploadScope,
 }: CoverPickerProps) {
   const { token } = theme.useToken();
   const queryClient = useQueryClient();
+  const beginRequest = useEditorRequestGuard(uploadScope ?? null);
   const [open, setOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -63,6 +68,12 @@ export function CoverPicker({
   const knownName = known !== null && known.id === value ? known.name : null;
 
   useEffect(() => { setError(null); }, [open]);
+  useEffect(() => {
+    setOpen(false);
+    setError(null);
+    setBusy(false);
+    setKnown(null);
+  }, [uploadScope]);
 
   /** 选中一个资产：记下文件名（如已知）并上报 id，随后收起弹窗。 */
   function choose(asset: MediaAsset): void {
@@ -85,16 +96,17 @@ export function CoverPicker({
       setError(rejection);
       return;
     }
+    const isCurrent = beginRequest();
     setError(null);
     setBusy(true);
     try {
       const uploaded = await mediaApi.upload(file);
       void invalidateAfterWrite(queryClient, "media");
-      choose(uploaded);
+      if (isCurrent()) choose(uploaded);
     } catch (e) {
-      setError(permissionMessageOf(e));
+      if (isCurrent()) setError(permissionMessageOf(e));
     } finally {
-      setBusy(false);
+      if (isCurrent()) setBusy(false);
     }
   }
 

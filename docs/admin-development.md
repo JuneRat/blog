@@ -51,6 +51,8 @@ pnpm --dir apps/admin typecheck
 
 正文预览调用[非持久化预览接口](admin-api.md#文章与回收站)，使用服务端清洗后的 HTML；预览请求不更新编辑基线或本机副本，不声称覆盖完整主题。冲突对比、预览和本地存储提示均须按当前账号/UUID 隔离，旧请求不得回填新编辑目标。
 
+正文与封面图片上传同样属于发起时的编辑会话：切换到另一篇内容后，已完成的上传仍刷新媒体库，旧回调不再改动正文、封面或显示反馈；新稿保存后获得 UUID 仍属于同一次编辑。
+
 自身槽的待恢复候选未处理时禁用编辑；其他实例候选不能阻断当前窗口持续保存新输入。恢复先持久化当前实例的克隆，再记录源修订已处理，克隆失败不得清除或持久隐藏源修订。保存飞行期间禁用恢复，防止旧副本与返回的新基线交错。
 
 ## 查询与缓存
@@ -80,7 +82,7 @@ pnpm --dir apps/admin typecheck
 | 评论审核、删除、回复 | `commentsAll()` 前缀；审核或删除失败后也会重取 |
 | 全站 / 单篇评论开关 | 成功响应写入自身 policy 键，刷新评论列表；单篇同时刷新 Post 关联视图；失败使自身键失效 |
 
-评论行为见 [CommentListScreen](../apps/admin/src/screens/CommentListScreen.tsx) 和 [CommentSwitch](../apps/admin/src/components/CommentSwitch.tsx)。后者使用 `useMutation`；复杂内容写入仍以显式函数编排，两种方式都必须保留版本和错误语义。
+评论行为见 [CommentListScreen](../apps/admin/src/screens/CommentListScreen.tsx) 和 [CommentSwitch](../apps/admin/src/components/CommentSwitch.tsx)。后者使用 `useMutation`；复杂内容写入仍以显式函数编排，两种方式都必须保留版本和错误语义。审核使最后一页清空时，列表在重取完成后回到最后有效页。
 
 新增关联写入时应检查所有读取方，并更新影响表及返回路径测试。这里保证当前后台实例中由这些入口提交后的刷新；其他浏览器、CLI、预约任务或维护任务的变更仍需重新加载，不属于跨标签页实时同步。
 

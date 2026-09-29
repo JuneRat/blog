@@ -1,5 +1,5 @@
 import { formatDateTime, useTimeZone } from "../timeZone";
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Alert, App, Button, Card, Modal, Pagination, Select, Space, Tag, Typography } from 'antd';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { commentsApi, type CommentItem } from '../api';
@@ -8,6 +8,7 @@ import { CommentEditor } from '../components/CommentEditor';
 import { paths, navigate } from '../router';
 import { queryKeys } from '../queryClient';
 import { invalidateAfterWrite } from '../queryEffects';
+const PAGE_SIZE = 20;
 const labels: Record<string, string> = { pending: '待审核', approved: '已通过', trash: '回收站', spam: '垃圾评论' };
 const actions: Record<string, string> = { pending: '退回待审', approved: '通过审核', spam: '标记垃圾', trash: '移入回收站' };
 const reasons: Record<string, string> = {
@@ -30,6 +31,11 @@ export function CommentListScreen() {
   const [reply, setReply] = useState<CommentItem>();
   const [body, setBody] = useState('');
   const query = useQuery({ queryKey: queryKeys.comments(page, status, post), queryFn: () => commentsApi.list(page, status, post) });
+  useEffect(() => {
+    if (!query.data || query.isFetching || query.isError) return;
+    const lastPage = Math.max(1, Math.ceil(query.data.total / PAGE_SIZE));
+    if (page > lastPage) setPage(lastPage);
+  }, [page, query.data, query.isFetching, query.isError]);
   async function moderate(item: CommentItem, next: string) {
     setBusy(true); setError(undefined);
     try { await commentsApi.moderate(item, next); void message.success(next === 'trash' ? '评论已移入回收站，回复仍保留' : '审核状态已保存'); }
@@ -67,7 +73,7 @@ export function CommentListScreen() {
         {item.status==='approved' && <Button disabled={busy} onClick={()=>{setReply(item);setBody('');setError(undefined);}}>回复</Button>}
       </Space>
     </Card>)}
-    <Pagination current={page} total={query.data?.total ?? 0} pageSize={20} showSizeChanger={false} onChange={setPage} />
+    <Pagination current={page} total={query.data?.total ?? 0} pageSize={PAGE_SIZE} showSizeChanger={false} onChange={setPage} />
     <Modal title="回复评论" open={!!reply} onCancel={()=>setReply(undefined)} onOk={()=>void submitReply()} confirmLoading={busy} okButtonProps={{disabled:!body.trim()}} okText="提交回复">
       <Typography.Paragraph>{reply?.body}</Typography.Paragraph>
       <CommentEditor key={reply?.id} disabled={busy} value={body} onChange={setBody} />

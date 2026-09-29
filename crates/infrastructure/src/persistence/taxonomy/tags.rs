@@ -36,6 +36,13 @@ fn tag_from_row(row: &sqlx::postgres::PgRow) -> Result<domain::content::TagSnaps
     })
 }
 
+fn tag_usage_from_row(row: &sqlx::postgres::PgRow) -> Result<TagWithUsage, UseCaseError> {
+    Ok(TagWithUsage {
+        snapshot: tag_from_row(row)?,
+        public_post_count: row.try_get("public_post_count").map_err(map_row_error)?,
+    })
+}
+
 /// 公开计数子查询：与公开文章谓词同口径（草稿/私密/回收站不计入）。
 const TAG_PUBLIC_COUNT: &str = "(SELECT count(*) FROM post_tags pt JOIN posts p ON p.id = pt.post_id \
       WHERE pt.tag_id = t.id AND p.status = 'published' AND p.visibility = 'public' \
@@ -96,14 +103,7 @@ impl TagRepository for PostgresTagRepository {
         .await
         .map_err(map_sqlx_error)?;
 
-        rows.iter()
-            .map(|row| {
-                Ok(TagWithUsage {
-                    snapshot: tag_from_row(row)?,
-                    public_post_count: row.try_get("public_post_count").map_err(map_row_error)?,
-                })
-            })
-            .collect()
+        rows.iter().map(tag_usage_from_row).collect()
     }
 
     async fn rename(
@@ -112,20 +112,26 @@ impl TagRepository for PostgresTagRepository {
         new_name: &str,
         expected_version: i64,
         actor_id: application::audit::AuditContext,
-    ) -> Result<Option<domain::content::TagSnapshot>, UseCaseError> {
+    ) -> Result<Option<TagWithUsage>, UseCaseError> {
         let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
-        let row = sqlx::query(
-            "UPDATE tags SET name = $3, version = version + 1 \
+        let row = sqlx::query(&format!(
+            "UPDATE tags t SET name = $3, \
+             version = CASE WHEN name IS DISTINCT FROM $3 THEN version + 1 ELSE version END, \
+             updated_at = CASE WHEN name IS DISTINCT FROM $3 THEN now() ELSE updated_at END \
              WHERE id = $1 AND version = $2 \
-             RETURNING id, name, slug, version, created_at",
-        )
+             RETURNING {TAG_COLUMNS}, {TAG_PUBLIC_COUNT} AS public_post_count"
+        ))
         .bind(id)
         .bind(expected_version)
         .bind(new_name)
         .fetch_optional(&mut *tx)
         .await
         .map_err(map_sqlx_error)?;
-        if row.is_some() {
+        let result = row.as_ref().map(tag_usage_from_row).transpose()?;
+        if result
+            .as_ref()
+            .is_some_and(|row| row.snapshot.version != expected_version)
+        {
             audit_content(
                 &mut tx,
                 actor_id,
@@ -137,7 +143,7 @@ impl TagRepository for PostgresTagRepository {
             .await?;
         }
         tx.commit().await.map_err(map_sqlx_error)?;
-        row.as_ref().map(tag_from_row).transpose()
+        Ok(result)
     }
 
     async fn delete(
@@ -205,20 +211,6 @@ impl TagRepository for PostgresTagRepository {
                 .await
                 .map_err(map_sqlx_error)?;
         Ok(rows.into_iter().map(|(id,)| id).collect())
-    }
-
-    async fn public_count(&self, id: Uuid) -> Result<i64, UseCaseError> {
-        // count(*) 恒有一行（可能为 0）。
-        let (count,): (i64,) = sqlx::query_as(
-            "SELECT count(*) FROM post_tags pt JOIN posts p ON p.id = pt.post_id \
-             WHERE pt.tag_id = $1 AND p.status = 'published' AND p.visibility = 'public' \
-               AND p.deleted_at IS NULL AND p.published_at <= now()",
-        )
-        .bind(id)
-        .fetch_one(&self.pool)
-        .await
-        .map_err(map_sqlx_error)?;
-        Ok(count)
     }
 }
 

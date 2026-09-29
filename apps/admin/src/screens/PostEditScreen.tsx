@@ -291,6 +291,7 @@ function PostEditor({ id }: { id: string | null }) {
                     hideTitle
                     form={formApi}
                     view={view}
+                    uploadScope={insertion.uploadScope}
                     canReadMedia={canReadMedia}
                     canUploadMedia={canUploadMedia}
                   />

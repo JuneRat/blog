@@ -130,15 +130,11 @@ impl CategoryInteractor {
             Some(Some(ref parent_slug)) => Some(self.resolve_parent(parent_slug).await?.id()),
         };
 
-        // 幂等：字段与父节点都无变化时只校验版本前提，不写不递增。
+        // 同值请求也交由仓储在事务内校验版本并返回本次记录。
         let mut category = category;
-        let fields_changed = category
+        category
             .update(cmd.name, cmd.description)
             .map_err(map_domain)?;
-        let parent_changed = parent_id != category.parent_id();
-        if !fields_changed && !parent_changed {
-            return self.dto_of(category.id()).await;
-        }
 
         let snapshot = category.snapshot();
         match self
@@ -153,18 +149,7 @@ impl CategoryInteractor {
             )
             .await?
         {
-            Some(updated) => {
-                let count = self.categories.public_count(updated.id).await?;
-                Ok(CategoryDto {
-                    id: updated.id,
-                    name: updated.name,
-                    slug: updated.slug,
-                    parent_id: updated.parent_id,
-                    description: updated.description,
-                    version: updated.version,
-                    public_post_count: count,
-                })
-            }
+            Some(updated) => Ok(CategoryDto::from_usage(&updated)),
             None => Err(UseCaseError::VersionConflict),
         }
     }
@@ -222,17 +207,6 @@ impl CategoryInteractor {
     async fn resolve_parent(&self, slug: &str) -> Result<Category, UseCaseError> {
         // 父分类与目标相同：聚合层不允许自父（数据库 CHECK 兜底）。
         self.load(slug).await
-    }
-
-    async fn dto_of(&self, id: Uuid) -> Result<CategoryDto, UseCaseError> {
-        let row = self
-            .categories
-            .list()
-            .await?
-            .into_iter()
-            .find(|row| row.snapshot.id == id)
-            .ok_or_else(|| UseCaseError::NotFound("分类".into()))?;
-        Ok(CategoryDto::from_usage(&row))
     }
 }
 

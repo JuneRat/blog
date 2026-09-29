@@ -490,6 +490,7 @@ function PageEditor({ id }: { id: string | null }) {
     contentRef,
     () => readForm().content,
     commitContent,
+    { id, loadedId: loadedIdRef.current },
   );
   const canPublish = me?.permissions.includes("page.publish") ?? false;
   const canUnpublish = me?.permissions.includes("page.unpublish") ?? false;

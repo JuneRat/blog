@@ -48,38 +48,50 @@ fn category_from_row(
     })
 }
 
+fn category_usage_from_row(row: &sqlx::postgres::PgRow) -> Result<CategoryWithUsage, UseCaseError> {
+    Ok(CategoryWithUsage {
+        snapshot: category_from_row(row)?,
+        public_post_count: row.try_get("public_post_count").map_err(map_row_error)?,
+    })
+}
+
 /// 公开文章计数子查询（直接归属；与公开分类页同口径）。
 const CATEGORY_PUBLIC_COUNT: &str = "(SELECT count(*) FROM posts p WHERE p.category_id = t.id AND p.status = 'published' \
       AND p.visibility = 'public' AND p.deleted_at IS NULL AND p.published_at <= now())";
 
-/// 深度受限的祖先链检查：自 parent 向上走，链上出现 self 即成环。
-///
-/// depth 上限防的是**已损坏数据**（自引用 CHECK 只排除直接自父，历史环会让
-/// 无界递归 CTE 永不终止）；正常数据下树锁保证环不会并发产生，链长天然有限。
-async fn parent_chain_contains(
+/// 树锁内完整遍历祖先链。UNION 按节点去重，旧环也能终止；
+/// 必须到达根，不能把截断或接入已有环当成校验成功。
+async fn validate_parent_chain(
     tx: &mut sqlx::PgConnection,
     parent_id: Uuid,
     self_id: Uuid,
-) -> Result<bool, UseCaseError> {
-    let hit: Option<(i32,)> = sqlx::query_as(
+) -> Result<(), UseCaseError> {
+    let (contains_self, reaches_root): (Option<bool>, Option<bool>) = sqlx::query_as(
         r#"
-        WITH RECURSIVE up(id, parent_id, depth) AS (
-            SELECT c.id, c.parent_id, 0 FROM categories c WHERE c.id = $1
-            UNION ALL
-            -- 向上走祖先链：c 是当前节点的父（up.parent_id = c.id）。
-            SELECT c.id, c.parent_id, up.depth + 1
+        WITH RECURSIVE up(id, parent_id) AS (
+            SELECT c.id, c.parent_id FROM categories c WHERE c.id = $1
+            UNION
+            SELECT c.id, c.parent_id
             FROM categories c JOIN up ON up.parent_id = c.id
-            WHERE up.depth < 100
         )
-        SELECT 1 FROM up WHERE id = $2 LIMIT 1
+        SELECT bool_or(id = $2), bool_or(parent_id IS NULL) FROM up
         "#,
     )
     .bind(parent_id)
     .bind(self_id)
-    .fetch_optional(&mut *tx)
+    .fetch_one(&mut *tx)
     .await
     .map_err(map_sqlx_error)?;
-    Ok(hit.is_some())
+    match contains_self {
+        None => Err(UseCaseError::Invalid("父分类不存在".into())),
+        Some(true) => Err(UseCaseError::Invalid(
+            "目标父分类的祖先链包含自身，会形成环".into(),
+        )),
+        Some(false) if reaches_root != Some(true) => {
+            Err(UseCaseError::DataCorrupt("父分类的祖先链已存在环".into()))
+        }
+        Some(false) => Ok(()),
+    }
 }
 
 #[async_trait]
@@ -90,8 +102,7 @@ impl CategoryRepository for PostgresCategoryRepository {
         audit_actor: application::audit::AuditContext,
     ) -> Result<(), UseCaseError> {
         let snapshot = aggregate.snapshot();
-        // 新节点不可能是自己的祖先，创建本身无环；树锁仍统一取得，
-        // 与并发删除父分类互斥（否则插入成功后父已消失，靠 FK 报裸错误）。
+        // 树锁内确认父节点仍存在且祖先链完好，避免新节点接入历史环。
         let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
         sqlx::query("SELECT pg_advisory_xact_lock($1::int, $2::int)")
             .bind(CATEGORY_TREE_LOCK.0)
@@ -99,6 +110,9 @@ impl CategoryRepository for PostgresCategoryRepository {
             .execute(&mut *tx)
             .await
             .map_err(map_sqlx_error)?;
+        if let Some(parent_id) = snapshot.parent_id {
+            validate_parent_chain(&mut tx, parent_id, snapshot.id).await?;
+        }
         sqlx::query(
             "INSERT INTO categories (id, name, slug, parent_id, description, version, \
              created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
@@ -149,14 +163,7 @@ impl CategoryRepository for PostgresCategoryRepository {
         .fetch_all(&self.pool)
         .await
         .map_err(map_sqlx_error)?;
-        rows.iter()
-            .map(|row| {
-                Ok(CategoryWithUsage {
-                    snapshot: category_from_row(row)?,
-                    public_post_count: row.try_get("public_post_count").map_err(map_row_error)?,
-                })
-            })
-            .collect()
+        rows.iter().map(category_usage_from_row).collect()
     }
 
     async fn update(
@@ -167,7 +174,7 @@ impl CategoryRepository for PostgresCategoryRepository {
         parent_id: Option<Uuid>,
         expected_version: i64,
         audit_actor: application::audit::AuditContext,
-    ) -> Result<Option<domain::content::CategorySnapshot>, UseCaseError> {
+    ) -> Result<Option<CategoryWithUsage>, UseCaseError> {
         let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
         // 树锁内完成「环检查 + 写入」：锁外的检查结果可能被并发移动作废。
         sqlx::query("SELECT pg_advisory_xact_lock($1::int, $2::int)")
@@ -195,37 +202,18 @@ impl CategoryRepository for PostgresCategoryRepository {
         if parent_id != current_parent
             && let Some(new_parent) = parent_id
         {
-            {
-                if new_parent == id {
-                    tx.commit().await.map_err(map_sqlx_error)?;
-                    return Err(UseCaseError::Invalid("父分类不能是自身".into()));
-                }
-                // 新父必须存在（给出可定位错误，而非 FK 裸错误）。
-                let exists: Option<(Uuid,)> =
-                    sqlx::query_as("SELECT id FROM categories WHERE id = $1")
-                        .bind(new_parent)
-                        .fetch_optional(&mut *tx)
-                        .await
-                        .map_err(map_sqlx_error)?;
-                if exists.is_none() {
-                    tx.commit().await.map_err(map_sqlx_error)?;
-                    return Err(UseCaseError::Invalid("父分类不存在".into()));
-                }
-                if parent_chain_contains(&mut tx, new_parent, id).await? {
-                    tx.commit().await.map_err(map_sqlx_error)?;
-                    return Err(UseCaseError::Invalid(
-                        "目标父分类的祖先链包含自身，会形成环".into(),
-                    ));
-                }
-            }
+            validate_parent_chain(&mut tx, new_parent, id).await?;
         }
 
-        let row = sqlx::query(
-            "UPDATE categories SET name = $3, description = $4, parent_id = $5, \
-             version = version + 1, updated_at = now() \
+        let row = sqlx::query(&format!(
+            "UPDATE categories t SET name = $3, description = $4, parent_id = $5, \
+             version = CASE WHEN (name, description, parent_id) IS DISTINCT FROM ($3::text, $4::text, $5::uuid) \
+                            THEN version + 1 ELSE version END, \
+             updated_at = CASE WHEN (name, description, parent_id) IS DISTINCT FROM ($3::text, $4::text, $5::uuid) \
+                               THEN now() ELSE updated_at END \
              WHERE id = $1 AND version = $2 \
-             RETURNING id, name, slug, parent_id, description, version, created_at, updated_at",
-        )
+             RETURNING {CATEGORY_COLUMNS}, {CATEGORY_PUBLIC_COUNT} AS public_post_count"
+        ))
         .bind(id)
         .bind(expected_version)
         .bind(name)
@@ -234,8 +222,11 @@ impl CategoryRepository for PostgresCategoryRepository {
         .fetch_optional(&mut *tx)
         .await
         .map_err(map_sqlx_error)?;
-        if let Some(row) = &row {
-            let snapshot = category_from_row(row)?;
+        let result = row.as_ref().map(category_usage_from_row).transpose()?;
+        if let Some(row) = &result
+            && row.snapshot.version != expected_version
+        {
+            let snapshot = &row.snapshot;
             audit_content(
                 &mut tx,
                 audit_actor,
@@ -247,7 +238,7 @@ impl CategoryRepository for PostgresCategoryRepository {
             .await?;
         }
         tx.commit().await.map_err(map_sqlx_error)?;
-        row.as_ref().map(category_from_row).transpose()
+        Ok(result)
     }
 
     async fn delete(
@@ -321,18 +312,6 @@ impl CategoryRepository for PostgresCategoryRepository {
             .await
             .map_err(map_sqlx_error)?;
         Ok(hit.is_some())
-    }
-
-    async fn public_count(&self, id: Uuid) -> Result<i64, UseCaseError> {
-        let (count,): (i64,) = sqlx::query_as(
-            "SELECT count(*) FROM posts WHERE category_id = $1 AND status = 'published' \
-             AND visibility = 'public' AND deleted_at IS NULL AND published_at <= now()",
-        )
-        .bind(id)
-        .fetch_one(&self.pool)
-        .await
-        .map_err(map_sqlx_error)?;
-        Ok(count)
     }
 }
 

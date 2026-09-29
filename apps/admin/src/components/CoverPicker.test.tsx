@@ -14,11 +14,11 @@ import { createQueryClient } from "../queryClient";
 import { invalidateAfterWrite } from "../queryEffects";
 import { AdminProviders } from "../providers";
 import { CoverPicker } from "./CoverPicker";
-import type { MediaPage } from "../types";
+import type { MediaAsset, MediaPage } from "../types";
 
 vi.mock("../api", async (load) => {
   const actual = await load<typeof import("../api")>();
-  return { ...actual, mediaApi: { ...actual.mediaApi, list: vi.fn() } };
+  return { ...actual, mediaApi: { ...actual.mediaApi, list: vi.fn(), upload: vi.fn() } };
 });
 beforeEach(() => vi.resetAllMocks());
 afterEach(cleanup);
@@ -99,6 +99,32 @@ it("passes cancellation to fetch when the picker unmounts", async () => {
   expect(signal?.aborted).toBe(false);
   mounted.unmount();
   expect(signal?.aborted).toBe(true);
+});
+
+it("does not select an upload from the previous editing target, but refreshes the library", async () => {
+  vi.mocked(mediaApi.list).mockResolvedValue(empty);
+  let finishUpload!: (asset: MediaAsset) => void;
+  vi.mocked(mediaApi.upload).mockReturnValue(new Promise((resolve) => { finishUpload = resolve; }));
+  const onChange = vi.fn();
+  const view = (uploadScope: string) => <AdminProviders>
+    <Library />
+    <CoverPicker value={null} onChange={onChange} canReadMedia canUploadMedia uploadScope={uploadScope} />
+  </AdminProviders>;
+  const mounted = render(view("post-a"));
+  fireEvent.click(screen.getByRole("button", { name: "选择封面" }));
+  await waitFor(() => expect(screen.getByLabelText("library-count").textContent).toBe("0"));
+  fireEvent.change(document.querySelector('input[type="file"]')!, {
+    target: { files: [new File([new Uint8Array(8)], "cover.png", { type: "image/png" })] },
+  });
+  expect(mediaApi.upload).toHaveBeenCalledTimes(1);
+  mounted.rerender(view("post-b"));
+  fireEvent.click(screen.getByRole("button", { name: "选择封面" }));
+  vi.mocked(mediaApi.list).mockResolvedValue(populated);
+  await act(async () => { finishUpload(populated.items[0]); });
+  await waitFor(() => expect(screen.getByLabelText("library-count").textContent).toBe("1"));
+  expect(onChange).not.toHaveBeenCalled();
+  expect(screen.getByRole("dialog")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "上传图片" }).hasAttribute("disabled")).toBe(false);
 });
 
 it("selects an older image from a later search page", async () => {

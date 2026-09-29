@@ -93,7 +93,7 @@ impl TagRepository for FakeTagRepo {
         new_name: &str,
         expected_version: i64,
         _actor_id: application::audit::AuditContext,
-    ) -> Result<Option<TagSnapshot>, UseCaseError> {
+    ) -> Result<Option<TagWithUsage>, UseCaseError> {
         let mut tags = self.tags.lock().unwrap();
         let Some(tag) = tags.values_mut().find(|t| t.id == id) else {
             return Ok(None);
@@ -101,9 +101,14 @@ impl TagRepository for FakeTagRepo {
         if tag.version != expected_version {
             return Ok(None);
         }
-        tag.name = new_name.into();
-        tag.version += 1;
-        Ok(Some(tag.clone()))
+        if tag.name != new_name {
+            tag.name = new_name.into();
+            tag.version += 1;
+        }
+        Ok(Some(TagWithUsage {
+            snapshot: tag.clone(),
+            public_post_count: *self.references.lock().unwrap().get(&id).unwrap_or(&0),
+        }))
     }
 
     async fn delete(
@@ -133,10 +138,6 @@ impl TagRepository for FakeTagRepo {
             .collect();
         found.sort();
         Ok(found)
-    }
-
-    async fn public_count(&self, id: Uuid) -> Result<i64, UseCaseError> {
-        Ok(*self.references.lock().unwrap().get(&id).unwrap_or(&0))
     }
 }
 
@@ -450,6 +451,7 @@ async fn editor_can_create_list_rename_and_delete_tags() {
     assert_eq!(list.len(), 2);
     assert_eq!(list[0].slug, "essay", "目录按 slug 排序");
 
+    f.repo.references.lock().unwrap().insert(created.id, 2);
     let renamed = f
         .tags
         .rename(&f.editor, "rust", "Rust 语言".into(), Some(1))
@@ -457,6 +459,7 @@ async fn editor_can_create_list_rename_and_delete_tags() {
         .unwrap();
     assert_eq!(renamed.name, "Rust 语言");
     assert_eq!(renamed.version, 2, "改名递增版本");
+    assert_eq!(renamed.public_post_count, 2, "返回提交时的计数");
 
     f.tags.delete(&f.editor, "essay", Some(1)).await.unwrap();
     assert_eq!(f.tags.list(&f.editor).await.unwrap().len(), 1);

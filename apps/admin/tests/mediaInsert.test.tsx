@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
 import { api, categoryApi, mediaApi, seriesApi } from "../src/api";
-import { paths } from "../src/router";
+import { navigate, paths } from "../src/router";
 import type { MediaAsset, PostDetail } from "../src/types";
 
 /** 每个用例可改写的权限集合（`media.read` 决定面板入口是否存在）。 */
@@ -29,6 +29,7 @@ vi.mock("../src/api", async (importOriginal) => {
       getPost: vi.fn(),
       getPage: vi.fn(),
       createPost: vi.fn(),
+      createPage: vi.fn(),
       updatePost: vi.fn(),
       publishPost: vi.fn(),
       unpublishPost: vi.fn(),
@@ -77,6 +78,12 @@ function asset(overrides: Partial<MediaAsset> = {}): MediaAsset {
 
 function contentBox(): HTMLTextAreaElement {
   return screen.getByLabelText("正文（Markdown）") as HTMLTextAreaElement;
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
 }
 
 /** 打开图片面板并等待资产列表就绪。 */
@@ -175,6 +182,50 @@ describe("编辑器内插入图片", () => {
 
     await waitFor(() => expect(mediaApi.upload).toHaveBeenCalledWith(file));
     await waitFor(() => expect(contentBox().value).toBe("![pasted](/media/pasted)"));
+  });
+
+  it.each(["post", "page"] as const)("%s 切换目标后忽略旧上传，新稿保存获得 ID 后仍可插图", async (kind) => {
+    state.permissions.push("post.create", "page.create", "page.update");
+    const editPath = kind === "post" ? paths.editPost : paths.editPage;
+    const newPath = kind === "post" ? paths.newPost : paths.newPage;
+    const create = kind === "post" ? api.createPost : api.createPage;
+    window.history.replaceState(null, "", editPath(post.id));
+    vi.mocked(api.getPage).mockResolvedValue(post);
+    const oldUpload = deferred<MediaAsset>();
+    const newUpload = deferred<MediaAsset>();
+    const save = deferred<PostDetail>();
+    vi.mocked(mediaApi.upload).mockReturnValueOnce(oldUpload.promise).mockReturnValueOnce(newUpload.promise);
+    vi.mocked(create).mockReturnValue(save.promise);
+    render(<App />);
+    await waitFor(() => expect(contentBox().value).toBe(post.content));
+    await openPanel();
+    const file = new File([new Uint8Array(8)], "pasted.png", { type: "image/png" });
+    fireEvent.paste(contentBox(), { clipboardData: { files: [file] } });
+
+    act(() => { navigate(newPath); });
+    await waitFor(() => expect(contentBox().value).toBe(""));
+    fireEvent.change(screen.getByLabelText("标题"), { target: { value: "新稿" } });
+    fireEvent.change(contentBox(), { target: { value: "新稿正文" } });
+    fireEvent.paste(contentBox(), { clipboardData: { files: [file] } });
+    expect(mediaApi.upload).toHaveBeenCalledTimes(2);
+
+    const uploaded = asset({ original_name: "old-target.png" });
+    vi.mocked(mediaApi.list).mockResolvedValue({ items: [uploaded], total: 1, page: 1, per_page: 24 });
+    await act(async () => { oldUpload.resolve(uploaded); });
+    expect(contentBox().value).toBe("新稿正文");
+    expect(screen.queryByText(/已插入.*张图片/)).toBeNull();
+    expect(screen.getByRole("button", { name: "上传中…" }).hasAttribute("disabled")).toBe(true);
+    await screen.findByText("old-target.png");
+
+    fireEvent.click(screen.getByRole("button", { name: "保存草稿" }));
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    fireEvent.change(contentBox(), { target: { value: "保存期间继续输入" } });
+    await act(async () => { save.resolve({ ...post, id: "created", title: "新稿", content: "新稿正文" }); });
+    expect(window.location.pathname).toBe(editPath("created"));
+    expect(contentBox().value).toBe("保存期间继续输入");
+    contentBox().setSelectionRange(contentBox().value.length, contentBox().value.length);
+    await act(async () => { newUpload.resolve(asset({ original_name: "current.png", url: "/media/current" })); });
+    expect(contentBox().value).toBe("保存期间继续输入\n\n![current](/media/current)");
   });
 
   it("拖入图片与粘贴共用同一插入路径", async () => {

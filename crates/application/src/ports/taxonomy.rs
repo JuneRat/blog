@@ -39,15 +39,15 @@ pub trait TagRepository: Send + Sync {
     /// 全量目录（数量小，不分页），含公开文章计数，按 slug 排序。
     async fn list(&self) -> Result<Vec<TagWithUsage>, UseCaseError>;
 
-    /// 条件改名（CAS）：命中时 name 更新、version+1 并返回新快照；
-    /// 未命中返回 None（调用方区分版本冲突与不存在）。
+    /// 条件改名（CAS）：返回本次提交的快照与公开计数；未命中返回 None。
+    /// 同名仍校验版本，保持版本与审计不变。
     async fn rename(
         &self,
         id: Uuid,
         new_name: &str,
         expected_version: i64,
         actor_id: crate::audit::AuditContext,
-    ) -> Result<Option<domain::content::TagSnapshot>, UseCaseError>;
+    ) -> Result<Option<TagWithUsage>, UseCaseError>;
 
     /// 条件删除标签并解除关联；保留文章并递增受影响文章版本。
     async fn delete(
@@ -60,9 +60,6 @@ pub trait TagRepository: Send + Sync {
     /// 返回 `ids` 中确实存在的标签 id（去重、按 id 排序）。
     /// 用例据此把「标签不存在」报为可定位的参数错误，而不是 FK 违规。
     async fn existing_ids(&self, ids: &[Uuid]) -> Result<Vec<Uuid>, UseCaseError>;
-
-    /// 单个标签的公开文章计数（改名响应回填用；与 list 同一口径）。
-    async fn public_count(&self, id: Uuid) -> Result<i64, UseCaseError>;
 }
 
 /// 分类目录条目：含公开文章计数（直接归属；子树聚合计数需显式查询，首版不提供）。
@@ -105,7 +102,8 @@ pub trait CategoryRepository: Send + Sync {
     /// 全量目录（含公开文章计数），按 slug 排序。
     async fn list(&self) -> Result<Vec<CategoryWithUsage>, UseCaseError>;
 
-    /// 条件更新（CAS）：name/描述/父节点一次提交；命中返回新快照，未命中 None。
+    /// 条件更新（CAS）：name/描述/父节点一次提交，返回本事务的快照与公开计数。
+    /// 无实际变化仍校验版本，保持版本、更新时间与审计不变；未命中返回 None。
     ///
     /// 父节点变化时在分类树锁内重走祖先链：链上出现自身即 `Err(Invalid)`（成环），
     /// 新父不存在同样 `Err(Invalid)`。树锁保证检查与写入之间无并发移动。
@@ -117,7 +115,7 @@ pub trait CategoryRepository: Send + Sync {
         parent_id: Option<Uuid>,
         expected_version: i64,
         audit_actor: crate::audit::AuditContext,
-    ) -> Result<Option<domain::content::CategorySnapshot>, UseCaseError>;
+    ) -> Result<Option<CategoryWithUsage>, UseCaseError>;
 
     /// 条件删除：树锁内先检查文章引用与子分类，再按版本条件删除。
     async fn delete(
@@ -129,9 +127,6 @@ pub trait CategoryRepository: Send + Sync {
 
     /// 文章设置分类前的存在性校验。
     async fn existing_id(&self, id: Uuid) -> Result<bool, UseCaseError>;
-
-    /// 单个分类的公开文章计数（更新响应回填用）。
-    async fn public_count(&self, id: Uuid) -> Result<i64, UseCaseError>;
 }
 
 /// 系列目录条目：含公开文章计数与总成员数。
