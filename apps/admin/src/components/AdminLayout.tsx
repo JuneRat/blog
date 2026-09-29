@@ -1,5 +1,5 @@
 import { invalidateAfterWrite } from "../queryEffects";
-import { Alert, Avatar, Breadcrumb, Button, Flex, Layout, Menu, Modal, Typography, theme } from "antd";
+import { Alert, Avatar, Breadcrumb, Button, Flex, Layout, Menu, Modal, Space, Typography, theme } from "antd";
 import type { MenuProps } from "antd";
 import type { ReactNode } from "react";
 import { useState } from "react";
@@ -193,31 +193,58 @@ export function AdminLayout({ children }: { children: ReactNode }) {
             display: "flex",
             alignItems: "center",
             justifyContent: "space-between",
+            borderBottom: `1px solid ${token.colorBorderSecondary}`,
           }}
         >
           <Breadcrumb items={[{ title: "博客后台" }, { title: TITLES[route.name] }]} />
-          <Flex gap={8} align="center">
-            <Button type="link" href="/" target="_blank">
-              查看站点
+          <Flex gap={12} align="center">
+            <Button type="link" href="/" target="_blank" style={{ paddingInline: 8 }}>
+              查看站点 ↗
             </Button>
-            {/* 头像入口：显示当前头像，点击打开自助更换弹窗。 */}
-            <Button type="text" onClick={openAvatar} style={{ paddingInline: 4 }}>
+            {/* 头像入口：显示当前头像，点击直接打开自助更换弹窗。 */}
+            <Button
+              type="text"
+              onClick={openAvatar}
+              aria-label="更换头像"
+              title="更换头像"
+              style={{ paddingInline: 4 }}
+            >
               <Flex gap={8} align="center">
                 <Avatar size={28} src={me?.avatar_url ?? undefined}>
                   {(me?.display_name ?? me?.username ?? "?").slice(0, 1)}
                 </Avatar>
-                <span>更换头像</span>
+                <span style={{ fontWeight: 500 }}>
+                  {me?.display_name ?? me?.username ?? "我的账号"}
+                </span>
               </Flex>
             </Button>
-            <Button onClick={() => setPasswordOpen(true)}>修改密码</Button>
-            <Button onClick={() => goTo(paths.profile)}>个人资料</Button>
-            <Button onClick={() => confirmLeave(() => void logout?.(), "放弃修改并退出")}>
-              退出登录
-            </Button>
+            {/* 顶栏用户操作：采用轻量 borderless 按钮与紧凑容器，解决孤立灰色按钮视觉杂乱问题 */}
+            <Space.Compact
+              style={{
+                background: token.colorFillQuaternary,
+                borderRadius: token.borderRadiusSM,
+                padding: "2px 4px",
+              }}
+            >
+              <Button type="text" size="small" onClick={() => goTo(paths.profile)}>
+                个人资料
+              </Button>
+              <Button type="text" size="small" onClick={() => setPasswordOpen(true)}>
+                修改密码
+              </Button>
+              <Button
+                type="text"
+                size="small"
+                danger
+                onClick={() => confirmLeave(() => void logout?.(), "放弃修改并退出")}
+              >
+                退出登录
+              </Button>
+            </Space.Compact>
           </Flex>
         </Header>
-        <Content style={{ padding: "8px 24px 48px" }}>
-          <div style={{ maxWidth: 1040, margin: "0 auto" }}>
+        <Content style={{ padding: "16px 24px 48px" }}>
+          <div style={{ maxWidth: 1400, margin: "0 auto", width: "100%" }}>
             {/* 退出失败时会话仍然有效，不能假装已退出：沿用 auth 的 logoutError 明确提示。 */}
             {logoutError != null && (
               <Alert type="error" showIcon title={logoutError} style={{ marginBottom: 16 }} />

@@ -27,8 +27,8 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      "/api": { target: "http://127.0.0.1:8080" },
-      "/auth": { target: "http://127.0.0.1:8080" },
+      "/api": { target: "http://127.0.0.1:3000" },
+      "/auth": { target: "http://127.0.0.1:3000" },
     },
   },
 });

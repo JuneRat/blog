@@ -150,6 +150,24 @@ describe("我的文章列表", () => {
     expect(screen.getByText("私有")).toBeTruthy();
   });
 
+  it("输入关键词即时过滤当前页标题与 slug", async () => {
+    render(<App />);
+    expect(await screen.findByText("Rust 指南")).toBeTruthy();
+    expect(screen.getByText("draft-note")).toBeTruthy();
+
+    const searchInput = screen.getByPlaceholderText("搜索当前页标题或 slug…");
+    fireEvent.change(searchInput, { target: { value: "Rust" } });
+    expect(screen.getByText("Rust 指南")).toBeTruthy();
+    expect(screen.queryByText("draft-note")).toBeNull();
+
+    fireEvent.change(searchInput, { target: { value: "draft-note" } });
+    expect(screen.queryByText("Rust 指南")).toBeNull();
+    expect(screen.getByText("draft-note")).toBeTruthy();
+
+    fireEvent.change(searchInput, { target: { value: "不存在的内容" } });
+    expect(screen.getByText("没有匹配搜索条件的文章。")).toBeTruthy();
+  });
+
   it("有 post.create 权限时「新建草稿」导航到新建地址", async () => {
     render(<App />);
     await screen.findByText("Rust 指南");

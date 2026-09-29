@@ -14,11 +14,13 @@ export function PostMetadataFields({
   view,
   canReadMedia,
   canUploadMedia,
+  hideTitle = false,
 }: {
   form: FormInstance<FormState>;
   view: FormState;
   canReadMedia: boolean;
   canUploadMedia: boolean;
+  hideTitle?: boolean;
 }) {
   const confirmLeave = useLeaveConfirmation();
   /**
@@ -52,11 +54,13 @@ export function PostMetadataFields({
       <Form.Item label="slug" name="slug">
         <Input placeholder="留空则自动生成（预约或发布后锁定）" />
       </Form.Item>
-      <Form.Item label="标题" name="title">
-        <Input />
-      </Form.Item>
+      {!hideTitle && (
+        <Form.Item label="标题" name="title">
+          <Input />
+        </Form.Item>
+      )}
       <Form.Item label="摘要" name="excerpt">
-        <Input />
+        <Input placeholder="文章简短摘要（可选）" />
       </Form.Item>
       <Form.Item name="coverMediaId" hidden>
         <Input />

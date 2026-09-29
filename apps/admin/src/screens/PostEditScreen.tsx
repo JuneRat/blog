@@ -1,4 +1,4 @@
-import { Alert, Button, Flex, Form, Input, Space, Tag, Typography } from "antd";
+import { Alert, Button, Card, Col, Flex, Form, Input, Row, Tag, Typography } from "antd";
 import { useAuth } from "../auth";
 import { ContentPreview } from "../components/ContentPreview";
 import { ContentConflict, conflictFields } from "../components/ContentConflict";
@@ -134,16 +134,6 @@ function PostEditor({ id }: { id: string | null }) {
           />
         )}
 
-        {id !== null && (
-          <CommentSwitch
-            key={id}
-            post={id}
-            expectedVersion={version}
-            disabled={busy || formMismatch}
-            onBusy={setCommentBusy}
-            onSaved={onCommentSaved}
-          />
-        )}
         <Form
           form={formApi}
           disabled={
@@ -158,117 +148,155 @@ function PostEditor({ id }: { id: string | null }) {
             if (!commentBusy) void save();
           }}
         >
-          <PostMetadataFields
-            form={formApi}
-            view={view}
-            canReadMedia={canReadMedia}
-            canUploadMedia={canUploadMedia}
-          />
-          <Form.Item label="正文（Markdown）" name="content">
-            <Input.TextArea
-              ref={attachContentRef}
-              rows={18}
-              onDrop={(event) => {
-                const files = Array.from(event.dataTransfer.files);
-                if (files.length === 0) return;
-                event.preventDefault();
-                void insertion.insertFiles(files);
-              }}
-              onPaste={(event) => {
-                const files = Array.from(event.clipboardData?.files ?? []);
-                if (files.length === 0) return;
-                event.preventDefault();
-                void insertion.insertFiles(files);
-              }}
-            />
-          </Form.Item>
+          <Row gutter={[24, 24]}>
+            <Col xs={24} lg={16} xl={17}>
+              <Form.Item label="标题" name="title" style={{ marginBottom: 16 }}>
+                <Input
+                  size="large"
+                  placeholder="输入文章标题…"
+                  style={{ fontSize: 18, fontWeight: 600 }}
+                />
+              </Form.Item>
+              <Form.Item label="正文（Markdown）" name="content" style={{ marginBottom: 16 }}>
+                <Input.TextArea
+                  ref={attachContentRef}
+                  rows={22}
+                  style={{
+                    fontFamily:
+                      'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace',
+                    fontSize: 14,
+                    lineHeight: 1.6,
+                  }}
+                  placeholder="在此输入 Markdown 正文…"
+                  onDrop={(event) => {
+                    const files = Array.from(event.dataTransfer.files);
+                    if (files.length === 0) return;
+                    event.preventDefault();
+                    void insertion.insertFiles(files);
+                  }}
+                  onPaste={(event) => {
+                    const files = Array.from(event.clipboardData?.files ?? []);
+                    if (files.length === 0) return;
+                    event.preventDefault();
+                    void insertion.insertFiles(files);
+                  }}
+                />
+              </Form.Item>
 
-          <ContentPreview
-            key={id ?? "new"}
-            content={view.content}
-            disabled={formMismatch || busy}
-          />
+              {canReadMedia && (
+                <Flex gap={12} align="center" style={{ marginBottom: 16 }}>
+                  <Button
+                    type="link"
+                    style={{ paddingInline: 0 }}
+                    onClick={() => {
+                      insertion.clear();
+                      setMediaOpen((open) => !open);
+                    }}
+                  >
+                    {mediaOpen ? "收起图片面板" : "插入图片"}
+                  </Button>
+                  <Typography.Text type="secondary">
+                    也可以把图片拖入正文框，或在正文框内粘贴剪贴板图片。
+                  </Typography.Text>
+                </Flex>
+              )}
+              {insertion.error !== null && (
+                <Alert
+                  type="error"
+                  showIcon
+                  title={insertion.error}
+                  style={{ marginBottom: 16 }}
+                />
+              )}
+              {insertion.notice !== null && (
+                <Alert
+                  type="success"
+                  showIcon
+                  title={insertion.notice}
+                  style={{ marginBottom: 16 }}
+                />
+              )}
+              {mediaOpen && canReadMedia && (
+                <div style={{ marginBottom: 16 }}>
+                  <MediaInsertPanel
+                    insertion={insertion}
+                    canUpload={canUploadMedia}
+                    onClose={() => setMediaOpen(false)}
+                  />
+                </div>
+              )}
 
-          {canReadMedia && (
-            <Flex gap={12} align="center" style={{ marginBottom: 16 }}>
-              <Button
-                type="link"
-                onClick={() => {
-                  insertion.clear();
-                  setMediaOpen((open) => !open);
-                }}
-              >
-                {mediaOpen ? "收起图片面板" : "插入图片"}
-              </Button>
-              <Typography.Text type="secondary">
-                也可以把图片拖入正文框，或在正文框内粘贴剪贴板图片。
-              </Typography.Text>
-            </Flex>
-          )}
-          {insertion.error !== null && (
-            <Alert
-              type="error"
-              showIcon
-              title={insertion.error}
-              style={{ marginBottom: 16 }}
-            />
-          )}
-          {insertion.notice !== null && (
-            <Alert
-              type="success"
-              showIcon
-              title={insertion.notice}
-              style={{ marginBottom: 16 }}
-            />
-          )}
-          {mediaOpen && canReadMedia && (
-            <div style={{ marginBottom: 16 }}>
-              <MediaInsertPanel
-                insertion={insertion}
-                canUpload={canUploadMedia}
-                onClose={() => setMediaOpen(false)}
+              <ContentPreview
+                key={id ?? "new"}
+                content={view.content}
+                disabled={formMismatch || busy}
               />
-            </div>
-          )}
+            </Col>
 
-          <Space>
-            {/*
-            用文案切换而不是 Button 的 loading 属性表示进行中。
-            antd 的 loading 图标在动画结束后仍会留在 DOM 里（jsdom 里动画不结束，
-            查询更明显），其 `role="img" aria-label="loading"` 会污染按钮的无障碍名，
-            让按名字定位变脆、读屏也会念出多余的 "loading"。
-          */}
-            <Button
-              type="primary"
-              htmlType="submit"
-              disabled={
-                busy ||
-                commentBusy ||
-                formMismatch ||
-                postStatus === "archived" ||
-                localDraft.blocksEditing
-              }
-            >
-              {busy
-                ? "处理中…"
-                : postStatus === "published"
-                  ? "更新已发布内容"
-                  : postStatus === "scheduled"
-                    ? "保存预约内容"
-                    : "保存草稿"}
-            </Button>
-            {id !== null && (
-              <ContentLifecycleControls
-                status={postStatus}
-                publishedAt={publishedAt}
-                disabled={busy || commentBusy || formMismatch}
-                canPublish={canPublish && !localDraft.blocksEditing}
-                canUnpublish={canUnpublish}
-                canArchive={canUnpublish}
-                onAction={changeStatus}
-              />
-            )}
-          </Space>
+            <Col xs={24} lg={8} xl={7}>
+              <Flex vertical gap={16} style={{ width: "100%" }}>
+                <Card title="发布设置" size="small">
+                  <Button
+                    type="primary"
+                    htmlType="submit"
+                    block
+                    size="large"
+                    disabled={
+                      busy ||
+                      commentBusy ||
+                      formMismatch ||
+                      postStatus === "archived" ||
+                      localDraft.blocksEditing
+                    }
+                    style={{ marginBottom: 12 }}
+                  >
+                    {busy
+                      ? "处理中…"
+                      : postStatus === "published"
+                        ? "更新已发布内容"
+                        : postStatus === "scheduled"
+                          ? "保存预约内容"
+                          : "保存草稿"}
+                  </Button>
+                  {id !== null && (
+                    <Flex justify="center" style={{ marginBottom: 12 }}>
+                      <ContentLifecycleControls
+                        status={postStatus}
+                        publishedAt={publishedAt}
+                        disabled={busy || commentBusy || formMismatch}
+                        canPublish={canPublish && !localDraft.blocksEditing}
+                        canUnpublish={canUnpublish}
+                        canArchive={canUnpublish}
+                        onAction={changeStatus}
+                      />
+                    </Flex>
+                  )}
+                  {id !== null && (
+                    <div style={{ paddingTop: 8, borderTop: "1px solid #f0f0f0" }}>
+                      <CommentSwitch
+                        key={id}
+                        post={id}
+                        expectedVersion={version}
+                        disabled={busy || formMismatch}
+                        onBusy={setCommentBusy}
+                        onSaved={onCommentSaved}
+                      />
+                    </div>
+                  )}
+                </Card>
+
+                <Card title="文章属性" size="small">
+                  <PostMetadataFields
+                    hideTitle
+                    form={formApi}
+                    view={view}
+                    canReadMedia={canReadMedia}
+                    canUploadMedia={canUploadMedia}
+                  />
+                </Card>
+              </Flex>
+            </Col>
+          </Row>
         </Form>
       </div>
     </>

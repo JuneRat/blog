@@ -1,7 +1,7 @@
 import { formatDateTime, useTimeZone } from "../timeZone";
 import { invalidateAfterWrite } from "../queryEffects";
 import { statusLabel } from "../components/ContentLifecycleControls";
-import { Alert, App as AntdApp, Button, Flex, Space, Table, Typography } from "antd";
+import { Alert, App as AntdApp, Button, Flex, Input, Space, Table, Typography } from "antd";
 import type { TableProps } from "antd";
 import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
@@ -55,20 +55,33 @@ export function PostListScreen() {
     });
   }
 
+  const [searchKeyword, setSearchKeyword] = useState("");
+  const rawPosts = posts.data?.items ?? [];
+  const displayedPosts = rawPosts.filter((post) => {
+    if (!searchKeyword.trim()) return true;
+    const kw = searchKeyword.trim().toLowerCase();
+    return (
+      (post.title && post.title.toLowerCase().includes(kw)) ||
+      (post.slug && post.slug.toLowerCase().includes(kw))
+    );
+  });
+
   const columns: TableProps<PostSummary>["columns"] = [
     {
-      title: "版本",
-      dataIndex: "version",
-      render: (version: number) => <Typography.Text type="secondary">v{version}</Typography.Text>,
+      title: "标题",
+      dataIndex: "title",
+      render: (title: string) => <Typography.Text strong>{title || "（无标题）"}</Typography.Text>,
     },
     {
       title: "状态",
       dataIndex: "status",
+      width: 110,
       render: (status: string) => statusLabel(status),
     },
     {
       title: "可见",
       dataIndex: "visibility",
+      width: 90,
       render: (visibility: string) => (visibility === "public" ? "公开" : "私有"),
     },
     {
@@ -77,13 +90,15 @@ export function PostListScreen() {
       render: (slug: string) => <Typography.Text code>{slug}</Typography.Text>,
     },
     {
-      title: "标题",
-      dataIndex: "title",
-      render: (title: string) => title || "（无标题）",
+      title: "版本",
+      dataIndex: "version",
+      width: 80,
+      render: (version: number) => <Typography.Text type="secondary">v{version}</Typography.Text>,
     },
     {
       title: "更新时间",
       dataIndex: "updated_at",
+      width: 180,
       render: (updatedAt: string) => <Typography.Text type="secondary">{formatDateTime(updatedAt, timeZone)}</Typography.Text>,
     },
   ];
@@ -91,6 +106,7 @@ export function PostListScreen() {
   columns.push({
     title: "操作",
     key: "actions",
+    width: 140,
     render: (_value, post) => (
       <Space>
         <Button
@@ -136,13 +152,22 @@ export function PostListScreen() {
         )}
       </Flex>
 
-      <ContentListFilters filter={filter} onChange={setFilter} />
+      <Flex justify="space-between" align="flex-start" wrap gap={12}>
+        <ContentListFilters filter={filter} onChange={setFilter} />
+        <Input
+          placeholder="搜索当前页标题或 slug…"
+          allowClear
+          value={searchKeyword}
+          onChange={(e) => setSearchKeyword(e.target.value)}
+          style={{ width: 220, marginBottom: 16 }}
+        />
+      </Flex>
 
       <Table<PostSummary>
         rowKey="id"
         size="middle"
         loading={posts.isFetching}
-        dataSource={posts.data?.items ?? []}
+        dataSource={displayedPosts}
         columns={columns}
         pagination={false}
         // 保留迁移前的语义：整行点击进入该文章的编辑页。
@@ -154,9 +179,11 @@ export function PostListScreen() {
           emptyText:
             errorText !== null
               ? "文章加载失败。"
-              : filter.status || filter.visibility
-                ? "没有符合筛选条件的文章。"
-                : `还没有文章。${canCreate ? "点击「新建草稿」开始。" : ""}`,
+              : searchKeyword.trim() && displayedPosts.length === 0
+                ? "没有匹配搜索条件的文章。"
+                : filter.status || filter.visibility
+                  ? "没有符合筛选条件的文章。"
+                  : `还没有文章。${canCreate ? "点击「新建草稿」开始。" : ""}`,
         }}
       />
       <ContentPagination data={posts.data} busy={posts.isFetching} onChange={setPage} />

@@ -1,5 +1,21 @@
 import { invalidateAfterWrite } from "../queryEffects";
-import { Alert, App as AntdApp, Button, Form, Input, Select, Space, Typography } from "antd";
+import {
+  Alert,
+  App as AntdApp,
+  Button,
+  Card,
+  Col,
+  Flex,
+  Form,
+  Input,
+  Row,
+  Select,
+  Space,
+  Tabs,
+  Tag,
+  Typography,
+  theme as antdTheme,
+} from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useState } from "react";
 import { ApiError, settingsApi, themeSettingsApi } from "../api";
@@ -230,148 +246,183 @@ export function SettingsScreen() {
         ? `当前生效来源：数据库（v${settings.version}）。`
         : "当前生效来源：内置默认值（数据库尚未配置；保存后由数据库接管）。";
 
-  // 计数按 trim 后的值算：后端也在 trim 后判长度，展示口径与提交口径一致。
+  // 计数字段按 trim 后的值算：后端也在 trim 后判长度，展示口径与提交口径一致。
   const titleCount = codePointLength(draft.title.trim());
   const descriptionCount = codePointLength(draft.description.trim());
 
   return (
     <>
-      <Typography.Title level={3}>站点设置</Typography.Title>
+      <Typography.Title level={3} style={{ marginBottom: 20 }}>
+        站点设置
+      </Typography.Title>
 
-      {errorText !== null && (
-        <Alert type="error" showIcon title={errorText} style={{ marginBottom: 16 }} />
-      )}
-      {notice !== null && (
-        <Alert type="success" showIcon title={notice} style={{ marginBottom: 16 }} />
-      )}
-      {sourceHint !== null && (
-        <Typography.Paragraph type="secondary">{sourceHint}</Typography.Paragraph>
-      )}
-      {settings === null && errorText === null && (
-        <Typography.Paragraph type="secondary">正在加载…</Typography.Paragraph>
-      )}
+      <Tabs
+        defaultActiveKey="site"
+        items={[
+          {
+            key: "site",
+            label: "常规设置",
+            forceRender: true,
+            children: (
+              <div style={{ maxWidth: 720, paddingTop: 8 }}>
+                {errorText !== null && (
+                  <Alert type="error" showIcon title={errorText} style={{ marginBottom: 16 }} />
+                )}
+                {notice !== null && (
+                  <Alert type="success" showIcon title={notice} style={{ marginBottom: 16 }} />
+                )}
+                {sourceHint !== null && (
+                  <Typography.Paragraph type="secondary">{sourceHint}</Typography.Paragraph>
+                )}
+                {settings === null && errorText === null && (
+                  <Typography.Paragraph type="secondary">正在加载…</Typography.Paragraph>
+                )}
 
-      {settings !== null && (
-        <>
-          <Form
-            form={formApi}
-            layout="vertical"
-            initialValues={EMPTY_DRAFT}
-            onValuesChange={(_changed, all) => setDraft({ ...EMPTY_DRAFT, ...all })}
-            onFinish={() => {
-              if (busy || conflict !== null) return; // 冲突期间/提交中不重复提交
-              void submit(settings.version);
-            }}
-            style={{ maxWidth: 720 }}
-          >
-            {/* 计数字段放在 Form.Item 的 extra 里，而不是 label 里：否则它会并入
-                输入框的可访问名，读屏与 getByLabelText 都会看到「站点标题 6/200 字符」。 */}
-            <Form.Item
-              label="站点标题"
-              name="title"
-              extra={
-                <Typography.Text type={titleCount > TITLE_MAX ? "danger" : "secondary"}>
-                  {titleCount}/{TITLE_MAX} 字符
-                </Typography.Text>
-              }
-            >
-              <Input
-                placeholder="显示在页头与浏览器标题"
-                aria-invalid={titleCount > TITLE_MAX}
-              />
-            </Form.Item>
-            <Form.Item
-              label="站点描述"
-              name="description"
-              extra={
-                <Typography.Text type={descriptionCount > DESCRIPTION_MAX ? "danger" : "secondary"}>
-                  {descriptionCount}/{DESCRIPTION_MAX} 字符
-                </Typography.Text>
-              }
-            >
-              <Input.TextArea
-                placeholder="一句话介绍这个站点（可留空）"
-                aria-invalid={descriptionCount > DESCRIPTION_MAX}
-                rows={3}
-              />
-            </Form.Item>
-            <Form.Item
-              label="站点时区"
-              name="timeZone"
-              extra="公开页面、后台时间显示和预约输入使用此时区，保存后生效。"
-            >
-              <Select
-                showSearch={{ optionFilterProp: "label" }}
-                options={settings.time_zones.map((zone) => ({ value: zone, label: zone }))}
-              />
-            </Form.Item>
-            {/*
-              站点 logo：隐藏 Form.Item 只负责把 logoMediaId 注册进表单 store，
-              真正控件是 CoverPicker；值由 draft 驱动、变化经 writeDraft 回写，
-              与标题/描述的脏标记、冲突合并走同一条路径。
-            */}
-            <Form.Item name="logoMediaId" hidden>
-              <Input />
-            </Form.Item>
-            <CoverPicker
-              value={draft.logoMediaId}
-              onChange={(id) => writeDraft({ ...readDraft(), logoMediaId: id })}
-              currentUrl={
-                draft.logoMediaId === (settings?.logo_media_id ?? null)
-                  ? (settings?.logo_url ?? null)
-                  : null
-              }
-              canReadMedia={canReadMedia}
-              canUploadMedia={canUploadMedia}
-              disabled={busy || conflict !== null}
-              label="站点 logo"
-            />
-            {conflict === null && (
-              // 用文案切换而不是 Button 的 loading：见 PostEditScreen 的同名说明。
-              <Button type="primary" htmlType="submit" disabled={busy}>
-                {busy ? "处理中…" : "保存"}
-              </Button>
-            )}
-          </Form>
+                {settings !== null && (
+                  <>
+                    <Form
+                      form={formApi}
+                      layout="vertical"
+                      initialValues={EMPTY_DRAFT}
+                      onValuesChange={(_changed, all) => setDraft({ ...EMPTY_DRAFT, ...all })}
+                      onFinish={() => {
+                        if (busy || conflict !== null) return; // 冲突期间/提交中不重复提交
+                        void submit(settings.version);
+                      }}
+                      style={{ maxWidth: 720 }}
+                    >
+                      {/* 计数字段放在 Form.Item 的 extra 里，而不是 label 里：否则它会并入
+                          输入框的可访问名，读屏与 getByLabelText 都会看到「站点标题 6/200 字符」。 */}
+                      <Form.Item
+                        label="站点标题"
+                        name="title"
+                        extra={
+                          <Typography.Text type={titleCount > TITLE_MAX ? "danger" : "secondary"}>
+                            {titleCount}/{TITLE_MAX} 字符
+                          </Typography.Text>
+                        }
+                      >
+                        <Input
+                          placeholder="显示在页头与浏览器标题"
+                          aria-invalid={titleCount > TITLE_MAX}
+                        />
+                      </Form.Item>
+                      <Form.Item
+                        label="站点描述"
+                        name="description"
+                        extra={
+                          <Typography.Text type={descriptionCount > DESCRIPTION_MAX ? "danger" : "secondary"}>
+                            {descriptionCount}/{DESCRIPTION_MAX} 字符
+                          </Typography.Text>
+                        }
+                      >
+                        <Input.TextArea
+                          placeholder="一句话介绍这个站点（可留空）"
+                          aria-invalid={descriptionCount > DESCRIPTION_MAX}
+                          rows={3}
+                        />
+                      </Form.Item>
+                      <Form.Item
+                        label="站点时区"
+                        name="timeZone"
+                        extra="公开页面、后台时间显示和预约输入使用此时区，保存后生效。"
+                      >
+                        <Select
+                          showSearch={{ optionFilterProp: "label" }}
+                          options={settings.time_zones.map((zone) => ({ value: zone, label: zone }))}
+                        />
+                      </Form.Item>
+                      {/*
+                        站点 logo：隐藏 Form.Item 只负责把 logoMediaId 注册进表单 store，
+                        真正控件是 CoverPicker；值由 draft 驱动、变化经 writeDraft 回写，
+                        与标题/描述的脏标记、冲突合并走同一条路径。
+                      */}
+                      <Form.Item name="logoMediaId" hidden>
+                        <Input />
+                      </Form.Item>
+                      <CoverPicker
+                        value={draft.logoMediaId}
+                        onChange={(id) => writeDraft({ ...readDraft(), logoMediaId: id })}
+                        currentUrl={
+                          draft.logoMediaId === (settings?.logo_media_id ?? null)
+                            ? (settings?.logo_url ?? null)
+                            : null
+                        }
+                        canReadMedia={canReadMedia}
+                        canUploadMedia={canUploadMedia}
+                        disabled={busy || conflict !== null}
+                        label="站点 logo"
+                      />
+                      {conflict === null && (
+                        // 用文案切换而不是 Button 的 loading：见 PostEditScreen 的同名说明。
+                        <Button type="primary" htmlType="submit" disabled={busy}>
+                          {busy ? "处理中…" : "保存"}
+                        </Button>
+                      )}
+                    </Form>
 
-          {conflict !== null && (
-            <Alert
-              type="warning"
-              showIcon
-              title={`设置已在别处被修改（服务器当前：v${conflict.version}「${conflict.title}」）。`}
-              description="你的输入已保留，选择如何继续。"
-              style={{ marginBottom: 16 }}
-              action={
-                <Space>
-                  <Button
-                    disabled={busy}
-                    onClick={() => {
-                      // 重新加载：丢弃本地改动，采用服务器值。缓存也同步到该视图，
-                      // 离开再回来时不会按旧缓存把它当成「未重新加载」。
-                      apply(conflict);
-                      queryClient.setQueryData(queryKeys.siteSettings(), conflict);
-                      setConflict(null);
-                      setNotice("已重新加载服务器当前值。");
-                    }}
-                  >
-                    重新加载
-                  </Button>
-                  <Button danger disabled={busy} onClick={() => overwrite(conflict.version)}>
-                    仍然覆盖
-                  </Button>
-                </Space>
-              }
-            />
-          )}
-        </>
-      )}
-      <ThemeSettingsForm />
-      <RetentionSettingsForm onDirtyChange={setRetentionDirty} />
+                    {conflict !== null && (
+                      <Alert
+                        type="warning"
+                        showIcon
+                        title={`设置已在别处被修改（服务器当前：v${conflict.version}「${conflict.title}」）。`}
+                        description="你的输入已保留，选择如何继续。"
+                        style={{ marginBottom: 16 }}
+                        action={
+                          <Space>
+                            <Button
+                              disabled={busy}
+                              onClick={() => {
+                                // 重新加载：丢弃本地改动，采用服务器值。缓存也同步到该视图，
+                                // 离开再回来时不会按旧缓存把它当成「未重新加载」。
+                                apply(conflict);
+                                queryClient.setQueryData(queryKeys.siteSettings(), conflict);
+                                setConflict(null);
+                                setNotice("已重新加载服务器当前值。");
+                              }}
+                            >
+                              重新加载
+                            </Button>
+                            <Button danger disabled={busy} onClick={() => overwrite(conflict.version)}>
+                              仍然覆盖
+                            </Button>
+                          </Space>
+                        }
+                      />
+                    )}
+                  </>
+                )}
+              </div>
+            ),
+          },
+          {
+            key: "theme",
+            label: "主题外观",
+            forceRender: true,
+            children: (
+              <div style={{ paddingTop: 8 }}>
+                <ThemeSettingsForm />
+              </div>
+            ),
+          },
+          {
+            key: "retention",
+            label: "数据保留",
+            forceRender: true,
+            children: (
+              <div style={{ paddingTop: 8 }}>
+                <RetentionSettingsForm onDirtyChange={setRetentionDirty} />
+              </div>
+            ),
+          },
+        ]}
+      />
     </>
   );
 }
 
 function ThemeSettingsForm() {
+  const { token } = antdTheme.useToken();
   const { modal } = AntdApp.useApp();
   const queryClient = useQueryClient();
   const [themeForm] = Form.useForm<{ slug: string }>();
@@ -384,13 +435,13 @@ function ThemeSettingsForm() {
   const [busy, setBusy] = useState(false);
 
   /** 主题设置查询：初次取到写入表单（写操作后由失效重取保持缓存新鲜）。 */
-  const theme = useQuery({
+  const themeQuery = useQuery({
     queryKey: queryKeys.themeSettings(),
     queryFn: () => themeSettingsApi.get(),
   });
   /** 取数失败与写操作失败分开：展示时动作错误优先。 */
   const errorText =
-    actionError ?? (theme.error === null ? null : permissionMessageOf(theme.error));
+    actionError ?? (themeQuery.error === null ? null : permissionMessageOf(themeQuery.error));
   const setError = setActionError;
 
   /** 读 store 里当前选中的主题（响应回来时用它判断等待期间是否换了选择）。 */
@@ -407,11 +458,11 @@ function ThemeSettingsForm() {
   useEffect(() => {
     // 只在还没有视图时写入表单：保存响应会与「等待期间换的选择」比对后合并
     // （见 save），无条件写入会把用户的新选择改回去。
-    if (theme.data !== undefined && view === null) {
-      setView(theme.data);
-      writeSlug(theme.data.effective_slug);
+    if (themeQuery.data !== undefined && view === null) {
+      setView(themeQuery.data);
+      writeSlug(themeQuery.data.effective_slug);
     }
-  }, [theme.data, view, writeSlug]);
+  }, [themeQuery.data, view, writeSlug]);
 
   async function save(expectedVersion: number) {
     const submitted = slug;
@@ -456,8 +507,10 @@ function ThemeSettingsForm() {
   }
 
   return (
-    <section aria-label="主题设置" style={{ marginTop: 32 }}>
-      <Typography.Title level={4}>主题</Typography.Title>
+    <section aria-label="主题设置" style={{ maxWidth: 880 }}>
+      <Typography.Title level={4} style={{ marginTop: 0 }}>
+        主题设置
+      </Typography.Title>
       <Typography.Paragraph type="secondary">
         选择已安装的主题。切换会同时更新公开页面和对应样式资源。
       </Typography.Paragraph>
@@ -470,6 +523,76 @@ function ThemeSettingsForm() {
       {view === null && errorText === null && (
         <Typography.Paragraph type="secondary">正在加载主题…</Typography.Paragraph>
       )}
+
+      {view !== null && (
+        <div style={{ marginBottom: 24 }}>
+          <Row gutter={[16, 16]}>
+            {view.available.map((item) => {
+              const isSelected = slug === item.slug;
+              const isCurrentActive = view.effective_slug === item.slug;
+              const desc =
+                item.slug === "default"
+                  ? "经典技术博客风格，布局清爽，清晰的代码块与层级排版。"
+                  : item.slug === "paper"
+                    ? "报纸与杂志社论风格，温润柔和质感与优雅衬线字体，专注沉浸式阅读。"
+                    : "已安装主题。";
+
+              return (
+                <Col xs={24} sm={12} key={item.slug}>
+                  <Card
+                    hoverable
+                    onClick={() => {
+                      if (!busy) {
+                        writeSlug(item.slug);
+                      }
+                    }}
+                    style={{
+                      borderColor: isSelected ? token.colorPrimary : token.colorBorderSecondary,
+                      boxShadow: isSelected ? `0 0 0 2px ${token.colorPrimaryBorder}` : undefined,
+                      cursor: busy ? "not-allowed" : "pointer",
+                      transition: "all 0.2s ease-in-out",
+                    }}
+                    styles={{
+                      body: { padding: 16 },
+                    }}
+                  >
+                    <Flex justify="space-between" align="center" style={{ marginBottom: 8 }}>
+                      <Typography.Text strong style={{ fontSize: 16 }}>
+                        {item.name}
+                      </Typography.Text>
+                      <Space size={4}>
+                        {isCurrentActive && <Tag color="green">当前生效</Tag>}
+                        {isSelected && !isCurrentActive && <Tag color="blue">待生效</Tag>}
+                      </Space>
+                    </Flex>
+                    <Typography.Paragraph
+                      type="secondary"
+                      style={{ fontSize: 13, marginBottom: 12, minHeight: 38 }}
+                    >
+                      {desc}
+                    </Typography.Paragraph>
+                    <Flex justify="space-between" align="center">
+                      <Typography.Text type="secondary" code style={{ fontSize: 12 }}>
+                        {item.slug}
+                      </Typography.Text>
+                      {isSelected ? (
+                        <Typography.Text strong style={{ fontSize: 12, color: token.colorPrimary }}>
+                          ✓ 已选择
+                        </Typography.Text>
+                      ) : (
+                        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                          点击选择
+                        </Typography.Text>
+                      )}
+                    </Flex>
+                  </Card>
+                </Col>
+              );
+            })}
+          </Row>
+        </div>
+      )}
+
       <Form
         form={themeForm}
         layout="vertical"

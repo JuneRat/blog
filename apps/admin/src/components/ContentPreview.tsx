@@ -1,10 +1,11 @@
-import { Alert, Button, Space, Typography } from "antd";
+import { Alert, Button, Space, Typography, theme } from "antd";
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { messageOf } from "../apiError";
 
 /** Render unsaved Markdown with the same server rules as publication. */
 export function ContentPreview({ content, disabled }: { content: string; disabled: boolean }) {
+  const { token } = theme.useToken();
   const [html, setHtml] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -30,12 +31,28 @@ export function ContentPreview({ content, disabled }: { content: string; disable
     }
   }
   return <div style={{ marginBottom: 16 }}>
-    <Space wrap>
+    <Space wrap align="center">
       <Button disabled={disabled || busy} onClick={() => void preview()}>{busy ? "正在预览…" : "预览正文"}</Button>
       {html !== null && <Button onClick={() => setHtml(null)}>收起预览</Button>}
       <Typography.Text type="secondary">预览当前输入，不保存或发布；展示正文，不含主题布局。</Typography.Text>
     </Space>
-    {error && <Alert type="error" showIcon title={error} />}
-    {html !== null && <div aria-label="正文预览" style={{ overflowWrap: "anywhere", overflowX: "auto", marginTop: 12 }} dangerouslySetInnerHTML={{ __html: html }} />}
+    {error && <Alert type="error" showIcon title={error} style={{ marginTop: 12 }} />}
+    {html !== null && (
+      <div
+        aria-label="正文预览"
+        style={{
+          overflowWrap: "anywhere",
+          overflowX: "auto",
+          marginTop: 12,
+          padding: "20px 24px",
+          background: token.colorBgContainer,
+          border: `1px solid ${token.colorBorderSecondary}`,
+          borderRadius: token.borderRadiusLG,
+          lineHeight: 1.8,
+          fontSize: 15,
+        }}
+        dangerouslySetInnerHTML={{ __html: html }}
+      />
+    )}
   </div>;
 }

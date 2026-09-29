@@ -57,20 +57,86 @@ a {
   color: var(--link);
 }
 
+.content pre,
 .post .content pre {
   overflow-x: auto;
-  padding: 0.75rem;
+  padding: 1rem 1.1rem;
   border-radius: 6px;
-  background: rgba(127, 127, 127, 0.12);
+  background: rgba(127, 127, 127, 0.08);
+  border: 1px solid var(--border);
+  line-height: 1.5;
 }
 
+.content code,
 .post .content code {
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
   font-size: 0.9em;
 }
 
+.content :not(pre) > code,
+.post .content :not(pre) > code {
+  padding: 0.2em 0.4em;
+  border-radius: 4px;
+  background: rgba(127, 127, 127, 0.12);
+  font-size: 0.88em;
+}
+
+.content blockquote,
+.post .content blockquote {
+  margin: 1.5rem 0;
+  padding: 0.5rem 1rem;
+  border-left: 4px solid var(--link);
+  background: rgba(127, 127, 127, 0.05);
+  color: var(--muted);
+  border-radius: 0 4px 4px 0;
+}
+
+.content blockquote p,
+.post .content blockquote p {
+  margin: 0.25rem 0;
+}
+
+.content table,
+.post .content table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1.5rem 0;
+  overflow-x: auto;
+  display: block;
+}
+
+.content th,
+.content td,
+.post .content th,
+.post .content td {
+  padding: 0.6rem 1rem;
+  border: 1px solid var(--border);
+  text-align: left;
+}
+
+.content th,
+.post .content th {
+  background: rgba(127, 127, 127, 0.08);
+  font-weight: 600;
+}
+
+.content tr:nth-child(2n),
+.post .content tr:nth-child(2n) {
+  background: rgba(127, 127, 127, 0.03);
+}
+
+.content hr,
+.post .content hr {
+  border: 0;
+  height: 1px;
+  background: var(--border);
+  margin: 2rem 0;
+}
+
+.content img,
 .post .content img {
   max-width: 100%;
+  border-radius: 4px;
 }
 
 /* 标签链接（文章详情）与标签页分页 */
