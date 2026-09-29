@@ -32,7 +32,7 @@ export const queryKeys = {
   commentPolicy: (post?: string) => ["comment-policy", post ?? "global"] as const,
   users: () => ["users"] as const,
   roles: () => ["roles"] as const,
-  media: (page: number, trash = false) => ["media", page, trash] as const,
+  media: (page: number, trash = false, q = "") => ["media", page, trash, q] as const,
   /**
    * 媒体库**整族**前缀。
    *

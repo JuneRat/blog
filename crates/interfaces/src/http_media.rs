@@ -123,6 +123,7 @@ struct MediaUsageViewJson {
 #[derive(Deserialize, Default)]
 struct MediaListQuery {
     page: Option<i64>,
+    q: Option<String>,
     #[serde(default)]
     trash: bool,
 }
@@ -169,7 +170,12 @@ async fn list_media(
 ) -> Response {
     match state
         .media
-        .list(&auth.actor, query.page.unwrap_or(1), query.trash)
+        .list(
+            &auth.actor,
+            query.page.unwrap_or(1),
+            query.trash,
+            query.q.as_deref(),
+        )
         .await
     {
         Ok(page) => (

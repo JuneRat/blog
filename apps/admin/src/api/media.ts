@@ -4,10 +4,10 @@ import { json, request, requestBinary, requestEmpty } from "./client";
 import type { MediaAsset, MediaPage, MediaUsageView } from "../types";
 
 export const mediaApi = {
-  list: (page = 1, trash = false, signal?: AbortSignal): Promise<MediaPage> =>
+  list: (page = 1, trash = false, signal?: AbortSignal, q = ""): Promise<MediaPage> =>
     request(
       s.mediaPage,
-      `/api/admin/v1/media?page=${page}${trash ? "&trash=true" : ""}`,
+      `/api/admin/v1/media?page=${page}${trash ? "&trash=true" : ""}${q ? `&q=${encodeURIComponent(q)}` : ""}`,
       { signal },
     ),
 

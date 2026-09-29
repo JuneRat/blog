@@ -8,6 +8,7 @@ import {
   Col,
   Empty,
   Flex,
+  Input,
   Pagination,
   Row,
   Segmented,
@@ -81,13 +82,14 @@ export function MediaLibraryScreen() {
   const queryClient = useQueryClient();
   const [page, setPage] = useState(1);
   const [trash, setTrash] = useState(false);
+  const [q, setQ] = useState("");
   /**
    * 列表查询：翻页即换键（每页一份缓存）。
    *
    * 错误分两处：`media.error` 是**取数失败**（含权限口径文案），
    * `actionError` 是上传/删除等写操作失败；展示时动作错误优先。
    */
-  const media = useQuery(mediaPageQuery(page, trash));
+  const media = useQuery(mediaPageQuery(page, trash, q));
   const [actionError, setActionError] = useState<string | null>(null);
   const errorText =
     actionError ?? (media.error === null ? null : permissionMessageOf(media.error));
@@ -134,6 +136,7 @@ export function MediaLibraryScreen() {
       setNotice(`已上传 ${uploaded.length} 张图片。`);
       setTrash(false);
       setPage(1);
+      setQ("");
       // 上传使全部页内容移位（新资产排在最前）：整族失效，与回收站 trashAll 同理；
       // 非活跃页的失效标记会在切回该页时触发重取，不会留下陈旧列表。
       await invalidateAfterWrite(queryClient, "media");
@@ -235,6 +238,9 @@ export function MediaLibraryScreen() {
         onChange={(value) => { setTrash(value === "trash"); setPage(1); setUsageId(null); setActionError(null); }}
         style={{ marginBottom: 16 }}
       />
+      <Input.Search key={q} aria-label="搜索图片" placeholder="按文件名搜索全部图片…"
+        defaultValue={q} maxLength={200} allowClear enterButton="搜索" style={{ maxWidth: 400, marginBottom: 16 }}
+        onSearch={value => { setQ(value.trim()); setPage(1); setUsageId(null); }} />
       <Alert
         type="info"
         showIcon
@@ -312,7 +318,7 @@ export function MediaLibraryScreen() {
         <Typography.Text type="secondary">正在加载…</Typography.Text>
       )}
       {data !== null && data.items.length === 0 && errorText === null && (
-        <Empty description={trash ? "回收站是空的。" : "媒体库还是空的。"} />
+        <Empty description={q ? "没有找到匹配的图片。" : trash ? "回收站是空的。" : "媒体库还是空的。"} />
       )}
 
       {data !== null && data.items.length > 0 && (

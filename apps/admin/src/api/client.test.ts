@@ -181,6 +181,16 @@ describe("HTTP response boundary", () => {
     await expect(api.logout()).resolves.toBeUndefined();
   });
 
+  it("media search preserves encoded filenames, paging and trash scope", async () => {
+    const fetcher = respond(jsonResponse({ items: [], total: 0, page: 2, per_page: 24 }));
+    const q = "海边 100%_&.png";
+    await mediaApi.list(2, true, undefined, q);
+    const url = new URL(fetcher.mock.calls[0][0], "http://localhost");
+    expect(url.searchParams.get("q")).toBe(q);
+    expect(url.searchParams.get("page")).toBe("2");
+    expect(url.searchParams.get("trash")).toBe("true");
+  });
+
   it("reply omits the nickname placeholder", async () => {
     const fetcher = respond(jsonResponse({ message: "已提交，等待审核", status: "pending" }, 202));
     await commentsApi.reply(

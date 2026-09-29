@@ -169,6 +169,7 @@ impl MediaRepository for FakeMediaRepo {
         limit: i64,
         offset: i64,
         trash: bool,
+        q: Option<&str>,
     ) -> Result<(Vec<MediaWithUsage>, i64), UseCaseError> {
         let state = self.state.lock().unwrap();
         let rows: Vec<_> = state
@@ -177,7 +178,9 @@ impl MediaRepository for FakeMediaRepo {
             .rev()
             .filter_map(|id| {
                 let s = &state.items[id];
-                (s.deleted_at.is_some() == trash).then(|| MediaWithUsage {
+                (s.deleted_at.is_some() == trash
+                    && q.is_none_or(|q| s.original_name.to_lowercase().contains(&q.to_lowercase())))
+                .then(|| MediaWithUsage {
                     snapshot: s.clone(),
                     owner_display: "Uploader".into(),
                     reference_count: state.usage.get(id).map_or(0, |r| r.len() as i64),
@@ -477,8 +480,22 @@ async fn independent_reads_and_soft_deletion_preserve_files_and_references() {
         f.interactor.read(dto.id).await.unwrap().bytes,
         png_bytes(10, 10)
     );
-    assert_eq!(f.interactor.list(&author, 1, false).await.unwrap().total, 0);
-    assert_eq!(f.interactor.list(&author, 1, true).await.unwrap().total, 1);
+    assert_eq!(
+        f.interactor
+            .list(&author, 1, false, None)
+            .await
+            .unwrap()
+            .total,
+        0
+    );
+    assert_eq!(
+        f.interactor
+            .list(&author, 1, true, None)
+            .await
+            .unwrap()
+            .total,
+        1
+    );
     assert!(matches!(
         f.interactor.set_deleted(&author, dto.id, 1, false).await,
         Err(UseCaseError::VersionConflict)
@@ -501,7 +518,14 @@ async fn independent_reads_and_soft_deletion_preserve_files_and_references() {
             .reference_count,
         1
     );
-    assert_eq!(f.interactor.list(&author, 1, false).await.unwrap().total, 1);
+    assert_eq!(
+        f.interactor
+            .list(&author, 1, false, None)
+            .await
+            .unwrap()
+            .total,
+        1
+    );
     assert!(matches!(
         f.interactor.read(Uuid::now_v7()).await,
         Err(UseCaseError::NotFound(_))
@@ -514,13 +538,13 @@ async fn library_requires_permission_and_valid_page() {
     let owner = Uuid::now_v7();
     upload(&f, owner).await;
     assert!(matches!(
-        f.interactor.list(&actor(owner, &[]), 1, false).await,
+        f.interactor.list(&actor(owner, &[]), 1, false, None).await,
         Err(UseCaseError::Forbidden)
     ));
     for page in [0, -1, i64::MAX] {
         assert!(matches!(
             f.interactor
-                .list(&actor(owner, &["media.read"]), page, false)
+                .list(&actor(owner, &["media.read"]), page, false, None)
                 .await,
             Err(UseCaseError::Invalid(_))
         ));

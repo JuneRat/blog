@@ -73,13 +73,13 @@ async fn active_and_trash_lists_support_nullable_uploaders_and_stable_pages() {
     let (repo, first, owner) = seed(&pool).await;
     let second = image(None);
     repo.insert(&second, None.into()).await.unwrap();
-    let (rows, total) = repo.list(1, 0, false).await.unwrap();
+    let (rows, total) = repo.list(1, 0, false, None).await.unwrap();
     assert_eq!(total, 2);
     assert_eq!(rows[0].snapshot.id, second.id());
     assert_eq!(rows[0].owner_display, "未知上传者");
     assert!(rows[0].snapshot.owner_id.is_none());
     assert_eq!(
-        repo.list(1, 1, false).await.unwrap().0[0].snapshot.id,
+        repo.list(1, 1, false, None).await.unwrap().0[0].snapshot.id,
         first.id()
     );
     assert_eq!(
@@ -94,9 +94,9 @@ async fn active_and_trash_lists_support_nullable_uploaders_and_stable_pages() {
         .unwrap(),
         MediaChangeOutcome::Updated
     );
-    assert_eq!(repo.list(24, 0, false).await.unwrap().1, 1);
+    assert_eq!(repo.list(24, 0, false, None).await.unwrap().1, 1);
     assert_eq!(
-        repo.list(24, 0, true).await.unwrap().0[0].snapshot.id,
+        repo.list(24, 0, true, None).await.unwrap().0[0].snapshot.id,
         first.id()
     );
     assert!(!repo.is_attachable(first.id()).await.unwrap());
@@ -656,4 +656,61 @@ async fn migration_provides_ordered_indexes_for_admin_filters() {
             "ordered index must avoid a sort: {plan}"
         );
     }
+}
+
+#[tokio::test]
+async fn filename_search_filters_before_paging_and_treats_wildcards_literally() {
+    let pool = common::fresh_database("blog_media_filename_search").await;
+    let repo = PostgresMediaRepository::new(common::database(pool.clone()));
+    let mut ids = Vec::new();
+    for name in [
+        "old-SUNSET.jpg",
+        "Sunset-river.png",
+        "new-photo.png",
+        "山景_100%.png",
+        "山景X100X.png",
+    ] {
+        let mut snapshot = image(None).snapshot();
+        snapshot.original_name = name.into();
+        let media = Media::reconstitute(snapshot).unwrap();
+        repo.insert(&media, None.into()).await.unwrap();
+        ids.push(media.id());
+    }
+    let (matches, total) = repo.list(100, 0, false, Some("sunset")).await.unwrap();
+    let (first, first_total) = repo.list(1, 0, false, Some("sunset")).await.unwrap();
+    let (second, second_total) = repo.list(1, 1, false, Some("sunset")).await.unwrap();
+    assert_eq!(
+        matches.iter().map(|m| m.snapshot.id).collect::<Vec<_>>(),
+        vec![ids[1], ids[0]]
+    );
+    assert_eq!(first[0].snapshot.id, ids[1]);
+    assert_eq!(second[0].snapshot.id, ids[0]);
+    assert_eq!(total, matches.len() as i64);
+    assert_eq!((first_total, second_total), (total, total));
+    let (literal, _) = repo.list(100, 0, false, Some("_100%")).await.unwrap();
+    assert_eq!(
+        literal.iter().map(|m| m.snapshot.id).collect::<Vec<_>>(),
+        vec![ids[3]]
+    );
+    repo.set_deleted(ids[0], 1, true, OffsetDateTime::now_utc(), None.into())
+        .await
+        .unwrap();
+    let (active, _) = repo.list(100, 0, false, Some("sunset")).await.unwrap();
+    let (trash, _) = repo.list(100, 0, true, Some("sunset")).await.unwrap();
+    assert_eq!(
+        active.iter().map(|m| m.snapshot.id).collect::<Vec<_>>(),
+        vec![ids[1]]
+    );
+    assert_eq!(
+        trash.iter().map(|m| m.snapshot.id).collect::<Vec<_>>(),
+        vec![ids[0]]
+    );
+    assert!(
+        repo.list(100, 0, false, Some("absent"))
+            .await
+            .unwrap()
+            .0
+            .is_empty()
+    );
+    pool.close().await;
 }

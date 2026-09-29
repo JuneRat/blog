@@ -176,6 +176,7 @@ impl MediaRepository for PostgresMediaRepository {
         limit: i64,
         offset: i64,
         trash: bool,
+        q: Option<&str>,
     ) -> Result<(Vec<MediaWithUsage>, i64), UseCaseError> {
         let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
         sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
@@ -188,16 +189,21 @@ impl MediaRepository for PostgresMediaRepository {
         } else {
             "m.deleted_at IS NULL"
         };
+        let predicate = format!(
+            "{predicate} AND ($1::text IS NULL OR strpos(lower(m.filename), lower($1)) > 0)"
+        );
         let total: i64 =
             sqlx::query_scalar(&format!("SELECT count(*) FROM media m WHERE {predicate}"))
+                .bind(q)
                 .fetch_one(&mut *tx)
                 .await
                 .map_err(map_sqlx_error)?;
         let rows = sqlx::query(&format!(
             "SELECT {} FROM media m LEFT JOIN users u ON u.id=m.uploaded_by \
-            WHERE {predicate} ORDER BY m.created_at DESC,m.id DESC LIMIT $1 OFFSET $2",
+            WHERE {predicate} ORDER BY m.created_at DESC,m.id DESC LIMIT $2 OFFSET $3",
             view_columns()
         ))
+        .bind(q)
         .bind(limit)
         .bind(offset)
         .fetch_all(&mut *tx)

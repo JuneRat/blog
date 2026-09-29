@@ -114,12 +114,13 @@ pub trait MediaRepository: Send + Sync {
         id: Uuid,
     ) -> Result<Option<domain::media::MediaSnapshot>, UseCaseError>;
     async fn find_view(&self, id: Uuid) -> Result<Option<MediaWithUsage>, UseCaseError>;
-    /// 正常库与回收站分别分页，上传者可以为空。
+    /// 正常库与回收站分别分页，按文件名搜索；上传者可以为空。
     async fn list(
         &self,
         limit: i64,
         offset: i64,
         trash: bool,
+        q: Option<&str>,
     ) -> Result<(Vec<MediaWithUsage>, i64), UseCaseError>;
     async fn usage_of(&self, id: Uuid) -> Result<Vec<MediaUsageRow>, UseCaseError>;
     /// 同事务校验版本、软删除/恢复与追加审计，不清除文件或引用。

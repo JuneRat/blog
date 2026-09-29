@@ -535,6 +535,47 @@ async fn upload_and_library_require_permissions_csrf_and_valid_image_content() {
     assert!(library["items"][0]["deleted_at"].is_null());
     assert!(library["items"][0].get("public_reference_count").is_none());
     assert_eq!(headers[header::CACHE_CONTROL], "no-store");
+    let (status, _, matched) = send(
+        &stack.router,
+        "GET",
+        "/api/admin/v1/media?q=%20PHOTO%20",
+        Some(&cookie),
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        matched["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|asset| asset["id"] == id)
+    );
+    let (status, _, absent) = send(
+        &stack.router,
+        "GET",
+        "/api/admin/v1/media?q=missing-image",
+        Some(&cookie),
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(absent["items"].as_array().unwrap().is_empty());
+    let (status, _, _) = send(
+        &stack.router,
+        "GET",
+        &format!("/api/admin/v1/media?q={}", "x".repeat(201)),
+        Some(&cookie),
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
     stack.pool.close().await;
 }
 

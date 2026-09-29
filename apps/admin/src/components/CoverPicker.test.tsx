@@ -109,3 +109,21 @@ it("passes cancellation to fetch when the picker unmounts", async () => {
   mounted.unmount();
   expect(signal?.aborted).toBe(true);
 });
+
+it("selects an older image from a later search page", async () => {
+  vi.mocked(mediaApi.list).mockImplementation(async (page = 1, _trash, _signal, q = "") => ({
+    ...populated, page, per_page: 1, total: 2,
+    items: [{ ...populated.items[0], id: `${q}-${page}`, original_name: `${q || 'recent'}-${page}.png` }],
+  }));
+  const onChange = vi.fn();
+  render(<AdminProviders><CoverPicker value={null} onChange={onChange} canReadMedia canUploadMedia={false} /></AdminProviders>);
+  fireEvent.click(screen.getByRole('button', { name: '选择封面' }));
+  await screen.findByText('recent-1.png');
+  fireEvent.change(screen.getByLabelText('搜索图片'), { target: { value: 'cover' } });
+  fireEvent.click(screen.getByRole('button', { name: '搜索' }));
+  await screen.findByText('cover-1.png');
+  fireEvent.click(screen.getByRole('button', { name: '下一页' }));
+  await screen.findByText('cover-2.png');
+  fireEvent.click(screen.getByRole('button', { name: '选择' }));
+  expect(onChange).toHaveBeenCalledWith('cover-2');
+});

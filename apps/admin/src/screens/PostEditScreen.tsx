@@ -1,3 +1,4 @@
+import { MEDIA_PUBLIC_NOTICE } from "../media";
 import { Alert, Button, Card, Col, Flex, Form, Input, Row, Tag, Typography } from "antd";
 import { useAuth } from "../auth";
 import { ContentPreview } from "../components/ContentPreview";
@@ -157,7 +158,7 @@ function PostEditor({ id }: { id: string | null }) {
                   style={{ fontSize: 18, fontWeight: 600 }}
                 />
               </Form.Item>
-              <Form.Item label="正文（Markdown）" name="content" style={{ marginBottom: 16 }}>
+              <Form.Item label="正文（Markdown）" name="content" extra={canUploadMedia ? MEDIA_PUBLIC_NOTICE : undefined} style={{ marginBottom: 16 }}>
                 <Input.TextArea
                   ref={attachContentRef}
                   rows={22}

@@ -34,7 +34,7 @@
 | 公开发现 | 已实现可配置每页数量的首页分页、RSS、sitemap、robots 与基础 SEO；使用统一公开条件，不收录草稿、私密或回收站内容 | [内容生命周期](content-lifecycle.md)、[主题与渲染](themes-and-rendering.md) |
 | 主题 | 已实现受控只读函数、请求级预算、第二主题 `paper` 与后台切换；桥接原型验证完成。已实现 `site.navigation` 上下文及两套主题导航；cursor 与公开作者函数未实现 | [主题与渲染](themes-and-rendering.md)、[原型报告](template-bridge-experiment.md) |
 | 原生评论 | 已适配游客/账号提交、受限 Markdown/预览、HTML 持久化、多级两级展示、删除占位、审核恢复、设置中的全站开关和四种审核策略（含待审原因）；IP 保留期已接入独立维护任务 | [评论](comments.md) |
-| 媒体 | 已实现正文图片、Post/Series 封面、用户头像和站点 logo，以及上传、引用保护、独立公开链接和回收站；正式文件可按明确计划在维护窗口清理，失败后原计划重试 | [内容生命周期](content-lifecycle.md) |
+| 媒体 | 已实现正文图片、Post/Series 封面、用户头像和站点 logo，以及上传、引用保护、独立公开链接和回收站；编辑器插图与封面选择、媒体库均支持文件名搜索和分页，直接上传/粘贴/拖入入口说明链接立即公开；正式文件可按明确计划在维护窗口清理，失败后原计划重试 | [内容生命周期](content-lifecycle.md) |
 | 渲染与模块边界 | 已实现持久化清洗 HTML、集中渲染运行时、按命令装配、业务模块拆分和 CI 依赖检查；身份端口按读取/资料/账号管理/凭据收窄，账号状态/Admin/登录方式保护已提为纯规则并在事务锁内执行，HTTP 路由统一组合，预约发布与保留期清理由应用用例编排；未启用跨请求整页缓存 | [架构](architecture.md)、[ADR-0015](adr/0015-rendered-content-runtime-and-module-boundaries.md) |
 | 备份恢复 | 已适配媒体原件/引用、预约任务隔离与会话撤销；Compose 提供停写备份、完整秘密材料、独立项目恢复、HTTP 核验、定时任务及 restic 加密副本，匹配的运维镜像随交付包发布；生产远端存储、容量和 RPO/RTO 尚未验收 | [Compose 备份恢复](compose-backup.md)、[备份与恢复](operations-and-recovery.md)、[全链路验收](acceptance.md) |
 

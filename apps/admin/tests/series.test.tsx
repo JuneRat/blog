@@ -150,7 +150,7 @@ describe("系列屏：封面", () => {
     fireEvent.click(screen.getByRole("button", { name: "封面" }));
     fireEvent.click(await screen.findByRole("button", { name: "选择封面" }));
     // 弹窗打开才拉媒体库第一页。
-    await waitFor(() => expect(mediaApi.list).toHaveBeenCalledWith(1, false, expect.any(AbortSignal)));
+    await waitFor(() => expect(mediaApi.list).toHaveBeenCalledWith(1, false, expect.any(AbortSignal), ""));
     fireEvent.click(await screen.findByRole("button", { name: "选择" }));
 
     fireEvent.click(screen.getByRole("button", { name: "保存" }));

@@ -210,12 +210,13 @@ impl MediaInteractor {
         self.detail_of(actor, id).await.map(|view| view.media)
     }
 
-    /// 媒体库分页（按上传时间倒序）。
+    /// 媒体库按文件名搜索并分页（按上传时间倒序）。
     pub async fn list(
         &self,
         actor: &Actor,
         page: i64,
         trash: bool,
+        q: Option<&str>,
     ) -> Result<MediaPage, UseCaseError> {
         if !actor.has_permission("media.read") {
             return Err(UseCaseError::Forbidden);
@@ -223,9 +224,13 @@ impl MediaInteractor {
         if !(1..=i64::MAX / MEDIA_PAGE_SIZE).contains(&page) {
             return Err(UseCaseError::Invalid("页码超出范围".into()));
         }
+        let q = q.map(str::trim).filter(|q| !q.is_empty());
+        if q.is_some_and(|q| q.chars().count() > 200) {
+            return Err(UseCaseError::Invalid("搜索词不能超过 200 字符".into()));
+        }
         let (rows, total) = self
             .media
-            .list(MEDIA_PAGE_SIZE, (page - 1) * MEDIA_PAGE_SIZE, trash)
+            .list(MEDIA_PAGE_SIZE, (page - 1) * MEDIA_PAGE_SIZE, trash, q)
             .await?;
         Ok(MediaPage {
             items: rows.iter().map(MediaDto::from).collect(),

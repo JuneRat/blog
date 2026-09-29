@@ -122,6 +122,32 @@ describe("编辑器内插入图片", () => {
     expect(api.updatePost).not.toHaveBeenCalled();
   });
 
+  it("跨页搜索旧图片后保留正文光标和替代文字，不触发保存", async () => {
+    vi.mocked(mediaApi.list).mockImplementation(async (page = 1, _trash, _signal, q = "") => ({
+      items: [asset(q ? {
+        id: `found-${page}`, original_name: `山间-${page}.png`, url: `/media/found-${page}`,
+      } : page === 1 ? {} : { id: 'older', original_name: 'older.png' })],
+      page, per_page: 1, total: 2,
+    }));
+    render(<App />);
+    await waitFor(() => expect(contentBox().value).toBe("原始正文"));
+    fireEvent.change(contentBox(), { target: { value: 'AB' } });
+    contentBox().setSelectionRange(1, 1);
+    await openPanel();
+    fireEvent.change(screen.getByLabelText('替代文字'), { target: { value: '历史插图' } });
+    fireEvent.click(screen.getByRole('button', { name: '下一页' }));
+    await screen.findByText('older.png');
+    fireEvent.change(screen.getByLabelText('搜索图片'), { target: { value: ' 山间 ' } });
+    expect(fireEvent.keyDown(screen.getByLabelText('搜索图片'), { key: 'Enter', code: 'Enter' })).toBe(false);
+    await screen.findByText('山间-1.png');
+    expect(mediaApi.list).toHaveBeenLastCalledWith(1, false, expect.any(AbortSignal), '山间');
+    fireEvent.click(screen.getByRole('button', { name: '下一页' }));
+    await screen.findByText('山间-2.png');
+    fireEvent.click(screen.getByRole('button', { name: '插入' }));
+    await waitFor(() => expect(contentBox().value).toBe('A\n\n![历史插图](/media/found-2)\n\nB'));
+    expect(api.updatePost).not.toHaveBeenCalled();
+  });
+
   it("替代文字非空时写入 alt 而不是文件名", async () => {
     render(<App />);
     await waitFor(() => expect(contentBox().value).toBe("原始正文"));
@@ -143,6 +169,7 @@ describe("编辑器内插入图片", () => {
     await waitFor(() => expect(contentBox().value).toBe("原始正文"));
     fireEvent.change(contentBox(), { target: { value: "" } });
 
+    expect(screen.getByText(/上传后图片链接立即公开/)).toBeTruthy();
     const file = new File([new Uint8Array(8)], "pasted.png", { type: "image/png" });
     fireEvent.paste(contentBox(), { clipboardData: { files: [file] } });
 
@@ -221,6 +248,7 @@ describe("编辑器内插入图片", () => {
     });
     box.setSelectionRange(0, 0);
 
+    expect(screen.getByText(/上传后图片链接立即公开/)).toBeTruthy();
     // 面板与文章编辑器同一实现：入口文案与插入结果一致。
     fireEvent.click(screen.getByRole("button", { name: "插入图片" }));
     await waitFor(() => expect(screen.getByText("photo.png")).toBeTruthy());

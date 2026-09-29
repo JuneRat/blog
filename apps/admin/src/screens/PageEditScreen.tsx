@@ -1,3 +1,4 @@
+import { MEDIA_PUBLIC_NOTICE } from "../media";
 import { useEditorRequestGuard } from "../useEditorRequestGuard";
 import { ContentPreview } from "../components/ContentPreview";
 import { ContentConflict, conflictFields } from "../components/ContentConflict";
@@ -570,7 +571,7 @@ function PageEditor({ id }: { id: string | null }) {
                 style={{ fontSize: 18, fontWeight: 600 }}
               />
             </Form.Item>
-            <Form.Item label="正文（Markdown）" name="content" style={{ marginBottom: 16 }}>
+            <Form.Item label="正文（Markdown）" name="content" extra={canUploadMedia ? MEDIA_PUBLIC_NOTICE : undefined} style={{ marginBottom: 16 }}>
               <Input.TextArea
                 ref={attachContentRef}
                 rows={22}

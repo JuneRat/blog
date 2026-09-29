@@ -7,6 +7,7 @@
 
 /** 允许上传的位图 MIME（与后端 `domain::media::ImageFormat` 一致）。 */
 export const MEDIA_ACCEPT = "image/png,image/jpeg,image/gif,image/webp";
+export const MEDIA_PUBLIC_NOTICE = "上传后图片链接立即公开，即使内容尚未发布或设为私密。";
 
 /**
  * 站内媒体地址的唯一构造处。

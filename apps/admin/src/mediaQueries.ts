@@ -3,9 +3,9 @@ import { mediaApi } from "./api";
 import { queryKeys } from "./queryClient";
 
 /** All media selectors share the library cache and cancellation semantics. */
-export function mediaPageQuery(page: number, trash = false) {
+export function mediaPageQuery(page: number, trash = false, q = "") {
   return queryOptions({
-    queryKey: queryKeys.media(page, trash),
-    queryFn: ({ signal }) => mediaApi.list(page, trash, signal),
+    queryKey: queryKeys.media(page, trash, q),
+    queryFn: ({ signal }) => mediaApi.list(page, trash, signal, q),
   });
 }

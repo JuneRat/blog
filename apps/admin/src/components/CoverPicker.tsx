@@ -2,26 +2,20 @@ import { invalidateAfterWrite } from "../queryEffects";
 import {
   Alert,
   Button,
-  Card,
-  Empty,
   Flex,
   Image,
   Modal,
   Space,
-  Spin,
   Typography,
   theme,
 } from "antd";
 import { useEffect, useRef, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { mediaApi } from "../api";
 import { permissionMessageOf } from "../apiError";
-import { MEDIA_ACCEPT, MEDIA_MAX_BYTES, formatBytes, mediaUrl, uploadRejection } from "../media";
-import { mediaPageQuery } from "../mediaQueries";
+import { MEDIA_ACCEPT, MEDIA_MAX_BYTES, MEDIA_PUBLIC_NOTICE, formatBytes, mediaUrl, uploadRejection } from "../media";
+import { MediaBrowser } from "./MediaBrowser";
 import type { MediaAsset } from "../types";
-
-/** 弹窗一次展示的资产数（与 MediaInsertPanel 相同的「第一页就够用」口径）。 */
-const PICKER_PAGE_SIZE = 24;
 
 export interface CoverPickerProps {
   /** 已选封面媒体 id（null = 无封面）。父组件持有，选择器只上报变化。 */
@@ -44,8 +38,7 @@ export interface CoverPickerProps {
  * 只上报选中的 id，表单值、脏标记与提交载荷仍由父组件统一持有（文章编辑器里
  * 就是 FormState 的单个可空字段），选择器自己只拥有弹窗与列表状态。
  *
- * 列表只取第一页：需要找更早的图片时去媒体库；上传成功后直接把新资产设为封面，
- * 不再等列表刷新（用户选一张图就是为了用它当封面）。
+ * 图片搜索与分页由共用媒体浏览器提供；上传成功后直接选择新资产。
  */
 export function CoverPicker({
   value,
@@ -59,7 +52,7 @@ export function CoverPicker({
   const { token } = theme.useToken();
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
-  const [uploadError, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const fileInput = useRef<HTMLInputElement | null>(null);
   /**
@@ -69,9 +62,6 @@ export function CoverPicker({
   const [known, setKnown] = useState<{ id: string; name: string } | null>(null);
   const knownName = known !== null && known.id === value ? known.name : null;
 
-  const query = useQuery({ ...mediaPageQuery(1), enabled: open && canReadMedia, staleTime: 0 });
-  const assets = query.data?.items ?? (query.isError ? [] : null);
-  const error = uploadError ?? (query.error ? permissionMessageOf(query.error) : null);
   useEffect(() => { setError(null); }, [open]);
 
   /** 选中一个资产：记下文件名（如已知）并上报 id，随后收起弹窗。 */
@@ -195,7 +185,7 @@ export function CoverPicker({
             {error !== null && <Alert type="error" showIcon title={error} />}
             <Flex justify="space-between" align="center" wrap gap={8}>
               <Typography.Text type="secondary">
-                从媒体库第一页选择；单张上限 {formatBytes(MEDIA_MAX_BYTES)}，仅
+                单张上限 {formatBytes(MEDIA_MAX_BYTES)}，仅
                 PNG/JPEG/GIF/WebP。
               </Typography.Text>
               <Space>
@@ -218,49 +208,9 @@ export function CoverPicker({
               </Space>
             </Flex>
 
-            {assets === null && (
-              <Flex justify="center" align="center" gap={8} style={{ padding: 12 }}>
-                <Spin size="small" />
-                <Typography.Text type="secondary">正在加载媒体库…</Typography.Text>
-              </Flex>
-            )}
-            {assets !== null && assets.length === 0 && error === null && (
-              <Empty
-                image={Empty.PRESENTED_IMAGE_SIMPLE}
-                description={
-                  canUploadMedia ? "媒体库还是空的：点「上传图片」。" : "媒体库还是空的。"
-                }
-              />
-            )}
-
-            {assets !== null && assets.length > 0 && (
-              <Flex wrap gap={12}>
-                {assets.slice(0, PICKER_PAGE_SIZE).map((asset) => (
-                  <Card key={asset.id} size="small" style={{ width: 180 }}>
-                    <Flex vertical gap={8}>
-                      <Image
-                        src={asset.url}
-                        alt={asset.original_name}
-                        height={96}
-                        style={{ objectFit: "cover" }}
-                      />
-                      <Typography.Text code title={asset.original_name}>
-                        {asset.original_name}
-                      </Typography.Text>
-                      <Typography.Text type="secondary">
-                        {asset.width}×{asset.height} · {formatBytes(asset.byte_size)}
-                      </Typography.Text>
-                      <Button
-                        disabled={busy || asset.id === value}
-                        onClick={() => choose(asset)}
-                      >
-                        {asset.id === value ? "当前封面" : "选择"}
-                      </Button>
-                    </Flex>
-                  </Card>
-                ))}
-              </Flex>
-            )}
+            {canUploadMedia && <Typography.Text type="secondary">{MEDIA_PUBLIC_NOTICE}</Typography.Text>}
+            <MediaBrowser actionLabel="选择" selectedId={value} disabled={busy || disabled} onChoose={choose}
+              emptyDescription={canUploadMedia ? "媒体库还是空的：点「上传图片」。" : "媒体库还是空的。"} />
           </Flex>
         </Modal>
       )}

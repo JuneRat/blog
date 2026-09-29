@@ -284,14 +284,14 @@ describe("媒体库屏", () => {
 
     // 第 1 页展示第 1 页数据（请求第 1 页）；总数 50、每页 24 → 共 3 页，当前页为 1。
     await waitFor(() => expect(screen.getByText("photo.png")).toBeTruthy());
-    expect(mediaApi.list).toHaveBeenCalledWith(1, false, expect.any(AbortSignal));
+    expect(mediaApi.list).toHaveBeenCalledWith(1, false, expect.any(AbortSignal), "");
     expect(screen.getByText("共 50 张")).toBeTruthy();
     expect(screen.getByTitle("3")).toBeTruthy();
     expect(screen.getByTitle("1").className).toContain("ant-pagination-item-active");
 
     // antd Pagination 的「下一页」是带 title 的 <li>；点击后请求第 2 页。
     fireEvent.click(screen.getByTitle("下一页"));
-    await waitFor(() => expect(mediaApi.list).toHaveBeenCalledWith(2, false, expect.any(AbortSignal)));
+    await waitFor(() => expect(mediaApi.list).toHaveBeenCalledWith(2, false, expect.any(AbortSignal), ""));
   });
 
   it("路由与地址对齐：/admin/media 打开媒体库", async () => {

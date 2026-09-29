@@ -194,11 +194,13 @@ Page 没有作者，使用站点级 `page.*` 权限。
 
 | 方法与路径 | 行为 / 权限 |
 |---|---|
-| `GET /media?page=1&trash=false` | 正常库分页；trash=true 查询回收站，`media.read` |
+| `GET /media?page=1&trash=false&q=…` | 按文件名搜索并分页；trash=true 查询回收站，`media.read` |
 | `POST /media?filename=…` | 裸图片字节上传，`media.upload`；文件名只用于展示 |
 | `GET /media/{id}` | 资产详情、可见引用位置及 `hidden_references`，`media.read` |
 | `DELETE /media/{id}` | 移入回收站，保留文件和引用；JSON 必须含 `expected_version`，本人 `media.delete` / 任意 `media.delete_any`，成功 204 |
 | `POST /media/{id}/restore` | 恢复；版本、权限和成功状态码同上 |
+
+可选 `q` 去除首尾空白，空值不筛选，最长 200 字符；按文件名忽略大小写做字面子串匹配，`%` 和 `_` 不作为通配符。搜索先于分页，条目和 total 来自同一快照；正常库与回收站分别查询。编辑器插图面板、封面选择器和媒体库共用此接口。
 
 上传不是 multipart。业务上限为 10 MiB、单边 12000 px、总计 6000 万像素，仅支持 PNG/JPEG/GIF/WebP，格式从内容识别；HTTP 上传体上限为 12 MiB，最终仍执行业务大小校验。
 
