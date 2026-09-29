@@ -99,6 +99,11 @@ pub enum UseCaseError {
     #[error("存储错误：{0}")]
     Repository(String),
 
+    /// Persisted data violates a domain invariant. Log separately from a storage
+    /// outage; HTTP responses must hide the record details and remain generic 500s.
+    #[error("持久化数据损坏：{0}")]
+    DataCorrupt(String),
+
     #[error("渲染错误：{0}")]
     Render(String),
 }

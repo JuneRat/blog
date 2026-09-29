@@ -7,6 +7,7 @@ mod installation;
 mod logging;
 mod observability;
 mod recovery;
+mod transport;
 mod website;
 
 use std::sync::Arc;
@@ -236,6 +237,7 @@ async fn run(command: Command, mut config: config::DeploymentConfig) -> Result<(
                 telemetry,
                 metrics_listener,
                 recovery_mode,
+                site.http,
             )
             .await
         }
@@ -249,6 +251,7 @@ async fn serve(
     telemetry: interfaces::observability::Telemetry,
     metrics_listener: Option<tokio::net::TcpListener>,
     recovery_mode: bool,
+    limits: transport::HttpLimits,
 ) -> Result<(), String> {
     let listener = tokio::net::TcpListener::bind(bind)
         .await
@@ -264,13 +267,10 @@ async fn serve(
         metrics_listener,
         telemetry.clone(),
         pool_receiver,
+        limits,
+        !recovery_mode,
     );
-    let scheduler = publish_scheduler(assembly::publisher(&pool), telemetry);
-    if recovery_mode {
-        tracing::info!("恢复核验模式：预约发布任务已停用");
-        return server.await;
-    }
-    tokio::select! { result=server=>result, _=scheduler=>unreachable!("scheduler loops until server shuts down") }
+    server.await
 }
 
 async fn serve_http(
@@ -279,32 +279,59 @@ async fn serve_http(
     metrics_listener: Option<tokio::net::TcpListener>,
     telemetry: interfaces::observability::Telemetry,
     pool: tokio::sync::watch::Receiver<Option<infrastructure::Database>>,
+    limits: transport::HttpLimits,
+    scheduler_enabled: bool,
 ) -> Result<(), String> {
-    let (shutdown, mut receiver) = tokio::sync::watch::channel(false);
-    let enabled = metrics_listener.is_some();
-    let management = observability::serve(metrics_listener, telemetry, pool, receiver.clone());
-    let public = async {
-        axum::serve(
+    let (shutdown, receiver) = tokio::sync::watch::channel(false);
+    let mut tasks = tokio::task::JoinSet::new();
+    tasks.spawn(transport::serve(listener, app, receiver.clone(), limits));
+    if let Some(listener) = metrics_listener {
+        tasks.spawn(observability::serve(
             listener,
-            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
-        )
-        .with_graceful_shutdown(async move {
-            let _ = receiver.wait_for(|closed| *closed).await;
-        })
-        .await
-        .map_err(|error| format!("服务退出：{error}"))
-    };
-    tokio::pin!(public, management);
-    tokio::select! {
-        result = &mut public => result,
-        result = &mut management => result,
-        _ = shutdown_signal() => {
-            shutdown.send_replace(true);
-            public.await?;
-            if enabled { management.await?; }
-            Ok(())
-        }
+            telemetry.clone(),
+            pool.clone(),
+            receiver.clone(),
+            limits,
+        ));
     }
+    if scheduler_enabled {
+        let mut ready = pool.clone();
+        let mut stopping = receiver;
+        tasks.spawn(async move {
+            let work = async {
+                let pool = ready.wait_for(|pool| pool.is_some()).await.map_err(|e| e.to_string())?.clone().expect("checked pool");
+                publish_scheduler(assembly::publisher(&pool), telemetry).await;
+                Ok(())
+            };
+            tokio::select! { result = work => result, _ = stopping.wait_for(|closed| *closed) => Ok(()) }
+        });
+    }
+    let result = tokio::select! {
+        _ = shutdown_signal() => Ok(()),
+        result = tasks.join_next() => match result {
+            Some(Ok(result)) => result,
+            Some(Err(error)) => Err(format!("服务任务退出：{error}")),
+            None => Ok(()),
+        },
+    };
+    let deadline = tokio::time::Instant::now() + limits.shutdown;
+    shutdown.send_replace(true);
+    let drain = async {
+        while let Some(result) = tasks.join_next().await {
+            if let Err(error) = result {
+                tracing::warn!(%error, "关闭服务任务失败");
+            }
+        }
+        let database = pool.borrow().clone();
+        if let Some(database) = database {
+            database.close().await;
+        }
+    };
+    if tokio::time::timeout_at(deadline, drain).await.is_err() {
+        tasks.abort_all();
+        tracing::warn!("关闭总期限已到，停止剩余任务");
+    }
+    result
 }
 
 async fn publish_scheduler(

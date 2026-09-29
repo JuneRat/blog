@@ -607,7 +607,9 @@ impl OAuthAccountStore for PostgresOAuthAccountStore {
         crate::persistence::acquire_identity_lock(&mut *tx)
             .await
             .map_err(|e| UseCaseError::Repository(e.to_string()))?;
-        sqlx::query("SELECT id FROM users WHERE id=$1 AND status='active' AND deleted_at IS NULL FOR UPDATE")
+        // This path also revokes sessions; do not block the KEY SHARE taken by
+        // a concurrent session insertion after capacity eviction.
+        sqlx::query("SELECT id FROM users WHERE id=$1 AND status='active' AND deleted_at IS NULL FOR NO KEY UPDATE")
             .bind(user_id).fetch_optional(&mut *tx).await
             .map_err(|e| UseCaseError::Repository(e.to_string()))?
             .ok_or_else(|| UseCaseError::NotFound("用户".into()))?;

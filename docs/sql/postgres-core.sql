@@ -433,4 +433,10 @@ CREATE INDEX audit_logs_target_time_idx ON audit_logs (target_type, target_id, c
 -- 保留期任务按 created_at 清理过期审计，或将过期 comments.ip_address 置 NULL。
 -- IP 清理保留评论正文、父子关系与审核状态，不把清理操作者的 IP 写回提交来源。
 
+-- Migration: 0002_admin_query_indexes.sql
+-- Ordered pagination for deleted media and selective audit filters.
+CREATE INDEX media_trash_idx ON media (created_at DESC, id DESC) WHERE deleted_at IS NOT NULL;
+CREATE INDEX audit_logs_actor_time_idx ON audit_logs (actor_id, created_at DESC, id DESC);
+CREATE INDEX audit_logs_action_time_idx ON audit_logs (action, created_at DESC, id DESC);
+
 COMMIT;

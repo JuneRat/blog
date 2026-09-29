@@ -567,7 +567,7 @@ impl UserInteractor {
             return Err(UseCaseError::VersionConflict);
         }
         let mut user = User::reconstitute(snapshot)
-            .map_err(|error| UseCaseError::Repository(error.to_string()))?;
+            .map_err(|error| UseCaseError::DataCorrupt(error.to_string()))?;
         user.edit_profile(normalize_display_name(display_name), bio)
             .map_err(|error| UseCaseError::Invalid(error.to_string()))?;
         let result = self
@@ -759,7 +759,7 @@ impl UserInteractor {
             .ok_or_else(|| UseCaseError::NotFound("作者用户".into()))?;
         let version = snapshot.auth_version;
         let user =
-            User::reconstitute(snapshot).map_err(|e| UseCaseError::Repository(e.to_string()))?;
+            User::reconstitute(snapshot).map_err(|e| UseCaseError::DataCorrupt(e.to_string()))?;
         if !user.is_active() {
             return Err(UseCaseError::Forbidden);
         }
@@ -773,7 +773,7 @@ impl UserInteractor {
 
     async fn actor_from_snapshot(&self, snapshot: UserSnapshot) -> Result<Actor, UseCaseError> {
         let user =
-            User::reconstitute(snapshot).map_err(|e| UseCaseError::Repository(e.to_string()))?;
+            User::reconstitute(snapshot).map_err(|e| UseCaseError::DataCorrupt(e.to_string()))?;
         if !user.is_active() {
             return Err(UseCaseError::Forbidden);
         }

@@ -13,15 +13,8 @@ fn db(e: sqlx::Error) -> UseCaseError {
 }
 // The first key is shared with comment submission/global policy writes.
 async fn lock(tx: &mut Transaction<'_, Postgres>, write: bool) -> Result<(), UseCaseError> {
-    let query = if write {
-        "SELECT pg_advisory_xact_lock(1129270605,$1)"
-    } else {
-        "SELECT pg_advisory_xact_lock_shared(1129270605,$1)"
-    };
-    for key in [1i32, 2] {
-        sqlx::query(query)
-            .bind(key)
-            .execute(&mut **tx)
+    for key in [crate::locks::COMMENT_POLICY, crate::locks::AUDIT_POLICY] {
+        crate::locks::acquire(&mut **tx, key, !write)
             .await
             .map_err(db)?;
     }
@@ -163,8 +156,7 @@ impl application::retention::RetentionCleanupStore for PostgresRetentionCleanupS
         let mut tx = self.pool.begin().await.map_err(db)?;
         // Serialize cleaners without granting the audit maintenance role UPDATE
         // merely to use SELECT FOR UPDATE. Writers only append audit rows.
-        sqlx::query("SELECT pg_advisory_xact_lock(1129270605,3)")
-            .execute(&mut *tx)
+        crate::locks::acquire(&mut *tx, crate::locks::RETENTION_CLEANUP, false)
             .await
             .map_err(db)?;
         lock(&mut tx, false).await?;

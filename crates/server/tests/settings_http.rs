@@ -330,6 +330,7 @@ async fn build(pool: PgPool) -> Stack {
     );
 
     let auth_state = AuthState {
+        admission: Arc::new(infrastructure::InMemoryRequestAdmission::default()),
         auth: auth.clone(),
         passwords: passwords.clone(),
         secure_cookies: false,

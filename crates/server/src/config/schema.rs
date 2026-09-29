@@ -100,6 +100,55 @@ macro_rules! field {
 }
 
 pub(super) const FIELDS: &[Field] = &[
+    field!(
+        "server.request_timeout_secs",
+        Some("BLOG_REQUEST_TIMEOUT_SECS"),
+        Integer,
+        Some("30"),
+        false
+    ),
+    field!(
+        "server.upload_timeout_secs",
+        Some("BLOG_UPLOAD_TIMEOUT_SECS"),
+        Integer,
+        Some("120"),
+        false
+    ),
+    field!(
+        "server.header_timeout_secs",
+        Some("BLOG_HEADER_TIMEOUT_SECS"),
+        Integer,
+        Some("10"),
+        false
+    ),
+    field!(
+        "server.io_idle_timeout_secs",
+        Some("BLOG_IO_IDLE_TIMEOUT_SECS"),
+        Integer,
+        Some("30"),
+        false
+    ),
+    field!(
+        "server.connection_max_age_secs",
+        Some("BLOG_CONNECTION_MAX_AGE_SECS"),
+        Integer,
+        Some("300"),
+        false
+    ),
+    field!(
+        "server.shutdown_timeout_secs",
+        Some("BLOG_SHUTDOWN_TIMEOUT_SECS"),
+        Integer,
+        Some("25"),
+        false
+    ),
+    field!(
+        "server.max_http_connections",
+        Some("BLOG_MAX_HTTP_CONNECTIONS"),
+        Integer,
+        Some("1024"),
+        false
+    ),
     field!("database.url", Some("DATABASE_URL"), String, None, true),
     field!(
         "database.max_connections",

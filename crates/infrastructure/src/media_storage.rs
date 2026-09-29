@@ -17,6 +17,7 @@ use application::ports::MediaStorage;
 use async_trait::async_trait;
 use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
+use tokio::io::AsyncWriteExt;
 
 /// 暂存子目录名（相对媒体根）。
 const STAGING_DIR: &str = "staging";
@@ -64,11 +65,15 @@ impl MediaStorage for LocalMediaStorage {
     async fn put_staged(&self, key: &str, bytes: &[u8]) -> Result<String, UseCaseError> {
         let staged = self.staged_path(key)?;
         let dir = staged.parent().ok_or_else(|| invalid_key(key))?;
-        tokio::fs::create_dir_all(dir).await.map_err(map_io)?;
+        durable_directory(dir).await?;
         // 先写 `.part` 再重命名：半截文件永远不会出现在暂存位置被 promote。
         let temp = staged.with_extension("part");
-        tokio::fs::write(&temp, bytes).await.map_err(map_io)?;
+        let mut file = tokio::fs::File::create(&temp).await.map_err(map_io)?;
+        file.write_all(bytes).await.map_err(map_io)?;
+        file.sync_all().await.map_err(map_io)?;
+        drop(file);
         tokio::fs::rename(&temp, &staged).await.map_err(map_io)?;
+        sync_directory(dir).await?;
         Ok(format!("{:x}", Sha256::digest(bytes)))
     }
 
@@ -78,13 +83,28 @@ impl MediaStorage for LocalMediaStorage {
         if tokio::fs::try_exists(&target).await.map_err(map_io)? {
             // 幂等：正式文件已就位时清理暂存残留并视为成功。
             let _ = tokio::fs::remove_file(&staged).await;
+            tokio::fs::File::open(&target)
+                .await
+                .map_err(map_io)?
+                .sync_all()
+                .await
+                .map_err(map_io)?;
+            sync_directory(target.parent().ok_or_else(|| invalid_key(key))?).await?;
+            if let Some(parent) = staged.parent() {
+                sync_directory(parent).await?;
+            }
             return Ok(());
         }
         if let Some(parent) = target.parent() {
-            tokio::fs::create_dir_all(parent).await.map_err(map_io)?;
+            durable_directory(parent).await?;
         }
         match tokio::fs::rename(&staged, &target).await {
-            Ok(()) => Ok(()),
+            Ok(()) => {
+                // Atomic rename alone is not durable. Persist both directory
+                // entries before the caller is allowed to commit media metadata.
+                sync_directory(target.parent().ok_or_else(|| invalid_key(key))?).await?;
+                sync_directory(staged.parent().ok_or_else(|| invalid_key(key))?).await
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(UseCaseError::Repository(
                 format!("上传暂存文件缺失，无法完成存储：{key}"),
             )),
@@ -140,6 +160,31 @@ impl MediaStorage for LocalMediaStorage {
         }
         Ok(removed)
     }
+}
+
+async fn sync_directory(path: &Path) -> Result<(), UseCaseError> {
+    let path = path.to_owned();
+    tokio::task::spawn_blocking(move || std::fs::File::open(path)?.sync_all())
+        .await
+        .map_err(|e| UseCaseError::Repository(e.to_string()))?
+        .map_err(map_io)
+}
+
+async fn durable_directory(path: &Path) -> Result<(), UseCaseError> {
+    tokio::fs::create_dir_all(path).await.map_err(map_io)?;
+    // Newly created ancestors must themselves be linked durably. Include '.'
+    // for a relative media root whose parent is represented by an empty path.
+    // Also sync existing directories: another upload may have just created them
+    // without finishing its sync, or a prior attempt may have failed midway.
+    for ancestor in path.ancestors() {
+        sync_directory(if ancestor.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            ancestor
+        })
+        .await?;
+    }
+    Ok(())
 }
 
 async fn remove_if_exists(path: &Path) -> Result<(), UseCaseError> {

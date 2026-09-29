@@ -216,7 +216,7 @@ impl CategoryInteractor {
             .find_by_slug(slug)
             .await?
             .ok_or_else(|| UseCaseError::NotFound(format!("分类 {slug}")))?;
-        Category::reconstitute(snapshot).map_err(|e| UseCaseError::Repository(e.to_string()))
+        Category::reconstitute(snapshot).map_err(|e| UseCaseError::DataCorrupt(e.to_string()))
     }
 
     async fn resolve_parent(&self, slug: &str) -> Result<Category, UseCaseError> {

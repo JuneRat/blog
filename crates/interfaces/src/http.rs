@@ -54,6 +54,7 @@ pub fn app_router(state: AppState, assets: HttpAssets, config: HttpConfig) -> Ro
         },
     );
     let comments = crate::http_comments::comments_router(crate::http_comments::CommentState {
+        admission: state.auth.admission.clone(),
         comments: state.comments,
         admin: state.admin.clone(),
         origin: config.public_origin,

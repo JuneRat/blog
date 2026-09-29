@@ -170,7 +170,7 @@ impl TagInteractor {
             .find_by_slug(slug)
             .await?
             .ok_or_else(|| UseCaseError::NotFound(format!("标签 {slug}")))?;
-        Tag::reconstitute(snapshot).map_err(|e| UseCaseError::Repository(e.to_string()))
+        Tag::reconstitute(snapshot).map_err(|e| UseCaseError::DataCorrupt(e.to_string()))
     }
 }
 

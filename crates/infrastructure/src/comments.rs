@@ -44,7 +44,7 @@ fn domain_error(error: CommentError) -> UseCaseError {
     }
 }
 fn status(row: &PgRow) -> Result<CommentStatus, UseCaseError> {
-    CommentStatus::parse(row.get("status")).map_err(|e| UseCaseError::Repository(e.into()))
+    CommentStatus::parse(row.get("status")).map_err(|e| UseCaseError::DataCorrupt(e.into()))
 }
 fn reference(row: &PgRow) -> Result<CommentReference, UseCaseError> {
     Ok(CommentReference {
@@ -68,7 +68,7 @@ fn aggregate(row: &PgRow) -> Result<Comment, UseCaseError> {
         status: status(row)?,
         version: row.get("version"),
     })
-    .map_err(domain_error)
+    .map_err(|e| UseCaseError::DataCorrupt(e.to_string()))
 }
 const PUBLIC: &str = "p.status='published' AND p.visibility='public' AND p.deleted_at IS NULL AND p.published_at<=now()";
 // Include only ancestors needed to connect approved descendants. A hidden node's
@@ -161,24 +161,27 @@ impl CommentRepository for PostgresCommentRepository {
         let post_id: Uuid = post.get("id");
         let enabled =
             global_policy(&mut tx).await?.0.enabled && post.get::<bool, _>("comments_enabled");
-        if let Some(root) = root {
-            let exists: bool = sqlx::query_scalar(&format!("{VISIBLE} SELECT EXISTS(SELECT 1 FROM comments c JOIN visible v ON c.id=v.id WHERE c.id=$2 AND c.post_id=$1 AND c.parent_id IS NULL)"))
-                .bind(post_id).bind(root).fetch_one(&mut *tx).await.map_err(db)?;
-            if !exists {
-                return Err(missing());
-            }
-        }
+        // Materialize visibility once for root validation, count and page. The
+        // LEFT JOIN retains totals even for an empty or out-of-range page.
         let filter = "c.post_id=$1 AND c.root_id IS NOT DISTINCT FROM $2::uuid";
-        let total = sqlx::query_scalar(&format!(
-            "{VISIBLE} SELECT count(*) FROM comments c JOIN visible v ON v.id=c.id WHERE {filter}"
-        ))
-        .bind(post_id)
-        .bind(root)
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(db)?;
-        let items = sqlx::query(&format!("{VISIBLE} SELECT c.id,c.parent_id,c.root_id,c.author_name,c.content_html,c.status,c.created_at,COALESCE(c.user_id=p.author_id,false) AS is_author,CASE WHEN parent.status='approved' THEN parent.author_name END AS parent_nickname FROM comments c JOIN visible v ON v.id=c.id JOIN posts p ON p.id=c.post_id LEFT JOIN comments parent ON parent.id=c.parent_id WHERE {filter} ORDER BY c.created_at,c.id LIMIT 20 OFFSET $3"))
-            .bind(post_id).bind(root).bind((page-1)*20).fetch_all(&mut *tx).await.map_err(db)?.into_iter().map(public_comment).collect();
+        let rows = sqlx::query(&format!("{VISIBLE}, \
+            summary AS (SELECT count(*) AS total FROM comments c JOIN visible v ON v.id=c.id WHERE {filter}), \
+            root_check AS (SELECT $2::uuid IS NULL OR EXISTS(SELECT 1 FROM comments c JOIN visible v ON v.id=c.id WHERE c.id=$2 AND c.post_id=$1 AND c.parent_id IS NULL) AS root_exists), \
+            page AS (SELECT c.id,c.parent_id,c.root_id,c.author_name,c.content_html,c.status,c.created_at,COALESCE(c.user_id=p.author_id,false) AS is_author,CASE WHEN parent.status='approved' THEN parent.author_name END AS parent_nickname FROM comments c JOIN visible v ON v.id=c.id JOIN posts p ON p.id=c.post_id LEFT JOIN comments parent ON parent.id=c.parent_id WHERE {filter} ORDER BY c.created_at,c.id LIMIT 20 OFFSET $3) \
+            SELECT summary.total,root_check.root_exists,page.* FROM summary CROSS JOIN root_check LEFT JOIN page ON true ORDER BY page.created_at,page.id"))
+            .bind(post_id).bind(root).bind((page-1)*20).fetch_all(&mut *tx).await.map_err(db)?;
+        let first = rows
+            .first()
+            .ok_or_else(|| UseCaseError::Repository("评论统计未返回结果".into()))?;
+        if !first.get::<bool, _>("root_exists") {
+            return Err(missing());
+        }
+        let total = first.get("total");
+        let items = rows
+            .into_iter()
+            .filter(|row| row.get::<Option<Uuid>, _>("id").is_some())
+            .map(public_comment)
+            .collect();
         tx.commit().await.map_err(db)?;
         Ok(PublicCommentPage {
             items,
@@ -195,8 +198,7 @@ impl CommentRepository for PostgresCommentRepository {
         let html = self.renderer.render_comment(cmd.body.as_str()).await?;
         let mut tx = self.pool.begin().await.map_err(db)?;
         // Shared lock also protects the default policy when no settings row exists.
-        sqlx::query("SELECT pg_advisory_xact_lock_shared(1129270605,1)")
-            .execute(&mut *tx)
+        crate::locks::acquire(&mut *tx, crate::locks::COMMENT_POLICY, true)
             .await
             .map_err(db)?;
         let global_enabled = global_policy(&mut tx).await?.0.enabled;
@@ -302,9 +304,7 @@ impl CommentRepository for PostgresCommentRepository {
         let mut tx = self.pool.begin().await.map_err(db)?;
         let post = sqlx::query("SELECT p.author_id FROM posts p JOIN comments c ON c.post_id=p.id WHERE c.id=$1 FOR SHARE OF p")
             .bind(id).fetch_optional(&mut *tx).await.map_err(db)?.ok_or_else(missing)?;
-        if !scope.all && post.get::<Uuid, _>("author_id") != scope.user_id {
-            return Err(UseCaseError::Forbidden);
-        }
+        scope.authorize_post(post.get("author_id"))?;
         let row = sqlx::query("SELECT id,post_id,parent_id,root_id,user_id,author_name,author_email,content,status,version FROM comments WHERE id=$1 FOR UPDATE")
             .bind(id)
             .fetch_optional(&mut *tx)
@@ -341,9 +341,7 @@ impl CommentRepository for PostgresCommentRepository {
         let (current, mut value) = if let Some(post) = post {
             let row = sqlx::query("SELECT author_id,comments_enabled,version FROM posts WHERE id=$1 AND deleted_at IS NULL FOR UPDATE")
                 .bind(post).fetch_optional(&mut *tx).await.map_err(db)?.ok_or_else(missing)?;
-            if !scope.all && row.get::<Uuid, _>("author_id") != scope.user_id {
-                return Err(UseCaseError::Forbidden);
-            }
+            scope.authorize_post(row.get("author_id"))?;
             (
                 CommentPolicy {
                     enabled: row.get("comments_enabled"),
@@ -352,8 +350,7 @@ impl CommentRepository for PostgresCommentRepository {
                 json!({}),
             )
         } else {
-            sqlx::query("SELECT pg_advisory_xact_lock(1129270605,1)")
-                .execute(&mut *tx)
+            crate::locks::acquire(&mut *tx, crate::locks::COMMENT_POLICY, false)
                 .await
                 .map_err(db)?;
             global_policy(&mut tx).await?

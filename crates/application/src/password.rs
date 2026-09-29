@@ -71,10 +71,10 @@ impl PasswordInteractor {
         let reservation = self.reserve_all(&subjects)?;
 
         match self.verify_login(username, password).await? {
-            Some(credential) => {
+            Some((credential, normalized)) => {
                 // 成功：账号维度清空计数，来源地址维度只归还预占（实现按主体区分）。
                 reservation.finish(true)?;
-                self.finish_login(username, password, credential, next, ip_address)
+                self.finish_login(&normalized, password, credential, next, ip_address)
                     .await
             }
             None => {
@@ -89,7 +89,7 @@ impl PasswordInteractor {
         &self,
         username: &str,
         password: &str,
-    ) -> Result<Option<crate::ports::PasswordCredential>, UseCaseError> {
+    ) -> Result<Option<(crate::ports::PasswordCredential, String)>, UseCaseError> {
         // 用户名形状非法与「不存在」不可区分：一律走统一失败路径。
         let normalized = domain::identity::normalize_username(username).ok();
         let credential = match normalized.as_deref() {
@@ -122,7 +122,7 @@ impl PasswordInteractor {
             },
         };
         match verified {
-            Ok(true) => Ok(credential),
+            Ok(true) => Ok(credential.zip(normalized)),
             Ok(false) => Ok(None),
             Err(e) => Err(e),
         }
@@ -131,7 +131,7 @@ impl PasswordInteractor {
     /// 登录成功后的收尾：透明升级弱参数哈希、复核凭据未被并发替换、签发会话。
     async fn finish_login(
         &self,
-        username: &str,
+        normalized: &str,
         password: &str,
         credential: crate::ports::PasswordCredential,
         next: String,
@@ -141,12 +141,10 @@ impl PasswordInteractor {
         let current_hash = self
             .upgrade_hash_if_needed(password, &credential, ip_address)
             .await;
-        let normalized =
-            domain::identity::normalize_username(username).expect("持有凭据时用户名必然规范化成功");
         let current = self
             .deps
             .credentials
-            .find_password_credential(&normalized)
+            .find_password_credential(normalized)
             .await?
             .filter(|current| {
                 current.user_id == credential.user_id && current.password_hash == current_hash

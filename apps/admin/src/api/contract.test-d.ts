@@ -25,3 +25,14 @@ const optional = responseObject<{ optional?: string }>();
 optional({ optional: z.string().optional() });
 // @ts-expect-error optional wire fields cannot become required in the validator
 optional({ optional: z.string() });
+
+// @ts-expect-error any must not erase primitive or nullability validation
+profileField({ display_name: z.any() });
+// @ts-expect-error unknown cannot validate a concrete nullable string either
+profileField({ display_name: z.unknown() });
+const nested = responseObject<{ item: { names: string[] } }>();
+nested({ item: z.object({ names: z.array(z.string()) }) });
+// @ts-expect-error permissive nested leaves are equally unsafe
+nested({ item: z.object({ names: z.array(z.any()) }) });
+// @ts-expect-error a whole nested object cannot bypass validation
+nested({ item: z.any() });

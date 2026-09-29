@@ -133,3 +133,7 @@ Post/Page 管理 API 及 Post CLI 通过稳定 UUID 定位资源，公开 URL �
 ## 取舍与后续方向
 
 当前以单进程、单数据库和业务提交端口保持可理解的一致性边界。运行时与业务规则已分离，但没有实现 outbox、外部搜索、Webhook、任意插件运行时或全站缓存 generation；这些能力的需求、验收门槛和顺序见[产品路线图](product-roadmap.md)与[扩展设计](extensions-and-data.md)。历史决策保留在 [ADR](adr/README.md)，不作为已交付功能清单。
+
+持久化快照重建失败使用 `UseCaseError::DataCorrupt`，与数据库连接/执行错误 `Repository` 区分；接口仍返回通用 500，日志保留错误类别。评论端口位于 `ports/comments.rs`，归属策略由应用层 `CommentScope::authorize_post` 定义；适配器必须在事务内锁定当前文章事实后执行该策略。其他业务提交端口可以与所属用例共置，不以文件目录代替依赖边界。
+
+数据库锁键集中于 `infrastructure::locks`，具体获取顺序、外键锁兼容性与升级约束见[锁协议](locking.md)。媒体上传在文件同步及最终重命名的目录同步完成后才登记元数据；文件同步错误阻止登记。

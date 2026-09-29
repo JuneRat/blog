@@ -206,7 +206,7 @@ pub async fn serve(
     let token = infrastructure::SystemSecureRandom
         .token_hex()
         .map_err(|e| e.to_string())?;
-    let (pool, mut receiver) = watch::channel(None);
+    let (pool, _) = watch::channel(None);
     let live = Arc::new(LiveSite {
         router: RwLock::new(Router::new()),
         pool,
@@ -246,15 +246,8 @@ pub async fn serve(
         metrics_listener,
         telemetry.clone(),
         metrics_pool,
+        site.http,
+        true,
     );
-    let scheduler = async {
-        let pool = receiver
-            .wait_for(|pool| pool.is_some())
-            .await
-            .expect("live site retains sender")
-            .clone()
-            .expect("ready pool");
-        crate::publish_scheduler(crate::assembly::publisher(&pool), telemetry).await
-    };
-    tokio::select! { result = server => result, _ = scheduler => unreachable!("scheduler loops") }
+    server.await
 }

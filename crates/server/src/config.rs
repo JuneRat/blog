@@ -23,6 +23,7 @@ pub struct DatabaseConfig {
 }
 
 pub struct SiteConfig {
+    pub http: crate::transport::HttpLimits,
     pub theme_dir: PathBuf,
     pub site: SiteInfo,
     pub admin_dist: PathBuf,
@@ -255,6 +256,34 @@ impl DeploymentConfig {
         Ok((source != "default").then(|| value.unwrap().as_str().unwrap().to_owned()))
     }
 
+    fn http_limits(&self) -> Result<crate::transport::HttpLimits, String> {
+        let number = |key: &str, max: i64| -> Result<u64, String> {
+            let value = self.value(key)?.0.unwrap().as_integer().unwrap();
+            if !(1..=max).contains(&value) {
+                return Err(format!("{key} 必须为 1–{max}"));
+            }
+            Ok(value as u64)
+        };
+        let seconds = |key: &str| number(key, 3600).map(std::time::Duration::from_secs);
+        let limits = crate::transport::HttpLimits {
+            requests: interfaces::http_limits::RequestTimeouts {
+                request: seconds("server.request_timeout_secs")?,
+                upload: seconds("server.upload_timeout_secs")?,
+            },
+            headers: seconds("server.header_timeout_secs")?,
+            io_idle: seconds("server.io_idle_timeout_secs")?,
+            connection_age: seconds("server.connection_max_age_secs")?,
+            shutdown: seconds("server.shutdown_timeout_secs")?,
+            max_connections: number("server.max_http_connections", 65536)? as usize,
+        };
+        if limits.requests.upload < limits.requests.request
+            || limits.connection_age <= limits.requests.upload.max(limits.headers)
+        {
+            return Err("upload_timeout_secs 须不小于 request_timeout_secs；connection_max_age_secs 须大于上传及请求头期限".into());
+        }
+        Ok(limits)
+    }
+
     pub fn site(&self, addr: Option<String>) -> Result<SiteConfig, String> {
         self.metrics_bind()?;
         let public_base_url = PublicBaseUrl::parse(&self.string("server.public_base_url")?)
@@ -282,6 +311,7 @@ impl DeploymentConfig {
             })
             .collect::<Result<Vec<_>, _>>()?;
         Ok(SiteConfig {
+            http: self.http_limits()?,
             secure_cookies: self
                 .boolean("server.secure_cookies")?
                 .unwrap_or_else(|| public_base_url.as_str().starts_with("https://")),

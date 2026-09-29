@@ -108,11 +108,20 @@ async fn owner_bootstrap_uses_new_identity_baseline() {
     .await
     .unwrap();
     assert_eq!(row, (3, 2, true, "owner".into()));
-    let migrations: Vec<i64> = sqlx::query_scalar("SELECT version FROM _sqlx_migrations")
-        .fetch_all(&pool)
-        .await
-        .unwrap();
-    assert_eq!(migrations, vec![1]);
+    let migrations: Vec<i64> =
+        sqlx::query_scalar("SELECT version FROM _sqlx_migrations ORDER BY version")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    let migrator = sqlx::migrate::Migrator::new(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../migrations/postgres")
+            .as_path(),
+    )
+    .await
+    .unwrap();
+    let expected: Vec<_> = migrator.iter().map(|migration| migration.version).collect();
+    assert_eq!(migrations, expected);
 }
 
 #[tokio::test]

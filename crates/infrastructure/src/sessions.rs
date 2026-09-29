@@ -245,7 +245,7 @@ impl SessionStore for InMemorySessionStore {
 ///
 /// 对 crate 外公开（`#[doc(hidden)]`）只为让集成测试能验证两者确实共用同一把锁。
 #[doc(hidden)]
-pub const SESSION_LOCK: (i32, i32) = (2048002, 1);
+pub const SESSION_LOCK: (i32, i32) = crate::locks::SESSIONS;
 
 /// PostgreSQL 会话存储：状态落库，因此**重启后仍登录**。
 ///
@@ -506,9 +506,17 @@ impl OAuthAttemptStore for InMemoryOAuthAttemptStore {
         let mut attempts = self.attempts.lock().unwrap();
         attempts.retain(|_, a| now - a.created_at <= time::Duration::seconds(self.config.ttl_secs));
         if attempts.len() >= self.config.max_entries {
-            return Err(UseCaseError::External(
-                "登录尝试存储已满，请稍后重试".into(),
-            ));
+            let retry_after_secs = attempts
+                .values()
+                .map(|a| {
+                    (time::Duration::seconds(self.config.ttl_secs) - (now - a.created_at))
+                        .whole_seconds()
+                        .max(0) as u64
+                        + 1
+                })
+                .min()
+                .unwrap_or(1);
+            return Err(UseCaseError::RateLimited { retry_after_secs });
         }
         attempts.insert(state, attempt);
         Ok(())

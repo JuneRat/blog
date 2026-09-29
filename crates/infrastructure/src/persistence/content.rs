@@ -360,8 +360,7 @@ impl PostRepository for PostgresPostRepository {
 pub(super) async fn lock_content_relations(
     tx: &mut sqlx::PgConnection,
 ) -> Result<(), UseCaseError> {
-    sqlx::query("SELECT pg_advisory_xact_lock(1129270868, 1)")
-        .execute(tx)
+    crate::locks::acquire(tx, crate::locks::CONTENT_RELATIONS, false)
         .await
         .map_err(map_sqlx_error)?;
     Ok(())

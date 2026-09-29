@@ -88,45 +88,11 @@ async fn migrations_create_core_tables() {
     let _g = SERIAL.lock().await;
     let pool = fresh_database().await;
 
-    // 新初始基线：18 张业务表 + sessions。
-    let count: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename <> '_sqlx_migrations'",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert_eq!(count, 19, "18 张业务表 + sessions");
-
-    let tables: Vec<String> = sqlx::query_scalar(
-        "SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename <> '_sqlx_migrations' ORDER BY tablename",
-    )
-    .fetch_all(&pool)
-    .await
-    .unwrap();
-    let expected = [
-        "audit_logs",
-        "categories",
-        "comments",
-        "media",
-        "media_refs",
-        "oauth_accounts",
-        "pages",
-        "permissions",
-        "post_series",
-        "post_tags",
-        "posts",
-        "role_permissions",
-        "roles",
-        "series",
-        "sessions",
-        "settings",
-        "tags",
-        "user_roles",
-        "users",
-    ];
-    for t in expected {
-        assert!(tables.iter().any(|x| x == t), "缺少表 {t}");
-    }
+    let contract =
+        infrastructure::schema_contract::SchemaContract::load("../../migrations/postgres").unwrap();
+    let tables: Vec<String> = sqlx::query_scalar("SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename <> '_sqlx_migrations' ORDER BY tablename")
+        .fetch_all(&pool).await.unwrap();
+    assert_eq!(tables, contract.tables().collect::<Vec<_>>());
     infrastructure::migrate_schema(&common::database(pool.clone()), "../../migrations/postgres")
         .await
         .unwrap();
@@ -135,7 +101,11 @@ async fn migrations_create_core_tables() {
             .fetch_all(&pool)
             .await
             .unwrap();
-    assert_eq!(applied, vec![1], "只有一个基线，重复启动不重复迁移");
+    let migrator = sqlx::migrate::Migrator::new(std::path::Path::new("../../migrations/postgres"))
+        .await
+        .unwrap();
+    let expected: Vec<_> = migrator.iter().map(|migration| migration.version).collect();
+    assert_eq!(applied, expected, "完整迁移链只执行一次");
 }
 
 #[tokio::test]
@@ -3332,4 +3302,65 @@ async fn admin_pages(
     )
     .await
     .unwrap()
+}
+
+#[tokio::test]
+async fn password_clear_does_not_deadlock_with_session_eviction_and_fk_insert() {
+    let _g = SERIAL.lock().await;
+    for binding in [false, true] {
+        let pool = fresh_database().await;
+        let user = seed_user(&pool, "clear-race").await;
+        seed_password(&pool, user).await;
+        seed_binding(&pool, user).await;
+        let sessions =
+            infrastructure::PostgresSessionStore::with_defaults(common::database(pool.clone()));
+        use application::ports::SessionStore;
+        sessions.create(user, 1).await.unwrap();
+        let mut creation = pool.begin().await.unwrap();
+        // Match SessionStore::create: capacity lock, removed rows, then FK insertion.
+        let key = infrastructure::sessions::SESSION_LOCK;
+        sqlx::query("SELECT pg_advisory_xact_lock($1::int,$2::int)")
+            .bind(key.0)
+            .bind(key.1)
+            .execute(&mut *creation)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM sessions WHERE user_id=$1")
+            .bind(user)
+            .execute(&mut *creation)
+            .await
+            .unwrap();
+        let repo = infrastructure::PostgresUserRepository::new(common::database(pool.clone()));
+        let oauth = infrastructure::PostgresOAuthAccountStore::new(common::database(pool.clone()));
+        let clearing = tokio::spawn(async move {
+            if binding {
+                application::ports::OAuthAccountStore::bind(
+                    &oauth,
+                    user,
+                    "https://idp.example",
+                    "new-subject",
+                    None,
+                    None.into(),
+                )
+                .await?;
+                Ok(application::ports::ClearPasswordOutcome::Cleared)
+            } else {
+                repo.clear_password_hash_guarded(user, None.into()).await
+            }
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            let waiting: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND query='DELETE FROM sessions WHERE user_id=$1' AND wait_event_type='Lock')").fetch_one(&pool).await.unwrap();
+            if waiting { break; }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }).await.expect("clear must reach session revocation while holding the user row");
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        sqlx::query("INSERT INTO sessions(token_hash,user_id,csrf_token,auth_version,created_at,last_seen_at,expires_at) VALUES(repeat('a',64),$1,repeat('b',64),1,now(),now(),now()+interval '1 hour')").bind(user).execute(&mut *creation).await.unwrap();
+        creation.commit().await.unwrap();
+        assert_eq!(clearing.await.unwrap().unwrap(), application::ports::ClearPasswordOutcome::Cleared);
+    }).await.expect("clearing a password must not deadlock with the session FK");
+        let valid: i64 = sqlx::query_scalar("SELECT count(*) FROM sessions s JOIN users u ON s.user_id=u.id WHERE u.id=$1 AND s.auth_version=u.auth_version").bind(user).fetch_one(&pool).await.unwrap();
+        assert_eq!(valid, 0);
+    }
 }

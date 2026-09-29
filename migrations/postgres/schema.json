@@ -6,6 +6,11 @@
       "version": 1,
       "file": "0001_initial_schema.sql",
       "checksum": "37e7a5cb07b483990436f88bcaab81fa96c8d8bc210130b3322cb16724671531cd3c86b95d84f415060a57e7caf1c0a4"
+    },
+    {
+      "version": 2,
+      "file": "0002_admin_query_indexes.sql",
+      "checksum": "ab5c19a56f489afa5f2ac30704b49e0b7277f2443d11e8513691cecfc1bf5f029e458adbf0b299024b6c89879855bee9"
     }
   ],
   "tables": {

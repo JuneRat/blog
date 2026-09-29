@@ -2040,6 +2040,8 @@ dependencies = [
  "axum",
  "domain",
  "http-body-util",
+ "hyper",
+ "hyper-util",
  "infrastructure",
  "interfaces",
  "reqwest",

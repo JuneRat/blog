@@ -36,6 +36,7 @@ use crate::http_support::{
 
 #[derive(Clone)]
 pub struct AuthState {
+    pub admission: Arc<dyn application::ports::RequestAdmission>,
     pub auth: Arc<AuthInteractor>,
     pub passwords: Arc<PasswordInteractor>,
     /// 生产 HTTPS 部署开启（Set-Cookie: Secure）。
@@ -59,8 +60,17 @@ pub fn auth_router(state: AuthState) -> Router {
         .layer(DefaultBodyLimit::max(PASSWORD_BODY_LIMIT))
         .layer(middleware::from_fn(no_store))
         .with_state(state.clone());
-    Router::new()
-        .route("/auth/login", get(login))
+    let login_route =
+        Router::new()
+            .route("/auth/login", get(login))
+            .route_layer(middleware::from_fn_with_state(
+                (
+                    state.admission.clone(),
+                    application::ports::PublicRequest::OAuthStart,
+                ),
+                crate::http_limits::admit,
+            ));
+    login_route
         .route("/auth/callback/{provider}", get(callback))
         .route("/auth/logout", post(logout))
         .with_state(state)
@@ -510,16 +520,24 @@ fn auth_error(e: UseCaseError) -> Response {
         UseCaseError::Forbidden | UseCaseError::LastOwnerProtected => StatusCode::FORBIDDEN,
         UseCaseError::External(_) => StatusCode::BAD_GATEWAY,
         UseCaseError::VersionConflict => StatusCode::CONFLICT,
-        UseCaseError::Repository(_) | UseCaseError::Render(_) => {
+        UseCaseError::Repository(_) | UseCaseError::DataCorrupt(_) | UseCaseError::Render(_) => {
             tracing::error!(error = %e, "认证路由内部错误");
             StatusCode::INTERNAL_SERVER_ERROR
         }
     };
     let message = match &e {
-        UseCaseError::Repository(_) | UseCaseError::Render(_) => "服务器内部错误".to_string(),
+        UseCaseError::Repository(_) | UseCaseError::DataCorrupt(_) | UseCaseError::Render(_) => {
+            "服务器内部错误".to_string()
+        }
         other => other.to_string(),
     };
-    (status, message).into_response()
+    let mut response = (status, message).into_response();
+    if let UseCaseError::RateLimited { retry_after_secs } = e
+        && let Ok(value) = HeaderValue::from_str(&retry_after_secs.to_string())
+    {
+        response.headers_mut().insert(header::RETRY_AFTER, value);
+    }
+    response
 }
 
 pub(crate) fn export_contract(out: &mut Vec<String>) {

@@ -173,7 +173,8 @@ impl ContentQueries {
 
     /// 显式作者筛选先检查 read_any，再解析用户名；普通列表与回收站共用。
     /// 缺省/空字符串代表本人。即使显式指定本人用户名，也要求 read_any，
-    /// 不通过用户名是否存在、是否合法或是否停用的差异泄露账号信息。
+    /// 无 read_any 者不会触发作者查询，无法探测账号。持有 read_any 者可区分
+    /// 不存在、非法及不可用的目标作者；这是管理查询的授权范围。
     pub async fn posts_by_author(
         &self,
         actor: &Actor,
@@ -194,7 +195,7 @@ impl ContentQueries {
                     .await?
                     .ok_or_else(|| UseCaseError::NotFound(format!("用户 {name}")))?;
                 let user = domain::identity::User::reconstitute(snapshot)
-                    .map_err(|error| UseCaseError::Repository(error.to_string()))?;
+                    .map_err(|error| UseCaseError::DataCorrupt(error.to_string()))?;
                 if !user.is_active() {
                     return Err(UseCaseError::Forbidden);
                 }

@@ -25,6 +25,14 @@ bind = "127.0.0.1:8080"
 # 首次安装可在向导填写；生产环境使用真实 HTTPS 域名。
 # public_base_url = "https://blog.example.com"
 trusted_proxies = []
+# HTTP 处理/上传期限与连接保护，秒；关闭总预算应小于容器的 stop_grace_period。
+# request_timeout_secs = 30
+# upload_timeout_secs = 120
+# header_timeout_secs = 10
+# io_idle_timeout_secs = 30
+# connection_max_age_secs = 300
+# shutdown_timeout_secs = 25
+# max_http_connections = 1024
 # 缺省根据公开 URL 是否使用 HTTPS 推导；环境布尔值接受 true/false、1/0。
 # secure_cookies = true
 

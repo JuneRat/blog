@@ -435,3 +435,33 @@ fn completed_journal_cleanup_preserves_configuration_and_rejects_changed_records
     assert_eq!(std::fs::read_to_string(&path).unwrap(), edited);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn http_limits_validate_ranges_relationships_and_environment_overrides() {
+    let defaults = config("", &[]).http_limits().unwrap();
+    assert_eq!(defaults.shutdown.as_secs(), 25);
+    assert_eq!(defaults.requests.upload.as_secs(), 120);
+    let chosen = config(
+        "[server]\nrequest_timeout_secs=45",
+        &[("BLOG_UPLOAD_TIMEOUT_SECS", "150")],
+    )
+    .http_limits()
+    .unwrap();
+    assert_eq!(chosen.requests.request.as_secs(), 45);
+    assert_eq!(chosen.requests.upload.as_secs(), 150);
+    for setting in [
+        "request_timeout_secs=0",
+        "shutdown_timeout_secs=-1",
+        "header_timeout_secs=3601",
+        "max_http_connections=0",
+        "request_timeout_secs=150",
+        "connection_max_age_secs=120",
+    ] {
+        assert!(
+            config(&format!("[server]\n{setting}"), &[])
+                .http_limits()
+                .is_err(),
+            "{setting}"
+        );
+    }
+}

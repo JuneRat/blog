@@ -200,6 +200,7 @@ async fn fresh_stack_with(secure_cookies: bool) -> Stack {
     let passwords = common::password_interactor(user_repo.clone(), sessions);
 
     let auth_state = AuthState {
+        admission: Arc::new(infrastructure::InMemoryRequestAdmission::default()),
         auth: auth.clone(),
         passwords: passwords.clone(),
         secure_cookies,
@@ -280,6 +281,7 @@ async fn request(
         axum::http::header::LOCATION,
         axum::http::header::CACHE_CONTROL,
         axum::http::header::WWW_AUTHENTICATE,
+        axum::http::header::RETRY_AFTER,
     ] {
         if let Some(value) = response.headers().get(&name).and_then(|v| v.to_str().ok()) {
             captured.push((name.as_str().to_string(), value.to_string()));
@@ -658,4 +660,30 @@ async fn providers_endpoint_is_public_minimal_and_no_store() {
     ] {
         assert!(!body.contains(leaked), "响应不得包含 {leaked}：{body}");
     }
+}
+
+#[tokio::test]
+async fn oauth_start_counts_successful_redirects_without_limiting_provider_listing() {
+    let _g = SERIAL.lock().await;
+    let stack = fresh_stack().await;
+    for _ in 0..10 {
+        let (status, _, _) =
+            request(&stack.router, "GET", "/auth/login?provider=idp&next=/", &[]).await;
+        assert_eq!(status, StatusCode::TEMPORARY_REDIRECT);
+    }
+    let (status, headers, body) = request(
+        &stack.router,
+        "GET",
+        "/auth/login?provider=idp&next=/",
+        &[("x-forwarded-for", "198.51.100.100")],
+    )
+    .await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{body}");
+    assert!(
+        headers
+            .iter()
+            .any(|(key, value)| key == "retry-after" && value.parse::<u64>().unwrap() > 0)
+    );
+    let (status, _, _) = request(&stack.router, "GET", "/auth/providers", &[]).await;
+    assert_eq!(status, StatusCode::OK);
 }

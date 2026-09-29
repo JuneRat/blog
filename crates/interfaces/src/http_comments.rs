@@ -28,6 +28,7 @@ use uuid::Uuid;
 
 #[derive(Clone)]
 pub struct CommentState {
+    pub admission: Arc<dyn application::ports::RequestAdmission>,
     pub comments: Arc<CommentInteractor>,
     pub admin: AdminState,
     pub origin: String,
@@ -94,9 +95,26 @@ pub fn comments_router(state: CommentState) -> Router {
         )
         .route(
             "/api/v1/posts/{slug}/comments",
-            get(public_list).post(submit),
+            get(public_list)
+                .post(submit)
+                .layer(middleware::from_fn_with_state(
+                    (
+                        state.admission.clone(),
+                        application::ports::PublicRequest::CommentSubmit,
+                    ),
+                    crate::http_limits::admit,
+                )),
         )
-        .route("/api/v1/comments/preview", post(preview))
+        .route(
+            "/api/v1/comments/preview",
+            post(preview).layer(middleware::from_fn_with_state(
+                (
+                    state.admission.clone(),
+                    application::ports::PublicRequest::CommentPreview,
+                ),
+                crate::http_limits::admit,
+            )),
+        )
         .route("/api/admin/v1/comments", get(list))
         .route("/api/admin/v1/comments/{id}", post(moderate))
         .route(

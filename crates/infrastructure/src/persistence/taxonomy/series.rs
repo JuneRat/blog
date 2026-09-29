@@ -328,24 +328,28 @@ impl SeriesRepository for PostgresSeriesRepository {
             return Ok(ReorderOutcome::MembershipMismatch);
         }
 
-        let mut changed = false;
-        for (index, post_id) in ordered_post_ids.iter().enumerate() {
-            let position =
-                i32::try_from(index).map_err(|_| UseCaseError::Invalid("系列成员过多".into()))?;
-            let updated=sqlx::query("UPDATE post_series SET position=$2 WHERE post_id=$1 AND series_id=$3 AND position<>$2")
-                .bind(post_id).bind(position).bind(series_id).execute(&mut *tx).await.map_err(map_sqlx_error)?.rows_affected();
-            if updated > 0 {
-                changed = true;
-                let (version,):(i64,)=sqlx::query_as("UPDATE posts SET version=version+1,updated_at=now() WHERE id=$1 RETURNING version")
-                    .bind(post_id).fetch_one(&mut *tx).await.map_err(map_sqlx_error)?;
-                audit_content(&mut tx,actor_id,"post.series_reordered","post",*post_id,serde_json::json!({"series_id":series_id,"position":position,"version":version})).await?;
-            }
-        }
-        if !changed {
+        i32::try_from(ordered_post_ids.len())
+            .map_err(|_| UseCaseError::Invalid("系列成员过多".into()))?;
+        // The row locks above remain in stable ID order. Both relationship and
+        // post changes are set-based; unchanged members get no version/audit bump.
+        let changed: Vec<(Uuid, i32, i64)> = sqlx::query_as(
+            "WITH desired AS (SELECT post_id,(ordinality-1)::int AS position FROM unnest($1::uuid[]) WITH ORDINALITY AS d(post_id,ordinality)), \
+             moved AS (UPDATE post_series ps SET position=d.position FROM desired d WHERE ps.series_id=$2 AND ps.post_id=d.post_id AND ps.position<>d.position RETURNING ps.post_id,ps.position) \
+             UPDATE posts p SET version=p.version+1,updated_at=now() FROM moved m WHERE p.id=m.post_id RETURNING p.id,m.position,p.version"
+        ).bind(ordered_post_ids).bind(series_id).fetch_all(&mut *tx).await.map_err(map_sqlx_error)?;
+        if changed.is_empty() {
+            tx.commit().await.map_err(map_sqlx_error)?;
             return Ok(ReorderOutcome::Reordered {
                 new_version: current_version,
             });
         }
+        let targets: Vec<_> = changed.iter().map(|(id, _, _)| id.to_string()).collect();
+        let entries: Vec<_> = changed.iter().zip(&targets).map(|((_,position,version),target)| crate::audit::AuditEntry {
+            actor_id: actor_id.actor_id, ip_address: actor_id.ip_address,
+            action: "post.series_reordered", target_type: "post", target_id: target,
+            metadata: serde_json::json!({"series_id":series_id,"position":position,"version":version}),
+        }).collect();
+        crate::audit::append_audit_logs(&mut tx, &entries).await?;
 
         let bumped: Option<(i64,)> = sqlx::query_as(
             "UPDATE series SET version = version + 1, updated_at = now() \

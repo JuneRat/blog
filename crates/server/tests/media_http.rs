@@ -232,6 +232,7 @@ async fn fresh_stack() -> Stack {
     let media = common::media_interactor(pool.clone(), common::media_dir("http"));
 
     let auth_state = AuthState {
+        admission: Arc::new(infrastructure::InMemoryRequestAdmission::default()),
         auth: auth.clone(),
         passwords: passwords.clone(),
         secure_cookies: false,

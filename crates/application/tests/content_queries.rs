@@ -307,3 +307,26 @@ async fn author_lookup_authorizes_before_resolving_and_preserves_target_rules() 
     }
     assert_eq!(spy.0.lock().unwrap().len(), before);
 }
+
+#[tokio::test]
+async fn corrupt_stored_author_is_distinct_from_invalid_request() {
+    let spy = Arc::new(QuerySpy::default());
+    let queries = ContentQueries::new(spy.clone(), spy.clone(), spy.clone());
+    let mut snapshot =
+        domain::identity::User::new("author", None, None, time::OffsetDateTime::UNIX_EPOCH)
+            .unwrap()
+            .snapshot();
+    snapshot.version = 0;
+    *spy.2.lock().unwrap() = Some(snapshot);
+    assert!(matches!(
+        queries
+            .posts_by_author(
+                &actor(&["post.read_any"]),
+                Some("author"),
+                Default::default()
+            )
+            .await,
+        Err(UseCaseError::DataCorrupt(_))
+    ));
+    assert!(spy.0.lock().unwrap().is_empty());
+}

@@ -102,7 +102,9 @@ pub async fn request_context(mut req: Request, next: Next) -> Response {
         route = %route,
     );
     let started = std::time::Instant::now();
-    let mut response = next.run(req).instrument(span).await;
+    let mut response = crate::http_limits::run(req, next, &request_id)
+        .instrument(span)
+        .await;
 
     let status = response.status();
     if let Some(measurement) = measurement {
@@ -222,6 +224,7 @@ pub const ADMIN_ERROR_CODES: &[&str] = &[
     "unauthenticated",
     "invalid_credentials",
     "invalid_request",
+    "request_timeout",
     "rate_limited",
     "version_conflict",
     "conflict",
@@ -267,7 +270,9 @@ pub fn admin_error_code(e: &UseCaseError) -> &'static str {
         UseCaseError::NotFound(_) => "not_found",
         UseCaseError::Forbidden => "forbidden",
         UseCaseError::External(_) => "external_error",
-        UseCaseError::Repository(_) | UseCaseError::Render(_) => "internal_error",
+        UseCaseError::Repository(_) | UseCaseError::DataCorrupt(_) | UseCaseError::Render(_) => {
+            "internal_error"
+        }
     }
 }
 
@@ -290,7 +295,9 @@ pub fn admin_error_status(e: &UseCaseError) -> StatusCode {
         UseCaseError::NotFound(_) => StatusCode::NOT_FOUND,
         UseCaseError::Forbidden => StatusCode::FORBIDDEN,
         UseCaseError::External(_) => StatusCode::BAD_GATEWAY,
-        UseCaseError::Repository(_) | UseCaseError::Render(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        UseCaseError::Repository(_) | UseCaseError::DataCorrupt(_) | UseCaseError::Render(_) => {
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
     }
 }
 
@@ -308,12 +315,22 @@ pub fn admin_error_with_status(
     status: StatusCode,
     request_id: &RequestId,
 ) -> Response {
-    if matches!(e, UseCaseError::Repository(_) | UseCaseError::Render(_)) {
-        tracing::error!(request_id = request_id.as_str(), error = %e, "管理 API 内部错误");
+    if matches!(
+        e,
+        UseCaseError::Repository(_) | UseCaseError::DataCorrupt(_) | UseCaseError::Render(_)
+    ) {
+        let error_kind = match &e {
+            UseCaseError::DataCorrupt(_) => "data_corrupt",
+            UseCaseError::Render(_) => "render",
+            _ => "repository",
+        };
+        tracing::error!(request_id = request_id.as_str(), error_kind, error = %e, "管理 API 内部错误");
     }
     // 内部错误只回通用文案；其余错误按用例语义回显（不含 SQL/存储细节）。
     let message = match &e {
-        UseCaseError::Repository(_) | UseCaseError::Render(_) => "服务器内部错误".to_string(),
+        UseCaseError::Repository(_) | UseCaseError::DataCorrupt(_) | UseCaseError::Render(_) => {
+            "服务器内部错误".to_string()
+        }
         other => other.to_string(),
     };
     let mut response = (
@@ -376,6 +393,7 @@ mod tests {
             (UseCaseError::Forbidden, "forbidden"),
             (UseCaseError::External("x".into()), "external_error"),
             (UseCaseError::Repository("x".into()), "internal_error"),
+            (UseCaseError::DataCorrupt("x".into()), "internal_error"),
             (UseCaseError::Render("x".into()), "internal_error"),
         ]
     }
@@ -428,6 +446,8 @@ mod tests {
             );
             mapped.insert(expected);
         }
+        // Emitted by the HTTP deadline middleware, not by business use cases.
+        mapped.insert("request_timeout");
         let registered: std::collections::BTreeSet<&str> =
             ADMIN_ERROR_CODES.iter().copied().collect();
         assert_eq!(

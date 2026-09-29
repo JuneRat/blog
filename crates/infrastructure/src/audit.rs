@@ -143,22 +143,36 @@ pub async fn append_audit_log(
     transaction: &mut Transaction<'_, Postgres>,
     entry: AuditEntry<'_>,
 ) -> Result<(), UseCaseError> {
-    if !entry.metadata.is_object() {
+    append_audit_logs(transaction, &[entry]).await
+}
+
+/// Batch the same validated audit contract without per-member round trips.
+pub(crate) async fn append_audit_logs(
+    transaction: &mut Transaction<'_, Postgres>,
+    entries: &[AuditEntry<'_>],
+) -> Result<(), UseCaseError> {
+    if entries.iter().any(|entry| !entry.metadata.is_object()) {
         return Err(UseCaseError::Invalid("审计摘要必须是 JSON 对象".into()));
     }
-    sqlx::query(
-        "INSERT INTO audit_logs (id, actor_id, ip_address, action, target_type, target_id, metadata) \
-         VALUES ($1, $2, $3::text::inet, $4, $5, $6, $7)",
-    )
-    .bind(Uuid::now_v7())
-    .bind(entry.actor_id)
-    .bind(entry.ip_address.map(|ip| ip.to_string()))
-    .bind(entry.action)
-    .bind(entry.target_type)
-    .bind(entry.target_id)
-    .bind(entry.metadata)
-    .execute(&mut **transaction)
-    .await
-    .map_err(|error| UseCaseError::Repository(format!("追加审计失败：{error}")))?;
+    for chunk in entries.chunks(1000) {
+        let mut query = sqlx::QueryBuilder::<Postgres>::new(
+            "INSERT INTO audit_logs (id, actor_id, ip_address, action, target_type, target_id, metadata) ",
+        );
+        query.push_values(chunk, |mut row, entry| {
+            row.push_bind(Uuid::now_v7())
+                .push_bind(entry.actor_id)
+                .push_bind(entry.ip_address.map(|ip| ip.to_string()))
+                .push_unseparated("::text::inet")
+                .push_bind(entry.action)
+                .push_bind(entry.target_type)
+                .push_bind(entry.target_id)
+                .push_bind(&entry.metadata);
+        });
+        query
+            .build()
+            .execute(&mut **transaction)
+            .await
+            .map_err(|error| UseCaseError::Repository(format!("追加审计失败：{error}")))?;
+    }
     Ok(())
 }

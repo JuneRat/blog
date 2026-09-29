@@ -282,6 +282,7 @@ async fn fresh_stack() -> Stack {
     let passwords = common::password_interactor(user_repo.clone(), sessions);
 
     let auth_state = AuthState {
+        admission: Arc::new(infrastructure::InMemoryRequestAdmission::default()),
         auth: auth.clone(),
         passwords: passwords.clone(),
         secure_cookies: false,
@@ -321,6 +322,7 @@ async fn fresh_stack() -> Stack {
         .merge(interfaces::http_admin::series_router(admin_state.clone()))
         .merge(interfaces::http_comments::comments_router(
             interfaces::http_comments::CommentState {
+                admission: Arc::new(infrastructure::InMemoryRequestAdmission::default()),
                 comments: Arc::new(application::comments::CommentInteractor::new(
                     Arc::new(infrastructure::comments::PostgresCommentRepository::new(
                         common::database(pool.clone()),
@@ -333,9 +335,21 @@ async fn fresh_stack() -> Stack {
                 origin: "http://127.0.0.1:18099".into(),
             },
         ))
-        .layer(axum::Extension(axum::extract::ConnectInfo(
-            "127.0.0.1:12345".parse::<std::net::SocketAddr>().unwrap(),
-        )))
+        .layer(middleware::from_fn(
+            |mut request: Request<Body>, next: axum::middleware::Next| async move {
+                // Default audit peer; source-limit tests may supply an explicit peer.
+                if request
+                    .extensions()
+                    .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+                    .is_none()
+                {
+                    request.extensions_mut().insert(axum::extract::ConnectInfo(
+                        "127.0.0.1:12345".parse::<std::net::SocketAddr>().unwrap(),
+                    ));
+                }
+                next.run(request).await
+            },
+        ))
         .merge(interfaces::http_identity::identity_router(admin_state))
         // 与生产装配一致：最外层请求编号/日志中间件。
         .layer(middleware::from_fn(request_context));
@@ -3809,7 +3823,16 @@ async fn native_comments_guest_moderation_and_http_boundaries() {
     let response = stack
         .router
         .clone()
-        .oneshot(guest_request().body(Body::from("x".repeat(17000))).unwrap())
+        .oneshot(
+            guest_request()
+                .extension(axum::extract::ConnectInfo(
+                    "203.0.113.200:12345"
+                        .parse::<std::net::SocketAddr>()
+                        .unwrap(),
+                ))
+                .body(Body::from("x".repeat(17000)))
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
@@ -4024,6 +4047,11 @@ async fn native_comments_use_server_name_before_guest_nickname_validation() {
         let response = stack
             .router
             .clone()
+            .layer(axum::Extension(axum::extract::ConnectInfo(
+                "203.0.113.201:12345"
+                    .parse::<std::net::SocketAddr>()
+                    .unwrap(),
+            )))
             .oneshot(comment_submit_request(
                 &endpoint,
                 serde_json::json!({"nickname":display_name,"body":body}),
@@ -4039,6 +4067,11 @@ async fn native_comments_use_server_name_before_guest_nickname_validation() {
         let response = stack
             .router
             .clone()
+            .layer(axum::Extension(axum::extract::ConnectInfo(
+                "203.0.113.202:12345"
+                    .parse::<std::net::SocketAddr>()
+                    .unwrap(),
+            )))
             .oneshot(comment_submit_request(
                 &endpoint,
                 serde_json::json!({"nickname":nickname,"body":"Guest"}),
@@ -4434,5 +4467,75 @@ async fn content_list_contract_pagination_filters_and_authorization() {
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(&body).unwrap()["total"],
         23
+    );
+}
+
+#[tokio::test]
+async fn comment_submission_limit_prevents_pending_rows_and_ignores_forged_forwarding() {
+    let _g = SERIAL.lock().await;
+    let stack = fresh_stack().await;
+    let (cookie, csrf) = login_as(&stack.router, &stack.idp, "author").await;
+    let endpoint = published_comment_endpoint(&stack, &cookie, &csrf).await;
+    for number in 0..6 {
+        let mut request = comment_submit_request(
+            &endpoint,
+            serde_json::json!({"nickname":"guest","body":format!("comment {number}")}),
+            None,
+            None,
+        );
+        request.headers_mut().insert(
+            "x-forwarded-for",
+            format!("198.51.100.{}", number + 1).parse().unwrap(),
+        );
+        request.extensions_mut().insert(axum::extract::ConnectInfo(
+            "203.0.113.10:12000"
+                .parse::<std::net::SocketAddr>()
+                .unwrap(),
+        ));
+        let response = stack.router.clone().oneshot(request).await.unwrap();
+        assert_eq!(
+            response.status(),
+            if number < 5 {
+                StatusCode::ACCEPTED
+            } else {
+                StatusCode::TOO_MANY_REQUESTS
+            }
+        );
+        if number == 5 {
+            assert!(response.headers().contains_key("retry-after"));
+        }
+    }
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM comments")
+        .fetch_one(&stack.pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 5);
+    let request = comment_submit_request(
+        &endpoint,
+        serde_json::json!({"nickname":"another","body":"allowed"}),
+        None,
+        None,
+    );
+    let mut request = request;
+    request.extensions_mut().insert(axum::extract::ConnectInfo(
+        "203.0.113.11:12000"
+            .parse::<std::net::SocketAddr>()
+            .unwrap(),
+    ));
+    assert_eq!(
+        stack
+            .router
+            .clone()
+            .oneshot(request)
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::ACCEPTED
+    );
+    assert_eq!(
+        api(&stack.router, "GET", &endpoint, None, None, None)
+            .await
+            .0,
+        StatusCode::OK
     );
 }

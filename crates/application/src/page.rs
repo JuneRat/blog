@@ -279,7 +279,7 @@ impl PageInteractor {
             .await?
             .filter(|s| s.deleted_at.is_some())
             .ok_or_else(|| UseCaseError::NotFound(format!("回收站页面 {id}")))?;
-        Page::reconstitute(snapshot).map_err(|e| UseCaseError::Repository(e.to_string()))
+        Page::reconstitute(snapshot).map_err(|e| UseCaseError::DataCorrupt(e.to_string()))
     }
 
     fn committed(outcome: PageCommitOutcome) -> Result<PageDto, UseCaseError> {
@@ -323,7 +323,7 @@ impl PageInteractor {
             .await?
             .filter(|s| s.deleted_at.is_none())
             .ok_or_else(|| UseCaseError::NotFound(format!("页面 {id}")))?;
-        Page::reconstitute(snapshot).map_err(|e| UseCaseError::Repository(e.to_string()))
+        Page::reconstitute(snapshot).map_err(|e| UseCaseError::DataCorrupt(e.to_string()))
     }
 
     async fn load_versioned(

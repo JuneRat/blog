@@ -190,9 +190,14 @@ async fn oauth_attempt_store_capacity_bound() {
     store.save("a".into(), sample_attempt()).await.unwrap();
     let err = store.save("b".into(), sample_attempt()).await.unwrap_err();
     assert!(
-        err.to_string().contains("已满"),
+        matches!(err, application::UseCaseError::RateLimited { .. }),
         "容量上限拒绝新尝试：{err}"
     );
+    assert!(
+        store.consume("a").await.unwrap().is_some(),
+        "未挤掉已接受的登录"
+    );
+    store.save("c".into(), sample_attempt()).await.unwrap();
 }
 
 #[test]

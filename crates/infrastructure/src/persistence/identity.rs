@@ -16,7 +16,7 @@ use domain::identity::{LoginMethod, LoginMethods, UserSnapshot, UserStatus};
 use super::sql::{map_row_error, map_sqlx_error};
 
 /// 身份/授权变更的统一排他锁键（docs/identity-and-admin.md §3）。
-const IDENTITY_LOCK: (i32, i32) = (2048001, 1);
+use crate::locks::IDENTITY as IDENTITY_LOCK;
 
 /// 取得身份/授权变更的统一排他锁。
 ///
@@ -411,8 +411,10 @@ impl PasswordCredentialStore for PostgresUserRepository {
             .await
             .map_err(map_sqlx_error)?;
 
+        // Preserve FK KEY SHARE compatibility: session creation may already own
+        // session rows that the revocation below needs to delete.
         let row: Option<(Option<String>,)> = sqlx::query_as(
-            "SELECT password_hash FROM users WHERE id = $1 AND status = 'active' AND deleted_at IS NULL FOR UPDATE",
+            "SELECT password_hash FROM users WHERE id = $1 AND status = 'active' AND deleted_at IS NULL FOR NO KEY UPDATE",
         )
         .bind(user_id)
         .fetch_optional(&mut *tx)
@@ -505,7 +507,7 @@ impl PasswordCredentialStore for PostgresUserRepository {
 }
 
 fn user_status(value: &str) -> Result<UserStatus, UseCaseError> {
-    UserStatus::parse(value).ok_or_else(|| UseCaseError::Repository("无效用户状态".into()))
+    UserStatus::parse(value).ok_or_else(|| UseCaseError::DataCorrupt("无效用户状态".into()))
 }
 
 impl PostgresUserRepository {

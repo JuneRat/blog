@@ -4,6 +4,8 @@
 //! 替代适配器必须保持相同可观察结果；可使用串行化事务、条件写入等不同机制。
 //! 具体 SQL、锁类型和获取顺序由 infrastructure 决定，不要求实现同一套锁。
 
+mod admission;
+mod comments;
 mod content;
 mod content_queries;
 mod identity;
@@ -13,6 +15,8 @@ mod runtime;
 mod site;
 mod taxonomy;
 
+pub use admission::{PublicRequest, RequestAdmission};
+pub use comments::CommentRepository;
 pub use content::{
     PageCommitOutcome, PageDeleteOutcome, PageRepository, PostCommitOutcome, PostRecord,
     PostRepository, PublicCategoryRef, PublicCategorySummary, PublicPageDetail, PublicPostDetail,

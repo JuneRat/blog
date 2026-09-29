@@ -17,7 +17,7 @@ use uuid::Uuid;
 ///
 /// 不锁读路径（目录读取无锁）；只约束写写并发——两条并发移动若各自
 /// 通过了环检查再先后提交，可能拼出环（检查结果在锁外失效）。
-const CATEGORY_TREE_LOCK: (i32, i32) = (2048002, 1);
+use crate::locks::CATEGORY_TREE as CATEGORY_TREE_LOCK;
 
 pub struct PostgresCategoryRepository {
     pool: PgPool,

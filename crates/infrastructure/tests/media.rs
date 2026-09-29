@@ -571,3 +571,44 @@ async fn local_storage_cleanup_only_removes_expired_temporary_uploads() {
     assert_eq!(storage.discard_orphaned_staging(cutoff).await.unwrap(), 0);
     tokio::fs::remove_dir_all(dir).await.unwrap();
 }
+
+#[tokio::test]
+async fn migration_provides_ordered_indexes_for_admin_filters() {
+    let pool = common::fresh_database("blog_admin_indexes_test").await;
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::raw_sql("SET LOCAL enable_seqscan=off; SET LOCAL enable_bitmapscan=off; SET LOCAL plan_cache_mode=force_generic_plan")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    // Check that the migrated schema offers ordered access, not planner cost choices on empty tables.
+    for (query, index) in [
+        (
+            "EXPLAIN (COSTS OFF) SELECT id FROM media WHERE deleted_at IS NULL ORDER BY created_at DESC,id DESC LIMIT $1",
+            "media_library_idx",
+        ),
+        (
+            "EXPLAIN (COSTS OFF) SELECT id FROM media WHERE deleted_at IS NOT NULL ORDER BY created_at DESC,id DESC LIMIT $1",
+            "media_trash_idx",
+        ),
+        (
+            "EXPLAIN (COSTS OFF) SELECT id FROM audit_logs WHERE actor_id='00000000-0000-0000-0000-000000000001' ORDER BY created_at DESC,id DESC LIMIT $1",
+            "audit_logs_actor_time_idx",
+        ),
+        (
+            "EXPLAIN (COSTS OFF) SELECT id FROM audit_logs WHERE action='post.update' ORDER BY created_at DESC,id DESC LIMIT $1",
+            "audit_logs_action_time_idx",
+        ),
+    ] {
+        let plan: Vec<String> = sqlx::query_scalar(query)
+            .bind(20i64)
+            .fetch_all(&mut *tx)
+            .await
+            .unwrap();
+        let plan = plan.join("\n");
+        assert!(plan.contains(index), "{index}: {plan}");
+        assert!(
+            !plan.contains("Sort"),
+            "ordered index must avoid a sort: {plan}"
+        );
+    }
+}

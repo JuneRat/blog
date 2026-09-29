@@ -118,7 +118,7 @@ fn media_from_row(row: &sqlx::postgres::PgRow) -> Result<MediaSnapshot, UseCaseE
     };
     Media::reconstitute(snapshot)
         .map(|media| media.snapshot())
-        .map_err(|e| UseCaseError::Repository(e.to_string()))
+        .map_err(|e| UseCaseError::DataCorrupt(e.to_string()))
 }
 fn media_view_from_row(row: &sqlx::postgres::PgRow) -> Result<MediaWithUsage, UseCaseError> {
     Ok(MediaWithUsage {
@@ -182,15 +182,27 @@ impl MediaRepository for PostgresMediaRepository {
             .execute(&mut *tx)
             .await
             .map_err(map_sqlx_error)?;
+        // Literal predicates allow partial indexes in generic prepared plans too.
+        let predicate = if trash {
+            "m.deleted_at IS NOT NULL"
+        } else {
+            "m.deleted_at IS NULL"
+        };
         let total: i64 =
-            sqlx::query_scalar("SELECT count(*) FROM media WHERE (deleted_at IS NOT NULL)=$1")
-                .bind(trash)
+            sqlx::query_scalar(&format!("SELECT count(*) FROM media m WHERE {predicate}"))
                 .fetch_one(&mut *tx)
                 .await
                 .map_err(map_sqlx_error)?;
-        let rows = sqlx::query(&format!("SELECT {} FROM media m LEFT JOIN users u ON u.id=m.uploaded_by \
-            WHERE (m.deleted_at IS NOT NULL)=$3 ORDER BY m.created_at DESC,m.id DESC LIMIT $1 OFFSET $2", view_columns()))
-            .bind(limit).bind(offset).bind(trash).fetch_all(&mut *tx).await.map_err(map_sqlx_error)?;
+        let rows = sqlx::query(&format!(
+            "SELECT {} FROM media m LEFT JOIN users u ON u.id=m.uploaded_by \
+            WHERE {predicate} ORDER BY m.created_at DESC,m.id DESC LIMIT $1 OFFSET $2",
+            view_columns()
+        ))
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(map_sqlx_error)?;
         tx.commit().await.map_err(map_sqlx_error)?;
         Ok((
             rows.iter()
@@ -255,7 +267,7 @@ impl MediaRepository for PostgresMediaRepository {
             return Ok(MediaChangeOutcome::Gone);
         };
         let mut media = Media::reconstitute(media_from_row(&row)?)
-            .map_err(|e| UseCaseError::Repository(e.to_string()))?;
+            .map_err(|e| UseCaseError::DataCorrupt(e.to_string()))?;
         if media.version() != expected_version {
             return Ok(MediaChangeOutcome::StaleVersion);
         }

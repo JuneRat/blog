@@ -20,12 +20,24 @@ type WireShape<T, Wire> = T extends string
           >;
         }
       : T;
+// `any` is assignable in both directions and defeats ordinary shape equality.
+// Check recursively: a single permissive leaf also bypasses runtime validation.
+type ContainsAny<T> = 0 extends 1 & T
+  ? true
+  : T extends ReadonlyArray<infer E>
+    ? ContainsAny<E>
+    : T extends object
+      ? { [K in keyof T]-?: ContainsAny<T[K]> }[keyof T]
+      : false;
 export function responseObject<T>() {
   return <S extends z.ZodRawShape>(
     shape: S & { [K in keyof T]-?: z.ZodType<T[K]> } & Record<
         Exclude<keyof S, keyof T>,
         never
       > &
+      (true extends ContainsAny<z.output<z.ZodObject<S>>>
+        ? { __unsafe_any: never }
+        : unknown) &
       (WireShape<T, T> extends WireShape<z.output<z.ZodObject<S>>, T>
         ? unknown
         : { __incompatible_wire_shape: never }),

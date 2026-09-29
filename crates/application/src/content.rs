@@ -404,7 +404,7 @@ impl PostInteractor {
         }
         let expected = checked_version(record.snapshot.version, version)?;
         let mut post = Post::reconstitute(record.snapshot)
-            .map_err(|e| UseCaseError::Repository(e.to_string()))?;
+            .map_err(|e| UseCaseError::DataCorrupt(e.to_string()))?;
         post.restore();
         Self::committed(
             self.posts
@@ -534,7 +534,7 @@ impl PostInteractor {
         authorize_own_or_any(actor, own_key, any_key, UserId(record.snapshot.author_id))?;
         Ok((
             Post::reconstitute(record.snapshot.clone())
-                .map_err(|e| UseCaseError::Repository(e.to_string()))?,
+                .map_err(|e| UseCaseError::DataCorrupt(e.to_string()))?,
             record,
         ))
     }

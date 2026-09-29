@@ -2,6 +2,7 @@
 //! 实现应用层端口；默认生产 API 封装数据库连接和错误类型，事务对象不暴露给 application。
 
 mod database;
+mod locks;
 pub use database::{Database, DatabaseError, PoolSnapshot};
 
 /// Raw-pool access for database integration fixtures, excluded from default builds.
@@ -16,6 +17,8 @@ pub mod test_support {
     }
 }
 
+mod admission;
+pub use admission::InMemoryRequestAdmission;
 pub mod audit;
 pub mod installation;
 pub mod media_cleanup;

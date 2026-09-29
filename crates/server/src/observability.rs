@@ -29,14 +29,12 @@ pub async fn bind(address: Option<SocketAddr>) -> Result<Option<TcpListener>, St
 }
 
 pub async fn serve(
-    listener: Option<TcpListener>,
+    listener: TcpListener,
     telemetry: Telemetry,
     pool: watch::Receiver<Option<Database>>,
-    mut shutdown: watch::Receiver<bool>,
+    shutdown: watch::Receiver<bool>,
+    limits: crate::transport::HttpLimits,
 ) -> Result<(), String> {
-    let Some(listener) = listener else {
-        return std::future::pending().await;
-    };
     tracing::info!(address = %listener.local_addr().map_err(|error| error.to_string())?, "指标监听已启动");
     let app = Router::new().route(
         "/metrics",
@@ -72,10 +70,5 @@ pub async fn serve(
             }
         }),
     );
-    axum::serve(listener, app)
-        .with_graceful_shutdown(async move {
-            let _ = shutdown.wait_for(|closed| *closed).await;
-        })
-        .await
-        .map_err(|error| format!("指标服务退出：{error}"))
+    crate::transport::serve(listener, app, shutdown, limits).await
 }

@@ -134,3 +134,25 @@ cargo run -- config show --for resources
 浏览器写请求的 Origin 检查是另一条独立路径：后台将提供的 Origin 与请求 Host 比较，允许 `http://{Host}` 或 `https://{Host}`；未提供 Origin 时不执行该项检查，已认证写请求仍要求 CSRF token。代理须保持与浏览器入口一致的 Host。登录与自助改密限流使用同一可信代理解析结果；无法解析时回退 socket 对端桶，不跳过来源限流。评论提交/预览额外要求 Origin 与配置的公开地址精确匹配；评论与业务审计来源 IP 共用 `BLOG_TRUSTED_PROXIES`，从 X-Forwarded-For 右侧剥离可信代理，非法或未知来源留空，规则见[评论](comments.md#请求与来源地址)。认证规则见[身份与权限](identity-and-admin.md)。
 
 业务审计通过显式上下文把已验证账号和来源 IP 传入写事务，不接受客户端请求体声明操作者/IP。可信代理链缺失、包含非法值、超过 20 个地址或没有可识别客户端时留空；非可信 socket 对端的转发头被忽略。审计 IP 随整条审计记录按 audit 保留期删除，评论 IP 单独按 comment 保留期清空。
+
+## HTTP 期限与匿名请求准入
+
+以下部署参数可写在 `[server]`；修改后重启，Compose 会传入对应环境变量。
+
+| TOML 字段 | 环境变量 | 默认值 |
+|---|---|---|
+| `request_timeout_secs` | `BLOG_REQUEST_TIMEOUT_SECS` | 30 秒 |
+| `upload_timeout_secs` | `BLOG_UPLOAD_TIMEOUT_SECS` | 120 秒，仅 POST `/api/admin/v1/media` |
+| `header_timeout_secs` | `BLOG_HEADER_TIMEOUT_SECS` | 10 秒 |
+| `io_idle_timeout_secs` | `BLOG_IO_IDLE_TIMEOUT_SECS` | 30 秒，socket 读写停滞期限 |
+| `connection_max_age_secs` | `BLOG_CONNECTION_MAX_AGE_SECS` | 300 秒，含持续缓慢传输和 keep-alive |
+| `shutdown_timeout_secs` | `BLOG_SHUTDOWN_TIMEOUT_SECS` | 25 秒，含连接排空与数据库关闭 |
+| `max_http_connections` | `BLOG_MAX_HTTP_CONNECTIONS` | 每个监听端口 1024 条 |
+
+秒数必须为 1–3600；上传期限不小于普通请求期限，连接最长寿命必须大于上传与请求头期限。连接上限为 1–65536。长连接达到寿命后关闭，由客户端建立新连接。请求处理超时返回 408、`request_timeout` 和请求编号；写请求超时不保证操作尚未提交，重试前应读取结果并使用原有版本冲突机制。请求体读取计入处理期限，传输层另限制慢请求头和响应发送停滞。
+
+关闭时立即停止接入并停止预约任务，公开与指标监听并行排空；80% 预算到期后取消残留连接，剩余预算用于关闭数据库池。Compose 的 `stop_grace_period` 为 30 秒；提高应用关闭预算时也需相应提高容器期限。
+
+公开入口使用独立令牌桶：OAuth 发起每来源容量 10、全局 60；评论提交每来源 5、全局 120；预览每来源 20、全局 240。每分钟补满一桶，允许桶容量内的短突发；成功、失败和被后续校验拒绝的已准入请求均计数。超限返回 429 和 `Retry-After`，公开读取不计入这些桶。OAuth 尝试池满时保留已接受的状态，拒绝新状态并提示重试时间；不淘汰仍有效的登录。
+
+来源使用 `trusted_proxies` 与 socket 对端解析；不信任任意 `X-Forwarded-For`，代理转发信息缺失时回落到代理地址，来源完全未知时使用共享桶。准入计数与 OAuth 临时状态仍是单进程状态；多副本必须在网关统一限流并另行解决回调状态共享。

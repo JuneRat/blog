@@ -40,6 +40,13 @@ services:
     # A key without a value stays unset when absent from .env/the shell.
     environment:
       - DATABASE_URL
+      - BLOG_REQUEST_TIMEOUT_SECS
+      - BLOG_UPLOAD_TIMEOUT_SECS
+      - BLOG_HEADER_TIMEOUT_SECS
+      - BLOG_IO_IDLE_TIMEOUT_SECS
+      - BLOG_CONNECTION_MAX_AGE_SECS
+      - BLOG_SHUTDOWN_TIMEOUT_SECS
+      - BLOG_MAX_HTTP_CONNECTIONS
       - BLOG_DB_MAX_CONNECTIONS
       - BLOG_DB_MIN_CONNECTIONS
       - BLOG_DB_ACQUIRE_TIMEOUT_MS

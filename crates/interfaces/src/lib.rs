@@ -11,6 +11,7 @@ pub mod http_comments;
 pub mod http_content_preview;
 pub mod http_identity;
 pub mod http_install;
+pub mod http_limits;
 pub mod http_media;
 pub mod http_support;
 
