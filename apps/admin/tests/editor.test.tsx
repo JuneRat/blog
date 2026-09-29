@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { contentPage } from "./contentFixtures";
+import { contentPage, postSummary } from "./contentFixtures";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
@@ -187,7 +187,7 @@ describe("文章编辑器回归", () => {
     expect(window.location.pathname).toBe(paths.editPost(post.id));
 
     // 原地址已被另一篇占用，列表同时出现两个实体；书签继续指向原 ID。
-    vi.mocked(api.listPosts).mockResolvedValue(contentPage([renamed, replacement]));
+    vi.mocked(api.listPosts).mockResolvedValue(contentPage([postSummary(renamed), postSummary(replacement)]));
     vi.mocked(api.getPost).mockImplementation(async (id) =>
       id === post.id ? renamed : replacement,
     );
@@ -243,7 +243,7 @@ describe("文章编辑器回归", () => {
   // 「改完标题 → 返回列表」会命中旧缓存，看到保存前的标题与 slug。
   it("保存后返回列表看到新标题（写后必须失效列表缓存）", async () => {
     window.history.replaceState(null, "", paths.list);
-    vi.mocked(api.listPosts).mockResolvedValue(contentPage([{ ...post, title: "原始标题" }]));
+    vi.mocked(api.listPosts).mockResolvedValue(contentPage([postSummary({ ...post, title: "原始标题" })]));
     render(<App />);
     await screen.findByText("原始标题"); // 让列表缓存先落地
 
@@ -251,7 +251,7 @@ describe("文章编辑器回归", () => {
     await screen.findByDisplayValue("原始标题");
     fireEvent.change(input("标题"), { target: { value: "改过的标题" } });
     vi.mocked(api.updatePost).mockResolvedValue({ ...post, title: "改过的标题", version: 2 });
-    vi.mocked(api.listPosts).mockResolvedValue(contentPage([{ ...post, title: "改过的标题", version: 2 }]));
+    vi.mocked(api.listPosts).mockResolvedValue(contentPage([postSummary({ ...post, title: "改过的标题", version: 2 })]));
     fireEvent.click(screen.getByRole("button", { name: /保存草稿|保存预约内容|更新已发布内容/ }));
     await waitFor(() => expect(api.updatePost).toHaveBeenCalledTimes(1));
 
@@ -264,7 +264,7 @@ describe("文章编辑器回归", () => {
   // 失效列表，保存成功而发布失败时，返回列表看到的还是保存前的数据。
   it("发布失败时，先行保存的结果仍会反映到列表", async () => {
     window.history.replaceState(null, "", paths.list);
-    vi.mocked(api.listPosts).mockResolvedValue(contentPage([{ ...post, title: "原始标题" }]));
+    vi.mocked(api.listPosts).mockResolvedValue(contentPage([postSummary({ ...post, title: "原始标题" })]));
     render(<App />);
     await screen.findByText("原始标题"); // 列表缓存先落地
 
@@ -275,7 +275,7 @@ describe("文章编辑器回归", () => {
     vi.mocked(api.publishPost).mockRejectedValue(
       new ApiError(500, "发布失败", "internal", "req-9"),
     );
-    vi.mocked(api.listPosts).mockResolvedValue(contentPage([{ ...post, title: "改过的标题", version: 2 }]));
+    vi.mocked(api.listPosts).mockResolvedValue(contentPage([postSummary({ ...post, title: "改过的标题", version: 2 })]));
 
     fireEvent.click(screen.getByRole("button", { name: "发布" }));
     // 先行保存发出并成功（版本 2），随后发布失败。

@@ -83,6 +83,7 @@ struct Stack {
     router: axum::Router,
     idp: Arc<FakeIdpClient>,
     pool: PgPool,
+    media_dir: std::path::PathBuf,
 }
 
 /// 最小合法 PNG 头：格式嗅探与尺寸解析只需要 IHDR。
@@ -229,7 +230,8 @@ async fn fresh_stack() -> Stack {
         "http://127.0.0.1:18099".into(),
     ));
     let passwords = common::password_interactor(user_repo.clone(), sessions);
-    let media = common::media_interactor(pool.clone(), common::media_dir("http"));
+    let media_dir = common::media_dir("http");
+    let media = common::media_interactor(pool.clone(), media_dir.clone());
 
     let auth_state = AuthState {
         registration: common::registration(&pool),
@@ -290,7 +292,12 @@ async fn fresh_stack() -> Stack {
         .merge(media_admin_router(admin_state))
         .merge(media_read_router(MediaReadState { media }))
         .layer(middleware::from_fn(request_context));
-    Stack { router, idp, pool }
+    Stack {
+        router,
+        idp,
+        pool,
+        media_dir,
+    }
 }
 
 /// 以指定用户登录，返回 (cookie, csrf)。
@@ -642,6 +649,10 @@ async fn public_url_works_without_references_and_never_reads_or_refreshes_sessio
             .as_ref(),
         png_bytes(16, 16)
     );
+    // 缓存命中只需元数据：暂时移走文件后仍能返回 304，不能先读取图片体。
+    let object = stack.media_dir.join(format!("objects/{id}.png"));
+    let held = object.with_extension("held");
+    tokio::fs::rename(&object, &held).await.unwrap();
     let cached = stack
         .router
         .clone()
@@ -657,6 +668,16 @@ async fn public_url_works_without_references_and_never_reads_or_refreshes_sessio
     assert_eq!(cached.status(), StatusCode::NOT_MODIFIED);
     assert_eq!(cached.headers()[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
     assert_eq!(cached.headers()[header::ETAG], etag);
+    assert!(
+        cached
+            .into_body()
+            .collect()
+            .await
+            .unwrap()
+            .to_bytes()
+            .is_empty()
+    );
+    tokio::fs::rename(&held, &object).await.unwrap();
     let (status, _, body) = send(&stack.router, "HEAD", &uri, None, None, None, None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body, Value::Null);

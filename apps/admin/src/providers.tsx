@@ -56,6 +56,7 @@ export function AdminProviders({ children }: { children: ReactNode }) {
   const dark = useSystemDark();
   // 惰性创建：每次挂载一个 client（测试因此天然隔离），而不是模块级单例。
   const [queryClient] = useState(createQueryClient);
+  useEffect(() => () => queryClient.clear(), [queryClient]);
   return (
     <ConfigProvider
       locale={zhCN}

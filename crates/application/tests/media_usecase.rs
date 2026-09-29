@@ -367,6 +367,11 @@ async fn upload(fixture: &Fixture, owner: Uuid) -> application::media::MediaDto 
         .unwrap()
 }
 
+async fn read(fixture: &Fixture, id: Uuid) -> Vec<u8> {
+    let metadata = fixture.interactor.read_metadata(id).await.unwrap();
+    fixture.interactor.read(&metadata).await.unwrap()
+}
+
 #[tokio::test]
 async fn upload_validates_permissions_and_content_before_registering_an_available_image() {
     let f = fixture();
@@ -446,10 +451,7 @@ async fn database_failure_never_removes_a_formal_object_even_if_commit_succeeded
         assert!(keys[0].starts_with("objects/"));
         if committed {
             let id = f.repo.state.lock().unwrap().created[0];
-            assert_eq!(
-                f.interactor.read(id).await.unwrap().bytes,
-                png_bytes(10, 10)
-            );
+            assert_eq!(read(&f, id).await, png_bytes(10, 10));
         }
     }
 }
@@ -459,10 +461,7 @@ async fn independent_reads_and_soft_deletion_preserve_files_and_references() {
     let f = fixture();
     let owner = Uuid::now_v7();
     let dto = upload(&f, owner).await;
-    assert_eq!(
-        f.interactor.read(dto.id).await.unwrap().bytes,
-        png_bytes(10, 10)
-    );
+    assert_eq!(read(&f, dto.id).await, png_bytes(10, 10));
     f.repo
         .seed_owned_reference(dto.id, "private-draft", false, Uuid::now_v7());
     let author = actor(owner, &["media.delete", "media.read"]);
@@ -476,10 +475,7 @@ async fn independent_reads_and_soft_deletion_preserve_files_and_references() {
         .set_deleted(&author, dto.id, 1, true)
         .await
         .unwrap();
-    assert_eq!(
-        f.interactor.read(dto.id).await.unwrap().bytes,
-        png_bytes(10, 10)
-    );
+    assert_eq!(read(&f, dto.id).await, png_bytes(10, 10));
     assert_eq!(
         f.interactor
             .list(&author, 1, false, None)
@@ -527,7 +523,7 @@ async fn independent_reads_and_soft_deletion_preserve_files_and_references() {
         1
     );
     assert!(matches!(
-        f.interactor.read(Uuid::now_v7()).await,
+        f.interactor.read_metadata(Uuid::now_v7()).await,
         Err(UseCaseError::NotFound(_))
     ));
 }
@@ -580,10 +576,7 @@ async fn cleanup_only_removes_stale_staging_files_and_requires_operator_permissi
         1
     );
     assert!(f.storage.has("staging/recent"));
-    assert_eq!(
-        f.interactor.read(dto.id).await.unwrap().bytes,
-        png_bytes(10, 10)
-    );
+    assert_eq!(read(&f, dto.id).await, png_bytes(10, 10));
 }
 
 #[tokio::test]

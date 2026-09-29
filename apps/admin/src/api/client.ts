@@ -46,8 +46,13 @@ export function withRequestId(
  */
 let csrfToken: string | null = null;
 let unauthorizedHandler: (() => void) | null = null;
+let sessionRequests = new AbortController();
 
 export function setCsrfToken(token: string | null): void {
+  if (token !== csrfToken) {
+    sessionRequests.abort();
+    sessionRequests = new AbortController();
+  }
   csrfToken = token;
 }
 
@@ -91,6 +96,9 @@ async function perform(
   init: RequestInit,
   jsonBody: boolean,
 ): Promise<Response> {
+  const signal = init.signal
+    ? AbortSignal.any([init.signal, sessionRequests.signal])
+    : sessionRequests.signal;
   const method = (init.method ?? "GET").toUpperCase();
   const headers = new Headers(init.headers);
   if (jsonBody) headers.set("Content-Type", "application/json");
@@ -98,9 +106,11 @@ async function perform(
     headers.set("X-CSRF-Token", csrfToken);
   const response = await fetch(path, {
     ...init,
+    signal,
     headers,
     credentials: "same-origin",
   });
+  signal.throwIfAborted();
   if (!response.ok) {
     let data: unknown = null;
     try {
@@ -108,8 +118,9 @@ async function perform(
     } catch {
       /* HTML and empty errors still preserve status/request ID. */
     }
+    signal.throwIfAborted();
     if (response.status === 401) {
-      csrfToken = null;
+      setCsrfToken(null);
       unauthorizedHandler?.();
     }
     throw new ApiError(
@@ -133,7 +144,8 @@ async function decode<T>(response: Response, schema: z.ZodType<T>): Promise<T> {
   let data: unknown;
   try {
     data = await response.json();
-  } catch {
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") throw error;
     throw fail();
   }
   const result = schema.safeParse(data);

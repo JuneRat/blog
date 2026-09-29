@@ -1,4 +1,13 @@
-import type { PostDetail } from "../src/types";
+import type { Me, PostDetail } from "../src/types";
+
+export function meResponse(overrides: Partial<Me> = {}): Me {
+  return {
+    user_id: "me", username: "author", display_name: null, bio: null, version: 1,
+    avatar_media_id: null, avatar_url: null, time_zone: "UTC", permissions: [],
+    csrf_token: "csrf", channel: "session",
+    ...overrides,
+  };
+}
 
 export function postResponse(overrides: Partial<PostDetail> = {}): PostDetail {
   return {

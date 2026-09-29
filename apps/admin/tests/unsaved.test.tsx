@@ -4,7 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConfigProvider } from "antd";
 import { App } from "../src/App";
-import { api, seriesApi } from "../src/api";
+import { api, categoryApi, seriesApi } from "../src/api";
 import { navigate, paths } from "../src/router";
 import type { PostDetail } from "../src/types";
 
@@ -39,7 +39,6 @@ vi.mock("../src/api", async (importOriginal) => {
       unpublishPost: vi.fn(),
       listTags: vi.fn(),
       listPosts: vi.fn(),
-      categoryApi: { list: vi.fn() },
     },
   };
 });
@@ -73,7 +72,7 @@ beforeEach(() => {
   window.history.replaceState(null, "", paths.editPost(post.id));
   vi.mocked(api.getPost).mockResolvedValue(post);
   vi.mocked(api.listTags).mockResolvedValue([]);
-  vi.mocked(api.categoryApi.list).mockResolvedValue([]);
+  vi.mocked(categoryApi.list).mockResolvedValue([]);
   vi.mocked(seriesApi.list).mockResolvedValue([]);
   vi.mocked(api.listPosts).mockResolvedValue(contentPage([]));
 });

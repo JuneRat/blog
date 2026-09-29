@@ -242,6 +242,9 @@ class SiteScenario:
         return item
 
     def comments(self):
+        policy = self.admin.json("GET", API + "/access-settings")
+        self.admin.json("PUT", API + "/access-settings",
+                        {**policy, "guest_comments_enabled": True})
         root = self.add_comment("Root guest", "**根评论** [链接](https://example.test/)")
         reply = self.add_comment("Reply guest", "*第二层*", root["id"])
         nested = self.add_comment("Nested guest", "`第三层`", reply["id"])
@@ -273,4 +276,3 @@ class SiteScenario:
         for item in roots["items"] + replies["items"]:
             require(not ({"body", "author_email", "ip_address", "status", "version"} & item.keys()),
                     "public comment responses must not disclose private moderation fields")
-

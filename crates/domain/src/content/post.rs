@@ -110,17 +110,21 @@ impl SeriesPlacement {
     }
 }
 
-fn normalize_series(mut series: Vec<SeriesPlacement>) -> Result<Vec<SeriesPlacement>, PostError> {
-    for placement in &series {
+/// 关联的纯校验；应用层可在查询目录存在性之前复用。
+pub fn validate_series_placements(series: &[SeriesPlacement]) -> Result<(), PostError> {
+    let mut ids = std::collections::BTreeSet::new();
+    for placement in series {
         SeriesPlacement::new(placement.series_id, placement.position)?;
+        if !ids.insert(placement.series_id) {
+            return Err(PostError::DuplicateSeries);
+        }
     }
+    Ok(())
+}
+
+fn normalize_series(mut series: Vec<SeriesPlacement>) -> Result<Vec<SeriesPlacement>, PostError> {
+    validate_series_placements(&series)?;
     series.sort_by_key(|placement| placement.series_id);
-    if series
-        .windows(2)
-        .any(|pair| pair[0].series_id == pair[1].series_id)
-    {
-        return Err(PostError::DuplicateSeries);
-    }
     Ok(series)
 }
 

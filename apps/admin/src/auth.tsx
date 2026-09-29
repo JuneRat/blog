@@ -45,39 +45,42 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   /** 退出流程内抑制 401 处理器，避免「会话已失效时退出」被重定向到登录页。 */
   const suppressUnauthorizedRef = useRef(false);
 
-  useEffect(() => {
-    statusRef.current = status;
-  }, [status]);
+  const clearSession = useCallback(() => {
+    setCsrfToken(null);
+    setMe(null);
+    statusRef.current = "anonymous";
+    setStatus("anonymous");
+  }, []);
 
   const refresh = useCallback(async () => {
     try {
       const current = await api.me();
       setCsrfToken(current.csrf_token);
       setMe(current);
+      statusRef.current = "authenticated";
       setStatus("authenticated");
     } catch (error) {
+      // Another refresh or an expired session superseded this request.
+      if (error instanceof DOMException && error.name === "AbortError") return;
       if (error instanceof ApiError && error.status === 401) {
-        setCsrfToken(null);
-        setMe(null);
-        setStatus("anonymous");
+        clearSession();
         return;
       }
       throw error;
     }
-  }, []);
+  }, [clearSession]);
 
   const updateTimeZone = useCallback((timeZone: string) => {
     setMe((current) => current === null ? null : { ...current, time_zone: timeZone });
   }, []);
 
   const goToLogin = useCallback(async () => {
+    clearSession();
     const url = await loginUrl("/admin/");
-    if (url !== null) {
+    if (url !== null && statusRef.current === "anonymous") {
       window.location.assign(url);
-      return;
     }
-    setStatus("anonymous");
-  }, []);
+  }, [clearSession]);
 
   useEffect(() => {
     setUnauthorizedHandler(() => {
@@ -85,11 +88,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (statusRef.current === "authenticated") {
         void goToLogin();
       } else {
-        setStatus("anonymous");
+        clearSession();
       }
     });
     return () => setUnauthorizedHandler(null);
-  }, [goToLogin]);
+  }, [goToLogin, clearSession]);
 
   useEffect(() => {
     let cancelled = false;
@@ -106,13 +109,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       try {
         await refresh();
       } catch {
-        if (!cancelled) setStatus("anonymous");
+        if (!cancelled) clearSession();
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [refresh]);
+  }, [refresh, clearSession]);
 
   const logout = useCallback(async () => {
     setLogoutError(null);
@@ -130,11 +133,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } finally {
       suppressUnauthorizedRef.current = false;
     }
-    setCsrfToken(null);
-    setMe(null);
-    setStatus("anonymous");
+    clearSession();
     window.location.assign("/admin/");
-  }, []);
+  }, [clearSession]);
 
   const value = useMemo<AuthValue>(
     () => ({

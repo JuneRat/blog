@@ -44,6 +44,14 @@ fn series_from_row(
     })
 }
 
+fn series_usage_from_row(row: &sqlx::postgres::PgRow) -> Result<SeriesWithUsage, UseCaseError> {
+    Ok(SeriesWithUsage {
+        snapshot: series_from_row(row)?,
+        post_count: row.try_get("post_count").map_err(map_row_error)?,
+        public_post_count: row.try_get("public_post_count").map_err(map_row_error)?,
+    })
+}
+
 #[async_trait]
 impl SeriesRepository for PostgresSeriesRepository {
     async fn insert(
@@ -115,15 +123,7 @@ impl SeriesRepository for PostgresSeriesRepository {
         .fetch_all(&self.pool)
         .await
         .map_err(map_sqlx_error)?;
-        rows.iter()
-            .map(|row| {
-                Ok(SeriesWithUsage {
-                    snapshot: series_from_row(row)?,
-                    post_count: row.try_get("post_count").map_err(map_row_error)?,
-                    public_post_count: row.try_get("public_post_count").map_err(map_row_error)?,
-                })
-            })
-            .collect()
+        rows.iter().map(series_usage_from_row).collect()
     }
 
     async fn update(
@@ -134,15 +134,23 @@ impl SeriesRepository for PostgresSeriesRepository {
         cover_media_id: Option<Uuid>,
         expected_version: i64,
         actor_id: application::audit::AuditContext,
-    ) -> Result<Option<domain::content::SeriesSnapshot>, UseCaseError> {
+    ) -> Result<Option<SeriesWithUsage>, UseCaseError> {
         // name/描述/封面与引用行在同一事务：封面替换时旧图必须同时被释放，
         // 否则会出现「列里已换新图、引用表还占着旧图」的幽灵占用。
         let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
         lock_content_relations(&mut tx).await?;
         let row = sqlx::query(
-            "UPDATE series SET name = $3, description = $4, cover_media_id = $5, \
-             version = version + 1, updated_at = now() WHERE id = $1 AND version = $2 \
-             RETURNING id, name, slug, description, cover_media_id, version, created_at, updated_at",
+            "UPDATE series s SET name = $3, description = $4, cover_media_id = $5, \
+             version = CASE WHEN (name, description, cover_media_id) IS DISTINCT FROM ($3::text, $4::text, $5::uuid) \
+                            THEN version + 1 ELSE version END, \
+             updated_at = CASE WHEN (name, description, cover_media_id) IS DISTINCT FROM ($3::text, $4::text, $5::uuid) \
+                               THEN now() ELSE updated_at END \
+             WHERE id = $1 AND version = $2 \
+             RETURNING id, name, slug, description, cover_media_id, version, created_at, updated_at, \
+               (SELECT count(*) FROM post_series ps WHERE ps.series_id=s.id) AS post_count, \
+               (SELECT count(*) FROM post_series ps JOIN posts p ON p.id=ps.post_id \
+                WHERE ps.series_id=s.id AND p.status='published' AND p.visibility='public' \
+                  AND p.deleted_at IS NULL AND p.published_at<=now()) AS public_post_count",
         )
         .bind(id)
         .bind(expected_version)
@@ -156,7 +164,12 @@ impl SeriesRepository for PostgresSeriesRepository {
             tx.commit().await.map_err(map_sqlx_error)?;
             return Ok(None);
         };
-        let snapshot = series_from_row(&row)?;
+        let result = series_usage_from_row(&row)?;
+        let snapshot = &result.snapshot;
+        if snapshot.version == expected_version {
+            tx.commit().await.map_err(map_sqlx_error)?;
+            return Ok(Some(result));
+        }
         // 系列封面与引用同事务固化，保留站内使用统计与物理清理保护。
         sync_media_refs(
             &mut tx,
@@ -175,7 +188,7 @@ impl SeriesRepository for PostgresSeriesRepository {
         )
         .await?;
         tx.commit().await.map_err(map_sqlx_error)?;
-        Ok(Some(snapshot))
+        Ok(Some(result))
     }
 
     async fn delete(
@@ -235,13 +248,12 @@ impl SeriesRepository for PostgresSeriesRepository {
         Ok(SeriesDeleteOutcome::Deleted)
     }
 
-    async fn existing_id(&self, id: Uuid) -> Result<bool, UseCaseError> {
-        let hit: Option<(Uuid,)> = sqlx::query_as("SELECT id FROM series WHERE id = $1")
-            .bind(id)
-            .fetch_optional(&self.pool)
+    async fn existing_ids(&self, ids: &[Uuid]) -> Result<Vec<Uuid>, UseCaseError> {
+        sqlx::query_scalar("SELECT id FROM series WHERE id = ANY($1::uuid[]) ORDER BY id")
+            .bind(ids)
+            .fetch_all(&self.pool)
             .await
-            .map_err(map_sqlx_error)?;
-        Ok(hit.is_some())
+            .map_err(map_sqlx_error)
     }
 
     async fn members_of(&self, series_id: Uuid) -> Result<Vec<SeriesMember>, UseCaseError> {

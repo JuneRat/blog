@@ -235,6 +235,15 @@ class Acceptance(SiteScenario):
         require(self.admin.me()["display_name"] == "Acceptance Owner",
                 "session and profile must survive a real process restart")
 
+    def browser(self):
+        env = clean_env()
+        env.update(BLOG_BROWSER_URL=self.origin, BLOG_BROWSER_PASSWORD=self.password)
+        result = subprocess.run(
+            ["pnpm", "--dir", str(PROJECT / "apps/admin"), "exec", "playwright", "test"],
+            cwd=PROJECT, env=env, timeout=180, check=False,
+        )
+        require(result.returncode == 0, "production browser acceptance failed; inspect Playwright results")
+
 
     def schedule_and_stop(self):
         scheduled = []
@@ -369,6 +378,8 @@ class Acceptance(SiteScenario):
             ("isolated HTTP verification", self.isolated_verification), ("release and recovered site", self.release_and_reopen),
         ):
             self.stage(name, action)
+            if name == "identity and persistent sessions" and self.args.browser:
+                self.stage("production browser writing", self.browser)
 
 
 def main():
@@ -376,6 +387,7 @@ def main():
     parser.add_argument("--binary", type=Path, default=PROJECT / "target/debug/blog")
     parser.add_argument("--admin-dist", type=Path, default=PROJECT / "apps/admin/dist")
     parser.add_argument("--report", type=Path, help="new JSON report path (no secrets, never overwrites)")
+    parser.add_argument("--browser", action="store_true", help="run Playwright against this temporary site")
     args = parser.parse_args()
     args.binary = args.binary.resolve()
     args.admin_dist = args.admin_dist.resolve()

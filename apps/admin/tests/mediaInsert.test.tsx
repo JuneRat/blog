@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
 import { api, categoryApi, mediaApi, seriesApi } from "../src/api";
-import { navigate, paths } from "../src/router";
+import { paths } from "../src/router";
 import type { MediaAsset, PostDetail } from "../src/types";
 
 /** 每个用例可改写的权限集合（`media.read` 决定面板入口是否存在）。 */

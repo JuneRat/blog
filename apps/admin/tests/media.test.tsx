@@ -236,7 +236,7 @@ describe("媒体库屏", () => {
       uploaded = true;
       return asset({ id: "new-media" });
     });
-    vi.mocked(mediaApi.list).mockImplementation(async (p: number) => {
+    vi.mocked(mediaApi.list).mockImplementation(async (p = 1) => {
       if (p === 1) {
         return uploaded
           ? { items: [asset({ id: "new-media", original_name: "new.png" })], total: 61, page: 1, per_page: 24 }

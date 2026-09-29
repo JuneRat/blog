@@ -193,7 +193,8 @@ pub trait SeriesRepository: Send + Sync {
     ) -> Result<Option<domain::content::SeriesSnapshot>, UseCaseError>;
     async fn list(&self) -> Result<Vec<SeriesWithUsage>, UseCaseError>;
 
-    /// 条件更新（CAS）：name/描述/封面一次提交；命中返回新快照，未命中 None。
+    /// 条件更新（CAS）：name/描述/封面一次提交；返回本事务的快照与成员计数。
+    /// 无实际变化时保持版本与审计不变，仍校验版本；未命中返回 None。
     async fn update(
         &self,
         id: Uuid,
@@ -202,7 +203,7 @@ pub trait SeriesRepository: Send + Sync {
         cover_media_id: Option<Uuid>,
         expected_version: i64,
         actor_id: crate::audit::AuditContext,
-    ) -> Result<Option<domain::content::SeriesSnapshot>, UseCaseError>;
+    ) -> Result<Option<SeriesWithUsage>, UseCaseError>;
 
     /// 条件删除系列并解除关联；保留文章并递增受影响文章版本。
     async fn delete(
@@ -212,8 +213,8 @@ pub trait SeriesRepository: Send + Sync {
         actor_id: crate::audit::AuditContext,
     ) -> Result<SeriesDeleteOutcome, UseCaseError>;
 
-    /// 文章设置系列前的存在性校验。
-    async fn existing_id(&self, id: Uuid) -> Result<bool, UseCaseError>;
+    /// 返回所给 id 中存在的系列，去重并按 id 排序；文章关联使用批量校验。
+    async fn existing_ids(&self, ids: &[Uuid]) -> Result<Vec<Uuid>, UseCaseError>;
 
     /// 系列当前成员（按 position、post_id 升序；重排授权与目录展示共用）。
     async fn members_of(&self, series_id: Uuid) -> Result<Vec<SeriesMember>, UseCaseError>;

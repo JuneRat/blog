@@ -87,8 +87,9 @@ impl HtmlRebuildStore for PostgresHtmlRebuildStore {
             ),
             HtmlKind::Comment => ("comments", "NULL::uuid", COMMENT_RENDER_VERSION, None),
         };
-        let rows: Vec<(Uuid, String, i64, Option<Uuid>)> = sqlx::query_as(&format!(
-            "SELECT id, content, version, {cover} FROM {table}
+        // 批次只保存 ID；源文逐条读取，内存不会随 batch_size × 正文大小增长。
+        let ids: Vec<Uuid> = sqlx::query_scalar(&format!(
+            "SELECT id FROM {table}
              WHERE content_render_version <> $1 AND ($2::uuid IS NULL OR id > $2)
              ORDER BY id LIMIT $3"
         ))
@@ -103,8 +104,21 @@ impl HtmlRebuildStore for PostgresHtmlRebuildStore {
             source: map_sqlx_error(error),
         })?;
         let mut progress = RebuildBatch::default();
-        for (id, source, version, cover_media_id) in rows {
+        for id in ids {
             let attempt: Result<bool, UseCaseError> = async {
+                let row: Option<(String, i64, Option<Uuid>)> = sqlx::query_as(&format!(
+                    "SELECT content, version, {cover} FROM {table}
+                     WHERE id=$1 AND content_render_version<>$2"
+                ))
+                .bind(id)
+                .bind(render_version)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(map_sqlx_error)?;
+                let Some((source, version, cover_media_id)) = row else {
+                    // 已删除或由其他保存/重建更新；仍计入本轮已检查并推进游标。
+                    return Ok(false);
+                };
                 let rendered = if kind == HtmlKind::Comment {
                     RenderedContent {
                         content_html: self.comment_renderer.render_comment(&source).await?,

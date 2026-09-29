@@ -97,7 +97,7 @@ GET 和 POST 都必须带启动终端显示的 `X-Install-Token`，并执行 Ori
 
 列表条目只含 `id/slug/title/status/visibility/version/published_at/updated_at`，文章另含 `author_id/author_username`。正文、摘要、标签、分类、系列与封面元数据只由详情端点返回。后台筛选变化回到首页，搜索、作者、分类、状态和页码写入 URL；刷新及从编辑器返回列表保留条件，同一登录会话中的菜单返回也恢复最近列表。内容写入使全部分页缓存失效，当前页删空时回到有效页。Post CLI 的 `post list` 同样支持 `--page`、`--status`、`--visibility`，每次输出一页及总数。
 
-创建字段为 `slug`、`title`、`excerpt`、`content`、`visibility`、`tag_ids`、`category_id`、`series`、`cover_media_id`。`slug` 可省略生成临时值，草稿允许未完成的标题与正文；发布要求见[内容生命周期](content-lifecycle.md)。`series` 为数组，例如 `[{ "series_id": "UUID", "position": 0 }]`，省略时为空数组。position 省略时为 0，范围为 0–2147483647，同一系列内可重复；数组内不能重复指定同一系列 ID。文章详情使用相同数组格式。
+创建字段为 `slug`、`title`、`excerpt`、`content`、`visibility`、`tag_ids`、`category_id`、`series`、`cover_media_id`。`slug` 可省略生成临时值，草稿允许未完成的标题与正文；发布要求见[内容生命周期](content-lifecycle.md)。`series` 为数组，例如 `[{ "series_id": "UUID", "position": 0 }]`，省略时为空数组；创建或替换时最多 100 项。position 省略时为 0，范围为 0–2147483647，同一系列内可重复；数组内不能重复指定同一系列 ID。文章详情使用相同数组格式。
 
 编辑支持 `new_slug`、`title`、`excerpt`、`content`、`visibility`、`tag_ids`、`category_id`、`series`、`cover_media_id` 和 `expected_version`。注意不同字段的更新语义：
 

@@ -155,10 +155,34 @@ jobs:
       - name: Build server
         run: cargo build -p server --bin blog
 
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: apps/admin/package.json
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: apps/admin/pnpm-lock.yaml
+
+      - name: Install browser tests
+        run: |
+          pnpm --dir apps/admin install --frozen-lockfile
+          pnpm --dir apps/admin exec playwright install --with-deps chromium
+
       - name: First install, authoring, comments and isolated recovery
         env:
           BLOG_TEST_PG_CONTAINER: ${{ job.services.postgres.id }}
-        run: python3 -B scripts/acceptance.py --report acceptance-report.json
+        run: python3 -B scripts/acceptance.py --browser --report acceptance-report.json
+
+      - name: Save browser failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-results
+          path: apps/admin/test-results
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Save acceptance evidence
         if: always()

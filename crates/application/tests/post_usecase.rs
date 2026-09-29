@@ -445,8 +445,13 @@ impl TagRepository for FakeTagRepo {
     }
 }
 
-/// 系列目录 fake：文章用例只依赖 existing_id，恒报存在。
-struct FakeSeriesRepo;
+/// 文章关联查找恒报存在；系列更新可提供固定的已提交结果。
+#[derive(Default)]
+struct FakeSeriesRepo {
+    lookups: Mutex<Vec<Vec<Uuid>>>,
+    current: Option<domain::content::SeriesSnapshot>,
+    committed: Option<application::ports::SeriesWithUsage>,
+}
 
 #[async_trait::async_trait]
 impl application::ports::SeriesRepository for FakeSeriesRepo {
@@ -462,10 +467,10 @@ impl application::ports::SeriesRepository for FakeSeriesRepo {
         &self,
         _slug: &str,
     ) -> Result<Option<domain::content::SeriesSnapshot>, UseCaseError> {
-        Ok(None)
+        Ok(self.current.clone())
     }
     async fn list(&self) -> Result<Vec<application::ports::SeriesWithUsage>, UseCaseError> {
-        Ok(Vec::new())
+        Err(UseCaseError::Repository("目录查询不可用".into()))
     }
     async fn update(
         &self,
@@ -475,8 +480,8 @@ impl application::ports::SeriesRepository for FakeSeriesRepo {
         _cover_media_id: Option<uuid::Uuid>,
         _expected_version: i64,
         _actor_id: application::audit::AuditContext,
-    ) -> Result<Option<domain::content::SeriesSnapshot>, UseCaseError> {
-        Ok(None)
+    ) -> Result<Option<application::ports::SeriesWithUsage>, UseCaseError> {
+        Ok(self.committed.clone())
     }
     async fn delete(
         &self,
@@ -486,8 +491,12 @@ impl application::ports::SeriesRepository for FakeSeriesRepo {
     ) -> Result<application::ports::SeriesDeleteOutcome, UseCaseError> {
         Ok(application::ports::SeriesDeleteOutcome::Gone)
     }
-    async fn existing_id(&self, _id: uuid::Uuid) -> Result<bool, UseCaseError> {
-        Ok(true)
+    async fn existing_ids(&self, ids: &[Uuid]) -> Result<Vec<Uuid>, UseCaseError> {
+        self.lookups.lock().unwrap().push(ids.to_vec());
+        let mut existing = ids.to_vec();
+        existing.sort();
+        existing.dedup();
+        Ok(existing)
     }
     async fn members_of(
         &self,
@@ -702,8 +711,10 @@ impl RbacStore for FakeRbacStore {
 
 struct Fixture {
     posts: Arc<PostInteractor>,
+    post_repo: Arc<FakePostRepo>,
     /// 供测试预置标签目录（文章-标签关联用例）。
     tags: Arc<FakeTagRepo>,
+    series: Arc<FakeSeriesRepo>,
     users: Arc<UserInteractor>,
     roles: Arc<RoleInteractor>,
     /// 媒体附着授权 fake：测试登记资产的归属与公开性。
@@ -717,6 +728,7 @@ struct Fixture {
 async fn fixture() -> Fixture {
     let post_repo = Arc::new(FakePostRepo::new());
     let tag_repo = Arc::new(FakeTagRepo::new());
+    let series_repo = Arc::new(FakeSeriesRepo::default());
     let user_repo = Arc::new(FakeUserRepo::new());
     let rbac = Arc::new(FakeRbacStore::new());
     let clock = Arc::new(FixedClock);
@@ -734,10 +746,10 @@ async fn fixture() -> Fixture {
     ));
     let roles = Arc::new(RoleInteractor::new(rbac.clone(), user_repo));
     let posts = Arc::new(PostInteractor::new(
-        post_repo,
+        post_repo.clone(),
         tag_repo.clone(),
         Arc::new(FakeCategoryRepo),
-        Arc::new(FakeSeriesRepo),
+        series_repo.clone(),
         clock,
         media_guard.clone(),
     ));
@@ -779,7 +791,9 @@ async fn fixture() -> Fixture {
 
     Fixture {
         posts,
+        post_repo,
         tags: tag_repo,
+        series: series_repo,
         users,
         roles,
         media_guard,
@@ -802,6 +816,174 @@ fn draft_cmd(slug: &str) -> CreatePostCmd {
         series: Vec::new(),
         cover_media_id: None,
     }
+}
+
+#[tokio::test]
+async fn series_inputs_are_validated_before_one_batch_lookup() {
+    use application::content::{MAX_SERIES_PER_POST, SeriesPlacement};
+    let f = fixture().await;
+    let base = f
+        .posts
+        .create(&f.author, draft_cmd("series-inputs"))
+        .await
+        .unwrap();
+    let placement = SeriesPlacement {
+        series_id: Uuid::now_v7(),
+        position: 0,
+    };
+    let valid: Vec<_> = (0..MAX_SERIES_PER_POST)
+        .map(|_| SeriesPlacement {
+            series_id: Uuid::now_v7(),
+            position: 0,
+        })
+        .collect();
+    let mut oversized = valid.clone();
+    oversized.push(placement);
+    for invalid in [
+        vec![placement, placement],
+        vec![SeriesPlacement {
+            position: -1,
+            ..placement
+        }],
+        oversized,
+    ] {
+        let mut cmd = draft_cmd("invalid-series");
+        cmd.series = invalid.clone();
+        assert!(matches!(
+            f.posts.create(&f.author, cmd).await,
+            Err(UseCaseError::Invalid(_))
+        ));
+        assert!(matches!(
+            f.posts
+                .edit(
+                    &f.author,
+                    EditPostCmd {
+                        id: base.id,
+                        series: Some(invalid),
+                        ..Default::default()
+                    }
+                )
+                .await,
+            Err(UseCaseError::Invalid(_))
+        ));
+    }
+    assert!(f.series.lookups.lock().unwrap().is_empty());
+
+    let mut cmd = draft_cmd("valid-series");
+    cmd.series = valid.clone();
+    assert_eq!(
+        f.posts.create(&f.author, cmd).await.unwrap().series.len(),
+        MAX_SERIES_PER_POST
+    );
+    assert_eq!(
+        f.posts
+            .edit(
+                &f.author,
+                EditPostCmd {
+                    id: base.id,
+                    series: Some(valid),
+                    ..Default::default()
+                }
+            )
+            .await
+            .unwrap()
+            .series
+            .len(),
+        MAX_SERIES_PER_POST
+    );
+    {
+        let lookups = f.series.lookups.lock().unwrap();
+        assert_eq!(lookups.len(), 2, "创建和编辑各查询一次完整集合");
+        assert!(lookups.iter().all(|ids| ids.len() == MAX_SERIES_PER_POST));
+    }
+
+    // 历史文章可能超过新预算；编辑器反向重发同一集合仍应允许只改标题。
+    let mut legacy_series: Vec<SeriesPlacement> = {
+        let mut stored = f.post_repo.posts.lock().unwrap();
+        let snapshot = stored.get_mut("series-inputs").unwrap();
+        snapshot.series.push(placement.into());
+        snapshot
+            .series
+            .iter()
+            .rev()
+            .copied()
+            .map(Into::into)
+            .collect()
+    };
+    let edited = f
+        .posts
+        .edit(
+            &f.author,
+            EditPostCmd {
+                id: base.id,
+                title: Some("Updated legacy title".into()),
+                series: Some(legacy_series.clone()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(edited.title, "Updated legacy title");
+    assert_eq!(edited.series.len(), MAX_SERIES_PER_POST + 1);
+    // 改权重是真实关联变更，仍受预算约束，不能作为同值重发放行。
+    legacy_series[0].position += 1;
+    assert!(matches!(
+        f.posts
+            .edit(
+                &f.author,
+                EditPostCmd {
+                    id: base.id,
+                    series: Some(legacy_series),
+                    ..Default::default()
+                }
+            )
+            .await,
+        Err(UseCaseError::Invalid(_))
+    ));
+    assert_eq!(f.series.lookups.lock().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn series_update_returns_committed_record_without_catalog_read() {
+    let current = domain::content::Series::new(
+        "Before".into(),
+        domain::content::Slug::new("guide").unwrap(),
+        None,
+        FixedClock.now(),
+    )
+    .unwrap()
+    .snapshot();
+    let mut saved = current.clone();
+    saved.name = "After".into();
+    saved.version += 1;
+    let repo = Arc::new(FakeSeriesRepo {
+        current: Some(current),
+        committed: Some(application::ports::SeriesWithUsage {
+            snapshot: saved.clone(),
+            post_count: 3,
+            public_post_count: 1,
+        }),
+        ..Default::default()
+    });
+    let usecase = application::series::SeriesInteractor::new(
+        repo,
+        Arc::new(FixedClock),
+        Arc::new(common::FakeMediaGuard::new()),
+    );
+    let result = usecase
+        .update(
+            &Actor::bootstrap_cli(),
+            "guide",
+            application::series::UpdateSeriesCmd {
+                name: "After".into(),
+                expected_version: Some(1),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!((result.name, result.version), (saved.name, saved.version));
+    assert_eq!((result.post_count, result.public_post_count), (Some(3), 1));
 }
 
 #[tokio::test]

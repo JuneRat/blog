@@ -362,7 +362,7 @@ describe("文章回收站", () => {
 
   it("分页：上一页/下一页切换到服务端回显的页码", async () => {
     // 服务端会回显本次返回的是第几页；界面页码以它为准，fixture 必须照实回显。
-    vi.mocked(api.listTrash).mockImplementation(async (target: number) => ({
+    vi.mocked(api.listTrash).mockImplementation(async (target = 1) => ({
       items: [trashed],
       total: 25,
       page: target,
@@ -429,7 +429,7 @@ describe("文章回收站", () => {
 
   it("删除当前页最后一条后回退一页，而不是停在空页", async () => {
     const second = summary({ id: "post-2", slug: "second", title: "第二页的稿子", version: 2 });
-    vi.mocked(api.listTrash).mockImplementation(async (target: number) =>
+    vi.mocked(api.listTrash).mockImplementation(async (target = 1) =>
       target === 1
         ? { items: [trashed], total: 11, page: 1, per_page: 10 }
         : { items: [second], total: 11, page: 2, per_page: 10 },
@@ -442,7 +442,7 @@ describe("文章回收站", () => {
     expect(screen.getByText("第 2 页")).toBeTruthy();
 
     // 第 2 页唯一一条被删除后，服务端该页为空 → 必须回退到第 1 页。
-    vi.mocked(api.listTrash).mockImplementation(async (target: number) =>
+    vi.mocked(api.listTrash).mockImplementation(async (target = 1) =>
       target === 1
         ? { items: [trashed], total: 10, page: 1, per_page: 10 }
         : { items: [], total: 10, page: 2, per_page: 10 },

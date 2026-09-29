@@ -148,12 +148,9 @@ impl SeriesInteractor {
         {
             crate::media::ensure_attachable(&*self.media_guard, cover_media_id).await?;
         }
-        if !series
+        series
             .update(cmd.name, cmd.description, cmd.cover_media_id)
-            .map_err(map_domain)?
-        {
-            return self.dto_of(series.id(), actor).await;
-        }
+            .map_err(map_domain)?;
         let snapshot = series.snapshot();
         match self
             .series
@@ -167,7 +164,7 @@ impl SeriesInteractor {
             )
             .await?
         {
-            Some(updated) => Ok(self.dto_of(updated.id, actor).await?),
+            Some(updated) => Ok(SeriesDto::from_usage(&updated, actor)),
             None => Err(UseCaseError::VersionConflict),
         }
     }
@@ -308,17 +305,6 @@ impl SeriesInteractor {
             .await?
             .ok_or_else(|| UseCaseError::NotFound(format!("系列 {slug}")))?;
         Series::reconstitute(snapshot).map_err(|e| UseCaseError::DataCorrupt(e.to_string()))
-    }
-
-    async fn dto_of(&self, id: Uuid, actor: &Actor) -> Result<SeriesDto, UseCaseError> {
-        let row = self
-            .series
-            .list()
-            .await?
-            .into_iter()
-            .find(|row| row.snapshot.id == id)
-            .ok_or_else(|| UseCaseError::NotFound("系列".into()))?;
-        Ok(SeriesDto::from_usage(&row, actor))
     }
 }
 

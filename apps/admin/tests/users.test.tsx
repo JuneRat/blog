@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { meResponse } from "./httpFixtures";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
@@ -46,8 +47,7 @@ vi.mock("../src/api", async (importOriginal) => {
 });
 
 function me(permissions: string[], userId = "u-me"): Me {
-  return { user_id: userId, username: "me", display_name: null, bio: null, version: 1,
-    avatar_media_id: null, avatar_url: null, permissions, csrf_token: "csrf", channel: "session" };
+  return meResponse({ user_id: userId, username: "me", permissions });
 }
 
 function user(overrides: Partial<AdminUser> = {}): AdminUser {

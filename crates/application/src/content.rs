@@ -23,6 +23,9 @@ use domain::identity::UserId;
 /// 向接口层转出的值对象（interfaces 不直接依赖 domain crate）。
 pub use domain::content::Visibility as PostVisibility;
 
+/// 创建/替换系列关联的输入预算；读取历史记录不受此限制。
+pub const MAX_SERIES_PER_POST: usize = 100;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SeriesPlacement {
     pub series_id: Uuid,
@@ -176,6 +179,7 @@ impl PostInteractor {
         if !actor.has_permission("post.create") {
             return Err(UseCaseError::Forbidden);
         }
+        let series = validate_series_input(cmd.series)?;
         let slug_raw = cmd
             .slug
             .unwrap_or_else(|| format!("draft-{}", Uuid::now_v7().simple()));
@@ -184,9 +188,7 @@ impl PostInteractor {
         if let Some(category_id) = cmd.category_id {
             self.validate_category(category_id).await?;
         }
-        for placement in &cmd.series {
-            self.validate_series(placement.series_id).await?;
-        }
+        self.validate_series_exists(&series).await?;
         // 新文章的封面总是首次附着，一律过可用性校验。
         if let Some(cover_media_id) = cmd.cover_media_id {
             crate::media::ensure_attachable(&*self.media_guard, cover_media_id).await?;
@@ -200,7 +202,7 @@ impl PostInteractor {
             cmd.visibility,
             PostDraftMetadata {
                 category_id: cmd.category_id,
-                series: cmd.series.into_iter().map(Into::into).collect(),
+                series,
                 cover_media_id: cmd.cover_media_id,
             },
             self.clock.now(),
@@ -221,14 +223,18 @@ impl PostInteractor {
             .load_authorized(cmd.id, actor, "post.update", "post.update_any")
             .await?;
         let expected = checked_version(record.snapshot.version, cmd.expected_version)?;
+        let series = match cmd.series {
+            // 编辑器会重发完整关联；相同 id/权重集合视为保留历史数据。
+            Some(series) if same_series(&series, &record.snapshot.series) => None,
+            Some(series) => Some(validate_series_input(series)?),
+            None => None,
+        };
 
         if let Some(Some(category_id)) = cmd.category_id {
             self.validate_category(category_id).await?;
         }
-        if let Some(placements) = &cmd.series {
-            for placement in placements {
-                self.validate_series(placement.series_id).await?;
-            }
+        if let Some(placements) = &series {
+            self.validate_series_exists(placements).await?;
         }
         // 封面只有**换成新资产**时才过可用性校验：编辑者重复提交当前封面
         // （含编辑他人文章）不重新授权，历史引用不卡正常保存。
@@ -256,9 +262,7 @@ impl PostInteractor {
                 content: cmd.content,
                 visibility: cmd.visibility,
                 category_id: cmd.category_id,
-                series: cmd
-                    .series
-                    .map(|series| series.into_iter().map(Into::into).collect()),
+                series,
                 cover_media_id: cmd.cover_media_id,
             })
             .map_err(|e| UseCaseError::Invalid(e.to_string()))?;
@@ -468,11 +472,23 @@ impl PostInteractor {
         }
     }
 
-    /// 系列存在性校验：未知 id 报为可定位的参数错误。
-    async fn validate_series(&self, series_id: Uuid) -> Result<(), UseCaseError> {
-        if !self.series.existing_id(series_id).await? {
+    /// 纯校验完成后一次查询目录；关联写入仍由事务内外键兜底。
+    async fn validate_series_exists(
+        &self,
+        series: &[domain::content::SeriesPlacement],
+    ) -> Result<(), UseCaseError> {
+        if series.is_empty() {
+            return Ok(());
+        }
+        let ids: Vec<_> = series.iter().map(|placement| placement.series_id).collect();
+        let existing = self.series.existing_ids(&ids).await?;
+        if existing.len() != ids.len() {
+            let missing: Vec<_> = ids
+                .into_iter()
+                .filter(|id| !existing.contains(id))
+                .collect();
             return Err(UseCaseError::Invalid(format!(
-                "所选系列不存在：{series_id}"
+                "所选系列不存在：{missing:?}"
             )));
         }
         Ok(())
@@ -538,6 +554,36 @@ impl PostInteractor {
             record,
         ))
     }
+}
+
+fn same_series(
+    requested: &[SeriesPlacement],
+    current: &[domain::content::SeriesPlacement],
+) -> bool {
+    if requested.len() != current.len() {
+        return false;
+    }
+    let mut requested: Vec<_> = requested
+        .iter()
+        .map(|p| (p.series_id, p.position))
+        .collect();
+    let mut current: Vec<_> = current.iter().map(|p| (p.series_id, p.position)).collect();
+    requested.sort_unstable();
+    current.sort_unstable();
+    requested == current
+}
+
+fn validate_series_input(
+    series: Vec<SeriesPlacement>,
+) -> Result<Vec<domain::content::SeriesPlacement>, UseCaseError> {
+    if series.len() > MAX_SERIES_PER_POST {
+        return Err(UseCaseError::Invalid(format!(
+            "每篇文章最多关联 {MAX_SERIES_PER_POST} 个系列"
+        )));
+    }
+    let series: Vec<_> = series.into_iter().map(Into::into).collect();
+    domain::content::post::validate_series_placements(&series).map_err(map_domain)?;
+    Ok(series)
 }
 
 fn map_domain(e: domain::content::PostError) -> UseCaseError {

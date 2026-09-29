@@ -12,7 +12,7 @@ import {
   Typography,
 } from "antd";
 import type { TableProps } from "antd";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { seriesApi } from "../api";
@@ -33,8 +33,7 @@ const EMPTY_DRAFT: Draft = { name: "", slug: "" };
  * 系列管理屏：目录 CRUD + 成员顺序调整。
  *
  * - 管理需 series.manage；目录读取开放；
- * - 成员列表来自文章列表接口（按 series 过滤在前端完成——列表接口返回
- *   全部状态，含草稿/私密，它们保留位置但公开页不出现）；
+ * - 成员来自专用目录端点，含草稿/私密，它们保留位置但公开页不出现；
  * - 上移/下移走整体重排接口：先交换再提交完整顺序与当前 series 版本；
  *   成功后用响应版本继续；403/409 原样展示（Author 不能重排他人文章）。
  *
@@ -50,10 +49,18 @@ export function SeriesListScreen() {
   const [actionError, setActionError] = useState<string | null>(null);
   const errorText =
     actionError ?? (series.error === null ? null : permissionMessageOf(series.error));
-  const [members, setMembers] = useState<Record<string, SeriesMemberRow[]>>({});
-  /** 成员目录不可读的系列（id → 原因）：显示权限提示并禁用重排，
-   * 不当成空目录——空目录会误导「还没有文章加入」，也删掉了重排入口。 */
-  const [unreadable, setUnreadable] = useState<Record<string, string>>({});
+  // 成员顺序与目录版本一起缓存，旧版本的慢响应不能覆盖新版成员。
+  // 每个系列独立加载与报错，避免一个慢请求阻塞其他系列。
+  const memberQueries = useQueries({
+    queries: (series.data ?? []).map((item) => ({
+      queryKey: queryKeys.seriesMembers(item.id, item.version),
+      queryFn: async () => {
+        const rows = await seriesApi.members(item.slug);
+        return [...rows].sort((a, b) => a.position - b.position || a.id.localeCompare(b.id));
+      },
+    })),
+  });
+  const membersById = new Map((series.data ?? []).map((item, index) => [item.id, memberQueries[index]]));
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [form] = Form.useForm<Draft>();
@@ -78,12 +85,6 @@ export function SeriesListScreen() {
   /** 写操作后让目录失效重取（替代手写「再拉一次」）。 */
   const load = () => invalidateAfterWrite(queryClient, "series");
 
-  /**
-   * 成员目录：外层列表就绪后按系列并发拉取。
-   *
-   * 保留逐系列独立收尾——任一 403 不得连带清空其它系列（混合系列含他人文章时
-   * 对本用户不可读是正常状态），所以这里没有把成员也交给单个查询。
-   */
   useEffect(() => {
     const current = series.data;
     if (current === undefined) {
@@ -92,29 +93,6 @@ export function SeriesListScreen() {
       return;
     }
     setExpandedKeys(current.map((s) => s.id));
-    void (async () => {
-      // 成员目录逐系列处理：任一 403 不得连带清空其它系列——
-      // 混合系列（含他人文章）对本用户不可读是**正常状态**，
-      // 它不该让可管理的独著系列一起消失。
-      const bySeries: Record<string, SeriesMemberRow[]> = {};
-      const blocked: Record<string, string> = {};
-      await Promise.all(
-        current.map(async (s) => {
-          try {
-            // 成员走专用目录端点：包含其他作者的成员（重排会改动它们的位置，
-            // 无参 listPosts 只回当前作者的文章，多人系列会缺员）。
-            const rows = await seriesApi.members(s.slug);
-            bySeries[s.id] = [...rows].sort(
-              (a, b) => a.position - b.position || a.id.localeCompare(b.id),
-            );
-          } catch (e) {
-            blocked[s.id] = permissionMessageOf(e);
-          }
-        }),
-      );
-      setMembers(bySeries);
-      setUnreadable(blocked);
-    })();
   }, [series.data, series.error]);
 
   async function create(): Promise<void> {
@@ -207,7 +185,9 @@ export function SeriesListScreen() {
 
   /** 与相邻成员交换后提交完整顺序。 */
   async function move(s: SeriesSummary, index: number, delta: -1 | 1): Promise<void> {
-    const list = members[s.id] ?? [];
+    const query = membersById.get(s.id);
+    if (busy || series.isFetching || query?.isFetching || query?.isError || !query?.data) return;
+    const list = query.data;
     const target = index + delta;
     if (target < 0 || target >= list.length) return;
     const next = [...list];
@@ -233,18 +213,22 @@ export function SeriesListScreen() {
 
   /** 一个系列的成员区：不可读 → 权限提示；空 → 空态文案；否则可重排的有序列表。 */
   function membersOf(s: SeriesSummary): ReactNode {
-    const blocked = unreadable[s.id];
-    if (blocked !== undefined) {
+    const query = membersById.get(s.id);
+    if (!query || query.isPending) {
+      return <Typography.Text type="secondary">正在加载系列成员…</Typography.Text>;
+    }
+    if (query.error) {
       // 不当成空目录：空目录会误导「还没有文章加入」，也删掉了重排入口。
       return (
         <Alert
           type="error"
           showIcon
-          title={`成员目录不可读：${blocked}（重排需要全部成员的读取权限；他人文章所在系列对无 post.read_any 的调用者不可见。）`}
+          title={`成员目录不可读：${permissionMessageOf(query.error)}（重排需要全部成员的读取权限；他人文章所在系列对无 post.read_any 的调用者不可见。）`}
         />
       );
     }
-    const list = members[s.id] ?? [];
+    const list = query.data ?? [];
+    const reorderingDisabled = busy || series.isFetching || query.isFetching;
     if (list.length === 0) {
       return <Typography.Text type="secondary">还没有文章加入这个系列。</Typography.Text>;
     }
@@ -287,14 +271,14 @@ export function SeriesListScreen() {
           <Space size={0}>
             <Button
               type="text"
-              disabled={busy || index === 0}
+              disabled={reorderingDisabled || index === 0}
               onClick={() => void move(s, index, -1)}
             >
               ↑
             </Button>
             <Button
               type="text"
-              disabled={busy || index === list.length - 1}
+              disabled={reorderingDisabled || index === list.length - 1}
               onClick={() => void move(s, index, 1)}
             >
               ↓

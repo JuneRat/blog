@@ -2205,6 +2205,66 @@ async fn post_in_series(
 }
 
 #[tokio::test]
+async fn series_update_returns_usage_and_preserves_unchanged_version() {
+    let _g = SERIAL.lock().await;
+    let pool = fresh_database().await;
+    let author = seed_user(&pool, "author").await;
+    let series = seed_series(&pool, "Before", "update-result").await;
+    let public = post_in_series(&pool, author, series.id, "public", 0).await;
+    post_in_series(&pool, author, series.id, "draft", 1).await;
+    sqlx::query(
+        "UPDATE posts SET status='published', published_at=now()-interval '1 minute' WHERE id=$1",
+    )
+    .bind(public.id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let repo = repo_of(&pool);
+    let before = repo.find_by_slug("update-result").await.unwrap().unwrap();
+    let saved = repo
+        .update(series.id, "After", None, None, before.version, None.into())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(saved.snapshot.name, "After");
+    assert_eq!(saved.snapshot.version, before.version + 1);
+    assert_eq!((saved.post_count, saved.public_post_count), (2, 1));
+
+    let unchanged = repo
+        .update(
+            series.id,
+            "After",
+            None,
+            None,
+            saved.snapshot.version,
+            None.into(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(unchanged, saved);
+    assert!(
+        repo.update(series.id, "After", None, None, before.version, None.into())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let audits: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM audit_logs WHERE action='series.update'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(audits, 1);
+    assert_eq!(
+        repo.existing_ids(&[series.id, uuid::Uuid::now_v7(), series.id])
+            .await
+            .unwrap(),
+        vec![series.id]
+    );
+    pool.close().await;
+}
+
+#[tokio::test]
 async fn series_reorder_rewrites_orders_and_bumps_versions() {
     let _g = SERIAL.lock().await;
     let pool = fresh_database().await;

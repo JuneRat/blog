@@ -3,7 +3,9 @@
 use std::sync::Arc;
 
 use application::error::UseCaseError;
-use application::media::{MediaContent, MediaDto, MediaInteractor, MediaUsageDto, UploadMediaCmd};
+use application::media::{
+    MediaDto, MediaInteractor, MediaReadMetadata, MediaUsageDto, UploadMediaCmd,
+};
 use axum::body::Bytes;
 use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
@@ -303,8 +305,8 @@ async fn read_media(
     let Ok(id) = Uuid::parse_str(&id) else {
         return media_not_found();
     };
-    match state.media.read(id).await {
-        Ok(content) => file_response(&content, &headers),
+    match file_response(&state.media, id, &headers).await {
+        Ok(response) => response,
         Err(UseCaseError::NotFound(_)) => media_not_found(),
         Err(e) => {
             tracing::error!(error = %e, "读取媒体文件失败");
@@ -314,33 +316,34 @@ async fn read_media(
 }
 
 /// 地址对应不可变的图片字节，可公开长期缓存；软删除不撤销访问。
-fn file_response(content: &MediaContent, request: &HeaderMap) -> Response {
-    let etag = format!("\"{}\"", content.checksum_sha256);
+async fn file_response(
+    media: &MediaInteractor,
+    id: Uuid,
+    request: &HeaderMap,
+) -> Result<Response, UseCaseError> {
+    let metadata = media.read_metadata(id).await?;
+    let etag = format!("\"{}\"", metadata.checksum_sha256);
     if let Some(value) = request
         .get(header::IF_NONE_MATCH)
         .and_then(|v| v.to_str().ok())
         && value.split(',').any(|candidate| candidate.trim() == etag)
     {
         let mut response = StatusCode::NOT_MODIFIED.into_response();
-        insert_media_headers(response.headers_mut(), content, &etag);
-        return response;
+        insert_media_headers(response.headers_mut(), &metadata, &etag);
+        return Ok(response);
     }
-    let mut response = (
-        StatusCode::OK,
-        [(header::CONTENT_TYPE, content.mime.clone())],
-        content.bytes.clone(),
-    )
-        .into_response();
-    insert_media_headers(response.headers_mut(), content, &etag);
-    response
+    let bytes = media.read(&metadata).await?;
+    let mut response = (StatusCode::OK, bytes).into_response();
+    insert_media_headers(response.headers_mut(), &metadata, &etag);
+    Ok(response)
 }
 
-fn insert_media_headers(headers: &mut HeaderMap, content: &MediaContent, etag: &str) {
+fn insert_media_headers(headers: &mut HeaderMap, metadata: &MediaReadMetadata, etag: &str) {
     headers.insert(
         header::X_CONTENT_TYPE_OPTIONS,
         HeaderValue::from_static("nosniff"),
     );
-    if let Ok(value) = HeaderValue::from_str(&content.mime) {
+    if let Ok(value) = HeaderValue::from_str(&metadata.mime) {
         headers.insert(header::CONTENT_TYPE, value);
     }
     if let Ok(value) = HeaderValue::from_str(etag) {

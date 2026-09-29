@@ -27,6 +27,7 @@ export const queryKeys = {
   tags: () => ["tags"] as const,
   categories: () => ["categories"] as const,
   series: () => ["series"] as const,
+  seriesMembers: (id: string, version: number) => ["series", "members", id, version] as const,
   commentsAll: () => ["comments"] as const,
   comments: (page: number, status: string, post?: string) => ["comments", page, status, post] as const,
   commentPolicy: (post?: string) => ["comment-policy", post ?? "global"] as const,
@@ -48,7 +49,7 @@ export const queryKeys = {
 };
 
 /**
- * 每个应用实例一个 QueryClient。
+ * 每个认证会话一个 QueryClient，App 在身份或登录状态变化时重建 Provider。
  *
  * 建在 `AdminProviders` 里（用 `useState` 惰性创建）而不是模块级单例：
  * 测试是同文件共用模块状态的，模块级缓存会让用例之间互相污染——

@@ -57,9 +57,11 @@ pnpm --dir apps/admin typecheck
 
 [默认策略](../apps/admin/src/queryClient.ts)是 30 秒新鲜期、关闭窗口聚焦重取，只对 `ApiError.status >= 500` 最多重试两次；mutation 不自动重试。普通网络异常不满足这条 `ApiError` 判断。401 由 [API 客户端](../apps/admin/src/api/client.ts) 与[认证层](../apps/admin/src/auth.tsx)处理，Query 只负责不重试，尚未统一为 Query 级认证处理器。
 
+查询缓存属于当前认证会话：转入登录页或切换账号会重新创建 QueryClient，并清除旧查询与编辑器状态。CSRF token 变化时取消上一会话的在途请求，旧请求的 401 不得退出新会话。本机恢复副本仍按既有账号隔离规则保留。
+
 媒体库、封面选择器和正文图片面板共用 [mediaPageQuery](../apps/admin/src/mediaQueries.ts) 的查询键、取消信号和缓存。封面弹窗关闭或没有读取权限时不加载；重新打开时重取，并可先显示缓存。上传后的失效仍通过统一写入影响表执行。
 
-列表、目录、设置和媒体主要使用 Query。Post/Page 详情仍直接请求并维护编辑基线；系列成员也由系列屏逐项加载。设置首次读取可初始化表单，后续后台重取不能无条件重新填表；版本冲突取服务器当前值时使用直接请求。
+列表、目录、设置、媒体与系列成员使用 Query。系列成员按稳定 ID 和目录版本独立缓存，旧版本的慢响应不会覆盖新版本成员；目录或成员刷新期间禁用重排，避免把新版本和旧顺序一起提交。Post/Page 详情仍直接请求并维护编辑基线。设置首次读取可初始化表单，后续后台重取不能无条件重新填表；版本冲突取服务器当前值时使用直接请求。
 
 共享查询键集中在 `queryKeys`，包括评论列表的页码、状态与文章过滤，以及全站/单篇评论开关。新增或修改查询时要把实际影响结果的页码、过滤条件、资源身份放入键，并明确共享范围。
 
@@ -70,7 +72,7 @@ pnpm --dir apps/admin typecheck
 | Post 创建、保存、覆盖、发布、预约、撤回、归档、移入回收站、恢复、永久删除 | 全部文章列表页及筛选、全部回收站页、标签/分类/系列统计、媒体列表及使用位置、评论关联信息 |
 | Page 内容/状态写入、移入回收站、恢复、永久删除 | 全部页面列表页及筛选、全部页面回收站页、媒体列表及使用位置 |
 | 媒体库上传、软删除、恢复；封面选择器直接上传；正文粘贴/拖入上传 | `mediaAll()` 前缀，包含正常库、回收站全部分页与使用位置；批次中已成功的上传不受后续失败影响 |
-| 标签、分类、系列写入 | 各自目录键、文章列表与回收站；系列另刷新媒体引用，系列成员按屏内加载流程刷新 |
+| 标签、分类、系列写入 | 各自目录键、文章列表与回收站；系列族同时覆盖成员查询，并刷新媒体引用 |
 | 用户创建、角色分配或移除 | `users()` |
 | 个人资料或头像保存 | 用户列表、媒体列表及使用位置；另刷新当前身份资料 |
 | 站点设置保存 | 站点设置键、媒体列表及使用位置 |
@@ -96,6 +98,8 @@ pnpm --dir apps/admin typecheck
 
 测试以最终界面、有效载荷和是否允许写入为主要证据。测试与构建命令统一见[开发指南](development.md#检查与测试)。
 
+`pnpm typecheck` 检查 `src/`、`tests/`，并通过单独配置检查 `e2e/` 和 Playwright 配置。测试 fixture 必须符合当前 API 类型；可复用 `httpFixtures.ts` 的身份与文章响应、`contentFixtures.ts` 的分页与列表摘要构造函数。
+
 - 异步挂载、表单校验、查询通知和弹窗收尾使用 `findBy*` 或 `waitFor` 等待可观察结果，不固定实现内部的调度次数。
 - 验证请求期间输入时，先确认请求已发出，再改变输入并完成受控响应，断言新输入和未保存提示都保留。
 - 验证写后缓存更新时，先访问列表形成旧缓存，再编辑并返回列表，断言新值；直接让初始查询返回新值无法证明失效有效。
@@ -105,3 +109,5 @@ pnpm --dir apps/admin typecheck
 - 在当前对话框或控件范围内按角色、名称定位。Select、Modal 等按实际交互方式操作，不依赖内部 class、隐藏残留节点或动画结构。
 
 可复用样例在 [editor.test.tsx](../apps/admin/tests/editor.test.tsx)、[listScreens.test.tsx](../apps/admin/tests/listScreens.test.tsx)、[settings.test.tsx](../apps/admin/tests/settings.test.tsx) 和 [CommentListScreen.test.tsx](../apps/admin/src/screens/CommentListScreen.test.tsx)。[testSetup.ts](../apps/admin/src/testSetup.ts)只补最小浏览器 API，不提供真实布局；组件测试不能替代构建后的浏览器交互与视觉核验。
+
+生产构建的浏览器冒烟测试放在 `e2e/`，通过[验收脚本的 `--browser` 选项](acceptance.md)在临时站点运行。只覆盖跨层关键流程，不重复枚举已由单元测试覆盖的字段和错误分支。

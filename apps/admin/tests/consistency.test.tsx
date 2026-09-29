@@ -1,4 +1,4 @@
-import { contentPage } from "./contentFixtures";
+import { contentPage, postSummary } from "./contentFixtures";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
@@ -31,7 +31,7 @@ const picture: MediaAsset = {
 };
 function count() { return post.status === "published" ? 1 : 0; }
 function references() {
-  return [{ kind: "post", value: post }, { kind: "page", value: page }]
+  return [{ kind: "post" as const, value: post }, { kind: "page" as const, value: page }]
     .filter(({ value }) => value.content.includes(picture.url))
     .map(({ kind, value }) => ({ kind, content_id: value.id, title: value.title, slug: value.slug,
       status: value.status, visibility: value.visibility, deleted: false, public: value.status === "published" }));
@@ -62,7 +62,7 @@ beforeEach(() => {
     visibility: "public", version: 1, published_at: null, updated_at: "2026-09-28T00:00:00Z" };
   vi.mocked(api.getPost).mockImplementation(async () => post);
   vi.mocked(api.updatePost).mockImplementation(async (_id, body) => {
-    post = { ...post, title: body.title, content: body.content, version: post.version + 1 };
+    post = { ...post, title: body.title ?? post.title, content: body.content ?? post.content, version: post.version + 1 };
     return post;
   });
   vi.mocked(api.publishPost).mockImplementation(async () => {
@@ -73,7 +73,7 @@ beforeEach(() => {
     post = { ...post, status: "draft", version: post.version + 1 };
     return post;
   });
-  vi.mocked(api.listPosts).mockImplementation(async () => contentPage([post]));
+  vi.mocked(api.listPosts).mockImplementation(async () => contentPage([postSummary(post)]));
   vi.mocked(api.listTags).mockImplementation(async () => [
     { id: "tag", name: "技术标签", slug: "tech", version: 1, public_post_count: count() },
   ]);
@@ -88,14 +88,14 @@ beforeEach(() => {
   vi.mocked(commentsApi.policy).mockResolvedValue({ enabled: true, version: 1 });
   vi.mocked(commentsApi.list).mockImplementation(async () => ({ items: [{
     id: "comment", post_id: post.id, post_slug: post.slug, post_title: post.title, status: "pending", version: 1,
-    parent_id: null, root_id: null, parent_nickname: null, author_email: null, ip_address: null,
+    parent_id: null, root_id: null, parent_nickname: null, author_email: null, ip_address: null, moderation_reason: "all_comments",
     content_html: "<p>读者留言</p>", body: "读者留言", nickname: "读者", is_author: false, created_at: "2026-09-28T00:00:00Z",
   }], total: 1, enabled: true }));
   vi.mocked(mediaApi.list).mockImplementation(async () => ({ items: [media()], total: 1, page: 1, per_page: 24 }));
   vi.mocked(mediaApi.detail).mockImplementation(async () => ({ media: media(), references: references(), hidden_references: 0 }));
   vi.mocked(api.getPage).mockImplementation(async () => page);
   vi.mocked(api.updatePage).mockImplementation(async (_id, body) => {
-    page = { ...page, title: body.title, content: body.content, version: page.version + 1 };
+    page = { ...page, title: body.title ?? page.title, content: body.content ?? page.content, version: page.version + 1 };
     return page;
   });
 });

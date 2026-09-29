@@ -137,6 +137,25 @@ describe("HTTP response boundary", () => {
     expect(fetcher.mock.calls[1][1].headers.has("X-CSRF-Token")).toBe(false);
   });
 
+  it("a late 401 from the previous session cannot log out the new session", async () => {
+    let finish!: (response: Response) => void;
+    const fetcher = vi.fn().mockReturnValueOnce(new Promise<Response>(resolve => { finish = resolve; }));
+    vi.stubGlobal("fetch", fetcher);
+    const unauthorized = vi.fn();
+    setUnauthorizedHandler(unauthorized);
+    setCsrfToken("session-a");
+    const pending = api.getPost("id");
+    const rejected = expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    setCsrfToken("session-b");
+    expect(fetcher.mock.calls[0][1].signal.aborted).toBe(true);
+    finish(jsonResponse({ code: "unauthenticated", error: "会话过期" }, 401));
+    await rejected;
+    expect(unauthorized).not.toHaveBeenCalled();
+    fetcher.mockResolvedValue(jsonResponse(postResponse()));
+    await api.updatePost("id", {});
+    expect(fetcher.mock.calls[1][1].headers.get("X-CSRF-Token")).toBe("session-b");
+  });
+
   it("keeps binary upload headers and validates its response", async () => {
     const fetcher = respond(jsonResponse({ id: "missing-fields" }));
     setCsrfToken("csrf");

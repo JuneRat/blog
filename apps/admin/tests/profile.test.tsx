@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { meResponse } from "./httpFixtures";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { App } from "../src/App";
@@ -15,10 +16,10 @@ vi.mock("../src/api", async (original) => {
   return { ...module, api: { ...module.api, me: vi.fn(), updateOwnProfile: vi.fn(), listUsers: vi.fn() } };
 });
 
-const profile: Me = {
+const profile = meResponse({
   user_id: "u-profile", username: "author", display_name: "原展示名", bio: "原简介", version: 7,
-  avatar_media_id: null, avatar_url: null, permissions: ["user.manage"], csrf_token: "csrf", channel: "session",
-};
+  permissions: ["user.manage"],
+});
 
 beforeEach(() => {
   vi.resetAllMocks();

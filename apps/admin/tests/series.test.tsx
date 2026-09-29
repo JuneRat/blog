@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
 import { contentPage } from "./contentFixtures";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
 import { ApiError, api, categoryApi, mediaApi, seriesApi } from "../src/api";
-import { navigate, paths } from "../src/router";
-import type { MediaAsset, MediaPage, SeriesSummary } from "../src/types";
+import { paths } from "../src/router";
+import type { MediaAsset, MediaPage, SeriesMemberRow, SeriesSummary } from "../src/types";
 
 vi.mock("../src/auth", () => ({
   useAuth: () => ({
@@ -34,16 +34,18 @@ const guide: SeriesSummary = {
   cover_media_id: null, cover_url: null,
 };
 
-const posts = [
+const posts: SeriesMemberRow[] = [
   { id: "p1", slug: "part-1", title: "第一篇", status: "published", visibility: "public",
-    version: 1, published_at: null, updated_at: "", author_id: "me",
-    tag_ids: [], category_id: null, series: [{series_id: "ser-1", position: 1}],
-    cover_media_id: null, cover_url: null },
+    author_id: "me", deleted: false, position: 1 },
   { id: "p2", slug: "part-2", title: "第二篇", status: "published", visibility: "public",
-    version: 1, published_at: null, updated_at: "", author_id: "me",
-    tag_ids: [], category_id: null, series: [{series_id: "ser-1", position: 2}],
-    cover_media_id: null, cover_url: null },
+    author_id: "me", deleted: false, position: 2 },
 ];
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
+}
 
 function asset(overrides: Partial<MediaAsset> = {}): MediaAsset {
   return {
@@ -72,11 +74,8 @@ beforeEach(() => {
   vi.resetAllMocks();
   window.history.replaceState(null, "", paths.series);
   vi.mocked(seriesApi.list).mockResolvedValue([guide]);
-  vi.mocked(seriesApi.members).mockResolvedValue([
-    { ...posts[0], visibility: "public" },
-    { ...posts[1], visibility: "public" },
-  ]);
-  vi.mocked(api.listPosts).mockResolvedValue(contentPage(posts));
+  vi.mocked(seriesApi.members).mockResolvedValue(posts);
+  vi.mocked(api.listPosts).mockResolvedValue(contentPage([]));
   vi.mocked(api.listTags).mockResolvedValue([]);
   vi.mocked(categoryApi.list).mockResolvedValue([]);
   // 封面选择器打开时才取媒体库第一页；默认给一张可选图片。
@@ -85,7 +84,8 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("系列管理屏", () => {
-  it("列出成员并整体重排（交换后提交完整顺序与版本）", async () => {
+  it("重排后等待新版成员，再用对应顺序和版本继续重排", async () => {
+    const pending = deferred<SeriesMemberRow[]>();
     vi.mocked(seriesApi.reorder).mockResolvedValue({
       series_version: 4,
       ordered_post_ids: ["p2", "p1"],
@@ -93,10 +93,46 @@ describe("系列管理屏", () => {
     render(<App />);
     await waitFor(() => expect(screen.getByText("第一篇")).toBeTruthy());
 
+    vi.mocked(seriesApi.list).mockResolvedValue([{ ...guide, version: 4 }]);
+    vi.mocked(seriesApi.members).mockReturnValue(pending.promise);
+
     fireEvent.click(within(screen.getByText("第二篇").closest("tr")!).getByRole("button", { name: "↑" })); // 第二篇上移
     await waitFor(() =>
       expect(seriesApi.reorder).toHaveBeenCalledWith("guide", ["p2", "p1"], 3),
     );
+    await screen.findByText(/篇公开 · v4/);
+    expect(screen.getByText("正在加载系列成员…")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "↑" })).toBeNull();
+
+    await act(async () => pending.resolve([
+      { ...posts[1], position: 1 }, { ...posts[0], position: 2 },
+    ]));
+    const down = () => within(screen.getByText("第二篇").closest("tr")!).getByRole("button", { name: "↓" }) as HTMLButtonElement;
+    await waitFor(() => expect(down().disabled).toBe(false));
+    fireEvent.click(down());
+    await waitFor(() => expect(seriesApi.reorder).toHaveBeenLastCalledWith("guide", ["p1", "p2"], 4));
+  });
+
+  it("旧版本成员晚返回时不覆盖新版成员顺序", async () => {
+    const previous = deferred<SeriesMemberRow[]>();
+    const latest = [{ ...posts[1], position: 1 }, { ...posts[0], position: 2 }];
+    vi.mocked(seriesApi.members).mockReturnValueOnce(previous.promise).mockResolvedValue(latest);
+    render(<App />);
+    await screen.findByText("正在加载系列成员…");
+
+    vi.mocked(seriesApi.update).mockResolvedValue({ ...guide, version: 4 });
+    vi.mocked(seriesApi.list).mockResolvedValue([{ ...guide, version: 4 }]);
+    fireEvent.click(screen.getByRole("button", { name: "封面" }));
+    fireEvent.click(await screen.findByRole("button", { name: "保存" }));
+    await screen.findByText(/篇公开 · v4/);
+    await screen.findByRole("link", { name: "第二篇" });
+    const order = () => screen.getAllByRole("link").filter((link) =>
+      link.getAttribute("href")?.startsWith("/admin/posts/"),
+    ).map((link) => link.textContent);
+    expect(order()).toEqual(["第二篇", "第一篇"]);
+
+    await act(async () => previous.resolve(posts));
+    expect(order()).toEqual(["第二篇", "第一篇"]);
   });
 
   it("重排越权（403）展示服务端文案并重载", async () => {
@@ -333,10 +369,9 @@ describe("系列屏：混合系列不可读不连带清空独著系列", () => {
     description: null, version: 1, post_count: 2, pub_post_count: 2,
     cover_media_id: null, cover_url: null,
   };
-  const ownPost = {
+  const ownPost: SeriesMemberRow = {
     id: "p1", slug: "solo-1", title: "我的独著篇", status: "published",
-    visibility: "public", version: 1, published_at: null, updated_at: "",
-    author_id: "me", position: 1,
+    visibility: "public", deleted: false, author_id: "me", position: 1,
   };
 
   beforeEach(() => {

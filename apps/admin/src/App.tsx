@@ -76,8 +76,11 @@ function Loading(): React.ReactNode {
  * （`App.useApp()` 的 modal.confirm 必须处在 antd 的 App 内才有效）。
  */
 export function App() {
+  const auth = useAuth();
+  // A session's queries and editor state must not survive a different identity.
+  const sessionKey = auth.status === "authenticated" ? auth.me?.user_id : auth.status;
   return (
-    <AdminProviders>
+    <AdminProviders key={sessionKey}>
       {/* 未保存改动登记处：屏幕登记、外壳在导航前确认（见 src/unsaved.tsx）。 */}
       <UnsavedChangesProvider>
         <AdminRoutes />

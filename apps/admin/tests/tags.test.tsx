@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
-import { ApiError, api, seriesApi } from "../src/api";
-import { navigate, paths } from "../src/router";
+import { ApiError, api, categoryApi, seriesApi } from "../src/api";
+import { paths } from "../src/router";
 import type { TagSummary } from "../src/types";
 
 vi.mock("../src/auth", () => ({
@@ -22,7 +22,6 @@ vi.mock("../src/api", async (importOriginal) => {
     api: {
       listTags: vi.fn(),
       createTag: vi.fn(),
-      categoryApi: { list: vi.fn() },
       renameTag: vi.fn(),
       deleteTag: vi.fn(),
     },
@@ -154,8 +153,8 @@ describe("文章编辑器标签选择", () => {
   beforeEach(() => {
     window.history.replaceState(null, "", paths.editPost(post.id));
     vi.mocked(api.listTags).mockResolvedValue([essay, rust]);
-    vi.mocked(api.categoryApi.list).mockResolvedValue([]);
-  vi.mocked(seriesApi.list).mockResolvedValue([]);
+    vi.mocked(categoryApi.list).mockResolvedValue([]);
+    vi.mocked(seriesApi.list).mockResolvedValue([]);
     const apiAny = api as unknown as Record<string, ReturnType<typeof vi.fn>>;
     apiAny.getPost = vi.fn().mockResolvedValue(post);
     apiAny.updatePost = vi.fn();

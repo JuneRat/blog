@@ -144,12 +144,13 @@ pub struct MediaPage {
     pub per_page: i64,
 }
 
-/// 读取到的媒体文件内容。
-#[derive(Debug, Clone)]
-pub struct MediaContent {
+/// 公开文件的不可变元数据；读取文件前可据此判断缓存是否仍有效。
+#[derive(Debug)]
+pub struct MediaReadMetadata {
     pub mime: String,
-    pub bytes: Vec<u8>,
     pub checksum_sha256: String,
+    id: Uuid,
+    storage_key: String,
 }
 
 pub struct MediaInteractor {
@@ -286,24 +287,28 @@ impl MediaInteractor {
     }
 
     /// 链接独立公开，软删除记录同样可读；不访问会话或来源内容。
-    pub async fn read(&self, id: Uuid) -> Result<MediaContent, UseCaseError> {
+    pub async fn read_metadata(&self, id: Uuid) -> Result<MediaReadMetadata, UseCaseError> {
         let snapshot = self
             .media
             .find_by_id(id)
             .await?
             .ok_or_else(media_not_found)?;
-        let bytes = self
-            .storage
-            .read(&snapshot.storage_key)
+        Ok(MediaReadMetadata {
+            mime: snapshot.mime,
+            checksum_sha256: snapshot.checksum_sha256,
+            id: snapshot.id,
+            storage_key: snapshot.storage_key,
+        })
+    }
+
+    /// 仅在调用方确实需要响应体时读取文件；存储定位来自已加载的媒体记录。
+    pub async fn read(&self, metadata: &MediaReadMetadata) -> Result<Vec<u8>, UseCaseError> {
+        self.storage
+            .read(&metadata.storage_key)
             .await?
             .ok_or_else(|| {
-                UseCaseError::Repository(format!("媒体记录存在但文件缺失：{}", snapshot.id))
-            })?;
-        Ok(MediaContent {
-            mime: snapshot.mime,
-            bytes,
-            checksum_sha256: snapshot.checksum_sha256,
-        })
+                UseCaseError::Repository(format!("媒体记录存在但文件缺失：{}", metadata.id))
+            })
     }
 
     /// 只清理未完成上传的暂存文件。正式对象即使零引用也不自动删除。

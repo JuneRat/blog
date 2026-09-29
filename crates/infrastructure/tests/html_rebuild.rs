@@ -2,7 +2,7 @@ mod common;
 
 use application::{
     UseCaseError,
-    html_rebuild::{HtmlRebuildInteractor, RebuildOptions},
+    html_rebuild::{HtmlKind, HtmlRebuildInteractor, HtmlRebuildStore, RebuildOptions},
     ports::{ContentRenderer, RenderedContent},
 };
 use async_trait::async_trait;
@@ -27,9 +27,51 @@ impl ContentRenderer for ChangingRenderer {
                 .execute(&self.pool)
                 .await
                 .unwrap();
+        } else if source == "change-candidates" {
+            // ID 已选入同批，但正文读取前可能已被其他写入者重建或删除。
+            sqlx::query("UPDATE posts SET content_html='<p>current</p>',content_render_version=1 WHERE id=$1")
+                .bind(Uuid::from_u128(2)).execute(&self.pool).await.unwrap();
+            sqlx::query("DELETE FROM posts WHERE id=$1")
+                .bind(Uuid::from_u128(3))
+                .execute(&self.pool)
+                .await
+                .unwrap();
         }
         RenderingRuntime::default().render_content(source).await
     }
+}
+
+#[tokio::test]
+async fn batch_skips_candidates_changed_before_their_source_is_loaded() {
+    let pool = common::fresh_database("blog_html_candidates_test").await;
+    let author = common::seed_user(&pool, "candidate-author").await;
+    for (n, source) in [
+        (1, "change-candidates"),
+        (2, "current"),
+        (3, "removed"),
+        (4, "last"),
+    ] {
+        sqlx::query("INSERT INTO posts(id,author_id,slug,content,content_html,content_render_version) VALUES($1,$2,$3,$3,'stale',2)")
+            .bind(Uuid::from_u128(n)).bind(author).bind(source).execute(&pool).await.unwrap();
+    }
+    let renderer = Arc::new(ChangingRenderer {
+        pool: pool.clone(),
+        calls: Mutex::new(vec![]),
+    });
+    let store = PostgresHtmlRebuildStore::new(
+        common::database(pool.clone()),
+        renderer.clone(),
+        Arc::new(RenderingRuntime::default()),
+    );
+    let batch = store.rebuild_batch(HtmlKind::Post, None, 4).await.unwrap();
+    assert_eq!((batch.rebuilt, batch.skipped), (2, 2));
+    assert_eq!(batch.cursor, Some(Uuid::from_u128(4)));
+    assert_eq!(
+        *renderer.calls.lock().unwrap(),
+        ["change-candidates", "last"]
+    );
+    assert_eq!(store.pending().await.unwrap().posts, 0);
+    pool.close().await;
 }
 
 #[tokio::test]
