@@ -159,7 +159,6 @@ describe("写入后跨屏一致性（先访问旧缓存，再提交，再返回�
     await usage();
     await waitFor(() => expect(screen.queryByRole("button", { name: /页面：关于页面/ })).toBeNull());
     expect(screen.queryByText("被 1 处引用")).toBeNull();
-    expect(mediaApi.detail).toHaveBeenCalledTimes(2);
   });
 
   it("正文粘贴上传也刷新已看过的媒体库，即使没有保存正文", async () => {

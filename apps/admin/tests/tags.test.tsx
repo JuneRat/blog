@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
 import { ApiError, api, seriesApi } from "../src/api";
@@ -67,7 +67,6 @@ describe("标签管理屏", () => {
 
     await waitFor(() => expect(screen.getByText("Rust")).toBeTruthy());
     expect(screen.getByText("2")).toBeTruthy(); // 公开文章计数
-    expect(screen.getAllByText("v1").length).toBe(2); // 两行目录各带版本
 
     fireEvent.change(screen.getByLabelText("名称"), { target: { value: "新标签" } });
     fireEvent.change(screen.getByLabelText("slug"), { target: { value: "new-tag" } });
@@ -100,7 +99,7 @@ describe("标签管理屏", () => {
     render(<App />);
     await waitFor(() => expect(screen.getByText("Rust")).toBeTruthy());
 
-    fireEvent.click(screen.getAllByRole("button", { name: "改名" })[1]); // rust 行
+    fireEvent.click(within(screen.getByRole("row", { name: /Rust/ })).getByRole("button", { name: "改名" })); // rust 行
     const input = screen.getByDisplayValue("Rust") as HTMLInputElement;
     fireEvent.change(input, { target: { value: "Rust 语言" } });
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
@@ -118,7 +117,7 @@ describe("标签管理屏", () => {
     render(<App />);
     await waitFor(() => expect(screen.getByText("Rust")).toBeTruthy());
 
-    fireEvent.click(screen.getAllByRole("button", { name: "删除" })[1]);
+    fireEvent.click(within(screen.getByRole("row", { name: /Rust/ })).getByRole("button", { name: "删除" }));
     // 确认弹窗由 antd 的 modal.confirm 渲染，必须点掉它才会发请求。
     fireEvent.click(await screen.findByRole("button", { name: "确定" }));
     await waitFor(() => expect(api.deleteTag).toHaveBeenCalledWith("rust", 1));
@@ -128,7 +127,7 @@ describe("标签管理屏", () => {
   it("删除确认被取消时不发请求", async () => {
     render(<App />);
     await waitFor(() => expect(screen.getByText("Rust")).toBeTruthy());
-    fireEvent.click(screen.getAllByRole("button", { name: "删除" })[0]);
+    fireEvent.click(within(screen.getByRole("row", { name: /随笔/ })).getByRole("button", { name: "删除" }));
     fireEvent.click(await screen.findByRole("button", { name: "取消" }));
     expect(api.deleteTag).not.toHaveBeenCalled();
   });

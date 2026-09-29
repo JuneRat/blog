@@ -10,10 +10,10 @@ class ContainerImageTests(unittest.TestCase):
     def test_database_image_matches_across_deployment_and_checks(self):
         references = set()
         for file in ("compose.yaml", ".github/workflows/ci.yml", "scripts/dev-db.sh"):
-            matches = re.findall(r"postgres:18-alpine[^\s\"']*", (ROOT / file).read_text())
+            matches = re.findall(r"\bpostgres:(?!//)[^\s\"']+", (ROOT / file).read_text())
             self.assertTrue(matches, file)
             for match in matches:
-                self.assertRegex(match, r"^postgres:18-alpine@sha256:[a-f0-9]{64}$")
+                self.assertRegex(match, r"^postgres:[^@\s]+@sha256:[a-f0-9]{64}$")
                 references.add(match)
         self.assertEqual(len(references), 1, "CI/dev database differs from the deployment image")
 

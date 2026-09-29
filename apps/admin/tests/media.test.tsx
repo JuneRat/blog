@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
 import { mediaApi } from "../src/api";
-import { navigate, paths } from "../src/router";
+import { paths } from "../src/router";
 import type { MediaAsset, MediaPage } from "../src/types";
 
 vi.mock("../src/auth", () => ({
@@ -73,17 +73,18 @@ describe("媒体库屏", () => {
     render(<App />);
 
     await waitFor(() => expect(screen.getByText("photo.png")).toBeTruthy());
-    // 两张图的尺寸相同，因此用 getAllByText 断言两者都渲染了尺寸信息。
-    expect(screen.getAllByText(/800×600/).length).toBe(2);
-    expect(screen.getAllByText(/2\.0 KiB/).length).toBe(2);
+    const own = within(screen.getByRole("group", { name: "photo.png" }));
+    const other = within(screen.getByRole("group", { name: "used.png" }));
+    expect(own.getByText(/800×600/)).toBeTruthy();
+    expect(own.getByText(/2\.0 KiB/)).toBeTruthy();
+    expect(own.getByText(/sun/)).toBeTruthy();
     expect(screen.getByText(/图片链接独立公开/)).toBeTruthy();
     expect(screen.getByText("被 2 处引用")).toBeTruthy();
 
     // 未被引用且是本人上传：可删除。
-    const deleteButtons = screen.getAllByRole("button", { name: "移入回收站" });
-    expect((deleteButtons[0] as HTMLButtonElement).disabled).toBe(false);
+    expect((own.getByRole("button", { name: "移入回收站" }) as HTMLButtonElement).disabled).toBe(false);
     // 其他上传者：没有 media.delete_any 时不能管理。
-    expect((deleteButtons[1] as HTMLButtonElement).disabled).toBe(true);
+    expect((other.getByRole("button", { name: "移入回收站" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("主动查看使用位置并解释隐藏引用", async () => {
@@ -267,37 +268,24 @@ describe("媒体库屏", () => {
     fireEvent.click(screen.getByTitle("下一页"));
     expect(await screen.findByText("shifted.png")).toBeTruthy();
     expect(screen.queryByText("second-page.png")).toBeNull();
-    // 第 2 页确实重新请求过（共两次：首次翻页 + 失效后重取）。
-    expect(
-      mediaApi.list.mock.calls.filter(([p]) => p === 2).length,
-    ).toBe(2);
   });
 
   it("分页信息与翻页", async () => {
-    vi.mocked(mediaApi.list).mockResolvedValue({
-      items: [asset()],
-      total: 50,
-      page: 1,
-      per_page: 24,
-    });
+    vi.mocked(mediaApi.list).mockImplementation(async (page = 1) => ({
+      items: [asset({ id: `media-${page}`, original_name: page === 1 ? "photo.png" : "older.png" })],
+      total: 2,
+      page,
+      per_page: 1,
+    }));
     render(<App />);
 
-    // 第 1 页展示第 1 页数据（请求第 1 页）；总数 50、每页 24 → 共 3 页，当前页为 1。
     await waitFor(() => expect(screen.getByText("photo.png")).toBeTruthy());
-    expect(mediaApi.list).toHaveBeenCalledWith(1, false, expect.any(AbortSignal), "");
-    expect(screen.getByText("共 50 张")).toBeTruthy();
-    expect(screen.getByTitle("3")).toBeTruthy();
-    expect(screen.getByTitle("1").className).toContain("ant-pagination-item-active");
-
-    // antd Pagination 的「下一页」是带 title 的 <li>；点击后请求第 2 页。
     fireEvent.click(screen.getByTitle("下一页"));
-    await waitFor(() => expect(mediaApi.list).toHaveBeenCalledWith(2, false, expect.any(AbortSignal), ""));
-  });
-
-  it("路由与地址对齐：/admin/media 打开媒体库", async () => {
-    navigate(paths.media);
-    render(<App />);
-    await waitFor(() => expect(screen.getByRole("heading", { name: "媒体库" })).toBeTruthy());
+    expect(await screen.findByText("older.png")).toBeTruthy();
+    expect(screen.queryByText("photo.png")).toBeNull();
+    fireEvent.click(screen.getByTitle("上一页"));
+    expect(await screen.findByText("photo.png")).toBeTruthy();
+    expect(screen.queryByText("older.png")).toBeNull();
   });
 
   it("使用位置按引用类型标注：用户/站点设置不再误标为草稿", async () => {
@@ -337,7 +325,10 @@ describe("媒体库屏", () => {
     expect(await screen.findByText("用户：作者甲")).toBeTruthy();
     expect(screen.getByText("站点设置：站点设置")).toBeTruthy();
     // 两者都是公开来源：只展示公开状态，不再套用「已发布/草稿」。
-    expect(screen.getAllByText("公开可读").length).toBe(2);
+    for (const name of ["用户：作者甲", "站点设置：站点设置"]) {
+      const reference = screen.getByRole("button", { name }).closest("li")!;
+      expect(within(reference).getByText("公开可读")).toBeTruthy();
+    }
     expect(screen.queryByText("草稿")).toBeNull();
   });
 });

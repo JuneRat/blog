@@ -33,7 +33,7 @@ it("renders historical identity and metadata as text and distinguishes anonymous
   render(<App />);
   await screen.findByText("账号已不存在");
   expect(screen.getByText("无关联账号")).toBeTruthy();
-  fireEvent.click(screen.getAllByRole("button", { name: "查看 post.update 详情" })[0]);
+  fireEvent.click(within(screen.getByRole("row", { name: /账号已不存在/ })).getByRole("button", { name: "查看 post.update 详情" }));
   const modal = await screen.findByRole("dialog");
   expect(within(modal).getByText(/former-user/)).toBeTruthy();
   expect(within(modal).getByText("<img src=x onerror=alert(1)>")).toBeTruthy();

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { contentPage } from "./contentFixtures";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
 import { ApiError, api, categoryApi, seriesApi } from "../src/api";
@@ -187,8 +187,7 @@ describe("我的文章列表", () => {
     // 移入回收站后后端不再返回这一行：用它证明列表真的刷新了。
     vi.mocked(api.listPosts).mockResolvedValue(contentPage([draftPost]));
 
-    // 后端返回顺序即渲染顺序，第一行是 rust-guide。
-    fireEvent.click(screen.getAllByRole("button", { name: "移入回收站" })[0]);
+    fireEvent.click(within(screen.getByRole("row", { name: /Rust 指南/ })).getByRole("button", { name: "移入回收站" }));
     // 确认弹窗标题带上文章标题，锁住「按行传参」而不是只按位置。
     expect(await screen.findByRole("dialog", { name: "将「Rust 指南」移入回收站？" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "确定" }));
@@ -204,7 +203,7 @@ describe("我的文章列表", () => {
     render(<App />);
     await screen.findByText("Rust 指南");
 
-    fireEvent.click(screen.getAllByRole("button", { name: "移入回收站" })[0]);
+    fireEvent.click(within(screen.getByRole("row", { name: /Rust 指南/ })).getByRole("button", { name: "移入回收站" }));
     fireEvent.click(await screen.findByRole("button", { name: "取消" }));
 
     expect(api.trashPost).not.toHaveBeenCalled();
@@ -218,7 +217,7 @@ describe("我的文章列表", () => {
     render(<App />);
     await screen.findByText("Rust 指南");
 
-    fireEvent.click(screen.getAllByRole("button", { name: "移入回收站" })[0]);
+    fireEvent.click(within(screen.getByRole("row", { name: /Rust 指南/ })).getByRole("button", { name: "移入回收站" }));
     fireEvent.click(await screen.findByRole("button", { name: "确定" }));
 
     expect(await screen.findByText("版本冲突：内容已被并发修改（错误编号 req-2）")).toBeTruthy();
@@ -337,6 +336,7 @@ describe("文章回收站", () => {
     await waitFor(() => expect(api.restorePost).toHaveBeenCalledWith(trashed.id, 4));
     expect(await screen.findByText("共 0 篇")).toBeTruthy();
     expect(screen.queryByText("gone")).toBeNull();
+    expect(screen.getByText("已恢复「已删除的稿子」。")).toBeTruthy();
   });
 
   it("永久删除：确认后以 ID 与当前版本调用 api.purgePost", async () => {
@@ -410,17 +410,6 @@ describe("文章回收站", () => {
     expect(screen.queryByText(/第 1 页/)).toBeNull();
   });
 
-  // 以下三条覆盖「操作成功 → 重载」这段的边界：重载失败不能看起来像操作失败，
-  // 也不能让成功的行凭空消失；当前页被清空时要回退而不是停在空页。
-  it("恢复成功后给出成功提示", async () => {
-    render(<App />);
-    await screen.findByText("已删除的稿子");
-
-    fireEvent.click(screen.getByRole("button", { name: "恢复" }));
-
-    expect(await screen.findByText("已恢复「已删除的稿子」。")).toBeTruthy();
-  });
-
   it("操作成功但重载失败时保留列表，并同时给出成功与失败提示", async () => {
     render(<App />);
     await screen.findByText("已删除的稿子");
@@ -458,7 +447,7 @@ describe("文章回收站", () => {
         ? { items: [trashed], total: 10, page: 1, per_page: 10 }
         : { items: [], total: 10, page: 2, per_page: 10 },
     );
-    fireEvent.click(screen.getAllByRole("button", { name: "永久删除" })[0]);
+    fireEvent.click(within(screen.getByRole("row", { name: /第二页的稿子/ })).getByRole("button", { name: "永久删除" }));
     fireEvent.click(await screen.findByRole("button", { name: "确定" }));
 
     // 先等目标页的行出现：页码由服务端回显渲染，等「第 1 页」等于等数据到位。

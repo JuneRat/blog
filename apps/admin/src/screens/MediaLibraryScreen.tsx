@@ -327,6 +327,8 @@ export function MediaLibraryScreen() {
             {data.items.map((asset) => (
               <Col key={asset.id} xs={24} sm={12} lg={8}>
                 <Card
+                  role="group"
+                  aria-label={asset.original_name}
                   size="small"
                   styles={{ body: { padding: 12 } }}
                   cover={

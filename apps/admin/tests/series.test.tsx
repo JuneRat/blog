@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { contentPage } from "./contentFixtures";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
 import { ApiError, api, categoryApi, mediaApi, seriesApi } from "../src/api";
@@ -93,7 +93,7 @@ describe("系列管理屏", () => {
     render(<App />);
     await waitFor(() => expect(screen.getByText("第一篇")).toBeTruthy());
 
-    fireEvent.click(screen.getAllByRole("button", { name: "↑" })[1]); // 第二篇上移
+    fireEvent.click(within(screen.getByText("第二篇").closest("tr")!).getByRole("button", { name: "↑" })); // 第二篇上移
     await waitFor(() =>
       expect(seriesApi.reorder).toHaveBeenCalledWith("guide", ["p2", "p1"], 3),
     );
@@ -105,7 +105,7 @@ describe("系列管理屏", () => {
     );
     render(<App />);
     await waitFor(() => expect(screen.getByText("第一篇")).toBeTruthy());
-    fireEvent.click(screen.getAllByRole("button", { name: "↑" })[1]);
+    fireEvent.click(within(screen.getByText("第二篇").closest("tr")!).getByRole("button", { name: "↑" }));
     await waitFor(() => expect(seriesApi.reorder).toHaveBeenCalled());
     expect(await screen.findByText(/无权执行该操作/)).toBeTruthy();
   });
@@ -153,6 +153,7 @@ describe("系列屏：封面", () => {
     await waitFor(() => expect(mediaApi.list).toHaveBeenCalledWith(1, false, expect.any(AbortSignal), ""));
     fireEvent.click(await screen.findByRole("button", { name: "选择" }));
 
+    vi.mocked(seriesApi.list).mockResolvedValue([{ ...guide, cover_media_id: "media-1", cover_url: "/media/media-1", version: 4 }]);
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
     await waitFor(() =>
       expect(seriesApi.update).toHaveBeenCalledWith("guide", {
@@ -162,8 +163,7 @@ describe("系列屏：封面", () => {
         expected_version: 3,
       }),
     );
-    // 保存成功后目录失效重取：初始一次 + 刷新一次。
-    await waitFor(() => expect(seriesApi.list).toHaveBeenCalledTimes(2));
+    expect((await screen.findByRole("img", { name: "指南 的封面" })).getAttribute("src")).toBe("/media/media-1");
     expect(await screen.findByText(/已更新系列 指南 的封面/)).toBeTruthy();
   });
 
@@ -218,11 +218,12 @@ describe("系列屏：封面", () => {
     fireEvent.click(screen.getByRole("button", { name: "封面" }));
     fireEvent.click(await screen.findByRole("button", { name: "选择封面" }));
     fireEvent.click(await screen.findByRole("button", { name: "选择" }));
+    vi.mocked(seriesApi.list).mockResolvedValue([{ ...guide, name: "指南（他人更新）", version: 4 }]);
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
 
     // 内联 Alert 展示服务端原因（含错误编号），并已重读目录。
     expect(await screen.findByText(/系列已在别处修改（错误编号 req-3）/)).toBeTruthy();
-    await waitFor(() => expect(seriesApi.list).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText("指南（他人更新）")).toBeTruthy();
   });
 });
 
@@ -360,7 +361,8 @@ describe("系列屏：混合系列不可读不连带清空独著系列", () => {
     expect(screen.getByText(/成员目录不可读/)).toBeTruthy();
     expect(screen.queryByText("还没有文章加入这个系列。")).toBeNull();
     // 独著系列的重排按钮仍在；混合系列的重排按钮（↑/↓）不出现。
-    expect(screen.getAllByRole("button", { name: "↑" }).length).toBeGreaterThanOrEqual(1);
+    expect(within(screen.getByText("我的独著篇").closest("tr")!).getByRole("button", { name: "↑" })).toBeTruthy();
+    expect(within(screen.getByText("混合").closest("tr")!).queryByRole("button", { name: "↑" })).toBeNull();
   });
 
   it("目录列表本身失败才清空并报全局错误", async () => {

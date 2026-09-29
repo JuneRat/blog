@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
 import { ApiError, categoryApi } from "../src/api";
@@ -114,7 +114,7 @@ describe("分类管理屏", () => {
     );
     render(<App />);
     await waitFor(() => expect(screen.getByRole("link", { name: "技术" })).toBeTruthy());
-    fireEvent.click(screen.getAllByRole("button", { name: "删除" })[1]);
+    fireEvent.click(within(screen.getByRole("link", { name: "技术" }).closest("tr")!).getByRole("button", { name: "删除" }));
     // 确认弹窗改由 antd 的 modal.confirm 渲染，必须点掉它才会发请求。
     fireEvent.click(await screen.findByRole("button", { name: "确定" }));
     await waitFor(() => expect(categoryApi.remove).toHaveBeenCalledWith("tech", 1));
@@ -124,7 +124,7 @@ describe("分类管理屏", () => {
   it("删除确认被取消时不发请求", async () => {
     render(<App />);
     await waitFor(() => expect(screen.getByRole("link", { name: "技术" })).toBeTruthy());
-    fireEvent.click(screen.getAllByRole("button", { name: "删除" })[1]);
+    fireEvent.click(within(screen.getByRole("link", { name: "技术" }).closest("tr")!).getByRole("button", { name: "删除" }));
     fireEvent.click(await screen.findByRole("button", { name: "取消" }));
     expect(categoryApi.remove).not.toHaveBeenCalled();
   });

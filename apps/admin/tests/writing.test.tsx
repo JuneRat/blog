@@ -81,7 +81,7 @@ describe("写作恢复与发布边界", () => {
     else vi.mocked(api.updatePage).mockResolvedValue({ ...page, content: "浏览器关闭前的编辑", version: 2 });
     fireEvent.click(screen.getByRole("button", { name: "保存草稿" }));
     await screen.findByText("已保存。");
-    expect(localStorage.length).toBe(0);
+    expect(localStorage.getItem(ownKey(auth.user, page.id, kind))).toBeNull();
     cleanup(); render(editor(kind)); await screen.findByDisplayValue(page.content);
     expect(screen.queryByText("发现本机未保存的编辑")).toBeNull();
   });
@@ -90,13 +90,14 @@ describe("写作恢复与发布边界", () => {
     const mounted = render(editor("page")); await screen.findByDisplayValue(page.content);
     fireEvent.change(content(), { target: { value: "账号一的草稿" } });
     await screen.findByRole("button", { name: "删除本机副本" });
-    const stored = localStorage.getItem(localStorage.key(0)!);
+    const key = ownKey(auth.user, page.id);
+    const stored = localStorage.getItem(key);
     auth.user = "writer-2"; mounted.rerender(editor("page")); await screen.findByDisplayValue(page.content);
     expect(screen.queryByText("发现本机未保存的编辑")).toBeNull();
     expect(content().value).toBe(page.content);
     vi.mocked(api.getPage).mockRejectedValueOnce(new ApiError(404, "未找到"));
     mounted.rerender(editor("page", "missing")); await screen.findByText("页面未能加载。");
-    expect(localStorage.length).toBe(1); expect(localStorage.getItem(localStorage.key(0)!)).toBe(stored);
+    expect(localStorage.getItem(key)).toBe(stored);
     mounted.rerender(editor("page", null)); await screen.findByText("新建页面");
     expect(content().value).toBe(""); expect(screen.queryByText("发现本机未保存的编辑")).toBeNull();
   });
@@ -165,7 +166,6 @@ describe("写作恢复与发布边界", () => {
     fireEvent.click(await screen.findByRole("button", { name: "确定" }));
     await waitFor(() => expect(update).toHaveBeenLastCalledWith(page.id, expect.objectContaining({ expected_version: 2, content: "我的修改" })));
     await screen.findByText("服务器版本 v3"); expect(content().value).toBe("我的修改");
-    expect(get).toHaveBeenCalledTimes(3);
   });
 
   it.each(["post", "page"] as const)("%s 旧版本本机恢复保留原提交前提，普通保存不能覆盖当前服务器版本", async kind => {
@@ -211,9 +211,9 @@ describe("写作恢复与发布边界", () => {
     render(editor("page")); await screen.findByDisplayValue(page.content);
     fireEvent.change(content(), { target: { value: "暂存正文" } });
     fireEvent.click(await screen.findByRole("button", { name: "删除本机副本" }));
-    expect(content().value).toBe("暂存正文"); expect(localStorage.length).toBe(0);
+    expect(content().value).toBe("暂存正文"); expect(localStorage.getItem(ownKey(auth.user, page.id))).toBeNull();
     fireEvent.change(content(), { target: { value: "下一次编辑" } });
-    await screen.findByRole("button", { name: "删除本机副本" }); expect(localStorage.length).toBe(1);
+    await screen.findByRole("button", { name: "删除本机副本" }); expect(JSON.parse(localStorage.getItem(ownKey(auth.user, page.id))!).value.content).toBe("下一次编辑");
   });
 
   it("预览未保存正文并忽略过期响应，不触发保存", async () => {

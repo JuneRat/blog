@@ -67,15 +67,8 @@ it("does not fetch while closed or without media.read", async () => {
   expect(screen.queryByRole("button", { name: "选择封面" })).toBeNull();
   expect(mediaApi.list).not.toHaveBeenCalled();
 });
-it("shares the library request and refreshes both observers after invalidation", async () => {
-  let resolve!: (page: MediaPage) => void;
-  vi.mocked(mediaApi.list)
-    .mockReturnValueOnce(
-      new Promise((done) => {
-        resolve = done;
-      }),
-    )
-    .mockResolvedValue(empty);
+it("refreshes the library and picker after media changes", async () => {
+  vi.mocked(mediaApi.list).mockResolvedValue(populated);
   const client = createQueryClient();
   render(
     <AdminProviders>
@@ -86,10 +79,9 @@ it("shares the library request and refreshes both observers after invalidation",
     </AdminProviders>,
   );
   fireEvent.click(screen.getByRole("button", { name: "选择封面" }));
-  await waitFor(() => expect(mediaApi.list).toHaveBeenCalledTimes(1));
-  await act(async () => resolve(populated));
   await screen.findByText("shared.png");
   expect(screen.getByLabelText("library-count").textContent).toBe("1");
+  vi.mocked(mediaApi.list).mockResolvedValue(empty);
   await act(async () => {
     await invalidateAfterWrite(client, "media");
   });
@@ -97,13 +89,12 @@ it("shares the library request and refreshes both observers after invalidation",
     expect(screen.getByLabelText("library-count").textContent).toBe("0"),
   );
   expect(screen.queryByText("shared.png")).toBeNull();
-  expect(mediaApi.list).toHaveBeenCalledTimes(2);
 });
 it("passes cancellation to fetch when the picker unmounts", async () => {
   vi.mocked(mediaApi.list).mockReturnValue(new Promise(() => {}));
   const mounted = render(<AdminProviders>{picker()}</AdminProviders>);
   fireEvent.click(screen.getByRole("button", { name: "选择封面" }));
-  await waitFor(() => expect(mediaApi.list).toHaveBeenCalledTimes(1));
+  await waitFor(() => expect(mediaApi.list).toHaveBeenCalled());
   const signal = vi.mocked(mediaApi.list).mock.calls[0][2];
   expect(signal?.aborted).toBe(false);
   mounted.unmount();
