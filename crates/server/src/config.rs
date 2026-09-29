@@ -206,13 +206,14 @@ impl DeploymentConfig {
     }
 
     pub fn maintenance_url(&self) -> Result<String, String> {
-        let url = self.optional_string("maintenance.database_url")?.ok_or(
-            "请设置独立维护连接 BLOG_MAINTENANCE_DATABASE_URL 或 maintenance.database_url",
-        )?;
-        application::installation::validate_database_url(&url).map_err(|_| {
-            "maintenance.database_url / BLOG_MAINTENANCE_DATABASE_URL 无效".to_owned()
-        })?;
-        Ok(url)
+        if let Some(url) = self.optional_string("maintenance.database_url")? {
+            application::installation::validate_database_url(&url).map_err(|_| {
+                "maintenance.database_url / BLOG_MAINTENANCE_DATABASE_URL 无效".to_owned()
+            })?;
+            return Ok(url);
+        }
+        self.configured_database_url()?
+            .ok_or_else(|| "请配置 database.url 或 DATABASE_URL；也可指定独立维护连接".into())
     }
 
     pub fn recovery_mode(&self) -> Result<bool, String> {
@@ -378,7 +379,11 @@ impl DeploymentConfig {
         self.check(scope)?;
         let mut fields = Vec::new();
         for field in FIELDS.iter().filter(|field| field.in_scope(scope)) {
-            let (value, mut source) = self.value(field.key)?;
+            let (mut value, mut source) = self.value(field.key)?;
+            if field.key == "maintenance.database_url" && value.is_none() {
+                (value, source) = self.value("database.url")?;
+                source = format!("fallback:{source}");
+            }
             let mut value = value
                 .map(|v| serde_json::to_value(v).expect("TOML value serializes"))
                 .unwrap_or(serde_json::Value::Null);

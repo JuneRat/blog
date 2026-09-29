@@ -36,7 +36,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
-    # Compose reads .env; pass only application variables, never DB admin secrets.
+    # Compose reads .env; the site account is stored in config or DATABASE_URL.
+    # Never pass the PostgreSQL cluster administrator password to the application.
     # A key without a value stays unset when absent from .env/the shell.
     environment:
       - DATABASE_URL
@@ -95,6 +96,7 @@ services:
     init: true
     command: [maintenance, --batch-size, "1000", --max-batches, "100"]
     environment:
+      - DATABASE_URL
       - BLOG_MAINTENANCE_DATABASE_URL
       - BLOG_RECOVERY_MODE
       - TZ=${TZ:-UTC}
@@ -102,6 +104,8 @@ services:
       - BLOG_DB_MAX_CONNECTIONS=2
       - BLOG_DB_STATEMENT_TIMEOUT_MS=60000
       - BLOG_DB_LOCK_TIMEOUT_MS=5000
+    volumes:
+      - blog-config:/var/lib/blog/config:ro
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=16m

@@ -6,15 +6,17 @@ Docker Compose 部署优先使用[Compose 备份恢复入口](compose-backup.md)
 
 ## 数据库账号与保留期
 
-数据库角色与博客 Owner/Admin 是不同层次的权限。
+数据库角色与博客 Owner/Admin 是不同层次的权限。默认使用一个非超级用户的博客专用账号，拥有本站数据库结构，承担启动迁移、日常业务与保留期维护；Compose 中为 `blog_owner`。安装后无需创建额外账号或执行授权脚本。它拥有的权限能直接修改审计，默认模式的审计追加规则由应用代码保证。
+
+以下是需要数据库强制权限隔离时的可选分工：
 
 | 身份 | 用途 |
 |---|---|
-| 结构管理账号 | 建库、迁移、授权、备份、恢复和显式媒体清理；不注入 HTTP 服务 |
+| 结构管理账号 | 迁移、授权、备份和显式媒体清理；分离模式下不保留在 HTTP 服务配置中。恢复到新库还需要具备建库权限的管理账号 |
 | 普通运行账号 | 必要业务读写；audit_logs 仅 SELECT/INSERT，无建表权限 |
 | 独立维护账号 | 读取保留期、清空评论 IP、删除过期审计和写入清理摘要；不能读取评论邮箱或改正文 |
 
-先用结构管理账号迁移，再创建两个不拥有对象、不继承其他角色的 LOGIN 角色。密码通过 psql 的交互密码命令设置，不放进命令历史。以结构管理账号执行：
+选择分离模式时，先用结构管理账号迁移，再由有建角色权限的管理员创建两个不拥有对象、不继承其他角色的 LOGIN 角色。密码通过 psql 的交互密码命令设置，不放进命令历史。以结构管理账号执行：
 
 ```sh
 psql "$DATABASE_URL" -v app_role=blog_app -v maintenance_role=blog_maintenance \
@@ -25,17 +27,17 @@ psql "$DATABASE_URL" -v app_role=blog_app -v maintenance_role=blog_maintenance \
 
 后台“设置 → 数据保留期”要求 settings.manage，默认评论 IP、审计各保留 **180 天**。范围为 1–36,500 整数天，分别保存到 settings.comments.ip_retention_days、settings.audit.retention_days，并校验两组版本、保留其他字段。缩短保留期会在下次维护时清理此前仍保留的数据。
 
-维护只读取 BLOG_MAINTENANCE_DATABASE_URL 或 TOML 的 maintenance.database_url，不回退到运行连接，不执行迁移、权限初始化或 HTML 重建：
+维护优先读取 `BLOG_MAINTENANCE_DATABASE_URL`，其次是 TOML 的 `maintenance.database_url`；两者都未设置时复用有效的 `database.url`（`DATABASE_URL` 优先于 TOML）。显式维护连接为空、无效或连接失败时不回退。维护不执行迁移、权限初始化或 HTML 重建：
 
 ```sh
-# 维护连接由受保护环境注入，先查看预计处理量。
+# 默认使用站点连接，先查看预计处理量。
 blog maintenance --dry-run
 blog maintenance --batch-size 1000 --max-batches 100
 ```
 
 按 created_at 严格早于截止时间处理：评论仅置空 IP，不改正文、审核状态、关系、version 或 updated_at；过期审计被永久删除。每批最多分别处理指定数量的两类记录，同事务追加不含个人信息的清理计数。审计追加失败则整批回滚。多维护进程按事务锁串行，评论遇到锁定行时跳过。JSON 结果含 comment_ips、audit_logs、batches、has_more、dry_run；has_more=true 表示达到批次上限或仍有锁定记录，可再次执行。
 
-每日调度示例为 [service](../ops/blog-maintenance.service) 与 [timer](../ops/blog-maintenance.timer)。它通过 Compose 启动独立维护容器，与备份共用操作锁；按部署修改路径和用户，在现有 `.env` 中设置 `BLOG_MAINTENANCE_DATABASE_URL`（数据库主机为 `db`），凭据不会传入 HTTP 服务。手工执行使用 `sh scripts/compose-backup.sh maintenance`。仓库不会安装或启用这些服务。恢复隔离期间拒绝执行维护。
+每日调度示例为 [service](../ops/blog-maintenance.service) 与 [timer](../ops/blog-maintenance.timer)。它通过 Compose 启动独立维护容器，与备份共用操作锁，默认只读挂载安装配置并复用站点连接；按部署修改路径和用户即可。分离模式在现有 `.env` 设置 `BLOG_MAINTENANCE_DATABASE_URL`（数据库主机为 `db`），此覆盖项不会传入 HTTP 服务。手工执行使用 `sh scripts/compose-backup.sh maintenance`。仓库不会安装或启用这些服务。恢复隔离期间拒绝执行维护。
 
 保留期不清理备份副本；备份保留规则另行制定。正式媒体文件也不属于此命令：零引用仍可能有站外链接。blog media cleanup-staging 仅清理过期暂存文件；正式对象按下面的显式计划清理。
 

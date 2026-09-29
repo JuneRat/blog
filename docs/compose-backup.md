@@ -53,7 +53,7 @@ sh scripts/compose-backup.sh check 你的管理员用户名
 sh scripts/compose-backup.sh release
 ```
 
-`restore` 先完成 age 认证解密、清单及匹配版本验证，再生成新的 `.env` 并启动独立数据库；错误密钥和损坏密文不会进入数据库导入阶段。新部署使用随机 Compose 项目名和独立数据卷。数据库管理员、结构所有者、普通运行账号及维护账号都使用新生成的密码；应用以受限 `blog_app` 连接。原部署不切库、不删卷、不改密码。新部署保留原站点地址、实际引用的 OAuth 密钥和备份公钥，使用备份对应的不可变本地应用镜像 ID。私钥不复制进新部署，OAuth 恢复材料不留在 HTTP 服务可读的配置卷。
+`restore` 先完成 age 认证解密、清单及匹配版本验证，再生成新的 `.env` 并启动独立数据库；错误密钥和损坏密文不会进入数据库导入阶段。新部署使用随机 Compose 项目名和独立数据卷，数据库管理员和博客专用账号均使用新密码。默认部署恢复后继续以非超级用户 `blog_owner` 运行，维护复用同一连接；备份若使用受限运行账号或独立维护连接，则分别保留对应分工并生成新凭据。没有账号模式元数据的旧格式 2 归档沿用当时的受限 `blog_app` / `blog_maintenance` 恢复方式。原部署不切库、不删卷、不改密码。新部署保留原站点地址、实际引用的 OAuth 密钥和备份公钥，使用备份对应的不可变本地应用镜像 ID。私钥不复制进新部署，OAuth 恢复材料不留在 HTTP 服务可读的配置卷。
 
 恢复只启动数据库，在新建的随机 `blog_restore_*` 库中导入，撤销备份中的会话，核对数据数量、Owner、结构及媒体引用，并写入数据库隔离标记。不要提前运行 `docker compose up` 启动应用；隔离标记会阻止普通服务开放。
 
@@ -108,7 +108,7 @@ systemctl list-timers blog-backup.timer
 journalctl -u blog-backup.service
 ```
 
-保留期维护使用 `sh scripts/compose-backup.sh maintenance`，在现有 `.env` 配置独立维护连接；配套 `ops/blog-maintenance.service` / `.timer` 同样通过 Compose 运行，并和备份互斥。正式媒体清理的 `media-plan` / `media-apply` 入口见[运维说明](operations-and-recovery.md#正式媒体物理清理)。
+保留期维护使用 `sh scripts/compose-backup.sh maintenance`，默认复用站点连接，无需额外配置；分离模式才在现有 `.env` 配置独立维护连接。配套 `ops/blog-maintenance.service` / `.timer` 同样通过 Compose 运行，并和备份互斥。正式媒体清理的 `media-plan` / `media-apply` 入口见[运维说明](operations-and-recovery.md#正式媒体物理清理)。
 
 也可用现有调度器运行同一个 backup 命令。调度器应报告非零退出，并监控最近成功备份是否过期；脚本不会自动创建通知渠道。仓库测试覆盖加密仓库存取、损坏/缺文件拒绝、失败后原服务重启、独立项目恢复、登录/页面/图片与会话撤销。实际备份耗时、恢复耗时、磁盘空间、远端权限和业务恢复点仍由生产演练记录。
 

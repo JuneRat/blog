@@ -171,6 +171,14 @@ def recovery_config(configured):
     return sanitized
 
 
+def has_dedicated_maintenance(model, configured):
+    # Use Compose's resolved environment so shell overrides have the same
+    # precedence as the maintenance container, not just ops' env_file values.
+    environment = model["services"]["maintenance"].get("environment", {})
+    return bool(environment.get("BLOG_MAINTENANCE_DATABASE_URL")
+                or configured.get("maintenance", {}).get("database_url"))
+
+
 def recipient():
     value = os.environ.get("BLOG_BACKUP_RECIPIENT", "")
     require(bool(re.fullmatch(r"age1[0-9a-z]+", value)),
@@ -213,10 +221,14 @@ def backup():
         private_write(deployment / "config.toml", toml.dumps(recovery_config(configured)))
         site_id = client.query("SELECT value->>'id' FROM settings WHERE key='installation'")
         require(bool(re.fullmatch(r"[a-f0-9]{64}", site_id)), "installation identity is missing")
+        runtime = recovery.PgTools(environment.get("DATABASE_URL") or configured["database"]["url"])
+        restricted_runtime = runtime.query("SELECT NOT has_schema_privilege(current_schema(),'CREATE')") == "t"
+        dedicated_maintenance = has_dedicated_maintenance(model, configured)
         metadata = {"format": 2, "recipient": public_key, "binary_sha256": binary_hash(), "image_id": actual["Image"],
                     "image": model["services"]["blog"]["image"],
                     "ops_image": model["services"]["ops"]["image"], "site_id": site_id,
-                    "project": model["name"], "created_at": now()}
+                    "project": model["name"], "created_at": now(),
+                    "restricted_runtime": restricted_runtime, "dedicated_maintenance": dedicated_maintenance}
         private_write(deployment / "compose.json", json.dumps(metadata, indent=2))
         os.environ["DATABASE_URL"] = "postgres://postgres:" + quote(os.environ["BLOG_POSTGRES_PASSWORD"], safe="") + "@db:5432/" + selected["PGDATABASE"]
         output = work / "backup"
@@ -350,22 +362,35 @@ def dotenv(values):
     return "\n".join(lines) + "\n"
 
 
+def restore_credentials(metadata, database):
+    # Old format-2 archives always restored with both restricted roles. Preserve
+    # that behavior when the optional account-mode metadata is absent.
+    restricted = metadata.get("restricted_runtime", True)
+    dedicated = metadata.get("dedicated_maintenance", True)
+    require(type(restricted) is bool and type(dedicated) is bool, "invalid database account mode")
+    values = {"BLOG_POSTGRES_PASSWORD": secrets.token_hex(32), "BLOG_OWNER_PASSWORD": secrets.token_hex(32)}
+    values["DATABASE_URL"] = f"postgres://blog_owner:{values['BLOG_OWNER_PASSWORD']}@db:5432/{database}"
+    if restricted:
+        values["BLOG_APP_PASSWORD"] = secrets.token_hex(32)
+        values["DATABASE_URL"] = f"postgres://blog_app:{values['BLOG_APP_PASSWORD']}@db:5432/{database}"
+    if dedicated:
+        values["BLOG_MAINTENANCE_PASSWORD"] = secrets.token_hex(32)
+        values["BLOG_MAINTENANCE_DATABASE_URL"] = (
+            f"postgres://blog_maintenance:{values['BLOG_MAINTENANCE_PASSWORD']}@db:5432/{database}")
+    return values
+
+
 def prepare(path):
     with unpack(path) as (_, manifest, deployment, metadata):
         values = json.loads((deployment / "environment.json").read_text())
         values = recovery_environment(values, manifest["secret_refs"])
-        app_password, maintenance_password = secrets.token_hex(32), secrets.token_hex(32)
         database = "blog_restore_" + secrets.token_hex(6)
         values.update({"BLOG_IMAGE": metadata["image_id"], "BLOG_OPS_IMAGE": metadata["ops_image"],
                        "BLOG_BACKUP_RECIPIENT": metadata["recipient"],
                        "BLOG_BACKUP_TMPFS_SIZE": os.environ.get("BLOG_BACKUP_TMPFS_SIZE", "2g"),
                        "COMPOSE_PROJECT_NAME": "blog-restore-" + secrets.token_hex(6),
-                       "BLOG_POSTGRES_PASSWORD": secrets.token_hex(32),
-                       "BLOG_OWNER_PASSWORD": secrets.token_hex(32),
-                       "BLOG_APP_PASSWORD": app_password, "BLOG_MAINTENANCE_PASSWORD": maintenance_password,
+                       **restore_credentials(metadata, database),
                        "BLOG_RESTORE_DATABASE": database,
-                       "DATABASE_URL": f"postgres://blog_app:{app_password}@db:5432/{database}",
-                       "BLOG_MAINTENANCE_DATABASE_URL": f"postgres://blog_maintenance:{maintenance_password}@db:5432/{database}",
                        "BLOG_THEME_DIR": str(STATE / "resources/installed-themes/default"),
                        "BLOG_HTTP_HOST": "127.0.0.1", "BLOG_HTTP_PORT": "0", "BLOG_METRICS_PORT": "0"})
         target = Path("/target")
@@ -379,20 +404,26 @@ def prepare(path):
 def restore(path):
     import tomllib
     require(not any(CONFIG.iterdir()) and not any(MEDIA.iterdir()), "restore requires empty config and media volumes")
+    runtime_url = os.environ["DATABASE_URL"]
     with unpack(path) as (root, manifest, deployment, _):
         client = pg()
         os.environ["DATABASE_URL"] = "postgres://postgres:" + quote(os.environ["BLOG_POSTGRES_PASSWORD"], safe="") + "@db:5432/postgres"
         quiet_call(recovery.restore, SimpleNamespace(
             backup=str(root), target_db=DATABASE, target_owner="blog_owner", output=str(STATE),
             isolation_confirmed=True, docker_container=None))
-        for role, variable in (("blog_app", "BLOG_APP_PASSWORD"), ("blog_maintenance", "BLOG_MAINTENANCE_PASSWORD")):
-            password = os.environ[variable]
-            require(bool(re.fullmatch(r"[a-f0-9]{64}", password)), "restore role password must be generated")
-            sql_input(client, f"CREATE ROLE {role} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD '{password}';")
-        command, env = client.command("psql", ["-X", "-v", "ON_ERROR_STOP=1", "-v", "app_role=blog_app",
-                                               "-v", "maintenance_role=blog_maintenance",
-                                               "-f", "/opt/blog/scripts/database-roles.sql"], DATABASE)
-        run(command, env=env, label="restored database grants")
+        if "BLOG_APP_PASSWORD" in os.environ or "BLOG_MAINTENANCE_PASSWORD" in os.environ:
+            for role, variable in (("blog_app", "BLOG_APP_PASSWORD"), ("blog_maintenance", "BLOG_MAINTENANCE_PASSWORD")):
+                password = os.environ.get(variable)
+                require(password is None or bool(re.fullmatch(r"[a-f0-9]{64}", password)),
+                        "restore role password must be generated")
+                # The shared grants contract needs both roles. An unused role has
+                # no password and no credentials installed in either service.
+                clause = f" PASSWORD '{password}'" if password is not None else ""
+                sql_input(client, f"CREATE ROLE {role} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE{clause};")
+            command, env = client.command("psql", ["-X", "-v", "ON_ERROR_STOP=1", "-v", "app_role=blog_app",
+                                                   "-v", "maintenance_role=blog_maintenance",
+                                                   "-f", "/opt/blog/scripts/database-roles.sql"], DATABASE)
+            run(command, env=env, label="restored database grants")
         shutil.copytree(STATE / "resources/media", MEDIA, dirs_exist_ok=True)
         # The HTTP process may read its config volume. Remove duplicate recovery
         # settings and OAuth secrets after they have been installed in the new .env.
@@ -401,7 +432,7 @@ def restore(path):
         # Use fresh DB credentials; preserve all other recognized deployment settings.
         import toml
         config = tomllib.loads((deployment / "config.toml").read_text())
-        config.setdefault("database", {}).update({"url": f"postgres://blog_app:{os.environ['BLOG_APP_PASSWORD']}@db:5432/{DATABASE}",
+        config.setdefault("database", {}).update({"url": runtime_url,
                               "migrations_dir": "/opt/blog/migrations/postgres"})
         config.pop("maintenance", None)
         config["recovery"] = {"enabled": False}
@@ -432,7 +463,7 @@ def check(username, password_stdin=False):
            if not key.startswith(("PG", "RESTIC_", "AWS_")) and key not in (
                "BLOG_POSTGRES_PASSWORD", "BLOG_OWNER_PASSWORD", "BLOG_APP_PASSWORD", "BLOG_MAINTENANCE_PASSWORD",
                "BLOG_MAINTENANCE_DATABASE_URL")}
-    env.update({"DATABASE_URL": f"postgres://blog_app:{os.environ['BLOG_APP_PASSWORD']}@db:5432/{DATABASE}",
+    env.update({"DATABASE_URL": os.environ["DATABASE_URL"],
                 "BLOG_CONFIG_FILE": str(CONFIG / "config.toml"), "BLOG_MEDIA_DIR": str(MEDIA),
                 "BLOG_THEME_DIR": str(STATE / "resources/installed-themes/default"),
                 "BLOG_ADMIN_DIST": "/opt/blog/admin", "BLOG_MIGRATIONS_DIR": "/opt/blog/migrations/postgres",

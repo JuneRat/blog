@@ -97,9 +97,9 @@ def exercise(image, root, ops_image):
                 f"Compose recovery {args[0]} unexpected exit {result.returncode}: {result.stderr[-1500:]}")
         return result.stdout
 
-    def restored_compose(*args):
+    def restored_compose(*args, data=None):
         result = subprocess.run(["docker", "compose", "--project-directory", str(restored), *args],
-                                cwd=restored, env=env, capture_output=True, text=True, timeout=120)
+                                cwd=restored, env=env, input=data, capture_output=True, text=True, timeout=120)
         require(result.returncode == 0, f"Restored Compose {args[0]} failed")
         return result.stdout.strip()
 
@@ -215,7 +215,12 @@ def exercise(image, root, ops_image):
         require(not any(secret in logs for secret in (password, owner_password, "not-a-log-field")),
                 "request logs leaked credentials or query parameters")
 
-        print("==> Compose: dedicated retention role and reviewed media purge", flush=True)
+        print("==> Compose: default and optional dedicated retention connections", flush=True)
+        # No extra role or environment variable is needed after installation.
+        retention = json.loads(operation("maintenance"))
+        require(not retention["dry_run"], "default retention must execute with the saved site connection")
+        require(sql("SELECT count(*) FROM pg_roles WHERE rolname IN ('blog_app','blog_maintenance')") == "0",
+                "default deployment unexpectedly created additional roles")
         maintenance_password = secrets.token_hex(32)
         sql(f"CREATE ROLE blog_app LOGIN; CREATE ROLE blog_maintenance LOGIN PASSWORD '{maintenance_password}';")
         compose("exec", "-T", "db", "psql", "-X", "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d", "blog",
@@ -228,10 +233,16 @@ def exercise(image, root, ops_image):
         require("BLOG_MAINTENANCE_DATABASE_URL" not in model["services"]["blog"]["environment"],
                 "maintenance credentials must stay out of the HTTP service")
         maintenance_env = model["services"]["maintenance"]["environment"]
-        require(not {"DATABASE_URL", "BLOG_OWNER_PASSWORD", "BLOG_POSTGRES_PASSWORD"} & maintenance_env.keys(),
-                "retention must only receive the dedicated role")
+        require(not {"BLOG_OWNER_PASSWORD", "BLOG_POSTGRES_PASSWORD"} & maintenance_env.keys(),
+                "retention must not receive database bootstrap passwords")
+        require(any(volume.get("target") == "/var/lib/blog/config" and volume.get("read_only")
+                    for volume in model["services"]["maintenance"]["volumes"]),
+                "retention must read the installed config through a read-only mount")
         retention = json.loads(operation("maintenance"))
         require(not retention["dry_run"], "scheduled retention must execute")
+        # Return to the default account mode for the full backup/restore round trip.
+        env_file.write_text("\n".join(line for line in env_file.read_text().splitlines()
+                                      if not line.startswith("BLOG_MAINTENANCE_DATABASE_URL=")) + "\n")
         guest.request("GET", "/readyz")
         removable = guest.json("POST", API + "/media?filename=purge.png", PNG, status=201,
                                headers={"Content-Type": "image/png"})
@@ -257,7 +268,12 @@ def exercise(image, root, ops_image):
         scenario.admin, scenario.guest = guest, Client(guest.origin)
         metrics = client("9090")
 
-        print("==> Compose: container replacement preserves database, config and media", flush=True)
+        print("==> Compose: automatic startup migration and persistent content", flush=True)
+        compose("stop", "blog")
+        # Recreate the pre-0002 state only in this disposable fixture, with data
+        # already present. Starting the owner-backed service must apply 0002.
+        sql("DROP INDEX media_trash_idx; DROP INDEX audit_logs_actor_time_idx; "
+            "DROP INDEX audit_logs_action_time_idx; DELETE FROM _sqlx_migrations WHERE version=2;")
         compose("down", "--timeout", "30")  # Deliberately retain all three named volumes.
         compose("up", "-d", "--no-build", "--pull", "never", "--wait", "--wait-timeout", "90")
         guest = client()
@@ -265,6 +281,11 @@ def exercise(image, root, ops_image):
         guest.request("GET", "/livez")
         require(guest.json("GET", "/version") == build, "build identity changed after restart")
         guest.request("GET", "/api/install", status=404)
+        require(sql("SELECT count(*) FROM _sqlx_migrations WHERE version=2 AND success") == "1",
+                "startup did not apply the pending migration")
+        require(sql("SELECT count(*) FROM pg_indexes WHERE indexname IN "
+                    "('media_trash_idx','audit_logs_actor_time_idx','audit_logs_action_time_idx')") == "3",
+                "startup migration did not recreate the expected indexes")
         guest.login(password)
         scenario.admin, scenario.guest = guest, Client(guest.origin)
         scenario.assert_public_content()
@@ -384,18 +405,47 @@ with unpack(sys.argv[1]) as (_, _, deployment, _):
         body, _ = target.request("GET", media["url"])
         require(body == PNG, "restored media differs")
         require(restored_sql("SELECT count(*) FROM sessions") == "0", "release retained verification sessions")
-        require(restored_sql("SELECT rolsuper OR rolcreatedb OR rolcreaterole FROM pg_roles WHERE rolname='blog_app'") == "f",
-                "restored application uses elevated database permissions")
+        require(urlsplit(restored_model["services"]["blog"]["environment"]["DATABASE_URL"]).username == "blog_owner",
+                "default recovery changed the site's account mode")
+        require(restored_sql("SELECT rolsuper OR rolcreatedb OR rolcreaterole FROM pg_roles WHERE rolname='blog_owner'") == "f",
+                "restored site account must not be a cluster administrator")
+        require(restored_sql("SELECT count(*) FROM pg_roles WHERE rolname IN ('blog_app','blog_maintenance')") == "0",
+                "default recovery created unnecessary accounts")
+        require(not json.loads(operation("maintenance", directory=restored))["dry_run"],
+                "restored site could not run maintenance with the default connection")
         guest.request("GET", "/readyz")
         require(sql("SELECT value->>'id' FROM settings WHERE key='installation'") == installation_id,
                 "restore modified the source deployment")
         restored_compose("--profile", "ops", "run", "--rm", "--no-deps", "--entrypoint", "python3", "ops", "-c",
                          "import toml; assert toml.load('/var/lib/blog/config/config.toml')['database']['max_lifetime_secs'] == 777")
-        print("==> Compose: a recovered site can itself be backed up and restored again", flush=True)
+        print("==> Compose: optional restricted accounts survive a second recovery", flush=True)
+        app_password, maintenance_password = secrets.token_hex(32), secrets.token_hex(32)
+        restored_sql(f"CREATE ROLE blog_app LOGIN PASSWORD '{app_password}'; "
+                     f"CREATE ROLE blog_maintenance LOGIN PASSWORD '{maintenance_password}';")
+        restored_compose("exec", "-T", "db", "psql", "-X", "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d", restored_database,
+                         "-v", "app_role=blog_app", "-v", "maintenance_role=blog_maintenance",
+                         data=(PROJECT / "scripts/database-roles.sql").read_text())
+        restricted_url = f"postgres://blog_app:{app_password}@db:5432/{restored_database}"
+        restored_env = restored / ".env"
+        restored_env.write_text("\n".join(line for line in restored_env.read_text().splitlines()
+                                         if not line.startswith("DATABASE_URL=")) + "\n" + dotenv({
+            "DATABASE_URL": restricted_url,
+            "BLOG_MAINTENANCE_DATABASE_URL": f"postgres://blog_maintenance:{maintenance_password}@db:5432/{restored_database}",
+        }))
+        restored_compose("run", "--rm", "--no-deps", "--entrypoint", "python3", "ops", "-c",
+                         "import os,toml; p='/var/lib/blog/config/config.toml'; c=toml.load(p); "
+                         "c['database']['url']=os.environ['DATABASE_URL']; open(p,'w').write(toml.dumps(c))")
+        restored_compose("up", "-d", "--no-build", "--pull", "never", "--wait", "--wait-timeout", "90", "blog")
+        operation("maintenance", directory=restored)
         operation("backup", directory=restored)
         recovered_archives = list((restored / "backups").glob("blog-*.tar.gz.age"))
         require(len(recovered_archives) == 1, "recovered deployment did not create a complete backup")
         operation("restore", str(recovered_archives[0]), str(restored_again), str(identity_file), directory=restored)
+        again_env = (restored_again / ".env").read_text()
+        require('DATABASE_URL="postgres://blog_app:' in again_env
+                and 'BLOG_MAINTENANCE_DATABASE_URL="postgres://blog_maintenance:' in again_env,
+                "separate database accounts were not preserved")
+        operation("check", "acceptance-owner", "--password-stdin", directory=restored_again, data=password + "\n")
         print("Compose installation, telemetry, persistence, backup, encrypted copy and isolated recovery passed.", flush=True)
     finally:
         if (restored_again / ".env").is_file():

@@ -52,7 +52,8 @@ format = "text" # json for structured stderr; Compose defaults to json.
 [recovery]
 enabled = false
 
-# 独立维护任务使用 BLOG_MAINTENANCE_DATABASE_URL，或单独维护配置中的下列字段。
+# 维护任务默认复用 database.url / DATABASE_URL；需要分离权限时才设置独立连接。
+# BLOG_MAINTENANCE_DATABASE_URL 优先于下列字段，显式配置无效时不会回退。
 # HTTP 服务不需要此凭据，维护连接不回退到 database.url。
 # [maintenance]
 # database_url = "postgres://blog_maintenance:change-me@127.0.0.1:5432/blog"

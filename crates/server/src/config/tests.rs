@@ -169,6 +169,68 @@ fn precedence_is_cli_then_environment_then_toml_then_defaults() {
 }
 
 #[test]
+fn maintenance_reuses_the_effective_site_connection_unless_overridden() {
+    let site = "postgres://site:site-secret@localhost/blog";
+    let file = format!("[database]\nurl='{site}'");
+    let from_file = config(&file, &[]);
+    assert_eq!(from_file.maintenance_url().unwrap(), site);
+    let shown = from_file.show(ConfigScope::Maintenance, true).unwrap();
+    let connection = shown["fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["key"] == "maintenance.database_url")
+        .unwrap();
+    assert_eq!(connection["value"], "[redacted]");
+    assert!(
+        connection["source"]
+            .as_str()
+            .unwrap()
+            .starts_with("fallback:toml:")
+    );
+    assert!(!shown.to_string().contains("site-secret"));
+
+    let env_site = "postgres://env:p@localhost/blog";
+    assert_eq!(
+        config(&file, &[("DATABASE_URL", env_site)])
+            .maintenance_url()
+            .unwrap(),
+        env_site
+    );
+    let dedicated = "postgres://maintenance:p@localhost/blog";
+    let separate = format!("{file}\n[maintenance]\ndatabase_url='{dedicated}'");
+    assert_eq!(
+        config(&separate, &[("DATABASE_URL", env_site)])
+            .maintenance_url()
+            .unwrap(),
+        dedicated
+    );
+    assert_eq!(
+        config(&separate, &[("BLOG_MAINTENANCE_DATABASE_URL", env_site)])
+            .maintenance_url()
+            .unwrap(),
+        env_site
+    );
+    // An explicit but invalid override must never silently gain the site's privileges.
+    for bad in ["", "not-a-database-url"] {
+        assert!(
+            config(&file, &[("BLOG_MAINTENANCE_DATABASE_URL", bad)])
+                .maintenance_url()
+                .is_err()
+        );
+    }
+    assert!(
+        config(
+            "[maintenance]\ndatabase_url=false",
+            &[("DATABASE_URL", site)]
+        )
+        .maintenance_url()
+        .is_err()
+    );
+    assert!(config("", &[]).maintenance_url().is_err());
+}
+
+#[test]
 fn bad_website_values_do_not_block_database_or_maintenance_commands() {
     let config = config(
         "[server]\npublic_base_url=42\nsecure_cookies='typo'\ntrusted_proxies=false\n[paths]\ntheme_dir=false\n",
@@ -226,7 +288,7 @@ fn booleans_are_strict_and_environment_can_repair_bad_file_values() {
     assert!(
         config("", &[("DATABASE_URL", "postgres://x:y@localhost/blog")])
             .maintenance_url()
-            .is_err()
+            .is_ok()
     );
 }
 

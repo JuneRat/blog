@@ -19,7 +19,7 @@ Usage: sh scripts/compose-backup.sh COMMAND
   remote-list                    List remote snapshots (IDs needed for fetch)
   sync ARCHIVE_NAME               Retry uploading a local archive from backups/
   fetch SNAPSHOT_ID              Retrieve one encrypted backup pair and check its checksum
-  maintenance                    Run privacy retention with the dedicated database role
+  maintenance                    Run privacy retention (optional dedicated database role)
   media-plan NAME.json UUID...    Create an explicit media purge plan in backups/plans/
   media-apply NAME.json --maintenance-confirmed --break-links-confirmed
                                  Stop blog, apply the reviewed plan, then restart

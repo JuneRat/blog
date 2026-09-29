@@ -12,7 +12,7 @@ sh scripts/compose-init.sh
 
 初始化脚本复用已有 `.env`，不存在时从 `.env.example` 创建；只为缺失或空的 `BLOG_POSTGRES_PASSWORD` / `BLOG_OWNER_PASSWORD` 生成随机密码，并自动设置文件为仅所有者可读写。重复运行不会更换已有密码，也不会覆盖其他配置。`600` 用于保护文件内的密码，不是 Docker 的运行要求，用户无需手动执行 chmod。
 
-`BLOG_POSTGRES_PASSWORD` 仅用于 PostgreSQL 集群管理，`BLOG_OWNER_PASSWORD` 对应非超级用户 `blog_owner`，负责站点结构初始化。首次安装时不要设置 `DATABASE_URL`，否则会按已有部署启动。
+`BLOG_POSTGRES_PASSWORD` 仅用于 PostgreSQL 集群管理。默认部署只使用一个博客专用账号 `blog_owner`，其密码为 `BLOG_OWNER_PASSWORD`；它拥有本站数据库，负责安装、启动迁移、日常读写与维护，但不是超级用户，也不能创建其他数据库或角色。首次安装时不要设置 `DATABASE_URL`，否则会按已有部署启动。
 
 ```sh
 docker compose up -d --build
@@ -74,26 +74,13 @@ PostgreSQL 初始化脚本只对新卷执行；修改 `.env` 的密码不会修�
 
 ## 运行配置、账号与公网访问
 
-统一在根目录 `.env` 中配置。Compose 自动读取它，用于服务配置插值，并只将 `blog.environment` 明确列出的应用变量传入博客；数据库管理员密码和维护凭据不传入 HTTP 服务。Rust 程序自身仍不直接加载 `.env`，应用配置默认来自配置卷中的 TOML。
+统一在根目录 `.env` 中配置。Compose 自动读取它，用于服务配置插值，并只将 `blog.environment` 明确列出的应用变量传入博客；集群管理员密码和独立维护连接覆盖项不传入 HTTP 服务。Rust 程序自身仍不直接加载 `.env`，应用配置默认来自配置卷中的 TOML。
 
 运行连接 `DATABASE_URL`、连接池 `BLOG_DB_*`、站点地址、可信代理、Cookie、恢复模式、`RUST_LOG`、`IDP_SECRET` 和 `GH_SECRET` 已列入传递清单。需要覆盖时直接编辑 `.env` 并重新创建 `blog` 容器。其他 OAuth secret_ref 名称需要同时加入 `compose.yaml` 的 `blog.environment`。`BLOG_THEME_DIR` 在 Compose 中须为容器内路径，恢复脚本用它选择恢复的主题。不要设置空的 `DATABASE_URL`；未配置时应完全省略该项。
 
-公开部署前，应按[数据库账号说明](operations-and-recovery.md#数据库账号与保留期)创建独立的 `blog_app` 和 `blog_maintenance` 登录角色。可通过下列交互入口使用 `CREATE ROLE ... LOGIN` 和 `\password` 设置密码：
+安装完成后默认继续使用保存的 `blog_owner` 连接，无需再创建运行或维护账号。服务启动时自动执行未应用的迁移，失败则退出，不接受 HTTP 请求。维护容器以只读方式挂载同一配置卷，复用 `DATABASE_URL` 或安装保存的 `database.url`。
 
-```sh
-docker compose exec db psql -U postgres -d blog
-docker compose exec -T db \
-  psql -U postgres -d blog -v app_role=blog_app -v maintenance_role=blog_maintenance \
-  < scripts/database-roles.sql
-```
-
-随后在 `.env` 配置 `DATABASE_URL` 使用 `blog_app` 并执行：
-
-```sh
-docker compose up -d --no-build --force-recreate blog
-```
-
-`blog_owner` 的安装连接仍可保留在私有 TOML 中作为配置来源，运行时由环境覆盖；不要向 HTTP 服务注入集群管理员或独立维护账号的环境凭据。
+独立的 `blog_app` / `blog_maintenance` 是可选权限加固方式，见下文。默认账号拥有本站结构，因此审计记录的追加约束由应用代码保证；数据库权限不会阻止它直接修改或删除审计。
 
 默认仅暴露 `127.0.0.1:8080`，PostgreSQL 没有宿主机端口。公网部署在前面接 HTTPS 反向代理；若代理运行于其他容器，需通过受控网络连接博客，或按实际网络调整 `BLOG_HTTP_HOST`。只将确定的代理地址加入 `BLOG_TRUSTED_PROXIES`，不要信任所有来源。修改域名时在 `.env` 设置 `BLOG_PUBLIC_BASE_URL`，重建容器；不要通过关闭 Secure Cookie 解决 HTTPS 配置问题。
 
@@ -114,24 +101,39 @@ docker compose logs --tail 100 -f blog
 
 ## 升级、维护与备份边界
 
-当前版本追加 `0002_admin_query_indexes.sql`，并将分类树 advisory 锁与会话锁分开。升级时须停止旧版 server 和会修改数据库的旧版 CLI，再迁移并启动新版本；不要混跑这两个版本的写入进程。HTTP 关闭默认总预算 25 秒，须小于此文件配置的 30 秒容器退出宽限期。
+当前版本追加 `0002_admin_query_indexes.sql`，并将分类树 advisory 锁与会话锁分开。升级时须停止旧版 server 和会修改数据库的旧版 CLI，不要混跑这两个版本的写入进程。默认由新服务在监听 HTTP 前自动迁移。HTTP 关闭默认总预算 25 秒，须小于此文件配置的 30 秒容器退出宽限期。
 
-升级前先完成匹配版本的备份恢复演练并保存旧镜像标识。构建或加载新镜像后停止全部写入；将结构管理 DSN 安全注入终端的 `DATABASE_URL`，不要将其写进命令历史：
+升级前先完成匹配版本的备份恢复演练并保存旧镜像标识。停止外部 CLI 与定时维护任务后，源码部署执行下列命令；发布包部署跳过 `build`，先加载匹配镜像并更新 `.env` 的镜像标识：
 
 ```sh
+docker compose build blog ops
 docker compose stop blog
-docker compose run --rm --no-deps -e DATABASE_URL blog migrate
+docker compose up -d --no-build --wait blog
 ```
 
-迁移成功后重跑新版本生成的授权脚本，再启动 `blog`。已有 `0001_initial_schema.sql` 保留原始校验和，新版本只追加迁移；跨版本恢复先用备份匹配的版本恢复并核验，再升级，详见[迁移演进](schema-migrations.md)。受限运行账号只校验迁移历史，不负责升级结构。旧数据库基线仍不支持原地转换；切回旧镜像也不等于数据库回滚。
+默认模式无需单独运行 `migrate` 或授权脚本。迁移失败会使新服务无法就绪，查看 `docker compose logs blog` 处理，不要直接开放流量。已有 `0001_initial_schema.sql` 保留原始校验和，新版本只追加迁移；跨版本恢复先用备份匹配的版本恢复并核验，再升级，详见[迁移演进](schema-migrations.md)。旧数据库基线仍不支持原地转换；切回旧镜像也不等于数据库回滚。
 
-在现有 `.env` 设置 `BLOG_MAINTENANCE_DATABASE_URL=postgres://blog_maintenance:<编码后的密码>@db:5432/blog`，再运行：
+安装后即可运行保留期维护，无需额外账号配置：
 
 ```sh
 sh scripts/compose-backup.sh maintenance
 ```
 
-此入口使用独立维护容器，只传入维护凭据与必要运行参数，和备份共用操作锁；正常 HTTP 服务无需停止。每日调度使用 `ops/blog-maintenance.service` / `.timer`，按实际部署修改 `/opt/blog` 和运行用户后安装并启用 timer。无需额外的环境文件。正式媒体物理清理使用同一脚本的 `media-plan` / `media-apply`，复核与重试规则见[运维说明](operations-and-recovery.md#正式媒体物理清理)。
+此入口使用独立维护容器，读取站点配置或可选维护连接，和备份共用操作锁；正常 HTTP 服务无需停止。每日调度使用 `ops/blog-maintenance.service` / `.timer`，按实际部署修改 `/opt/blog` 和运行用户后安装并启用 timer。无需额外的环境文件。正式媒体物理清理使用同一脚本的 `media-plan` / `media-apply`，复核与重试规则见[运维说明](operations-and-recovery.md#正式媒体物理清理)。
+
+## 可选：分离数据库权限
+
+需要数据库强制限制日常服务修改结构、删除审计时，按[数据库账号说明](operations-and-recovery.md#数据库账号与保留期)创建不拥有对象、不继承其他角色的 `blog_app` 和 `blog_maintenance` LOGIN 角色。使用 `docker compose exec db psql -U postgres -d blog`，通过 `CREATE ROLE ... LOGIN` 和 `\password` 设置密码，再授权：
+
+```sh
+docker compose exec -T db \
+  psql -U postgres -d blog -v app_role=blog_app -v maintenance_role=blog_maintenance \
+  < scripts/database-roles.sql
+```
+
+将配置卷中 `config.toml` 的 `database.url` 改为 `blog_app` 连接，移除原结构所有者凭据；若 `.env` 配置了 `DATABASE_URL`，也须同步更新。仅用环境变量覆盖连接不会移除 TOML 中仍可读取的旧凭据。在 `.env` 设置 `BLOG_MAINTENANCE_DATABASE_URL=postgres://blog_maintenance:<编码后的密码>@db:5432/blog`，重新创建 `blog`。独立维护连接优先使用，显式配置错误时不会回退；它不注入 HTTP 服务。
+
+受限运行账号启动时只校验迁移，无法自动升级。此模式升级时先停止全部写入，将结构所有者连接安全注入终端的 `DATABASE_URL`，执行 `docker compose run --rm --no-deps -e DATABASE_URL blog migrate`；再重跑新版本授权脚本，撤销终端中的所有者连接覆盖，最后启动使用 `blog_app` 的服务。迁移与授权凭据由部署侧保管，不保留在服务配置卷中。
 
 命名卷是持久存储。Compose 的完整备份、隔离恢复、定时执行与加密异地副本见[Compose 备份恢复](compose-backup.md)。原有宿主机 `recovery.py` 入口继续支持非 Compose 部署；Compose 用户无需安装 Python、导出命名卷或手工设置文件权限。
 

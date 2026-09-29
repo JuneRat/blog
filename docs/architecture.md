@@ -98,7 +98,7 @@ Post/Page 管理 API 及 Post CLI 通过稳定 UUID 定位资源，公开 URL �
 | `media purge` | 只读校验结构 | 显式清理用例、数据库提交与计划/文件端口 |
 | `post` | 结构迁移 | 用户、内容用例及本次写入的正文渲染 |
 | `publish-due` | 结构迁移 | 到期发布用例及原子批次适配器 |
-| `maintenance` | 不执行迁移或派生物回填 | 独立维护连接与保留期清理用例 |
+| `maintenance` | 不执行迁移或派生物回填 | 默认站点连接或可选独立维护连接、保留期清理用例 |
 | `serve` | 结构迁移 | 网站配置、全部用例、主题、静态资源与 HTTP 状态 |
 
 除 `config`、`migrate`、`rebuild-html`、`media purge` 与独立的 `maintenance` 外，其余命令在执行前同步权限注册表。只有 `serve` 读取网站配置并加载主题；主题目录损坏或公开 URL 无效不会阻止账号、密码、OAuth 或 HTML 维护。启动参数统一由 `server::config` 按 CLI > env > TOML > 默认值解析，并按命令校验；运行期设置仍走应用用例和数据库端口，TOML 不覆盖后台保存。`config check/show` 仅做离线诊断，不连接数据库。配置项见[配置参考](configuration.md)。

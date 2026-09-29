@@ -24,6 +24,35 @@ def make_transport(path, content=b"age-encryption.org/v1\ntransport-only-test"):
 
 
 class ArchiveTests(unittest.TestCase):
+    def test_maintenance_mode_uses_resolved_compose_settings_or_toml(self):
+        model = {"services": {"maintenance": {"environment": {}}}}
+        with patch.dict(os.environ, {"BLOG_MAINTENANCE_DATABASE_URL": "unused-ops-value"}):
+            self.assertFalse(tool.has_dedicated_maintenance(model, {}))
+        self.assertTrue(tool.has_dedicated_maintenance(model, {"maintenance": {"database_url": "file-value"}}))
+        model["services"]["maintenance"]["environment"]["BLOG_MAINTENANCE_DATABASE_URL"] = "shell-value"
+        self.assertTrue(tool.has_dedicated_maintenance(model, {}))
+
+    def test_restore_accounts_preserve_shared_separate_and_legacy_modes(self):
+        for restricted in (False, True):
+            for dedicated in (False, True):
+                with self.subTest(restricted=restricted, dedicated=dedicated):
+                    values = tool.restore_credentials({"restricted_runtime": restricted,
+                                                       "dedicated_maintenance": dedicated}, "blog_restore_test")
+                    role = "blog_app" if restricted else "blog_owner"
+                    password = values["BLOG_APP_PASSWORD" if restricted else "BLOG_OWNER_PASSWORD"]
+                    self.assertEqual(values["DATABASE_URL"], f"postgres://{role}:{password}@db:5432/blog_restore_test")
+                    self.assertEqual("BLOG_APP_PASSWORD" in values, restricted)
+                    self.assertEqual("BLOG_MAINTENANCE_DATABASE_URL" in values, dedicated)
+                    self.assertEqual("BLOG_MAINTENANCE_PASSWORD" in values, dedicated)
+                    self.assertRegex(password, r"^[a-f0-9]{64}$")
+        legacy = tool.restore_credentials({}, "blog_restore_old")
+        self.assertIn("BLOG_APP_PASSWORD", legacy)
+        self.assertIn("BLOG_MAINTENANCE_PASSWORD", legacy)
+        self.assertNotEqual(legacy["BLOG_OWNER_PASSWORD"], tool.restore_credentials({}, "blog_restore_old")["BLOG_OWNER_PASSWORD"])
+        for key in ("restricted_runtime", "dedicated_maintenance"):
+            with self.assertRaises(tool.RecoveryError):
+                tool.restore_credentials({key: "false"}, "blog_restore_bad")
+
     def test_missing_public_key_fails_before_reading_deployment_context(self):
         with patch.dict(os.environ, {"BLOG_BACKUP_RECIPIENT": ""}), patch.object(tool, "context") as context:
             with self.assertRaises(tool.RecoveryError):

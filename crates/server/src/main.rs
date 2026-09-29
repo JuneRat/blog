@@ -183,9 +183,14 @@ async fn run(command: Command, mut config: config::DeploymentConfig) -> Result<(
     // Keep automatic schema initialization for schema owners; restricted runtime
     // roles verify the applied migrations. Derived HTML is rebuilt only by the
     // explicit maintenance command, never as a startup or migration side effect.
-    infrastructure::migrate_schema(&pool, database.migrations_dir)
-        .await
-        .map_err(|error| format!("执行迁移失败：{error}"))?;
+    if recovery_mode {
+        // Recovery verification must keep the backed-up schema even when the
+        // default site account owns it. Upgrade only after releasing isolation.
+        infrastructure::verify_schema(&pool, &database.migrations_dir).await
+    } else {
+        infrastructure::migrate_schema(&pool, &database.migrations_dir).await
+    }
+    .map_err(|error| format!("执行或校验迁移失败：{error}"))?;
     if matches!(command, Command::Migrate) {
         println!("迁移完成。");
         return Ok(());

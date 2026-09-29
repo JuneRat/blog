@@ -708,4 +708,55 @@ async fn recovery_database_guard_blocks_normal_start_publishing_and_retention_be
         serde_json::from_str::<serde_json::Value>(json.trim()).unwrap()["dry_run"],
         true
     );
+
+    // Default maintenance uses the normal connection without loading website
+    // resources or running migrations, and keeps the same recovery guard.
+    let shared = || {
+        Command::new(env!("CARGO_BIN_EXE_blog"))
+            .args(["maintenance", "--dry-run"])
+            .current_dir(&project)
+            .env("BLOG_CONFIG_FILE", project.join("absent-test-config.toml"))
+            .env("DATABASE_URL", &database_url)
+            .env_remove("BLOG_MAINTENANCE_DATABASE_URL")
+            .env("BLOG_MIGRATIONS_DIR", "missing")
+            .env("BLOG_PUBLIC_BASE_URL", "broken")
+            .env_remove("BLOG_RECOVERY_MODE")
+            .output()
+            .unwrap()
+    };
+    let result: serde_json::Value = serde_json::from_str(&assert_success(shared())).unwrap();
+    assert_eq!(result["dry_run"], true);
+    sqlx::raw_sql(
+        "COMMENT ON DATABASE blog_recovery_guard_test IS 'blog:recovery-isolated:command-test'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let blocked = shared();
+    assert!(!blocked.status.success());
+    assert!(String::from_utf8_lossy(&blocked.stderr).contains("恢复隔离期间禁止保留期清理"));
+
+    // Even an owner cannot auto-migrate during isolated recovery verification.
+    // Missing history simulates a mismatched backup; verify must not recreate it.
+    sqlx::raw_sql("DROP TABLE _sqlx_migrations")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let blocked = Command::new(env!("CARGO_BIN_EXE_blog"))
+        .args(["serve", "--addr", "127.0.0.1:0"])
+        .current_dir(&project)
+        .env("BLOG_CONFIG_FILE", project.join("absent-test-config.toml"))
+        .env("DATABASE_URL", &database_url)
+        .env("BLOG_RECOVERY_MODE", "true")
+        .env("BLOG_PUBLIC_BASE_URL", "http://127.0.0.1:8080")
+        .env("BLOG_MIGRATIONS_DIR", project.join("migrations/postgres"))
+        .output()
+        .unwrap();
+    assert!(!blocked.status.success());
+    assert!(String::from_utf8_lossy(&blocked.stderr).contains("迁移记录不存在"));
+    let absent: bool = sqlx::query_scalar("SELECT to_regclass('_sqlx_migrations') IS NULL")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(absent);
 }

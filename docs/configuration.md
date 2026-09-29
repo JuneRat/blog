@@ -20,7 +20,7 @@ cargo run
 
 TOML 和安装记录须为普通文件，Unix 权限不得开放给组或其他用户（建议 `600`），不能使用符号链接。解析器拒绝未知字段、不支持的 `config_version`、空连接串和非法类型。布尔环境变量接受大小写不敏感的 `true`/`false`、`1`/`0`；拼错或空值报错。错误信息不打印包含凭据的 TOML 源码。
 
-TOML 可以先只配置路径、代理或 `[bootstrap]`：没有数据库连接和安装记录时 `serve` 进入安装向导。显式配置的连接失败或文件损坏时不会回退到无配置安装。业务 CLI 必须通过 `database.url` 或 `DATABASE_URL` 提供连接；保留期维护必须配置独立维护连接，均没有隐式数据库地址。
+TOML 可以先只配置路径、代理或 `[bootstrap]`：没有数据库连接和安装记录时 `serve` 进入安装向导。显式配置的连接失败或文件损坏时不会回退到无配置安装。业务 CLI 必须通过 `database.url` 或 `DATABASE_URL` 提供连接；保留期维护默认复用该连接，也可显式覆盖，均没有隐式数据库地址。
 
 ## 启动配置
 
@@ -30,7 +30,7 @@ TOML 可以先只配置路径、代理或 `[bootstrap]`：没有数据库连接�
 |---|---|---|
 | `database.url` | `DATABASE_URL` | PostgreSQL 业务连接；推荐用环境注入凭据 |
 | `database.migrations_dir` | `BLOG_MIGRATIONS_DIR` | `migrations/postgres` |
-| `maintenance.database_url` | `BLOG_MAINTENANCE_DATABASE_URL` | 维护任务独立连接，无兜底；不应把维护凭据注入 HTTP 服务 |
+| `maintenance.database_url` | `BLOG_MAINTENANCE_DATABASE_URL` | 可选独立维护连接；缺省复用有效的 `database.url`，显式错误不回退；独立维护凭据不注入 HTTP 服务 |
 | `server.time_zone` | `BLOG_TIME_ZONE` | `UTC`；兼容旧配置，仅在数据库未保存站点时区时作为回退值（新部署请使用后台设置） |
 | `server.bind` | `BLOG_BIND` | `127.0.0.1:8080`；支持 IPv4/IPv6 的 IP:端口 |
 | `server.public_base_url` | `BLOG_PUBLIC_BASE_URL` | `http://127.0.0.1:8080`；公开链接、OAuth 回调与来源校验 |
@@ -117,9 +117,9 @@ cargo run -- config check --for maintenance
 cargo run -- config show --for resources
 ```
 
-`check` 只校验字段和语义，不连接数据库、不检查资源是否完整、不写文件；不代表数据库可连接或主题可加载。`show` 输出 JSON，所有数据库连接均为 `[redacted]`，`--sources` 标出 env/TOML/default/推导来源及生效时机。范围支持 `serve`（默认）、`database`、`maintenance`、`media`、`resources`、`all`；`all` 同时要求独立维护连接。
+`check` 只校验字段和语义，不连接数据库、不检查资源是否完整、不写文件；不代表数据库可连接或主题可加载。`show` 输出 JSON，所有数据库连接均为 `[redacted]`，`--sources` 标出 env/TOML/default/推导来源及生效时机。维护连接复用站点配置时以 `fallback:env:DATABASE_URL` 或 `fallback:toml:路径` 标明来源。范围支持 `serve`（默认）、`database`、`maintenance`、`media`、`resources`、`all`；`all` 要求维护有可用连接，但无需单独配置。
 
-各命令共享 TOML 语法、字段名称和日志配置解析，但按职责校验字段类型和值。`user`、`role`、`oauth`、`post`、`migrate`、`publish-due`、`rebuild-html` 不校验主题、公开 URL、代理和 Cookie 设置；`media cleanup-staging` 额外校验媒体目录。`maintenance` 使用独立维护连接、共用连接池策略与恢复模式，不回退到业务 DSN、不读取安装记录、不运行迁移。
+各命令共享 TOML 语法、字段名称和日志配置解析，但按职责校验字段类型和值。`user`、`role`、`oauth`、`post`、`migrate`、`publish-due`、`rebuild-html` 不校验主题、公开 URL、代理和 Cookie 设置；`media cleanup-staging` 额外校验媒体目录。`maintenance` 使用显式维护连接或有效站点连接，共用连接池策略与恢复模式，不读取安装记录、不运行迁移；显式维护连接有效时不校验未使用的站点连接。
 
 配置文件本身语法损坏、权限不合格或未知字段会报错；需要修复时可通过 `--config` 指向独立的最小维护 TOML。`rebuild-html` 保持显式执行，以上配置修改本身不触发 HTML 重建。
 
