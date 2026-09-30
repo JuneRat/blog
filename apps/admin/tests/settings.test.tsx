@@ -181,6 +181,33 @@ describe("站点设置屏", () => {
     await waitFor(() => expect(screen.getByText(/主题已切换为「Paper」/)).toBeTruthy());
   });
 
+  it("键盘选择待生效主题后拦截离开，恢复原选择或保存后清除保护", async () => {
+    vi.mocked(themeSettingsApi.save).mockResolvedValue({ slug: "paper", effective_slug: "paper", source: "database", version: 1,
+      available: [{ slug: "default", name: "Default" }, { slug: "paper", name: "Paper" }] });
+    render(<App />);
+    fireEvent.click(await screen.findByRole("tab", { name: "主题外观" }));
+    const paper = await screen.findByRole("button", { name: "选择主题 Paper" });
+    fireEvent.keyDown(paper, { key: "Enter" });
+    expect(paper.getAttribute("aria-pressed")).toBe("true");
+    const departure = new Event("beforeunload", { cancelable: true });
+    act(() => { window.dispatchEvent(departure); });
+    expect(departure.defaultPrevented).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "个人资料" }));
+    await screen.findByRole("dialog", { name: "有未保存的修改" });
+    fireEvent.click(screen.getByRole("button", { name: "留在此页" }));
+    expect(window.location.pathname).toBe(paths.settings);
+    fireEvent.keyDown(screen.getByRole("button", { name: "选择主题 Default" }), { key: " " });
+    const reverted = new Event("beforeunload", { cancelable: true });
+    act(() => { window.dispatchEvent(reverted); });
+    expect(reverted.defaultPrevented).toBe(false);
+    fireEvent.keyDown(paper, { key: "Enter" });
+    fireEvent.click(screen.getByRole("button", { name: "切换主题" }));
+    await screen.findByText(/主题已切换为「Paper」/);
+    const saved = new Event("beforeunload", { cancelable: true });
+    act(() => { window.dispatchEvent(saved); });
+    expect(saved.defaultPrevented).toBe(false);
+  });
+
   it("已保存主题缺失时提示默认主题并允许修复", async () => {
     vi.mocked(themeSettingsApi.get).mockResolvedValue({ slug: "removed", effective_slug: "default", source: "database", version: 3, available: [{ slug: "default", name: "Default" }, { slug: "paper", name: "Paper" }] });
     vi.mocked(themeSettingsApi.save).mockResolvedValue({ slug: "default", effective_slug: "default", source: "database", version: 4, available: [{ slug: "default", name: "Default" }, { slug: "paper", name: "Paper" }] });

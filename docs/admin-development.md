@@ -6,7 +6,7 @@
 
 [App.tsx](../apps/admin/src/App.tsx)负责按路由懒加载屏幕；其内的 [AdminProviders](../apps/admin/src/providers.tsx)提供中文 locale、Ant Design 上下文、系统深浅色与每次挂载独立的 QueryClient。测试直接渲染根组件时也能获得相同环境。主题种子 token 集中维护；自定义组件使用 `theme.useToken()`，定制优先采用公开属性与语义插槽，不依赖组件内部 DOM。
 
-[AdminLayout](../apps/admin/src/components/AdminLayout.tsx)管理导航、面包屑与账号操作，菜单当前不按权限隐藏。各屏可据权限禁用动作或停止无效查询，最终授权由后端执行；可见菜单不能被当作授权证明。
+[AdminLayout](../apps/admin/src/components/AdminLayout.tsx)管理导航、面包屑与账号操作，改密与头像弹窗在打开时懒加载，菜单当前不按权限隐藏。各屏可据权限禁用动作或停止无效查询，最终授权由后端执行；可见菜单不能被当作授权证明。
 
 Post/Page 管理身份是稳定 UUID。生成编辑链接使用 [router.ts](../apps/admin/src/router.ts) 的 `paths.editPost(id)`、`paths.editPage(id)`，包括系列成员、媒体引用和评论关联跳转。slug 只表示公开地址，改名不能改变编辑会话身份。前端解析固定路径形状，UUID 合法性由 API 校验，见 [ADR-0014](adr/0014-content-commits-and-stable-admin-identity.md)。
 
@@ -16,7 +16,9 @@ Post/Page 管理身份是稳定 UUID。生成编辑链接使用 [router.ts](../a
 
 ## HTTP 契约与客户端
 
-[api/index.ts](../apps/admin/src/api/index.ts) 保留调用入口，端点按资源拆分；[client.ts](../apps/admin/src/api/client.ts) 统一认证凭据、错误码、请求编号和响应解析。JSON 成功响应须通过 [Zod 校验](../apps/admin/src/api/schemas.ts)，空响应命令必须返回 204；退出登录单独接受服务端跳转后的 HTML。协议错误使用 `ApiProtocolError`，保留实际 HTTP 状态与请求编号，不自动重试写入，也不显示响应中的原始敏感内容。新增响应字段允许兼容，缺失必填字段、类型错误、未知封闭枚举及不安全整数会被拒绝。
+[api/index.ts](../apps/admin/src/api/index.ts) 保留兼容入口；应用运行时直接导入 `api/identity`、`api/posts` 等资源适配器及各自的 `api/schemas/` 校验器，避免认证入口加载全部领域。测试同样 mock 实际适配器，不通过兼容聚合对象替换方法。[client.ts](../apps/admin/src/api/client.ts) 统一认证凭据、错误码、请求编号和响应解析。JSON 成功响应须通过 Zod 校验，空响应命令必须返回 204；退出登录单独接受服务端跳转后的 HTML。协议错误使用 `ApiProtocolError`，保留实际 HTTP 状态与请求编号，不自动重试写入，也不显示响应中的原始敏感内容。新增响应字段允许兼容，缺失必填字段、类型错误、未知封闭枚举及不安全整数会被拒绝。
+
+认证使用轻量 [timeZoneContext.tsx](../apps/admin/src/timeZoneContext.tsx)；时间显示与拒绝夏令时重复/不存在时段的转换留在 [timeZone.tsx](../apps/admin/src/timeZone.tsx)。构建为 Temporal/jsbi 设置独立分组，避免通用 runtime helper 将排期依赖重新带入首屏。运行 `node apps/admin/scripts/bundle-size.mjs apps/admin/dist` 可统计入口全部静态 JavaScript 依赖和 gzip 总量；评价拆分收益时比较总量，不能只看最大 chunk。
 
 [generated.ts](../apps/admin/src/api/generated.ts) 由实际 HTTP DTO 的 ts-rs 派生生成。依赖仅在 interfaces；直接返回应用视图的端点先转换为接口层 DTO。包装转换穷尽解构应用字段，避免内部字段变化静默丢失。前端输入类型引用生成结果，响应类型从校验器推导，校验器逐字段受生成类型约束；新增、删除或改型字段必须同步校验器。筛选状态等纯前端类型仍由前端维护。
 
@@ -32,7 +34,7 @@ pnpm --dir apps/admin typecheck
 
 [文章编辑器](../apps/admin/src/screens/PostEditScreen.tsx)通过 [usePostEditor](../apps/admin/src/screens/postEditor/usePostEditor.ts) 管理请求、服务器基线和恢复副本；[form.ts](../apps/admin/src/screens/postEditor/form.ts) 负责表单归一化与逐字段合并，[PostMetadataFields](../apps/admin/src/screens/postEditor/PostMetadataFields.tsx) 负责目录查询和选择控件。文章输入仅存于 Ant Design Form store，`Form.useWatch` 触发界面更新，不再手工双写整个表单镜像。订阅通知会批量延迟，因此异步响应和离开确认必须同步读取 store；请求完成后的渲染也读取当前值，避免用旧订阅值写入本机副本。
 
-[页面编辑器](../apps/admin/src/screens/PageEditScreen.tsx)和[设置屏](../apps/admin/src/screens/SettingsScreen.tsx)目前仍由 `onValuesChange` 和统一写入函数维护渲染镜像。程序调用 `setFieldsValue` 不会触发用户输入回调。
+[页面编辑器](../apps/admin/src/screens/PageEditScreen.tsx)只负责视图，[usePageEditor](../apps/admin/src/screens/pageEditor/usePageEditor.ts)管理请求与服务器基线，[form.ts](../apps/admin/src/screens/pageEditor/form.ts)负责纯表单转换及合并。[设置屏](../apps/admin/src/screens/SettingsScreen.tsx)组合独立的常规、主题、账号和保留期表单；常规与主题实现位于 `screens/settings/`，各组拥有自己的基线，向父级回传 dirty，由父级统一登记离开保护。未保存的主题选择同样受保护；主题卡片支持键盘 Enter/Space 和选择状态。Page/设置仍由 `onValuesChange` 和统一写入函数维护渲染镜像，程序调用 `setFieldsValue` 不会触发用户输入回调。
 
 - 用当前值与最近服务器基线比较 dirty，不能以 touched 状态代替。程序回填与用户实际修改不是同一件事。
 - 发请求时保存提交快照。响应只覆盖等待期间没有继续修改的字段；保留新增输入，并明确提示其尚未保存。标签按集合比较，系列及序号作为关联字段一起处理。
@@ -48,6 +50,8 @@ pnpm --dir apps/admin typecheck
 保存、删除成功后的程序跳转不需要再次确认；创建响应在确认期间返回时先结束待决导航，再更新内容地址，保留保存期间的新输入。
 
 离开保护覆盖已登记的文章、页面、个人资料和设置等表单，不代表每个短表单都已登记。Post/Page 另通过 [localDraft.tsx](../apps/admin/src/localDraft.tsx) 和 [draftStorage.ts](../apps/admin/src/draftStorage.ts) 保存本机恢复副本：v2 按账号、类型、UUID/新建、标签和页面实例隔离；v1 仅作为恢复候选兼容。恢复复制候选到当前实例，保留原版本且不联网保存，不删除源实例数据。成功提交/手动删除仅清理当前实例拥有的槽，等待期间的新输入继续保留；忽略候选只在当前标签记录已处理修订。副本不自动过期或随退出清除，存储失败独立于服务器保存结果显示。完整保留与隐私边界见[当前正文与资源身份](content-lifecycle.md#1-当前正文与资源身份)。
+
+草稿输入按固定 400ms 窗口合并写盘，持续输入不会无限推迟保存，render 不再序列化完整正文。`pagehide`、`beforeunload`、页面隐藏与卸载时补写最新 Form store；身份/实体切换先处理旧槽，成功提交、手动删除和创建后的 ID 迁移取消待写任务，不能复活旧槽。保存时间只提供反馈，不触发新一次写盘；恢复克隆仍立即持久化。
 
 正文预览调用[非持久化预览接口](admin-api.md#文章与回收站)，使用服务端清洗后的 HTML；预览请求不更新编辑基线或本机副本，不声称覆盖完整主题。冲突对比、预览和本地存储提示均须按当前账号/UUID 隔离，旧请求不得回填新编辑目标。
 

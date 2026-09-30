@@ -98,6 +98,21 @@ afterEach(() => {
 });
 
 describe("PageEditScreen 保存流程", () => {
+  it("离开保护同步读取表单，输入后立即关闭页面也会确认", async () => {
+    await openExistingPage();
+    const clean = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(clean);
+    expect(clean.defaultPrevented).toBe(false);
+
+    const dirty = new Event("beforeunload", { cancelable: true });
+    act(() => {
+      fireEvent.change(field("标题"), { target: { value: "刚输入的标题" } });
+      // 与输入处于同一批更新，useWatch 镜像此刻还没重新渲染。
+      window.dispatchEvent(dirty);
+    });
+    expect(dirty.defaultPrevented).toBe(true);
+  });
+
   it("移入回收站必须确认，携带 id 与版本并返回列表", async () => {
     await openExistingPage();
     trashPage.mockResolvedValue(pageDetail({version:2}));
