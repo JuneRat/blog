@@ -26,15 +26,23 @@ use interfaces::http_auth::{AdminState, AuthState};
 use crate::assembly;
 use crate::config::SiteConfig;
 
+pub struct TaskEnvironment {
+    pub supervisor: Arc<crate::tasks::TaskSupervisor>,
+    pub maintenance: Option<Database>,
+    pub recovery_mode: bool,
+}
+pub struct WebsiteSetup {
+    pub router: axum::Router,
+    pub tasks: Arc<crate::tasks::TaskRuntime>,
+}
 pub async fn build_router(
     pool: &Database,
     config: &SiteConfig,
     roles: Arc<RoleInteractor>,
     runtime: Arc<RenderingRuntime>,
     telemetry: &interfaces::observability::Telemetry,
-    html_rebuild: Arc<crate::html_rebuild::HtmlRebuildCoordinator>,
-    recovery_mode: bool,
-) -> Result<axum::Router, String> {
+    environment: TaskEnvironment,
+) -> Result<WebsiteSetup, String> {
     let time_zones = Arc::new(infrastructure::IanaTimeZones);
     let public_posts = Arc::new(PostgresPublishedPostQuery::new(pool.clone()));
     let public_pages = Arc::new(PostgresPublishedPageQuery::new(pool.clone()));
@@ -141,45 +149,61 @@ pub async fn build_router(
     let audit = Arc::new(application::audit::AuditInteractor::new(Arc::new(
         infrastructure::audit::PostgresAuditQuery::new(pool.clone()),
     )));
+    let task_runtime = Arc::new(crate::tasks::TaskRuntime::new(
+        pool.clone(),
+        environment.maintenance,
+        runtime.clone(),
+        telemetry.clone(),
+        environment.recovery_mode,
+    ));
+    let task_admin = Arc::new(crate::tasks::WebsiteTasks::new(
+        task_runtime.clone(),
+        environment.supervisor,
+    ));
+    let tasks = Arc::new(application::tasks::TasksInteractor::new(
+        task_admin.clone(),
+        Arc::new(SystemClock),
+    ));
     let html_rebuild = Arc::new(
         application::html_rebuild_admin::HtmlRebuildAdminInteractor::new(Arc::new(
-            crate::html_rebuild::WebsiteHtmlRebuildJobs::new(
-                pool.clone(),
-                runtime.clone(),
-                html_rebuild,
-                recovery_mode,
-            ),
+            crate::html_rebuild::WebsiteHtmlRebuildJobs::new(task_admin),
         )),
     );
-    Ok(interfaces::http::app_router(
-        AppState {
-            public: PublicSiteState {
-                site: public_site,
-                health: Some(Arc::new(infrastructure::PgHealthCheck::new(pool.clone()))),
+    Ok(WebsiteSetup {
+        tasks: task_runtime,
+        router: interfaces::http::app_router(
+            AppState {
+                public: PublicSiteState {
+                    site: public_site,
+                    health: Some(Arc::new(infrastructure::PgHealthCheck::new(pool.clone()))),
+                },
+                auth: auth_state,
+                admin,
+                comments,
+                content_preview: Arc::new(application::content_preview::ContentPreview::new(
+                    runtime,
+                )),
+                retention,
+                audit,
+                html_rebuild,
+                tasks,
             },
-            auth: auth_state,
-            admin,
-            comments,
-            content_preview: Arc::new(application::content_preview::ContentPreview::new(runtime)),
-            retention,
-            audit,
-            html_rebuild,
-        },
-        HttpAssets {
-            themes: installed.assets,
-            admin_dist: config.admin_dist.clone(),
-        },
-        HttpConfig {
-            public_origin: config
-                .public_base_url
-                .as_str()
-                .trim_end_matches('/')
-                .to_string(),
-            trusted_proxies: config.trusted_proxies.clone(),
-        },
-    )
-    .layer(axum::Extension(telemetry.clone()))
-    .layer(axum::Extension(crate::observability::build_info())))
+            HttpAssets {
+                themes: installed.assets,
+                admin_dist: config.admin_dist.clone(),
+            },
+            HttpConfig {
+                public_origin: config
+                    .public_base_url
+                    .as_str()
+                    .trim_end_matches('/')
+                    .to_string(),
+                trusted_proxies: config.trusted_proxies.clone(),
+            },
+        )
+        .layer(axum::Extension(telemetry.clone()))
+        .layer(axum::Extension(crate::observability::build_info())),
+    })
 }
 
 struct InstalledThemes {

@@ -17,7 +17,7 @@ struct LiveSite {
     router: RwLock<Router>,
     pool: watch::Sender<Option<infrastructure::Database>>,
     telemetry: interfaces::observability::Telemetry,
-    html_rebuild: Arc<crate::html_rebuild::HtmlRebuildCoordinator>,
+    tasks: Arc<crate::tasks::TaskSupervisor>,
 }
 
 struct Setup {
@@ -154,8 +154,16 @@ impl Installer for Setup {
                     .with_observer(Arc::new(live.telemetry.clone())),
             ),
             &live.telemetry,
-            live.html_rebuild.clone(),
-            false,
+            crate::website::TaskEnvironment {
+                supervisor: live.tasks.clone(),
+                maintenance: crate::tasks::maintenance_pool(
+                    &deployment,
+                    &database_url,
+                    &runtime_pool,
+                )
+                .await,
+                recovery_mode: false,
+            },
         )
         .await
         .map_err(|_| {
@@ -175,8 +183,9 @@ impl Installer for Setup {
         // Cleanup must not turn a committed installation into an HTTP failure.
         // A crash or failed unlink leaves the journal for startup to retry.
         cleanup_completed(&deployment, &saved);
-        *live.router.write().expect("live router lock") = app;
+        *live.router.write().expect("live router lock") = app.router;
         live.pool.send_replace(Some(runtime_pool));
+        live.tasks.activate(app.tasks);
         crate::notice(format_args!(
             "安装完成，安装入口已关闭。登录地址：{}/admin/",
             site.public_base_url.as_str().trim_end_matches('/')
@@ -214,7 +223,7 @@ pub async fn serve(
         router: RwLock::new(Router::new()),
         pool,
         telemetry: telemetry.clone(),
-        html_rebuild: Arc::new(crate::html_rebuild::HtmlRebuildCoordinator::default()),
+        tasks: Arc::new(crate::tasks::TaskSupervisor::default()),
     });
     let setup = Arc::new(Setup {
         saved: RwLock::new(saved),
@@ -224,7 +233,7 @@ pub async fn serve(
         live: Arc::downgrade(&live),
     });
     let metrics_pool = live.pool.subscribe();
-    let html_rebuild = live.html_rebuild.clone();
+    let tasks = live.tasks.clone();
     *live.router.write().expect("live router lock") =
         interfaces::http_install::install_router(interfaces::http_install::InstallState {
             installer: setup,
@@ -253,7 +262,7 @@ pub async fn serve(
         metrics_pool,
         site.http,
         crate::HttpBackground {
-            html_rebuild,
+            tasks,
             scheduler_enabled: true,
         },
     );

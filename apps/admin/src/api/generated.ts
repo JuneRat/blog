@@ -277,6 +277,30 @@ export type TagSummary = { id: string, slug: string, name: string, version: numb
  */
 public_post_count: number, };
 
+export type TaskKind = "html_rebuild" | "retention" | "publish_due";
+
+export type TaskPublicationResult = { published: number, batches: number, has_more: boolean, };
+
+export type TaskReport = { html: HtmlRebuildReport | null, retention: TaskRetentionResult | null, publication: TaskPublicationResult | null, error: string | null, };
+
+export type TaskRetentionResult = { comment_ips: number, audit_logs: number, batches: number, has_more: boolean, dry_run: boolean, };
+
+export type TaskRun = { id: string, kind: TaskKind, status: TaskStatus, trigger: TaskTrigger, run_at: string, created_at: string, started_at: string | null, finished_at: string | null, retry_of: string | null, report: TaskReport, can_retry: boolean, can_cancel: boolean, };
+
+export type TaskRunPage = { items: Array<TaskRun>, next_cursor: string | null, };
+
+export type TaskSchedule = { kind: TaskKind, enabled: boolean, interval_seconds: number, next_run_at: string | null, version: number, };
+
+export type TaskScheduleBody = { enabled: boolean, interval_seconds: number, next_run_at: string | null, version: number, };
+
+export type TaskStartBody = { kind: TaskKind, run_at: string | null, };
+
+export type TaskStatus = "queued" | "running" | "completed" | "failed" | "interrupted" | "cancelled";
+
+export type TaskTrigger = "manual" | "once" | "periodic" | "retry";
+
+export type TaskView = { available: boolean, retention_available: boolean, pending_html: HtmlRebuildCounts | null, schedules: Array<TaskSchedule>, latest: Array<TaskRun>, runs: TaskRunPage, };
+
 export type ThemeOption = { slug: string, name: string, };
 
 export type ThemeSettings = { slug: string, effective_slug: string, source: SiteSettingsSource, version: number, available: Array<ThemeOption>, };

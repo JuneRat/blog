@@ -27,6 +27,10 @@ use application::ports::{
 use application::public_site::PublicSiteInteractor;
 use application::settings::SettingsInteractor;
 use application::site_info::SiteInfo;
+use application::tasks::{
+    TaskAdmin, TaskKind, TaskListQuery, TaskReport, TaskRun, TaskRunPage, TaskSchedule,
+    TaskScheduleInput, TaskStartInput, TaskStatus, TaskTrigger, TaskView, TasksInteractor,
+};
 use application::themes::ThemeRegistry;
 use async_trait::async_trait;
 use axum::body::Body;
@@ -154,6 +158,165 @@ impl HtmlRebuildJobs for FakeHtmlRebuildJobs {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum TaskCall {
+    View(Option<TaskKind>, Option<String>, Option<u32>),
+    Enqueue(TaskKind, Option<String>, application::audit::AuditContext),
+    Retry(Uuid, application::audit::AuditContext),
+    Cancel(Uuid, application::audit::AuditContext),
+    Schedule(i64, application::audit::AuditContext),
+}
+#[derive(Default)]
+struct FakeTaskState {
+    calls: Vec<TaskCall>,
+    latest: Option<TaskRun>,
+    schedule_version: i64,
+}
+#[derive(Default)]
+struct FakeTaskAdmin(Mutex<FakeTaskState>);
+
+fn fake_task(
+    id: Uuid,
+    kind: TaskKind,
+    run_at: time::OffsetDateTime,
+    trigger: TaskTrigger,
+) -> TaskRun {
+    TaskRun {
+        id,
+        kind,
+        status: TaskStatus::Queued,
+        trigger,
+        run_at,
+        created_at: time::OffsetDateTime::now_utc(),
+        started_at: None,
+        finished_at: None,
+        retry_of: None,
+        report: TaskReport::default(),
+        can_retry: false,
+        can_cancel: true,
+    }
+}
+#[async_trait]
+impl TaskAdmin for FakeTaskAdmin {
+    async fn view(&self, query: TaskListQuery) -> Result<TaskView, application::UseCaseError> {
+        let mut state = self.0.lock().unwrap();
+        state
+            .calls
+            .push(TaskCall::View(query.kind, query.cursor, query.limit));
+        let latest = state.latest.clone().into_iter().collect::<Vec<_>>();
+        Ok(TaskView {
+            available: true,
+            retention_available: true,
+            pending_html: Some(RebuildCounts {
+                posts: 3,
+                pages: 2,
+                comments: 1,
+            }),
+            schedules: vec![TaskSchedule {
+                kind: TaskKind::Retention,
+                enabled: false,
+                interval_seconds: 86400,
+                next_run_at: None,
+                version: state.schedule_version,
+            }],
+            latest: latest.clone(),
+            runs: TaskRunPage {
+                items: latest,
+                next_cursor: None,
+            },
+        })
+    }
+    async fn enqueue(
+        &self,
+        input: TaskStartInput,
+        audit: application::audit::AuditContext,
+    ) -> Result<TaskRun, application::UseCaseError> {
+        let mut state = self.0.lock().unwrap();
+        let run_at = input.resolve_run_at(time::OffsetDateTime::now_utc())?;
+        let trigger = if input.run_at.is_some() {
+            TaskTrigger::Once
+        } else {
+            TaskTrigger::Manual
+        };
+        state
+            .calls
+            .push(TaskCall::Enqueue(input.kind, input.run_at, audit));
+        let run = fake_task(
+            Uuid::from_u128(100 + state.calls.len() as u128),
+            input.kind,
+            run_at,
+            trigger,
+        );
+        state.latest = Some(run.clone());
+        Ok(run)
+    }
+    async fn retry(
+        &self,
+        id: Uuid,
+        audit: application::audit::AuditContext,
+    ) -> Result<TaskRun, application::UseCaseError> {
+        let mut state = self.0.lock().unwrap();
+        state.calls.push(TaskCall::Retry(id, audit));
+        if id.is_nil() {
+            return Err(application::UseCaseError::Conflict(
+                application::error::ConflictKind::Unknown,
+            ));
+        }
+        let mut run = fake_task(
+            Uuid::from_u128(200),
+            TaskKind::HtmlRebuild,
+            time::OffsetDateTime::now_utc(),
+            TaskTrigger::Retry,
+        );
+        run.retry_of = Some(id);
+        state.latest = Some(run.clone());
+        Ok(run)
+    }
+    async fn cancel(
+        &self,
+        id: Uuid,
+        audit: application::audit::AuditContext,
+    ) -> Result<TaskRun, application::UseCaseError> {
+        let mut state = self.0.lock().unwrap();
+        state.calls.push(TaskCall::Cancel(id, audit));
+        if id.is_nil() {
+            return Err(application::UseCaseError::Conflict(
+                application::error::ConflictKind::Unknown,
+            ));
+        }
+        let mut run = fake_task(
+            id,
+            TaskKind::HtmlRebuild,
+            time::OffsetDateTime::now_utc(),
+            TaskTrigger::Once,
+        );
+        run.status = TaskStatus::Cancelled;
+        run.can_cancel = false;
+        run.finished_at = Some(time::OffsetDateTime::now_utc());
+        state.latest = Some(run.clone());
+        Ok(run)
+    }
+    async fn save_retention_schedule(
+        &self,
+        input: TaskScheduleInput,
+        audit: application::audit::AuditContext,
+    ) -> Result<TaskSchedule, application::UseCaseError> {
+        let mut state = self.0.lock().unwrap();
+        state.calls.push(TaskCall::Schedule(input.version, audit));
+        if state.schedule_version != input.version {
+            return Err(application::UseCaseError::VersionConflict);
+        }
+        state.schedule_version += 1;
+        Ok(TaskSchedule {
+            kind: TaskKind::Retention,
+            enabled: input.enabled,
+            interval_seconds: input.interval_seconds,
+            next_run_at: input.resolve_next_run_at(time::OffsetDateTime::now_utc())?,
+            version: state.schedule_version,
+        })
+    }
+}
+
 fn site_fallback() -> SiteInfo {
     SiteInfo {
         home_page_size: application::site_info::DEFAULT_HOME_PAGE_SIZE,
@@ -177,6 +340,7 @@ struct Stack {
     pool: PgPool,
     media_dir: PathBuf,
     html_rebuild: Arc<FakeHtmlRebuildJobs>,
+    tasks: Arc<FakeTaskAdmin>,
 }
 
 async fn build(pool: PgPool) -> Stack {
@@ -427,6 +591,7 @@ async fn build(pool: PgPool) -> Stack {
         secure_cookies: false,
     };
     let html_rebuild = Arc::new(FakeHtmlRebuildJobs::default());
+    let tasks = Arc::new(FakeTaskAdmin::default());
 
     let router = mount_theme_assets(
         public_router(PublicSiteState {
@@ -439,6 +604,12 @@ async fn build(pool: PgPool) -> Stack {
     .merge(admin_router(admin_state.clone()))
     .merge(pages_router(admin_state.clone()))
     .merge(settings_router(admin_state.clone()))
+    .merge(interfaces::http_tasks::tasks_router(
+        interfaces::http_tasks::TasksState {
+            tasks: Arc::new(TasksInteractor::new(tasks.clone(), Arc::new(SystemClock))),
+            admin: admin_state.clone(),
+        },
+    ))
     .merge(interfaces::http_html_rebuild::html_rebuild_router(
         interfaces::http_html_rebuild::HtmlRebuildState {
             rebuild: Arc::new(HtmlRebuildAdminInteractor::new(html_rebuild.clone())),
@@ -470,6 +641,7 @@ async fn build(pool: PgPool) -> Stack {
         pool,
         media_dir,
         html_rebuild,
+        tasks,
     }
 }
 
@@ -699,6 +871,348 @@ async fn html_rebuild_wire_view_and_admission_use_only_the_authenticated_actor_a
         let state = stack.html_rebuild.0.lock().unwrap();
         assert_eq!(state.views, 4);
         assert_eq!(state.starts.len(), 3);
+    })
+    .await;
+}
+
+const TASKS_PATH: &str = "/api/admin/v1/tasks";
+
+#[tokio::test]
+async fn tasks_http_auth_permission_origin_csrf_and_validation_precede_admin_port() {
+    isolated_html_rebuild(|stack| async move {
+        let (editor, editor_csrf) = login_as(&stack, "editor").await;
+        let (admin, csrf) = login_as(&stack, "admin").await;
+        let id = Uuid::from_u128(42);
+        let retry = format!("{TASKS_PATH}/{id}/retry");
+        let cancel = format!("{TASKS_PATH}/{id}/cancel");
+        let schedule = format!("{TASKS_PATH}/retention-schedule");
+        for (method, path) in [
+            ("GET", TASKS_PATH),
+            ("POST", TASKS_PATH),
+            ("POST", retry.as_str()),
+            ("POST", cancel.as_str()),
+            ("PUT", schedule.as_str()),
+        ] {
+            for (cookie, token, origin, expected) in [
+                (None, None, "https://blog.test", StatusCode::UNAUTHORIZED),
+                (
+                    Some(editor.as_str()),
+                    Some(editor_csrf.as_str()),
+                    "https://blog.test",
+                    StatusCode::FORBIDDEN,
+                ),
+            ] {
+                let mut request = Request::builder()
+                    .method(method)
+                    .uri(path)
+                    .header("host", "blog.test")
+                    .header("origin", origin)
+                    .header("content-type", "application/json");
+                if let Some(cookie) = cookie {
+                    request = request.header("cookie", format!("blog_session={cookie}"));
+                }
+                if let Some(token) = token {
+                    request = request.header("x-csrf-token", token);
+                }
+                let (status, body) = html_rebuild_exchange(
+                    &stack.router,
+                    request.body(Body::from("{invalid")).unwrap(),
+                )
+                .await;
+                assert_eq!(status, expected, "{method} {path}: {body}");
+            }
+            if method != "GET" {
+                for (token, origin, expected) in [
+                    (None, "https://blog.test", StatusCode::BAD_REQUEST),
+                    (Some("wrong"), "https://blog.test", StatusCode::BAD_REQUEST),
+                    (
+                        Some(csrf.as_str()),
+                        "https://evil.example",
+                        StatusCode::FORBIDDEN,
+                    ),
+                ] {
+                    let mut request = Request::builder()
+                        .method(method)
+                        .uri(path)
+                        .header("host", "blog.test")
+                        .header("origin", origin)
+                        .header("cookie", format!("blog_session={admin}"))
+                        .header("content-type", "application/json");
+                    if let Some(token) = token {
+                        request = request.header("x-csrf-token", token);
+                    }
+                    let (status, body) = html_rebuild_exchange(
+                        &stack.router,
+                        request.body(Body::from("{invalid")).unwrap(),
+                    )
+                    .await;
+                    assert_eq!(status, expected, "{method} {path}: {body}");
+                }
+            }
+        }
+        for query in [
+            "kind=untrusted",
+            "limit=0",
+            "limit=101",
+            "limit=no",
+            "cursor=broken",
+            "extra=hidden",
+        ] {
+            let request = Request::builder()
+                .uri(format!("{TASKS_PATH}?{query}"))
+                .header("cookie", format!("blog_session={admin}"))
+                .body(Body::empty())
+                .unwrap();
+            let (status, body) = html_rebuild_exchange(&stack.router, request).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{query}: {body}");
+        }
+        for action in ["retry", "cancel"] {
+            for (cookie, token, expected) in [
+                (&editor, &editor_csrf, StatusCode::FORBIDDEN),
+                (&admin, &csrf, StatusCode::BAD_REQUEST),
+            ] {
+                let request = Request::builder()
+                    .method("POST")
+                    .uri(format!("{TASKS_PATH}/invalid-task-id/{action}"))
+                    .header("host", "blog.test")
+                    .header("origin", "https://blog.test")
+                    .header("cookie", format!("blog_session={cookie}"))
+                    .header("x-csrf-token", token)
+                    .body(Body::empty())
+                    .unwrap();
+                let (status, body) = html_rebuild_exchange(&stack.router, request).await;
+                assert_eq!(status, expected, "{action}: {body}");
+                assert_eq!(
+                    body["code"],
+                    if expected == StatusCode::FORBIDDEN {
+                        "forbidden"
+                    } else {
+                        "invalid_request"
+                    }
+                );
+            }
+        }
+        for (method, path) in [("POST", TASKS_PATH), ("PUT", schedule.as_str())] {
+            let response = stack
+                .router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri(path)
+                        .header("host", "blog.test")
+                        .header("origin", "https://blog.test")
+                        .header("cookie", format!("blog_session={admin}"))
+                        .header("x-csrf-token", &csrf)
+                        .header("content-type", "application/json")
+                        .body(Body::from("x".repeat(9 * 1024)))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+            assert_eq!(response.headers()["cache-control"], "no-store");
+            assert!(response.headers().contains_key("x-request-id"));
+        }
+        for input in [
+            json!({"kind":"shell"}),
+            json!({"kind":"html_rebuild","actor_id":id}),
+            json!({"kind":"html_rebuild","ip_address":"203.0.113.99"}),
+            json!({"kind":"retention","run_at":"2099-01-01T00:00:00Z"}),
+            json!({"kind":"html_rebuild","run_at":"2099-01-01T00:00:00Z"}),
+            json!({"kind":"html_rebuild","run_at":"2020-01-01T00:00:00Z"}),
+        ] {
+            let request = Request::builder()
+                .method("POST")
+                .uri(TASKS_PATH)
+                .header("host", "blog.test")
+                .header("origin", "https://blog.test")
+                .header("cookie", format!("blog_session={admin}"))
+                .header("x-csrf-token", &csrf)
+                .header("content-type", "application/json")
+                .body(Body::from(input.to_string()))
+                .unwrap();
+            let (status, body) = html_rebuild_exchange(&stack.router, request).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{input}: {body}");
+        }
+        for input in [
+            json!({"enabled":true,"interval_seconds":3599,"version":0}),
+            json!({"enabled":true,"interval_seconds":3600,"version":-1}),
+            json!({"enabled":true,"interval_seconds":3600,"version":0,"actor_id":id}),
+        ] {
+            let request = Request::builder()
+                .method("PUT")
+                .uri(&schedule)
+                .header("host", "blog.test")
+                .header("origin", "https://blog.test")
+                .header("cookie", format!("blog_session={admin}"))
+                .header("x-csrf-token", &csrf)
+                .header("content-type", "application/json")
+                .body(Body::from(input.to_string()))
+                .unwrap();
+            assert_eq!(
+                html_rebuild_exchange(&stack.router, request).await.0,
+                StatusCode::BAD_REQUEST
+            );
+        }
+        assert!(
+            stack.tasks.0.lock().unwrap().calls.is_empty(),
+            "all rejections precede runtime reads or writes"
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn tasks_http_wire_times_whitelist_and_trusted_audit_are_preserved() {
+    isolated_html_rebuild(|stack| async move {
+        let (admin, csrf) = login_as(&stack, "admin").await;
+        let actor: Uuid = sqlx::query_scalar("SELECT id FROM users WHERE username='admin'")
+            .fetch_one(&stack.pool)
+            .await
+            .unwrap();
+        let router = stack.router.clone().layer(axum::Extension(
+            interfaces::http_client_ip::TrustedProxies(vec!["127.0.0.1".parse().unwrap()]),
+        ));
+        let due = (time::OffsetDateTime::now_utc() + time::Duration::hours(2))
+            .to_offset(time::UtcOffset::from_hms(8, 0, 0).unwrap());
+        let input_due = due
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap();
+        let expected_due = due
+            .to_offset(time::UtcOffset::UTC)
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap();
+        let request = |method: &str, path: &str, input: serde_json::Value| {
+            let mut request = Request::builder()
+                .method(method)
+                .uri(path)
+                .header("host", "blog.test")
+                .header("origin", "https://blog.test")
+                .header("cookie", format!("blog_session={admin}"))
+                .header("x-csrf-token", &csrf)
+                .header("content-type", "application/json")
+                .header("x-forwarded-for", "203.0.113.99, 2001:db8::17, 127.0.0.1")
+                .body(Body::from(input.to_string()))
+                .unwrap();
+            request.extensions_mut().insert(axum::extract::ConnectInfo(
+                "127.0.0.1:42000".parse::<std::net::SocketAddr>().unwrap(),
+            ));
+            request
+        };
+        let (status, initial) =
+            html_rebuild_exchange(&router, request("GET", TASKS_PATH, json!(null))).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(initial["latest"], json!([]));
+        assert_eq!(
+            initial["pending_html"],
+            json!({"posts":3,"pages":2,"comments":1})
+        );
+        let (status, planned) = html_rebuild_exchange(
+            &router,
+            request(
+                "POST",
+                TASKS_PATH,
+                json!({"kind":"html_rebuild","run_at":input_due}),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::ACCEPTED);
+        assert_eq!(planned["run_at"], expected_due);
+        assert_eq!(planned["trigger"], "once");
+        assert_eq!(planned["status"], "queued");
+        let id = planned["id"].as_str().unwrap();
+        let (status, view) = html_rebuild_exchange(
+            &router,
+            request(
+                "GET",
+                "/api/admin/v1/tasks?kind=html_rebuild&limit=100",
+                json!(null),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(view["latest"], json!([planned.clone()]));
+        assert_eq!(view["runs"]["items"], json!([planned]));
+        for kind in ["retention", "publish_due"] {
+            let (status, run) =
+                html_rebuild_exchange(&router, request("POST", TASKS_PATH, json!({"kind":kind})))
+                    .await;
+            assert_eq!(status, StatusCode::ACCEPTED);
+            assert_eq!(run["kind"], kind);
+            assert_eq!(run["trigger"], "manual");
+            assert!(application::tasks::parse_time(run["run_at"].as_str().unwrap()).is_ok());
+        }
+        let (status, retry) = html_rebuild_exchange(
+            &router,
+            request("POST", &format!("{TASKS_PATH}/{id}/retry"), json!(null)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::ACCEPTED);
+        assert_eq!(retry["retry_of"], id);
+        assert_ne!(retry["id"], id);
+        assert_eq!(retry["trigger"], "retry");
+        let (status, cancelled) = html_rebuild_exchange(
+            &router,
+            request("POST", &format!("{TASKS_PATH}/{id}/cancel"), json!(null)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(cancelled["status"], "cancelled");
+        assert_eq!(cancelled["can_cancel"], false);
+        let schedule_path = format!("{TASKS_PATH}/retention-schedule");
+        let policy =
+            json!({"enabled":true,"interval_seconds":3600,"next_run_at":input_due,"version":0});
+        let (status, saved) =
+            html_rebuild_exchange(&router, request("PUT", &schedule_path, policy.clone())).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(saved["version"], 1);
+        assert_eq!(saved["next_run_at"], expected_due);
+        let (status, conflict) =
+            html_rebuild_exchange(&router, request("PUT", &schedule_path, policy)).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(conflict["code"], "version_conflict");
+        for action in ["retry", "cancel"] {
+            let (status, conflict) = html_rebuild_exchange(
+                &router,
+                request(
+                    "POST",
+                    &format!("{TASKS_PATH}/{}/{action}", Uuid::nil()),
+                    json!(null),
+                ),
+            )
+            .await;
+            assert_eq!(status, StatusCode::CONFLICT);
+            assert_eq!(conflict["code"], "conflict");
+        }
+        let state = stack.tasks.0.lock().unwrap();
+        assert_eq!(state.calls[0], TaskCall::View(None, None, None));
+        assert_eq!(
+            state.calls[1],
+            TaskCall::Enqueue(
+                TaskKind::HtmlRebuild,
+                Some(input_due),
+                application::audit::AuditContext {
+                    actor_id: Some(actor),
+                    ip_address: Some("2001:db8::17".parse().unwrap())
+                }
+            )
+        );
+        assert_eq!(
+            state.calls[2],
+            TaskCall::View(Some(TaskKind::HtmlRebuild), None, Some(100))
+        );
+        for call in &state.calls {
+            let audit = match call {
+                TaskCall::View(..) => continue,
+                TaskCall::Enqueue(_, _, audit)
+                | TaskCall::Retry(_, audit)
+                | TaskCall::Cancel(_, audit)
+                | TaskCall::Schedule(_, audit) => audit,
+            };
+            assert_eq!(audit.actor_id, Some(actor));
+            assert_eq!(audit.ip_address, Some("2001:db8::17".parse().unwrap()));
+        }
     })
     .await;
 }

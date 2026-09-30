@@ -114,3 +114,50 @@ fn settings_commands_keep_rejecting_unknown_fields() {
     );
     assert!(serde_json::from_value::<interfaces::http_contract::RetentionSettings>(json!({"comment_ip_days": 180, "comment_version": 1, "audit_days": 180, "audit_version": 1, "extra": true})).is_err());
 }
+
+#[test]
+fn task_transport_normalizes_instants_and_never_exposes_the_execution_lease() {
+    use application::tasks::{TaskKind, TaskReport, TaskRun, TaskStatus, TaskTrigger};
+    let run = TaskRun {
+        id: Uuid::from_u128(42),
+        kind: TaskKind::HtmlRebuild,
+        status: TaskStatus::Queued,
+        trigger: TaskTrigger::Once,
+        run_at: time::macros::datetime!(2026-10-02 08:15 +08:00),
+        created_at: time::macros::datetime!(2026-10-01 00:00 UTC),
+        started_at: None,
+        finished_at: None,
+        retry_of: None,
+        report: TaskReport::default(),
+        can_retry: false,
+        can_cancel: true,
+    };
+    let dto = interfaces::http_contract::TaskRun::try_from(run.clone()).unwrap();
+    let value = serde_json::to_value(dto).unwrap();
+    assert_eq!(value["run_at"], "2026-10-02T00:15:00Z");
+    assert_eq!(value["status"], "queued");
+    assert_eq!(value["trigger"], "once");
+    assert_eq!(value["started_at"], serde_json::Value::Null);
+    assert_eq!(value["report"]["html"], serde_json::Value::Null);
+    assert!(!value.as_object().unwrap().contains_key("lease_token"));
+    let invalid_time = TaskRun {
+        created_at: time::macros::datetime!(-0001-01-01 00:00 UTC),
+        ..run
+    };
+    assert!(matches!(
+        interfaces::http_contract::TaskRun::try_from(invalid_time),
+        Err(application::UseCaseError::DataCorrupt(_))
+    ));
+    assert!(
+        serde_json::from_value::<interfaces::http_contract::TaskStartBody>(
+            json!({"kind":"shell","command":"rebuild-html"})
+        )
+        .is_err()
+    );
+    assert!(
+        serde_json::from_value::<interfaces::http_contract::TaskScheduleBody>(
+            json!({"enabled":true,"interval_seconds":3600,"version":0,"actor_id":Uuid::nil()})
+        )
+        .is_err()
+    );
+}

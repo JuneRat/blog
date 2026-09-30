@@ -15,6 +15,7 @@ pub mod http_install;
 pub mod http_limits;
 pub mod http_media;
 pub mod http_support;
+pub mod http_tasks;
 
 pub mod http_retention;
 

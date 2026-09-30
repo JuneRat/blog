@@ -5,12 +5,14 @@ mod common;
 mod html_rebuild;
 mod identity;
 mod settings;
+mod tasks;
 pub use audit::*;
 pub use comments::*;
 pub use common::*;
 pub use html_rebuild::*;
 pub use identity::*;
 pub use settings::*;
+pub use tasks::*;
 
 pub(crate) fn declare<T: ts_rs::TS>(out: &mut Vec<String>) {
     // serde_json sends integers as JSON numbers; UUIDs are strings.
@@ -51,6 +53,18 @@ pub fn typescript() -> String {
     declare::<HtmlRebuildJobStatus>(&mut out);
     declare::<HtmlRebuildJob>(&mut out);
     declare::<HtmlRebuildView>(&mut out);
+    declare::<TaskKind>(&mut out);
+    declare::<TaskStatus>(&mut out);
+    declare::<TaskTrigger>(&mut out);
+    declare::<TaskRetentionResult>(&mut out);
+    declare::<TaskPublicationResult>(&mut out);
+    declare::<TaskReport>(&mut out);
+    declare::<TaskRun>(&mut out);
+    declare::<TaskSchedule>(&mut out);
+    declare::<TaskRunPage>(&mut out);
+    declare::<TaskView>(&mut out);
+    declare::<TaskStartBody>(&mut out);
+    declare::<TaskScheduleBody>(&mut out);
     declare::<CommentPolicy>(&mut out);
     declare::<CommentModerationMode>(&mut out);
     declare::<CommentSubmissionResult>(&mut out);

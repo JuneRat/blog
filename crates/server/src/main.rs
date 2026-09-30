@@ -8,6 +8,7 @@ mod installation;
 mod logging;
 mod observability;
 mod recovery;
+mod tasks;
 mod transport;
 mod website;
 
@@ -232,25 +233,34 @@ async fn run(command: Command, mut config: config::DeploymentConfig) -> Result<(
             let site = site_config.expect("serve configuration was validated above");
             let telemetry = interfaces::observability::Telemetry::new(&observability::build_info());
             let metrics_listener = observability::bind(config.metrics_bind()?).await?;
-            let html_rebuild = Arc::new(html_rebuild::HtmlRebuildCoordinator::default());
+            let tasks = Arc::new(tasks::TaskSupervisor::default());
+            let maintenance = if recovery_mode {
+                None
+            } else {
+                tasks::maintenance_pool(&config, &database.url, &pool).await
+            };
             let app = website::build_router(
                 &pool,
                 &site,
                 roles,
                 Arc::new(RenderingRuntime::default().with_observer(Arc::new(telemetry.clone()))),
                 &telemetry,
-                html_rebuild.clone(),
-                recovery_mode,
+                website::TaskEnvironment {
+                    supervisor: tasks.clone(),
+                    maintenance,
+                    recovery_mode,
+                },
             )
             .await?;
+            tasks.activate(app.tasks);
             serve(
-                app,
+                app.router,
                 &site.bind,
                 pool,
                 telemetry,
                 metrics_listener,
                 HttpBackground {
-                    html_rebuild,
+                    tasks,
                     scheduler_enabled: !recovery_mode,
                 },
                 site.http,
@@ -261,7 +271,7 @@ async fn run(command: Command, mut config: config::DeploymentConfig) -> Result<(
 }
 
 struct HttpBackground {
-    html_rebuild: Arc<html_rebuild::HtmlRebuildCoordinator>,
+    tasks: Arc<tasks::TaskSupervisor>,
     scheduler_enabled: bool,
 }
 
@@ -316,16 +326,7 @@ async fn serve_http(
         ));
     }
     if background.scheduler_enabled {
-        let mut ready = pool.clone();
-        let mut stopping = receiver;
-        tasks.spawn(async move {
-            let work = async {
-                let pool = ready.wait_for(|pool| pool.is_some()).await.map_err(|e| e.to_string())?.clone().expect("checked pool");
-                publish_scheduler(pool, telemetry).await;
-                Ok(())
-            };
-            tokio::select! { result = work => result, _ = stopping.wait_for(|closed| *closed) => Ok(()) }
-        });
+        background.tasks.start();
     }
     let result = tokio::select! {
         _ = shutdown_signal() => Ok(()),
@@ -336,15 +337,16 @@ async fn serve_http(
         },
     };
     let deadline = tokio::time::Instant::now() + limits.shutdown;
-    background.html_rebuild.close();
+    background.tasks.close();
     shutdown.send_replace(true);
-    background.html_rebuild.shutdown().await;
+    background.tasks.shutdown(deadline).await;
     let drain = async {
         while let Some(result) = tasks.join_next().await {
             if let Err(error) = result {
                 tracing::warn!(%error, "关闭服务任务失败");
             }
         }
+        background.tasks.close_maintenance_pool().await;
         let database = pool.borrow().clone();
         if let Some(database) = database {
             database.close().await;
@@ -355,24 +357,6 @@ async fn serve_http(
         tracing::warn!("关闭总期限已到，停止剩余任务");
     }
     result
-}
-
-async fn publish_scheduler(
-    database: infrastructure::Database,
-    telemetry: interfaces::observability::Telemetry,
-) {
-    let publisher = assembly::publisher(&database);
-    let mut log = logging::PublicationLog::default();
-    let mut ticks = tokio::time::interval(std::time::Duration::from_secs(30));
-    ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    loop {
-        ticks.tick().await;
-        let started = std::time::Instant::now();
-        let result = publisher.run().await;
-        let elapsed = started.elapsed();
-        telemetry.publication_run(elapsed, result.is_ok());
-        log.record(&result, elapsed, database.pool_snapshot());
-    }
 }
 
 async fn shutdown_signal() {
