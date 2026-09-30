@@ -235,13 +235,16 @@ async fn maintenance_does_not_require_a_working_website() {
         invalid_url,
     ));
 
-    // Damaged legacy body content must not pull the HTML rebuild into password,
-    // role or OAuth repair commands. There is intentionally no matching media.
-    sqlx::query(
-        "UPDATE posts SET content = $1, content_render_version = 1 WHERE slug = 'assembly-post'",
+    // Damaged stored body content with a mismatched pipeline must not pull the
+    // HTML rebuild into password, role or OAuth repair commands. There is
+    // intentionally no matching media.
+    let stored_render_version: i32 = sqlx::query_scalar(
+        "UPDATE posts SET content = $1, content_render_version = $2 \
+         WHERE slug = 'assembly-post' RETURNING content_render_version",
     )
     .bind(format!("![missing](/media/{})", uuid::Uuid::now_v7()))
-    .execute(&pool)
+    .bind(infrastructure::CONTENT_RENDER_VERSION + 1)
+    .fetch_one(&pool)
     .await
     .unwrap();
     assert_success(cli(
@@ -271,7 +274,10 @@ async fn maintenance_does_not_require_a_working_website() {
             .fetch_one(&pool)
             .await
             .unwrap();
-    assert_eq!(pending, 2, "普通命令不得触发内容派生物重建");
+    assert_eq!(
+        pending, stored_render_version,
+        "普通命令不得触发内容派生物重建"
+    );
 
     let failed = cli(&database_url, &["rebuild-html"], None, invalid_url);
     assert!(!failed.status.success());
@@ -337,7 +343,7 @@ async fn maintenance_does_not_require_a_working_website() {
             .fetch_one(&pool)
             .await
             .unwrap();
-    assert_eq!(pending, 2, "serve 不得隐式重建");
+    assert_eq!(pending, stored_render_version, "serve 不得隐式重建");
 
     // 修复历史引用后可重跑；网站配置错误仍由 serve 自己报告。
     sqlx::query("UPDATE posts SET content = 'body' WHERE slug = 'assembly-post'")
@@ -384,15 +390,17 @@ async fn explicit_html_rebuild_updates_all_three_sources_and_is_repeatable() {
     let database = "blog_explicit_html_rebuild_test";
     let pool = common::fresh_database(database).await;
     let url = common::test_db_url(&common::admin_url(), database);
-    sqlx::raw_sql(
+    let stale_content_version = infrastructure::CONTENT_RENDER_VERSION + 1;
+    let stale_comment_version = infrastructure::COMMENT_RENDER_VERSION + 1;
+    sqlx::raw_sql(&format!(
         "INSERT INTO users(id,username) VALUES(gen_random_uuid(),'html-author');
          INSERT INTO posts(id,author_id,slug,content,content_html,content_render_version)
-           SELECT gen_random_uuid(),id,'html-post','**fresh**','stale',2 FROM users;
+           SELECT gen_random_uuid(),id,'html-post','**fresh**','stale',{stale_content_version} FROM users;
          INSERT INTO pages(id,slug,content,content_html,content_render_version)
-           VALUES(gen_random_uuid(),'html-page','**fresh**','stale',2);
+           VALUES(gen_random_uuid(),'html-page','**fresh**','stale',{stale_content_version});
          INSERT INTO comments(id,post_id,author_name,content,content_html,content_render_version)
-           SELECT gen_random_uuid(),id,'guest','**fresh**','stale',2 FROM posts;",
-    )
+           SELECT gen_random_uuid(),id,'guest','**fresh**','stale',{stale_comment_version} FROM posts;",
+    ))
     .execute(&pool)
     .await
     .unwrap();
@@ -414,7 +422,14 @@ async fn explicit_html_rebuild_updates_all_three_sources_and_is_repeatable() {
         .await
         .unwrap();
         assert_eq!(row.0, "stale");
-        assert_eq!(row.1, 2);
+        assert_eq!(
+            row.1,
+            if table == "comments" {
+                stale_comment_version
+            } else {
+                stale_content_version
+            }
+        );
         before.push((row.2, row.3));
     }
     // 即使连接拥有建表权限，也必须能在 PostgreSQL 强制只读模式下预检。
