@@ -7,7 +7,7 @@ use application::error::UseCaseError;
 use application::ports::{AdminPageQuery, AdminPostQuery};
 use async_trait::async_trait;
 use domain::content::{Visibility, page::PageStatus, post::PostStatus};
-use sqlx::{PgPool, Row};
+use sqlx::{PgPool, Postgres, QueryBuilder, Row};
 use uuid::Uuid;
 
 pub struct PostgresAdminContentQuery {
@@ -32,48 +32,29 @@ impl AdminPostQuery for PostgresAdminContentQuery {
             .execute(&mut *tx)
             .await
             .map_err(map_sqlx_error)?;
-        let (total,): (i64,) = sqlx::query_as(
-            "SELECT count(*) FROM posts
-             WHERE ($1::uuid IS NULL OR author_id = $1) AND (deleted_at IS NOT NULL) = $2
-             AND ($3::text IS NULL OR status = $3)
-             AND ($4::text IS NULL OR visibility = $4)
-             AND ($5::text IS NULL OR strpos(lower(title), lower($5)) > 0
-                  OR strpos(lower(slug), lower($5)) > 0 OR strpos(lower(content), lower($5)) > 0
-                  OR strpos(lower(coalesce(excerpt, '')), lower($5)) > 0)
-             AND ($6::uuid IS NULL OR category_id = $6)",
-        )
-        .bind(author_id)
-        .bind(filter.trash())
-        .bind(filter.status().map(|status| status.as_str()))
-        .bind(filter.visibility().map(Visibility::as_str))
-        .bind(filter.q())
-        .bind(filter.category_id())
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(map_sqlx_error)?;
-        // 排序字段只由内部布尔值选择，不拼接用户输入。
-        let order = if filter.trash() {
-            "deleted_at"
+        let mut count = QueryBuilder::new("SELECT count(*) FROM posts");
+        post_filters(&mut count, author_id, filter);
+        let (total,): (i64,) = count
+            .build_query_as()
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(map_sqlx_error)?;
+        let mut list = QueryBuilder::new(
+            "SELECT posts.id, posts.slug, posts.title, posts.status, posts.visibility, posts.version, \
+             posts.published_at, posts.updated_at, posts.author_id, users.username AS author_username \
+             FROM posts JOIN users ON users.id = posts.author_id",
+        );
+        post_filters(&mut list, author_id, filter);
+        list.push(if filter.trash() {
+            " ORDER BY posts.deleted_at DESC, posts.id DESC LIMIT "
         } else {
-            "updated_at"
-        };
-        let rows = sqlx::query(&format!("SELECT posts.id, posts.slug, title, posts.status, visibility, posts.version, published_at, posts.updated_at, author_id, users.username AS author_username
-             FROM posts JOIN users ON users.id = posts.author_id WHERE ($1::uuid IS NULL OR author_id = $1) AND (posts.deleted_at IS NOT NULL) = $2
-             AND ($3::text IS NULL OR posts.status = $3)
-             AND ($4::text IS NULL OR visibility = $4)
-             AND ($5::text IS NULL OR strpos(lower(title), lower($5)) > 0
-                  OR strpos(lower(slug), lower($5)) > 0 OR strpos(lower(content), lower($5)) > 0
-                  OR strpos(lower(coalesce(excerpt, '')), lower($5)) > 0)
-             AND ($6::uuid IS NULL OR category_id = $6)
-             ORDER BY posts.{order} DESC, posts.id DESC LIMIT $7 OFFSET $8"))
-            .bind(author_id)
-            .bind(filter.trash())
-            .bind(filter.status().map(|status| status.as_str()))
-            .bind(filter.visibility().map(Visibility::as_str))
-        .bind(filter.q())
-        .bind(filter.category_id())
-            .bind(filter.limit())
-            .bind(filter.offset())
+            " ORDER BY posts.updated_at DESC, posts.id DESC LIMIT "
+        })
+        .push_bind(filter.limit())
+        .push(" OFFSET ")
+        .push_bind(filter.offset());
+        let rows = list
+            .build()
             .fetch_all(&mut *tx)
             .await
             .map_err(map_sqlx_error)?;
@@ -114,44 +95,30 @@ impl AdminPageQuery for PostgresAdminContentQuery {
             .execute(&mut *tx)
             .await
             .map_err(map_sqlx_error)?;
-        let (total,): (i64,) = sqlx::query_as(
-            "SELECT count(*) FROM pages WHERE (deleted_at IS NOT NULL) = $1
-             AND ($2::text IS NULL OR status = $2)
-             AND ($3::text IS NULL OR visibility = $3)
-             AND ($4::text IS NULL OR strpos(lower(title), lower($4)) > 0
-                  OR strpos(lower(slug), lower($4)) > 0 OR strpos(lower(content), lower($4)) > 0)",
-        )
-        .bind(filter.trash())
-        .bind(filter.status().map(|status| status.as_str()))
-        .bind(filter.visibility().map(Visibility::as_str))
-        .bind(filter.q())
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(map_sqlx_error)?;
-        // 排序字段只由内部布尔值选择，不拼接用户输入。
-        let order = if filter.trash() {
-            "deleted_at"
+        let mut count = QueryBuilder::new("SELECT count(*) FROM pages");
+        page_filters(&mut count, filter);
+        let (total,): (i64,) = count
+            .build_query_as()
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(map_sqlx_error)?;
+        let mut list = QueryBuilder::new(
+            "SELECT id, slug, title, status, visibility, version, published_at, updated_at FROM pages",
+        );
+        page_filters(&mut list, filter);
+        list.push(if filter.trash() {
+            " ORDER BY deleted_at DESC, id DESC LIMIT "
         } else {
-            "updated_at"
-        };
-        let rows = sqlx::query(&format!(
-            "SELECT id, slug, title, status, visibility, version, published_at, updated_at
-             FROM pages WHERE (deleted_at IS NOT NULL) = $1
-             AND ($2::text IS NULL OR status = $2)
-             AND ($3::text IS NULL OR visibility = $3)
-             AND ($4::text IS NULL OR strpos(lower(title), lower($4)) > 0
-                  OR strpos(lower(slug), lower($4)) > 0 OR strpos(lower(content), lower($4)) > 0)
-             ORDER BY {order} DESC, id DESC LIMIT $5 OFFSET $6"
-        ))
-        .bind(filter.trash())
-        .bind(filter.status().map(|status| status.as_str()))
-        .bind(filter.visibility().map(Visibility::as_str))
-        .bind(filter.q())
-        .bind(filter.limit())
-        .bind(filter.offset())
-        .fetch_all(&mut *tx)
-        .await
-        .map_err(map_sqlx_error)?;
+            " ORDER BY updated_at DESC, id DESC LIMIT "
+        })
+        .push_bind(filter.limit())
+        .push(" OFFSET ")
+        .push_bind(filter.offset());
+        let rows = list
+            .build()
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(map_sqlx_error)?;
         let items = rows
             .iter()
             .map(|row| {
@@ -174,4 +141,119 @@ impl AdminPageQuery for PostgresAdminContentQuery {
         tx.commit().await.map_err(map_sqlx_error)?;
         Ok((items, total))
     }
+}
+
+// Build only the requested predicates. In particular, static trash predicates let
+// PostgreSQL use partial ordering indexes even after switching to a generic plan.
+fn post_filters<'a>(
+    query: &mut QueryBuilder<'a, Postgres>,
+    author_id: Option<Uuid>,
+    filter: &'a PostListFilter,
+) {
+    query.push(if filter.trash() {
+        " WHERE posts.deleted_at IS NOT NULL"
+    } else {
+        " WHERE posts.deleted_at IS NULL"
+    });
+    if let Some(id) = author_id {
+        query.push(" AND posts.author_id = ").push_bind(id);
+    }
+    if let Some(status) = filter.status() {
+        query
+            .push(" AND posts.status = ")
+            .push_bind(status.as_str());
+    }
+    if let Some(visibility) = filter.visibility() {
+        query
+            .push(" AND posts.visibility = ")
+            .push_bind(visibility.as_str());
+    }
+    if let Some(id) = filter.category_id() {
+        query.push(" AND posts.category_id = ").push_bind(id);
+    }
+    if let Some(q) = filter.q() {
+        search_filter(
+            query,
+            q,
+            &[
+                "posts.title",
+                "posts.slug",
+                "posts.content",
+                "coalesce(posts.excerpt, '')",
+            ],
+        );
+    }
+}
+
+fn page_filters<'a>(query: &mut QueryBuilder<'a, Postgres>, filter: &'a PageListFilter) {
+    query.push(if filter.trash() {
+        " WHERE pages.deleted_at IS NOT NULL"
+    } else {
+        " WHERE pages.deleted_at IS NULL"
+    });
+    if let Some(status) = filter.status() {
+        query
+            .push(" AND pages.status = ")
+            .push_bind(status.as_str());
+    }
+    if let Some(visibility) = filter.visibility() {
+        query
+            .push(" AND pages.visibility = ")
+            .push_bind(visibility.as_str());
+    }
+    if let Some(q) = filter.q() {
+        search_filter(query, q, &["pages.title", "pages.slug", "pages.content"]);
+    }
+}
+
+fn search_filter<'a>(query: &mut QueryBuilder<'a, Postgres>, q: &'a str, columns: &[&'static str]) {
+    // One trigram candidate index per content type keeps Chinese/case-insensitive
+    // literal substring semantics. The original per-field predicate rejects a
+    // match spanning concatenated fields (e.g. a query containing a newline).
+    // Avoid an unselective full trigram-index scan for short/punctuation-only
+    // input. Such input keeps the existing per-field substring scan.
+    let mut run = 0;
+    let can_use_trigrams = q.chars().any(|ch| {
+        run = if ch.is_alphanumeric() { run + 1 } else { 0 };
+        run >= 3
+    });
+    if can_use_trigrams {
+        query.push(" AND lower(");
+        for (i, column) in columns.iter().enumerate() {
+            if i > 0 {
+                query.push(" || E'\\n' || ");
+            }
+            query.push(*column);
+        }
+        query
+            .push(") LIKE lower(")
+            .push_bind(substring_pattern(q))
+            .push(r") ESCAPE E'\\'");
+    }
+    query.push(" AND (");
+    for (i, column) in columns.iter().enumerate() {
+        if i > 0 {
+            query.push(" OR ");
+        }
+        query
+            .push("strpos(lower(")
+            .push(*column)
+            .push("), lower(")
+            .push_bind(q)
+            .push(")) > 0");
+    }
+    query.push(")");
+}
+
+fn substring_pattern(q: &str) -> String {
+    let mut pattern = String::with_capacity(q.len() + 2);
+    pattern.push('%');
+    for ch in q.chars() {
+        if matches!(ch, '%' | '_' | '\\') {
+            pattern.push('\\');
+        }
+        pattern.push(ch);
+    }
+    pattern.push('%');
+    pattern
 }

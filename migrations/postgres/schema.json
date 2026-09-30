@@ -21,6 +21,11 @@
       "version": 4,
       "file": "0004_comment_moderation.sql",
       "checksum": "4c019801f7a5d532630f22d742853946252c072b18c19c27e72e23e8c96cbcda1096d8b62b489750573c214029063681"
+    },
+    {
+      "version": 5,
+      "file": "0005_content_admin_search_indexes.sql",
+      "checksum": "eda909f18428745430291aed3ff9d7a5a503dbebcce44a4a87122ec71fa50fa037d92e5e7d2d1cb02769d4b5727af694"
     }
   ],
   "tables": {
