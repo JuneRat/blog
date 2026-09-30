@@ -41,6 +41,8 @@ vi.mock("../api/pages", async (load) => {
 import { ApiError } from "../api/client";
 import { pagesApi } from "../api/pages";
 import { AdminProviders } from "../providers";
+import { useQueryClient, type QueryClient } from "@tanstack/react-query";
+import { queryKeys } from "../queryClient";
 import { PageEditScreen } from "./PageEditScreen";
 import type { PageDetail } from "../types";
 
@@ -51,6 +53,17 @@ import type { PageDetail } from "../types";
  */
 function renderPage(ui: React.ReactElement): ReturnType<typeof render> {
   return render(<AdminProviders>{ui}</AdminProviders>);
+}
+
+function QueryClientProbe({ capture }: { capture: (client: QueryClient) => void }) {
+  capture(useQueryClient());
+  return null;
+}
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
 }
 
 const getPage = vi.mocked(pagesApi.getPage);
@@ -145,6 +158,89 @@ describe("PageEditScreen 保存流程", () => {
     fireEvent.click(screen.getByRole("button", { name: "重新加载页面" }));
     await screen.findByText("v2");
     expect(screen.queryByRole("button", { name: "重新加载页面" })).toBeNull();
+  });
+
+  it.each(["success", "conflict", "error"] as const)("旧删除返回%s不会导航、覆盖新建页提示或结束新保存", async outcome => {
+    const deletion = deferred<PageDetail>();
+    const creation = deferred<PageDetail>();
+    trashPage.mockReturnValue(deletion.promise);
+    createPage.mockReturnValue(creation.promise);
+    getPage.mockResolvedValue(pageDetail());
+    let client!: QueryClient;
+    const content = (id: string | null) => <AdminProviders>
+      <QueryClientProbe capture={current => { client = current; }} />
+      <PageEditScreen id={id} />
+    </AdminProviders>;
+    const view = render(content("p1"));
+    await screen.findByDisplayValue("关于");
+    client.setQueryData(queryKeys.pages(), []);
+    client.setQueryData(queryKeys.pageTrashAll(), []);
+    fireEvent.click(screen.getByRole("button", { name: "移入页面回收站" }));
+    fireEvent.click(await screen.findByRole("button", { name: "确定" }));
+    await waitFor(() => expect(trashPage).toHaveBeenCalledWith("p1", 1));
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    view.rerender(content(null));
+    await waitFor(() => expect((field("标题") as HTMLInputElement).value).toBe(""));
+    fireEvent.change(field("标题"), { target: { value: "新页自己的输入" } });
+    fireEvent.change(field(/正文/), { target: { value: "新页自己的正文" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存草稿" }));
+    await waitFor(() => expect(createPage).toHaveBeenCalledTimes(1));
+
+    await act(async () => {
+      if (outcome === "success") deletion.resolve(pageDetail({ status: "trashed", version: 2 }));
+      else deletion.reject(new ApiError(outcome === "conflict" ? 409 : 500, "旧删除返回错误", outcome === "conflict" ? "version_conflict" : "internal_error"));
+    });
+    expect(navigate).not.toHaveBeenCalled();
+    expect((field("标题") as HTMLInputElement).value).toBe("新页自己的输入");
+    expect((field(/正文/) as HTMLTextAreaElement).value).toBe("新页自己的正文");
+    expect(screen.getByRole("button", { name: "处理中…" }).hasAttribute("disabled")).toBe(true);
+    expect(screen.queryByText(/页面已被修改|旧删除返回错误/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "重新加载页面" })).toBeNull();
+    // The already-sent successful deletion still affects the server's list and trash.
+    expect(client.getQueryState(queryKeys.pages())?.isInvalidated).toBe(outcome === "success");
+    expect(client.getQueryState(queryKeys.pageTrashAll())?.isInvalidated).toBe(outcome === "success");
+
+    await act(async () => creation.resolve(pageDetail({ id: "new-id", title: "新页自己的输入", content: "新页自己的正文" })));
+    expect(navigate).toHaveBeenCalledWith("/admin/pages/new-id/edit");
+  });
+
+  it.each(["entity", "leave"] as const)("删除确认延迟到%s之后，不再发送旧页面请求", async target => {
+    getPage.mockResolvedValue(pageDetail());
+    const view = renderPage(<PageEditScreen id="p1" />);
+    await screen.findByDisplayValue("关于");
+    fireEvent.click(screen.getByRole("button", { name: "移入页面回收站" }));
+    await screen.findByText(/可从页面回收站恢复/);
+    if (target === "entity") {
+      getPage.mockResolvedValueOnce(pageDetail({ id: "p2", slug: "second", title: "第二页" }));
+      view.rerender(<AdminProviders><PageEditScreen id="p2" /></AdminProviders>);
+      await screen.findByDisplayValue("第二页");
+    } else {
+      view.rerender(<AdminProviders><div>已离开编辑器</div></AdminProviders>);
+    }
+    fireEvent.click(screen.getByRole("button", { name: "确定" }));
+    await act(async () => {});
+    expect(trashPage).not.toHaveBeenCalled();
+    expect(navigate).not.toHaveBeenCalled();
+    if (target === "entity") expect((field("标题") as HTMLInputElement).value).toBe("第二页");
+  });
+
+  it("已发送删除在卸载后成功仍刷新缓存，但不导航回列表", async () => {
+    const deletion = deferred<PageDetail>();
+    trashPage.mockReturnValue(deletion.promise);
+    getPage.mockResolvedValue(pageDetail());
+    let client!: QueryClient;
+    const probe = <QueryClientProbe capture={current => { client = current; }} />;
+    const view = renderPage(<>{probe}<PageEditScreen id="p1" /></>);
+    await screen.findByDisplayValue("关于");
+    client.setQueryData(queryKeys.pages(), []);
+    fireEvent.click(screen.getByRole("button", { name: "移入页面回收站" }));
+    fireEvent.click(await screen.findByRole("button", { name: "确定" }));
+    await waitFor(() => expect(trashPage).toHaveBeenCalledWith("p1", 1));
+    view.rerender(<AdminProviders>{probe}<div>已离开编辑器</div></AdminProviders>);
+    await act(async () => deletion.resolve(pageDetail({ status: "trashed", version: 2 })));
+    expect(client.getQueryState(queryKeys.pages())?.isInvalidated).toBe(true);
+    expect(navigate).not.toHaveBeenCalled();
+    expect(screen.getByText("已离开编辑器")).toBeTruthy();
   });
   it("新建页面：提交后跳转到编辑地址", async () => {
     createPage.mockResolvedValue(pageDetail({ slug: "contact", title: "联系" }));

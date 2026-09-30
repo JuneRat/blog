@@ -374,12 +374,14 @@ export function usePageEditor(id: string | null) {
 
   function deletePage(): void {
     if (id === null || formMismatch || pageId === null || version === null) return;
+    const isCurrent = beginRequest();
     const current = readForm();
     modal.confirm({
       title: `移入页面回收站「${current.title || current.slug}」？`,
       content: `地址 /${baselineRef.current.slug} 会立即失效。可从页面回收站恢复为草稿；未保存的修改会丢失。`,
       okButtonProps: { danger: true },
       onOk: async () => {
+        if (!isCurrent()) return;
         setBusy(true);
         setError(null);
         setNotice(null);
@@ -387,8 +389,10 @@ export function usePageEditor(id: string | null) {
         try {
           await pagesApi.trashPage(id, version);
           invalidateRelated();
+          if (!isCurrent()) return;
           navigate(paths.pages, { replace: true });
         } catch (cause) {
+          if (!isCurrent()) return;
           if (isVersionConflict(cause)) {
             setError("页面已被修改。请重新加载并核对最新内容后再决定是否删除。");
             setDeleteConflict(true);
@@ -396,7 +400,7 @@ export function usePageEditor(id: string | null) {
             setError(permissionMessageOf(cause));
           }
         } finally {
-          setBusy(false);
+          if (isCurrent()) setBusy(false);
         }
       },
     });
