@@ -133,6 +133,76 @@ impl OidcDiscovery {
     }
 }
 
+// Shared by the network adapter and signed-token regression tests.
+fn validate_id_token_claims(
+    jwks: &Jwks,
+    header: &jsonwebtoken::Header,
+    id_token: &str,
+    issuer: &str,
+    client_id: &str,
+    expected_nonce: Option<&str>,
+) -> Result<(String, Option<String>), UseCaseError> {
+    let key = jwks
+        .keys
+        .iter()
+        .filter(|k| matches!(k.algorithm, jsonwebtoken::jwk::AlgorithmParameters::RSA(_)))
+        .find(|k| match (&header.kid, &k.common.key_id) {
+            // 有 kid 时精确匹配；无 kid 的 RSA 密钥仅单一时可用。
+            (Some(want), Some(have)) => want == have,
+            (Some(_), None) => false,
+            (None, _) => true,
+        })
+        .ok_or_else(|| UseCaseError::External("JWKS 中没有匹配的 RSA 公钥".into()))?;
+    let decoding_key =
+        DecodingKey::from_jwk(key).map_err(|e| external_err("JWKS 公钥构建失败", e))?;
+
+    let mut validation = Validation::new(Algorithm::RS256);
+    validation.set_issuer(&[issuer]);
+    validation.set_required_spec_claims(&["exp", "iss", "aud", "sub"]);
+    validation.set_audience(&[client_id]);
+    validation.leeway = 60;
+    validation.validate_exp = true;
+
+    let claims: serde_json::Value = decode(id_token, &decoding_key, &validation)
+        .map_err(|e| external_err("ID 令牌校验失败", e))?
+        .claims;
+
+    // An audience list may include this client alongside other recipients;
+    // the authorized party must still be this client (OIDC Core §3.1.3.7).
+    let multiple_audiences = claims
+        .get("aud")
+        .and_then(|aud| aud.as_array())
+        .is_some_and(|aud| aud.len() > 1);
+    if (multiple_audiences || claims.get("azp").is_some())
+        && claims.get("azp").and_then(|azp| azp.as_str()) != Some(client_id)
+    {
+        return Err(UseCaseError::External("ID 令牌 azp 不匹配或缺失".into()));
+    }
+
+    let sub = claims
+        .get("sub")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| UseCaseError::External("ID 令牌缺少非空 sub".into()))?
+        .to_string();
+
+    // OIDC 必须校验 nonce（防重放）。
+    if let Some(expected) = expected_nonce {
+        let got = claims.get("nonce").and_then(|v| v.as_str());
+        if got != Some(expected) {
+            return Err(UseCaseError::External(
+                "ID 令牌 nonce 不匹配（疑似重放）".into(),
+            ));
+        }
+    }
+
+    let email = claims
+        .get("email")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    Ok((sub, email))
+}
+
 impl ReqwestIdentityClient {
     pub fn new(secrets: Arc<dyn SecretSource>) -> Self {
         Self {
@@ -206,52 +276,14 @@ impl ReqwestIdentityClient {
     ) -> Result<(String, Option<String>), UseCaseError> {
         let header = decode_header(id_token).map_err(|e| external_err("ID 令牌头解析失败", e))?;
         let jwks = self.jwks(discovery).await?;
-        let key = jwks
-            .keys
-            .iter()
-            .filter(|k| matches!(k.algorithm, jsonwebtoken::jwk::AlgorithmParameters::RSA(_)))
-            .find(|k| match (&header.kid, &k.common.key_id) {
-                // 有 kid 时精确匹配；无 kid 的 RSA 密钥仅单一时可用。
-                (Some(want), Some(have)) => want == have,
-                (Some(_), None) => false,
-                (None, _) => true,
-            })
-            .ok_or_else(|| UseCaseError::External("JWKS 中没有匹配的 RSA 公钥".into()))?;
-        let decoding_key =
-            DecodingKey::from_jwk(key).map_err(|e| external_err("JWKS 公钥构建失败", e))?;
-
-        let mut validation = Validation::new(Algorithm::RS256);
-        validation.set_issuer(&[&discovery.issuer]);
-        validation.set_audience(&[client_id]);
-        validation.leeway = 60;
-        validation.validate_exp = true;
-
-        let claims: serde_json::Value = decode(id_token, &decoding_key, &validation)
-            .map_err(|e| external_err("ID 令牌校验失败", e))?
-            .claims;
-
-        let sub = claims
-            .get("sub")
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())
-            .ok_or_else(|| UseCaseError::External("ID 令牌缺少非空 sub".into()))?
-            .to_string();
-
-        // OIDC 必须校验 nonce（防重放）。
-        if let Some(expected) = expected_nonce {
-            let got = claims.get("nonce").and_then(|v| v.as_str());
-            if got != Some(expected) {
-                return Err(UseCaseError::External(
-                    "ID 令牌 nonce 不匹配（疑似重放）".into(),
-                ));
-            }
-        }
-
-        let email = claims
-            .get("email")
-            .and_then(|v| v.as_str())
-            .map(str::to_string);
-        Ok((sub, email))
+        validate_id_token_claims(
+            &jwks,
+            &header,
+            id_token,
+            &discovery.issuer,
+            client_id,
+            expected_nonce,
+        )
     }
 
     async fn oidc_exchange(
@@ -822,6 +854,109 @@ impl OAuthAccountStore for PostgresOAuthAccountStore {
 #[cfg(test)]
 mod outbound_security_tests {
     use super::*;
+
+    fn signed_id_token(claims: &serde_json::Value) -> String {
+        let key = jsonwebtoken::EncodingKey::from_rsa_pem(include_bytes!(
+            "fixtures/oidc-test-rsa-key.pem"
+        ))
+        .unwrap();
+        let mut header = jsonwebtoken::Header::new(Algorithm::RS256);
+        header.kid = Some("oidc-test".into());
+        jsonwebtoken::encode(&header, claims, &key).unwrap()
+    }
+
+    fn id_token_claims() -> serde_json::Value {
+        serde_json::json!({
+            "iss": "https://accounts.google.com",
+            "aud": "test-client",
+            "sub": "subject-42",
+            "exp": time::OffsetDateTime::now_utc().unix_timestamp() + 300,
+            "nonce": "test-nonce",
+            "email": "member@example.test",
+        })
+    }
+
+    fn verify_signed_id_token(token: &str) -> Result<(String, Option<String>), UseCaseError> {
+        let jwks = serde_json::from_str(include_str!("fixtures/oidc-test-jwks.json")).unwrap();
+        validate_id_token_claims(
+            &jwks,
+            &decode_header(token).unwrap(),
+            token,
+            "https://accounts.google.com",
+            "test-client",
+            Some("test-nonce"),
+        )
+    }
+
+    #[test]
+    fn valid_rs256_id_token_is_verified_with_matching_jwks() {
+        assert_eq!(
+            verify_signed_id_token(&signed_id_token(&id_token_claims())).unwrap(),
+            ("subject-42".into(), Some("member@example.test".into()))
+        );
+        let mut claims = id_token_claims();
+        claims["aud"] = serde_json::json!(["other-client", "test-client"]);
+        claims["azp"] = serde_json::json!("test-client");
+        claims.as_object_mut().unwrap().remove("email");
+        assert_eq!(
+            verify_signed_id_token(&signed_id_token(&claims)).unwrap(),
+            ("subject-42".into(), None)
+        );
+    }
+
+    #[test]
+    fn rs256_id_token_rejects_an_invalid_signature() {
+        let token = signed_id_token(&id_token_claims());
+        let (message, signature) = token.rsplit_once('.').unwrap();
+        let mut signature = signature.as_bytes().to_vec();
+        signature[0] = if signature[0] == b'A' { b'B' } else { b'A' };
+        let tampered = format!("{message}.{}", String::from_utf8(signature).unwrap());
+        assert!(verify_signed_id_token(&tampered).is_err());
+    }
+
+    #[test]
+    fn signed_id_tokens_require_issuer_audience_expiry_subject_and_nonce() {
+        for field in ["iss", "aud", "exp", "sub", "nonce"] {
+            let mut claims = id_token_claims();
+            claims.as_object_mut().unwrap().remove(field);
+            assert!(
+                verify_signed_id_token(&signed_id_token(&claims)).is_err(),
+                "missing {field} must fail even with a valid signature"
+            );
+        }
+        for (field, value) in [
+            ("iss", serde_json::json!("https://other-issuer.example")),
+            ("aud", serde_json::json!("other-client")),
+            ("nonce", serde_json::json!("other-nonce")),
+            ("sub", serde_json::json!("")),
+            ("exp", serde_json::json!(0)),
+        ] {
+            let mut claims = id_token_claims();
+            claims[field] = value;
+            assert!(
+                verify_signed_id_token(&signed_id_token(&claims)).is_err(),
+                "invalid {field} must fail even with a valid signature"
+            );
+        }
+    }
+
+    #[test]
+    fn signed_id_tokens_reject_other_authorized_parties() {
+        for audience in [
+            serde_json::json!("test-client"),
+            serde_json::json!(["test-client", "other-client"]),
+        ] {
+            for azp in [serde_json::json!("other-client"), serde_json::json!(null)] {
+                let mut claims = id_token_claims();
+                claims["aud"] = audience.clone();
+                claims["azp"] = azp;
+                assert!(verify_signed_id_token(&signed_id_token(&claims)).is_err());
+            }
+        }
+        let mut claims = id_token_claims();
+        claims["aud"] = serde_json::json!(["test-client", "other-client"]);
+        assert!(verify_signed_id_token(&signed_id_token(&claims)).is_err());
+    }
 
     fn discovery() -> OidcDiscovery {
         OidcDiscovery {
