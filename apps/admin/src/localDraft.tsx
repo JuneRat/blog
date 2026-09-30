@@ -1,9 +1,13 @@
 import { formatDateTime } from "./timeZone";
 import { useTimeZone } from "./timeZoneContext";
 import { Alert, Button, Select, Space, Typography } from "antd";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { candidateRevision, draftIdentity, draftKey, draftScope, handledKey, readCandidates, readHandled, snapshot, type DraftCandidate, type DraftIdentity } from "./draftStorage";
 import { createDraftWriteQueue, draftValueEquals } from "./draftPersistence";
+import { draftCoordination, retainDraftEditor } from "./draftActivity";
+import type { StoredDraft } from "./draftManagement";
+
+const LocalDraftManager = lazy(() => import("./components/LocalDraftManager"));
 
 interface DraftState<T> {
   visit: number; key: string; candidates: DraftCandidate<T>[]; selected: string | null;
@@ -22,6 +26,7 @@ export function useLocalDraft<T>({ owner, kind, id, ready, disabled, dirty, valu
   const storageScope = owner ? draftScope(owner, kind, id) : "";
   const key = owner ? draftKey(storageScope, identity) : "";
   const [state, setState] = useState<DraftState<T>>({ visit: -1, key: "", candidates: [], selected: null, reviewing: false, savedAt: null, error: null });
+  const [managerOpen, setManagerOpen] = useState(false);
   const activeKey = useRef("");
   const deletedValue = useRef<{ value: T } | null>(null);
   const adoptedKey = useRef<string | null>(null);
@@ -56,7 +61,7 @@ export function useLocalDraft<T>({ owner, kind, id, ready, disabled, dirty, valu
       previous.dirty === currentDirty && draftValueEquals(previous.value, currentValue)) return;
     const currentScope = () => mounted.current && scope.current.key === input.key && scope.current.visit === input.visit;
     try {
-      const draft = currentDirty ? snapshot(currentValue, input.baselineVersion) : null;
+      const draft = currentDirty ? { ...snapshot(currentValue, input.baselineVersion), coordination: draftCoordination(input.key) } : null;
       if (draft) localStorage.setItem(input.key, JSON.stringify(draft));
       else localStorage.removeItem(input.key);
       lastWritten.current = { ...input, value: currentValue, dirty: currentDirty };
@@ -113,6 +118,30 @@ export function useLocalDraft<T>({ owner, kind, id, ready, disabled, dirty, valu
   }, [writes]);
   // A scope change flushes the old queue before the next editor can replace its contents.
   useLayoutEffect(() => () => writes.flush(), [key, visit, writes]);
+  useLayoutEffect(() => {
+    if (!key) return;
+    let release = retainDraftEditor(key);
+    const depart = () => { release(); };
+    const returnToPage = () => {
+      release();
+      release = retainDraftEditor(key);
+      // Another window may safely clean this slot while BFCache has paused its editor.
+      // Our previous write no longer proves the stored copy exists after returning.
+      lastWritten.current = null;
+      if (latest.current) {
+        writes.enqueue(() => { if (latest.current) persist(latest.current); });
+        writes.flush();
+      }
+    };
+    window.addEventListener("pagehide", depart);
+    window.addEventListener("pageshow", returnToPage);
+    return () => {
+      release();
+      window.removeEventListener("pagehide", depart);
+      window.removeEventListener("pageshow", returnToPage);
+    };
+  }, [key]);
+  useEffect(() => { setManagerOpen(false); }, [key]);
   useEffect(() => {
     const input = latest.current;
     if (!input) { writes.cancel(); return; }
@@ -132,6 +161,33 @@ export function useLocalDraft<T>({ owner, kind, id, ready, disabled, dirty, valu
       const candidates = current.candidates.filter(item => item.key !== candidate.key);
       return { ...current, candidates, selected: candidates[0]?.key ?? null, reviewing: !restored && candidates.length > 0 };
     });
+  }
+  function restoreCandidate(candidate: DraftCandidate<T>) {
+    writes.cancel();
+    restoredSource.current = candidate;
+    try {
+      // Persist our clone before hiding the source from this tab's future recovery list.
+      const draft = { ...snapshot(candidate.snapshot.value, candidate.snapshot.baselineVersion), coordination: draftCoordination(key) };
+      localStorage.setItem(key, JSON.stringify(draft));
+      markHandled(candidate);
+      restoredSource.current = null;
+      setState(previous => ({ ...previous, savedAt: draft.savedAt, error: null }));
+    } catch {
+      setState(previous => ({ ...previous, error: "已恢复到编辑器，但当前窗口的本机副本保存失败。源副本仍保留，下次可再次恢复；请手动保存或复制正文。" }));
+    }
+    onRestore(candidate.snapshot.value, candidate.snapshot.baselineVersion);
+    closeCandidate(candidate, true);
+  }
+  function restoreManaged(draft: StoredDraft): string | null {
+    if (disabled) return "请等待当前操作完成后再恢复。";
+    try {
+      // Management previews accept arbitrary stored text; restoration uses the exact form template.
+      const candidate = readCandidates(storageScope, identity, template, id === null).find(item => item.key === draft.key);
+      if (localStorage.getItem(draft.key) !== draft.raw) return "副本已有更新，请重新查看后恢复。";
+      if (!candidate) return "副本字段与当前编辑器不兼容，未覆盖当前输入。";
+      restoreCandidate(candidate);
+      return null;
+    } catch { return "读取恢复副本失败，当前输入仍保留。"; }
   }
   function discardCurrent() {
     if (!key || disabled) return;
@@ -167,7 +223,7 @@ export function useLocalDraft<T>({ owner, kind, id, ready, disabled, dirty, valu
       deletedValue.current = stillDirty ? null : { value: merged };
       let savedAt: string | null = null;
       if (stillDirty) {
-        const draft = snapshot(merged, nextVersion);
+        const draft = { ...snapshot(merged, nextVersion), coordination: draftCoordination(nextKey) };
         localStorage.setItem(nextKey, JSON.stringify(draft));
         savedAt = draft.savedAt;
       } else localStorage.removeItem(nextKey);
@@ -197,19 +253,7 @@ export function useLocalDraft<T>({ owner, kind, id, ready, disabled, dirty, valu
         <Space wrap>
           <Button disabled={disabled} onClick={() => {
             if (disabled) return;
-            restoredSource.current = selected;
-            try {
-              // Persist our clone before hiding the source from this tab's future recovery list.
-              const draft = snapshot(selected.snapshot.value, selected.snapshot.baselineVersion);
-              localStorage.setItem(key, JSON.stringify(draft));
-              markHandled(selected);
-              restoredSource.current = null;
-              setState(previous => ({ ...previous, savedAt: draft.savedAt, error: null }));
-            } catch {
-              setState(previous => ({ ...previous, error: "已恢复到编辑器，但当前窗口的本机副本保存失败。源副本仍保留，下次可再次恢复；请手动保存或复制正文。" }));
-            }
-            onRestore(selected.snapshot.value, selected.snapshot.baselineVersion);
-            closeCandidate(selected, true);
+            restoreCandidate(selected);
           }}>恢复本机编辑</Button>
           <Button disabled={disabled} onClick={() => {
             if (disabled) return;
@@ -222,6 +266,13 @@ export function useLocalDraft<T>({ owner, kind, id, ready, disabled, dirty, valu
         {current?.savedAt && <Button size="small" disabled={disabled} onClick={discardCurrent}>删除本机副本</Button>}
         <Button size="small" disabled={disabled} onClick={refreshCandidates}>查找其它恢复副本</Button>
       </Space>}
+      <div style={{ marginTop: 8 }}><Button size="small" disabled={disabled} onClick={() => setManagerOpen(true)}>管理本机副本</Button></div>
+      {managerOpen && owner && <Suspense fallback={null}><LocalDraftManager owner={owner} kind={kind} id={id} disabled={disabled}
+        onClose={() => setManagerOpen(false)} onRestore={restoreManaged} onDeleted={removedKey => setState(previous => {
+          const candidates = previous.candidates.filter(candidate => candidate.key !== removedKey);
+          return { ...previous, candidates, selected: candidates.some(candidate => candidate.key === previous.selected) ? previous.selected : candidates[0]?.key ?? null,
+            reviewing: previous.reviewing && candidates.length > 0 };
+        })} /></Suspense>}
     </div>,
   };
 }

@@ -3,6 +3,8 @@ export interface DraftIdentity { tabId: string; writerId: string }
 export interface DraftSnapshot<T> {
   schema: 1 | 2;
   revision?: string;
+  /** Set only while this document holds the slot's Web Lock. Older writers never declared it. */
+  coordination?: "web-lock-v1";
   savedAt: string;
   baselineVersion: number | null;
   value: T;
