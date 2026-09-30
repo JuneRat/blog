@@ -842,11 +842,26 @@ impl PageRepository for PostgresPageRepository {
 /// 预约发布的 PostgreSQL 原子批次适配器。
 pub struct PostgresScheduledPublicationStore {
     pool: PgPool,
+    audit: application::audit::AuditContext,
+    task_lease: Option<application::tasks::TaskLease>,
 }
 impl PostgresScheduledPublicationStore {
     pub fn new(database: crate::Database) -> Self {
         let pool = database.pool;
-        Self { pool }
+        Self {
+            pool,
+            audit: application::audit::AuditContext::system(),
+            task_lease: None,
+        }
+    }
+    pub fn with_audit(mut self, audit: application::audit::AuditContext) -> Self {
+        self.audit = audit;
+        self
+    }
+    pub fn with_task_lease(mut self, lease: application::tasks::TaskLease) -> Self {
+        self.audit = lease.audit;
+        self.task_lease = Some(lease);
+        self
     }
 }
 
@@ -854,6 +869,14 @@ impl PostgresScheduledPublicationStore {
 impl application::publishing::ScheduledPublicationStore for PostgresScheduledPublicationStore {
     async fn publish_batch(&self, now: OffsetDateTime, limit: i64) -> Result<usize, UseCaseError> {
         let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        if let Some(lease) = &self.task_lease {
+            if lease.run.kind != application::tasks::TaskKind::PublishDue {
+                return Err(UseCaseError::Invalid("任务租约类型不匹配".into()));
+            }
+            crate::tasks::guard_execution(&mut tx, lease).await?;
+        } else {
+            crate::tasks::guard_writes(&mut tx).await?;
+        }
         let mut count = 0;
         for (table, kind) in [("posts", "post"), ("pages", "page")] {
             let rows: Vec<(Uuid, i64)> = sqlx::query_as(&format!(
@@ -876,7 +899,7 @@ impl application::publishing::ScheduledPublicationStore for PostgresScheduledPub
             for (id, version) in rows {
                 audit_content(
                     &mut tx,
-                    application::audit::AuditContext::system(),
+                    self.audit,
                     &format!("{kind}.publish_due"),
                     kind,
                     id,

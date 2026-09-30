@@ -137,11 +137,26 @@ impl RetentionStore for PostgresRetentionStore {
 /// 独立维护连接执行单个原子批次；不迁移、不初始化权限、不启动发布任务。
 pub struct PostgresRetentionCleanupStore {
     pool: PgPool,
+    audit: application::audit::AuditContext,
+    task_lease: Option<application::tasks::TaskLease>,
 }
 impl PostgresRetentionCleanupStore {
     pub fn new(database: crate::Database) -> Self {
         let pool = database.pool;
-        Self { pool }
+        Self {
+            pool,
+            audit: application::audit::AuditContext::system(),
+            task_lease: None,
+        }
+    }
+    pub fn with_audit(mut self, audit: application::audit::AuditContext) -> Self {
+        self.audit = audit;
+        self
+    }
+    pub fn with_task_lease(mut self, lease: application::tasks::TaskLease) -> Self {
+        self.audit = lease.audit;
+        self.task_lease = Some(lease);
+        self
     }
 }
 
@@ -154,6 +169,14 @@ impl application::retention::RetentionCleanupStore for PostgresRetentionCleanupS
     ) -> Result<application::retention::RetentionBatch, UseCaseError> {
         let mut result = application::retention::RetentionBatch::default();
         let mut tx = self.pool.begin().await.map_err(db)?;
+        if let Some(lease) = &self.task_lease {
+            if lease.run.kind != application::tasks::TaskKind::Retention {
+                return Err(UseCaseError::Invalid("任务租约类型不匹配".into()));
+            }
+            crate::tasks::guard_execution(&mut tx, lease).await?;
+        } else if !dry_run {
+            crate::tasks::guard_writes(&mut tx).await?;
+        }
         // Serialize cleaners without granting the audit maintenance role UPDATE
         // merely to use SELECT FOR UPDATE. Writers only append audit rows.
         crate::locks::acquire(&mut *tx, crate::locks::RETENTION_CLEANUP, false)
@@ -172,7 +195,7 @@ impl application::retention::RetentionCleanupStore for PostgresRetentionCleanupS
         let audits=sqlx::query("WITH expired AS (SELECT id FROM audit_logs WHERE created_at < now()-make_interval(days => $1) ORDER BY created_at,id LIMIT $2) DELETE FROM audit_logs a USING expired e WHERE a.id=e.id")
             .bind(policy.audit_days).bind(batch_size).execute(&mut *tx).await.map_err(db)?.rows_affected() as i64;
         if comments + audits > 0 {
-            append_audit_log(&mut tx,AuditEntry{actor_id:None,ip_address:None,action:"maintenance.retention",target_type:"system",target_id:"retention",metadata:json!({"comment_ips":comments,"audit_logs":audits,"comment_ip_days":policy.comment_ip_days,"audit_days":policy.audit_days})}).await?;
+            append_audit_log(&mut tx,AuditEntry{actor_id:self.audit.actor_id,ip_address:self.audit.ip_address,action:"maintenance.retention",target_type:"system",target_id:"retention",metadata:json!({"comment_ips":comments,"audit_logs":audits,"comment_ip_days":policy.comment_ip_days,"audit_days":policy.audit_days})}).await?;
         }
         result.has_more=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM comments WHERE ip_address IS NOT NULL AND created_at < now()-make_interval(days => $1)) OR EXISTS(SELECT 1 FROM audit_logs WHERE created_at < now()-make_interval(days => $2))")
             .bind(policy.comment_ip_days).bind(policy.audit_days).fetch_one(&mut *tx).await.map_err(db)?;

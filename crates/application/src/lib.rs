@@ -26,6 +26,7 @@ pub mod settings;
 pub mod site_info;
 pub mod syndication;
 pub mod tag;
+pub mod tasks;
 pub mod theme_data;
 pub mod themes;
 pub mod version;

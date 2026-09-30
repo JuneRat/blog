@@ -2,12 +2,12 @@
 use std::{fmt, sync::Arc};
 
 use async_trait::async_trait;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::UseCaseError;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HtmlKind {
     Post,
@@ -25,7 +25,7 @@ impl fmt::Display for HtmlKind {
     }
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RebuildCounts {
     pub posts: u64,
     pub pages: u64,
@@ -113,7 +113,7 @@ pub trait HtmlRebuildStore: Send + Sync {
     ) -> Result<RebuildBatch, RebuildBatchError>;
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RebuildFailure {
     pub kind: Option<HtmlKind>,
     pub id: Option<Uuid>,
@@ -132,7 +132,7 @@ impl fmt::Display for RebuildFailure {
     }
 }
 
-#[derive(Debug, Default, Clone, Serialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct RebuildReport {
     pub rebuilt: RebuildCounts,
     pub skipped: RebuildCounts,

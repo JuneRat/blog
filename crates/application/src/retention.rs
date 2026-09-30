@@ -89,13 +89,22 @@ pub trait RetentionCleanupStore: Send + Sync {
     ) -> Result<RetentionBatch, UseCaseError>;
 }
 
-#[derive(Debug, Default, Serialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct RetentionResult {
     pub comment_ips: i64,
     pub audit_logs: i64,
     pub batches: u32,
     pub has_more: bool,
     pub dry_run: bool,
+}
+
+pub trait RetentionObserver: Send + Sync {
+    fn progress(&self, result: &RetentionResult);
+}
+
+struct IgnoreProgress;
+impl RetentionObserver for IgnoreProgress {
+    fn progress(&self, _: &RetentionResult) {}
 }
 
 /// 使用独立维护身份装配；执行环境的恢复隔离守卫由部署入口负责。
@@ -114,6 +123,17 @@ impl RetentionMaintenance {
         max_batches: u32,
         dry_run: bool,
     ) -> Result<RetentionResult, UseCaseError> {
+        self.run_with_progress(batch_size, max_batches, dry_run, &IgnoreProgress)
+            .await
+    }
+
+    pub async fn run_with_progress(
+        &self,
+        batch_size: i64,
+        max_batches: u32,
+        dry_run: bool,
+        observer: &dyn RetentionObserver,
+    ) -> Result<RetentionResult, UseCaseError> {
         if !(1..=10_000).contains(&batch_size) || !(1..=1000).contains(&max_batches) {
             return Err(UseCaseError::Invalid(
                 "批量大小须为 1–10,000，批次数须为 1–1,000".into(),
@@ -121,17 +141,21 @@ impl RetentionMaintenance {
         }
         let mut result = RetentionResult {
             dry_run,
+            has_more: !dry_run,
             ..Default::default()
         };
+        observer.progress(&result);
         for _ in 0..max_batches {
             let batch = self.store.cleanup_batch(batch_size, dry_run).await?;
             result.comment_ips += batch.comment_ips;
             result.audit_logs += batch.audit_logs;
             if dry_run {
+                observer.progress(&result);
                 return Ok(result);
             }
             result.batches += 1;
             result.has_more = batch.has_more;
+            observer.progress(&result);
             if !batch.has_more || batch.comment_ips + batch.audit_logs == 0 {
                 break;
             }

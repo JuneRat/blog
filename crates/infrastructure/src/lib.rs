@@ -33,6 +33,8 @@ pub mod rendering;
 pub mod schema_contract;
 pub mod sessions;
 pub mod settings;
+pub mod tasks;
+pub use tasks::PostgresTaskStore;
 mod theme_functions;
 mod theme_validation;
 mod time_zone;

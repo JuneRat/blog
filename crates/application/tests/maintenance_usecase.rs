@@ -6,8 +6,13 @@ use std::{
 use application::{
     UseCaseError,
     ports::Clock,
-    publishing::{PublishDueInteractor, ScheduledPublicationStore},
-    retention::{RetentionBatch, RetentionCleanupStore, RetentionMaintenance},
+    publishing::{
+        PublicationObserver, PublicationResult, PublishDueInteractor, ScheduledPublicationStore,
+    },
+    retention::{
+        RetentionBatch, RetentionCleanupStore, RetentionMaintenance, RetentionObserver,
+        RetentionResult,
+    },
 };
 use async_trait::async_trait;
 use time::OffsetDateTime;
@@ -175,4 +180,100 @@ async fn cleanup_finishes_when_drained_and_propagates_failures() {
         RetentionMaintenance::new(store).run(10, 100, false).await,
         Err(UseCaseError::Repository(_))
     ));
+}
+
+#[derive(Default)]
+struct PublicationProgress(Mutex<Vec<PublicationResult>>);
+impl PublicationObserver for PublicationProgress {
+    fn progress(&self, report: &PublicationResult) {
+        self.0.lock().unwrap().push(report.clone());
+    }
+}
+#[derive(Default)]
+struct RetentionProgress(Mutex<Vec<RetentionResult>>);
+impl RetentionObserver for RetentionProgress {
+    fn progress(&self, report: &RetentionResult) {
+        self.0.lock().unwrap().push(report.clone());
+    }
+}
+
+#[tokio::test]
+async fn bounded_publication_progress_preserves_only_confirmed_batches_on_failure() {
+    let store = Arc::new(Publications(Mutex::new(VecDeque::from([
+        Ok(200),
+        Err(UseCaseError::Repository(
+            "second transaction rolled back".into(),
+        )),
+        Ok(4),
+    ]))));
+    let publisher = PublishDueInteractor::new(store.clone(), Arc::new(FixedClock));
+    let progress = PublicationProgress::default();
+    assert!(publisher.run_with_progress(100, &progress).await.is_err());
+    let confirmed = progress.0.lock().unwrap().last().unwrap().clone();
+    assert_eq!(
+        (confirmed.published, confirmed.batches, confirmed.has_more),
+        (200, 1, true)
+    );
+    assert_eq!(progress.0.lock().unwrap().len(), 2);
+    let resumed = publisher
+        .run_with_progress(100, &PublicationProgress::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        (resumed.published, resumed.batches, resumed.has_more),
+        (4, 1, false)
+    );
+    let limited = PublishDueInteractor::new(
+        Arc::new(Publications(Mutex::new(VecDeque::from([Ok(100)])))),
+        Arc::new(FixedClock),
+    )
+    .run_with_progress(1, &PublicationProgress::default())
+    .await
+    .unwrap();
+    assert_eq!(
+        (limited.published, limited.batches, limited.has_more),
+        (100, 1, true)
+    );
+    let empty = Arc::new(Publications(Mutex::new(VecDeque::new())));
+    assert!(
+        PublishDueInteractor::new(empty.clone(), Arc::new(FixedClock))
+            .run_with_progress(0, &PublicationProgress::default())
+            .await
+            .is_err()
+    );
+    assert!(empty.0.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn retention_progress_preserves_committed_work_when_later_batch_fails() {
+    let store = Cleanup::new(vec![
+        batch(10, 3, true),
+        Err(UseCaseError::Repository("rolled back".into())),
+    ]);
+    let progress = RetentionProgress::default();
+    assert!(
+        RetentionMaintenance::new(store)
+            .run_with_progress(10, 100, false, &progress)
+            .await
+            .is_err()
+    );
+    let reports = progress.0.lock().unwrap();
+    assert_eq!(reports.len(), 2);
+    assert_eq!(
+        (
+            reports[0].comment_ips,
+            reports[0].audit_logs,
+            reports[0].batches
+        ),
+        (0, 0, 0)
+    );
+    assert_eq!(
+        (
+            reports[1].comment_ips,
+            reports[1].audit_logs,
+            reports[1].batches
+        ),
+        (10, 3, 1)
+    );
+    assert!(reports[1].has_more);
 }

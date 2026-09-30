@@ -30,7 +30,7 @@ BEGIN
   IF (SELECT array_agg(table_name::text ORDER BY table_name)
       FROM information_schema.tables
       WHERE table_schema='public' AND table_type='BASE TABLE'
-        AND table_name<>'_sqlx_migrations') IS DISTINCT FROM ARRAY['audit_logs','categories','comments','media','media_refs','oauth_accounts','pages','permissions','post_series','post_tags','posts','role_permissions','roles','series','sessions','settings','tags','user_roles','users']::text[] THEN
+        AND table_name<>'_sqlx_migrations') IS DISTINCT FROM ARRAY['audit_logs','categories','comments','media','media_refs','oauth_accounts','pages','permissions','post_series','post_tags','posts','role_permissions','roles','series','sessions','settings','tags','task_runs','task_schedules','user_roles','users']::text[] THEN
     RAISE EXCEPTION 'Database tables differ from schema.json; use the matching release';
   END IF;
 END $$;
@@ -74,6 +74,10 @@ GRANT SELECT,INSERT,UPDATE,DELETE ON public."sessions" TO :"app_role";
 GRANT SELECT,INSERT,UPDATE,DELETE ON public."settings" TO :"app_role";
 GRANT SELECT ON public."settings" TO :"maintenance_role";
 GRANT SELECT,INSERT,UPDATE,DELETE ON public."tags" TO :"app_role";
+GRANT SELECT,INSERT,UPDATE,DELETE ON public."task_runs" TO :"app_role";
+GRANT SELECT,UPDATE ON public."task_runs" TO :"maintenance_role";
+GRANT SELECT,INSERT,UPDATE ON public."task_schedules" TO :"app_role";
+GRANT SELECT ON public."task_schedules" TO :"maintenance_role";
 GRANT SELECT,INSERT,UPDATE,DELETE ON public."user_roles" TO :"app_role";
 GRANT SELECT,INSERT,UPDATE,DELETE ON public."users" TO :"app_role";
 

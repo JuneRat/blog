@@ -22,6 +22,7 @@ pub struct PostgresHtmlRebuildStore {
     database: crate::Database,
     pool: PgPool,
     audit: AuditContext,
+    task_lease: Option<application::tasks::TaskLease>,
     content_renderer: Arc<dyn ContentRenderer>,
     comment_renderer: Arc<dyn CommentRenderer>,
 }
@@ -37,6 +38,7 @@ impl PostgresHtmlRebuildStore {
             database,
             pool,
             audit: AuditContext::system(),
+            task_lease: None,
             content_renderer,
             comment_renderer,
         }
@@ -44,6 +46,12 @@ impl PostgresHtmlRebuildStore {
 
     pub fn with_audit(mut self, audit: AuditContext) -> Self {
         self.audit = audit;
+        self
+    }
+
+    pub fn with_task_lease(mut self, lease: application::tasks::TaskLease) -> Self {
+        self.audit = lease.audit;
+        self.task_lease = Some(lease);
         self
     }
 }
@@ -171,6 +179,12 @@ impl HtmlRebuildStore for PostgresHtmlRebuildStore {
                     vec![]
                 };
                 let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+                if let Some(lease) = &self.task_lease {
+                    if lease.run.kind != application::tasks::TaskKind::HtmlRebuild {
+                        return Err(UseCaseError::Invalid("任务租约类型不匹配".into()));
+                    }
+                    crate::tasks::guard_execution(&mut tx, lease).await?;
+                }
                 let changed = sqlx::query(&format!(
                     "UPDATE {table} SET content_html=$2, content_render_version=$3
                      WHERE id=$1 AND content=$4 AND version=$5 AND content_render_version<>$3"
