@@ -54,6 +54,8 @@ flowchart TD
 
 身份端口按调用能力拆成 `UserQuery`、`UserProfileStore`、`AccountAdministration` 与 `PasswordCredentialStore`。角色用例只依赖账号读取，密码用例依赖账号读取和凭据端口，用户用例通过 `UserStores` 注入读取、资料提交与账号管理；不再把全部用户存储能力交给每个调用方。`PostgresUserRepository` 实现这些窄端口，共用连接池，资料/头像与引用、账号状态与会话撤销、凭据变更与审计仍由各业务提交方法原子执行。
 
+内容用例的目录存在性预检仅依赖 `TagLookup`、`CategoryLookup`、`SeriesLookup`，不持有目录创建、删除或系列重排能力。完整目录仓储继承这些查询端口；同一个 PostgreSQL 适配器可分别注入窄查询端口与目录管理用例，最终关联仍由文章提交事务校验。
+
 [持久化入口](../crates/infrastructure/src/persistence/mod.rs) 同样显式导出适配器，内部拆为 `connection`、`content`、`content_queries`、`identity`、`media`、`taxonomy`、`sql`。行映射、SQL 错误映射和事务 helper 保持私有或限定可见性；媒体引用锁、身份锁按实际复用范围在基础设施内部共享。数据库连接与事务对象不进入应用端口。装配根使用不透明的 `Database` 句柄：连接、迁移、安装、恢复隔离标记及连接池指标都通过 infrastructure 的接口访问，生产 API 不公开 `PgPool` 或 `sqlx::Error`。SQLx 仅作为 server 的测试依赖；`sqlx-test-support` feature 只供集成测试注入/观察同一个真实池，默认运行构建不启用。
 
 身份规则分为纯判断与事务执行：`application::identity::policy` 负责账号状态变更的权限/版本/幂等顺序及最后可登录 Admin 阈值；`domain::identity::LoginMethods` 负责登录方式保留规则。基础设施在统一身份排他锁内重新读取事实后调用规则，继续在同一事务撤销会话、维护版本与追加审计。后台账号提示复用相同规则，展示数据不能作为写入授权凭据。
