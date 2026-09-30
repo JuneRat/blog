@@ -83,6 +83,10 @@ name = "oauth_config"
 required-features = ["sqlx-test-support"]
 
 [[test]]
+name = "oauth_login"
+required-features = ["sqlx-test-support"]
+
+[[test]]
 name = "media"
 required-features = ["sqlx-test-support"]
 

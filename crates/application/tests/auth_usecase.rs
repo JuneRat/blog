@@ -9,9 +9,9 @@ use application::auth::{AuthInteractor, LoginSuccess};
 use application::error::UseCaseError;
 use application::identity::{Actor, CreateUserCmd, RoleInteractor, UserInteractor};
 use application::ports::{
-    Clock, ExternalIdentity, ExternalIdentityClient, OAuthAccountStore, OAuthAttempt,
-    OAuthAttemptStore, OAuthConfigStore, ProviderConfig, ProviderKind, SecureRandom, SessionRecord,
-    SessionStore,
+    Clock, ExternalIdentity, ExternalIdentityClient, OAuthAccountSnapshot, OAuthAccountStore,
+    OAuthAttempt, OAuthAttemptStore, OAuthConfigStore, ProviderConfig, ProviderKind, SecureRandom,
+    SessionRecord, SessionStore,
 };
 use domain::identity::UserSnapshot;
 use time::OffsetDateTime;
@@ -129,6 +129,8 @@ impl OAuthConfigStore for FakeProviderConfigStore {
 #[derive(Default)]
 struct FakeAccountStore {
     bindings: Mutex<Vec<(Uuid, String, String)>>, // (user, provider_key, external_id)
+    users: Arc<FakeUserRepo>,
+    after_lookup: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 
 #[async_trait::async_trait]
@@ -137,14 +139,26 @@ impl OAuthAccountStore for FakeAccountStore {
         &self,
         provider_key: &str,
         provider_user_id: &str,
-    ) -> Result<Option<Uuid>, UseCaseError> {
-        Ok(self
-            .bindings
-            .lock()
-            .unwrap()
+    ) -> Result<Option<OAuthAccountSnapshot>, UseCaseError> {
+        let bindings = self.bindings.lock().unwrap();
+        let users = self.users.users.lock().unwrap();
+        let result = bindings
             .iter()
             .find(|(_, pk, pid)| pk == provider_key && pid == provider_user_id)
-            .map(|(u, _, _)| *u))
+            .and_then(|(id, _, _)| users.values().find(|user| user.id == *id))
+            .filter(|user| {
+                user.status == domain::identity::UserStatus::Active && user.deleted_at.is_none()
+            })
+            .map(|user| OAuthAccountSnapshot {
+                user_id: user.id,
+                auth_version: user.auth_version,
+            });
+        drop(users);
+        drop(bindings);
+        if let Some(after_lookup) = self.after_lookup.lock().unwrap().take() {
+            after_lookup();
+        }
+        Ok(result)
     }
     async fn bind(
         &self,
@@ -246,6 +260,7 @@ struct Fixture {
     auth: Arc<AuthInteractor>,
     identity_client: Arc<FakeIdentityClient>,
     sessions: Arc<FakeSessionStore>,
+    user_repo: Arc<FakeUserRepo>,
     member_id: Uuid,
 }
 
@@ -263,7 +278,7 @@ async fn fixture() -> Fixture {
         clock.clone(),
         Arc::new(common::FakeMediaGuard::new()),
     ));
-    let _roles = Arc::new(RoleInteractor::new(rbac, user_repo));
+    let _roles = Arc::new(RoleInteractor::new(rbac, user_repo.clone()));
 
     let member = users
         .create_user(
@@ -297,7 +312,10 @@ async fn fixture() -> Fixture {
             scopes: vec![],
         },
     ];
-    let accounts = Arc::new(FakeAccountStore::default());
+    let accounts = Arc::new(FakeAccountStore {
+        users: user_repo.clone(),
+        ..Default::default()
+    });
     accounts
         .bind(
             member.id,
@@ -346,6 +364,7 @@ async fn fixture() -> Fixture {
         auth,
         identity_client,
         sessions,
+        user_repo,
         member_id: member.id,
     }
 }
@@ -368,18 +387,23 @@ async fn complete_login(f: &Fixture, next: &str) -> Result<LoginSuccess, UseCase
 #[derive(Default)]
 struct FakeUserRepo {
     users: Mutex<HashMap<String, UserSnapshot>>,
+    after_read: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 
 #[async_trait::async_trait]
 impl application::ports::UserQuery for FakeUserRepo {
     async fn find_by_id(&self, id: Uuid) -> Result<Option<UserSnapshot>, UseCaseError> {
-        Ok(self
+        let snapshot = self
             .users
             .lock()
             .unwrap()
             .values()
             .find(|u| u.id == id)
-            .cloned())
+            .cloned();
+        if let Some(after_read) = self.after_read.lock().unwrap().take() {
+            after_read();
+        }
+        Ok(snapshot)
     }
 
     async fn find_by_username(&self, username: &str) -> Result<Option<UserSnapshot>, UseCaseError> {
@@ -726,6 +750,66 @@ async fn unbound_identity_is_rejected_without_registration() {
         matches!(err, UseCaseError::Forbidden),
         "未绑定外部身份不得自动注册：{err:?}"
     );
+}
+
+fn revoke_during_login(f: &Fixture, remove_binding: bool) -> Box<dyn FnOnce() + Send> {
+    let accounts = f.accounts.clone();
+    let users = f.user_repo.clone();
+    let sessions = f.sessions.clone();
+    let member_id = f.member_id;
+    Box::new(move || {
+        if remove_binding {
+            accounts.bindings.lock().unwrap().clear();
+        }
+        users
+            .users
+            .lock()
+            .unwrap()
+            .values_mut()
+            .find(|user| user.id == member_id)
+            .unwrap()
+            .auth_version += 1;
+        sessions.sessions.lock().unwrap().clear();
+    })
+}
+
+#[tokio::test]
+async fn unbind_or_revoke_after_binding_lookup_rejects_the_captured_login() {
+    for remove_binding in [true, false] {
+        let f = fixture().await;
+        *f.accounts.after_lookup.lock().unwrap() = Some(revoke_during_login(&f, remove_binding));
+        assert!(matches!(
+            complete_login(&f, "/admin").await,
+            Err(UseCaseError::Forbidden)
+        ));
+        assert!(
+            f.sessions.sessions.lock().unwrap().is_empty(),
+            "no session should be issued after revocation"
+        );
+        assert_eq!(
+            f.accounts.bindings.lock().unwrap().is_empty(),
+            remove_binding
+        );
+    }
+}
+
+#[tokio::test]
+async fn revocation_after_actor_read_cannot_upgrade_the_login_proof() {
+    for remove_binding in [true, false] {
+        let f = fixture().await;
+        let original_revision = f.user_repo.users.lock().unwrap()["member"].auth_version;
+        *f.user_repo.after_read.lock().unwrap() = Some(revoke_during_login(&f, remove_binding));
+        let login = complete_login(&f, "/admin").await.unwrap();
+        let record = f.sessions.validate(&login.token).await.unwrap().unwrap();
+        assert_eq!(
+            record.auth_version, original_revision,
+            "old proof must retain its proven revision"
+        );
+        assert!(matches!(
+            f.auth.session_actor(&login.token).await,
+            Err(UseCaseError::Unauthenticated)
+        ));
+    }
 }
 
 #[tokio::test]

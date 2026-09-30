@@ -16,8 +16,8 @@ use uuid::Uuid;
 use application::error::{ConflictKind, UseCaseError};
 use application::oauth_config::{validate_provider_configs, validate_stored_providers};
 use application::ports::{
-    ExternalIdentity, ExternalIdentityClient, OAuthAccountStore, OAuthConfigSnapshot,
-    OAuthConfigStore, ProviderConfig, ProviderKind, SecretSource,
+    ExternalIdentity, ExternalIdentityClient, OAuthAccountSnapshot, OAuthAccountStore,
+    OAuthConfigSnapshot, OAuthConfigStore, ProviderConfig, ProviderKind, SecretSource,
 };
 
 /// GitHub 固定平台实例端点。
@@ -650,9 +650,9 @@ impl OAuthAccountStore for PostgresOAuthAccountStore {
         &self,
         provider_key: &str,
         provider_user_id: &str,
-    ) -> Result<Option<Uuid>, UseCaseError> {
-        let row: Option<(Uuid,)> = sqlx::query_as(
-            "SELECT oa.user_id FROM oauth_accounts oa \
+    ) -> Result<Option<OAuthAccountSnapshot>, UseCaseError> {
+        let row: Option<(Uuid, i64)> = sqlx::query_as(
+            "SELECT oa.user_id, u.auth_version FROM oauth_accounts oa \
              JOIN users u ON u.id = oa.user_id \
              WHERE oa.provider = $1 AND oa.subject = $2 AND u.status = 'active' AND u.deleted_at IS NULL",
         )
@@ -661,7 +661,10 @@ impl OAuthAccountStore for PostgresOAuthAccountStore {
         .fetch_optional(&self.pool)
         .await
         .map_err(|e| UseCaseError::Repository(e.to_string()))?;
-        Ok(row.map(|r| r.0))
+        Ok(row.map(|(user_id, auth_version)| OAuthAccountSnapshot {
+            user_id,
+            auth_version,
+        }))
     }
 
     async fn bind(

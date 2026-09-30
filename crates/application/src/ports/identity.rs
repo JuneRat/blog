@@ -390,13 +390,23 @@ pub struct ExternalIdentity {
     pub email: Option<String>,
 }
 
+/// An active external binding and its account's authentication revision,
+/// captured atomically. A login proof must never inherit a later revision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OAuthAccountSnapshot {
+    pub user_id: Uuid,
+    pub auth_version: i64,
+}
+
 #[async_trait]
 pub trait OAuthAccountStore: Send + Sync {
+    /// Read the binding, active account and authentication revision as one
+    /// snapshot; missing bindings or inactive/deleted users return None.
     async fn find_user_by_external_id(
         &self,
         provider_key: &str,
         provider_user_id: &str,
-    ) -> Result<Option<Uuid>, UseCaseError>;
+    ) -> Result<Option<OAuthAccountSnapshot>, UseCaseError>;
     /// 绑定外部身份；同一 (provider_key, provider_user_id) 只能属于一个用户。
     async fn bind(
         &self,

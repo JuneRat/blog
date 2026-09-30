@@ -192,20 +192,30 @@ impl AuthInteractor {
         }
 
         // 相同邮箱不自动合并：未知绑定一律拒绝，不自动注册。
-        let user_id = self
+        let binding = self
             .deps
             .accounts
             .find_user_by_external_id(&identity.provider_key, &identity.provider_user_id)
             .await?
             .ok_or(UseCaseError::Forbidden)?;
+        let user_id = binding.user_id;
 
         let (actor, revision) = self
             .users
             .actor_with_revision(user_id, ActorChannel::Session)
             .await
             .map_err(|_| UseCaseError::Forbidden)?;
+        if revision != binding.auth_version {
+            return Err(UseCaseError::Forbidden);
+        }
 
-        let token = self.deps.sessions.create(user_id, revision).await?;
+        // Keep the revision proven by the binding read. A later revoke/unbind
+        // must invalidate this login instead of upgrading its old proof.
+        let token = self
+            .deps
+            .sessions
+            .create(user_id, binding.auth_version)
+            .await?;
         Ok(LoginSuccess {
             token,
             next: sanitize_next(&attempt.next)?.to_string(),

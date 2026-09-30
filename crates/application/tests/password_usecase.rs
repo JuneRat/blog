@@ -11,8 +11,9 @@ use application::error::UseCaseError;
 use application::identity::{Actor, ActorChannel};
 use application::password::{PasswordDeps, PasswordInteractor};
 use application::ports::{
-    ClearPasswordOutcome, ExternalIdentity, LoginThrottle, OAuthAccountStore, PasswordCredential,
-    PasswordHasher, SessionRecord, SessionStore, ThrottleDecision, ThrottleSubject, UserQuery,
+    ClearPasswordOutcome, ExternalIdentity, LoginThrottle, OAuthAccountSnapshot, OAuthAccountStore,
+    PasswordCredential, PasswordHasher, SessionRecord, SessionStore, ThrottleDecision,
+    ThrottleSubject, UserQuery,
 };
 use domain::identity::{PermissionSet, UserSnapshot};
 use time::OffsetDateTime;
@@ -366,7 +367,8 @@ impl OAuthAccountStore for FakeUserRepo {
         &self,
         provider_key: &str,
         provider_user_id: &str,
-    ) -> Result<Option<Uuid>, UseCaseError> {
+    ) -> Result<Option<OAuthAccountSnapshot>, UseCaseError> {
+        let users = self.users.lock().unwrap();
         Ok(self
             .bindings
             .lock()
@@ -377,7 +379,14 @@ impl OAuthAccountStore for FakeUserRepo {
                     b.provider_key == provider_key && b.provider_user_id == provider_user_id
                 })
             })
-            .map(|(user, _)| *user))
+            .and_then(|(id, _)| users.values().find(|user| user.id == *id))
+            .filter(|user| {
+                user.status == domain::identity::UserStatus::Active && user.deleted_at.is_none()
+            })
+            .map(|user| OAuthAccountSnapshot {
+                user_id: user.id,
+                auth_version: user.auth_version,
+            }))
     }
 
     async fn bind(
