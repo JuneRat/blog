@@ -90,6 +90,8 @@ HTTP 返回超时只表示停止等待处理器，不能当作 PostgreSQL 工作
 
 SQLx 已启用 Rustls。连接公网/远程数据库时可在 `DATABASE_URL` 使用 `?sslmode=verify-full`；私有 CA 追加 `&sslrootcert=/容器内路径/ca.crt`，证书文件须只读挂载且运行用户可读。使用内置公共根证书认可的证书链时无需另设根证书文件。`sslmode=require` 只保证加密，不替代 `verify-full` 的服务器身份验证；默认连接行为不强制 TLS。Compose 自带数据库仍在私有网络，数据库 TLS 与公网 HTTP 的反代 TLS 是两条独立链路。
 
+原生 `recovery.py` 同样保留 URL 中的 TLS、证书、认证、连接超时和会话参数，通过 [libpq 环境变量](https://www.postgresql.org/docs/current/libpq-envars.html) 传给所有 PostgreSQL 工具；切换管理库或恢复库时仅替换数据库名。支持项见 `scripts/recovery.py` 的 `CONNECTION_OPTIONS`；未知、重复、空值或试图覆盖 URL 主机/数据库的查询参数会在建连前报错，不会静默忽略。`--docker-container` 模式使用容器本地 socket，拒绝带查询参数的 URL；需要指定网络 TLS 策略时使用原生工具。原生路径中的证书文件须在工具运行主机可读。
+
 ## 运行期设置与初始值
 
 | 设置 | 权威来源 | 生效时机 |

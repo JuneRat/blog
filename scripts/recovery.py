@@ -18,7 +18,7 @@ import stat
 import subprocess
 import sys
 import uuid
-from urllib.parse import unquote, urlsplit
+from urllib.parse import parse_qsl, unquote, urlsplit
 from deployment_config import resource_paths
 
 from recovery_inventory import (
@@ -32,6 +32,36 @@ SAFE_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,62}$")
 THEME_SLUG = re.compile(r"^[a-z0-9-]+$")
 RESTORE_NAME = re.compile(r"^blog_restore_[A-Za-z0-9_]{1,48}$")
 
+# Only libpq options with an environment-variable equivalent are accepted.
+# Unknown options fail before connecting instead of silently weakening a DSN.
+# Endpoint, credentials and database overrides are deliberately excluded: the
+# validated URL path remains authoritative when selecting a recovery database.
+CONNECTION_OPTIONS = {
+    "sslmode": "PGSSLMODE",
+    "sslrootcert": "PGSSLROOTCERT",
+    "sslcert": "PGSSLCERT",
+    "sslkey": "PGSSLKEY",
+    "sslcrl": "PGSSLCRL",
+    "sslcrldir": "PGSSLCRLDIR",
+    "ssl_min_protocol_version": "PGSSLMINPROTOCOLVERSION",
+    "ssl_max_protocol_version": "PGSSLMAXPROTOCOLVERSION",
+    "sslcompression": "PGSSLCOMPRESSION",
+    "sslsni": "PGSSLSNI",
+    "sslcertmode": "PGSSLCERTMODE",
+    "sslnegotiation": "PGSSLNEGOTIATION",
+    "channel_binding": "PGCHANNELBINDING",
+    "require_auth": "PGREQUIREAUTH",
+    "gssencmode": "PGGSSENCMODE",
+    "krbsrvname": "PGKRBSRVNAME",
+    "gsslib": "PGGSSLIB",
+    "gssdelegation": "PGGSSDELEGATION",
+    "connect_timeout": "PGCONNECT_TIMEOUT",
+    "client_encoding": "PGCLIENTENCODING",
+    "options": "PGOPTIONS",
+    "application_name": "PGAPPNAME",
+    "target_session_attrs": "PGTARGETSESSIONATTRS",
+}
+
 
 def is_pg_archive(path):
     with open(path, "rb") as stream:
@@ -40,18 +70,31 @@ def is_pg_archive(path):
 
 def db_config(url):
     parsed = urlsplit(url)
-    if parsed.scheme not in ("postgres", "postgresql") or not parsed.hostname:
+    if parsed.scheme not in ("postgres", "postgresql") or not parsed.hostname or parsed.fragment:
         raise RecoveryError("DATABASE_URL must be a PostgreSQL URL")
     database = unquote(parsed.path.lstrip("/"))
     if not SAFE_NAME.fullmatch(database):
         raise RecoveryError("database name must be a simple PostgreSQL identifier")
-    return {
+    config = {
         "PGHOST": parsed.hostname,
         "PGPORT": str(parsed.port or 5432),
         "PGUSER": unquote(parsed.username or ""),
         "PGPASSWORD": unquote(parsed.password or ""),
         "PGDATABASE": database,
     }
+    try:
+        options = parse_qsl(parsed.query, keep_blank_values=True, strict_parsing=True) if parsed.query else []
+    except ValueError:
+        # urllib's error includes the malformed field, which may contain a secret.
+        raise RecoveryError("invalid DATABASE_URL query parameters") from None
+    for key, value in options:
+        variable = CONNECTION_OPTIONS.get(key)
+        if variable is None:
+            raise RecoveryError("unsupported DATABASE_URL query parameter")
+        if variable in config or not value or "\0" in value:
+            raise RecoveryError("duplicate, empty or invalid DATABASE_URL query parameter")
+        config[variable] = value
+    return config
 
 
 class PgTools:
@@ -60,6 +103,10 @@ class PgTools:
         self.container = container
         if container and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", container):
             raise RecoveryError("invalid Docker container name")
+        if container and urlsplit(url).query:
+            # Docker mode uses the container's local socket, where a requested
+            # network TLS policy could not be honored. Never silently ignore it.
+            raise RecoveryError("Docker mode does not accept DATABASE_URL query parameters; use native tools for connection policies")
 
     def command(self, tool, args, database=None):
         selected = dict(self.config)
