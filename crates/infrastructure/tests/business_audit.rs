@@ -5,13 +5,15 @@ use application::identity::{BUILTIN_ROLES, PERMISSION_REGISTRY, PermissionDescri
 use application::ports::{
     AccountAdministration, CategoryRepository, ClearPasswordOutcome, OAuthAccountStore,
     OAuthConfigStore, PasswordCredentialStore, ProviderConfig, ProviderKind, RbacStore,
-    SaveOutcome, SessionStore, SettingsStore, SiteSettingsValue, ThemeSettingsStore, UserQuery,
+    SaveOutcome, SessionStore, SettingsStore, SiteSettingsValue, TagDeleteOutcome, TagRepository,
+    ThemeSettingsStore, UserQuery,
 };
-use domain::content::{Category, Slug};
+use domain::content::{Category, Slug, Tag};
 use domain::identity::User;
 use infrastructure::{
     PostgresCategoryRepository, PostgresOAuthAccountStore, PostgresOAuthConfigStore,
-    PostgresRbacStore, PostgresSessionStore, PostgresSettingsStore, PostgresUserRepository,
+    PostgresRbacStore, PostgresSessionStore, PostgresSettingsStore, PostgresTagRepository,
+    PostgresUserRepository,
 };
 use serde_json::{Value, json};
 use sqlx::PgPool;
@@ -60,6 +62,93 @@ async fn assert_actor(pool: &PgPool, action: &str, target: &str, actor: Uuid) ->
         assert_eq!(*actual, Some(actor), "{action}");
     }
     rows[0].1.clone()
+}
+
+#[tokio::test]
+async fn tag_deletion_batches_member_audits_and_rolls_back_every_chunk_on_failure() {
+    let _guard = SERIAL.lock().await;
+    let pool = common::fresh_database("blog_business_audit_test").await;
+    let actor = common::seed_user(&pool, "tag-operator").await;
+    let tag = Tag::new(
+        "Shared".into(),
+        Slug::new("shared").unwrap(),
+        OffsetDateTime::now_utc(),
+    )
+    .unwrap();
+    let tag_id = tag.snapshot().id;
+    let tags = PostgresTagRepository::new(common::database(pool.clone()));
+    tags.insert(&tag, context(actor)).await.unwrap();
+    // Cross the audit helper's 1,000-entry chunk boundary.
+    sqlx::query(
+        "WITH seeded AS (INSERT INTO posts(id,author_id,slug,content_html,content_render_version) \
+        SELECT gen_random_uuid(),$1,'member-'||i,'',1 FROM generate_series(1,1001) i RETURNING id) \
+        INSERT INTO post_tags(post_id,tag_id) SELECT id,$2 FROM seeded",
+    )
+    .bind(actor)
+    .bind(tag_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let before_audits = count(&pool).await;
+    assert_eq!(
+        tags.delete(tag_id, 2, context(actor)).await.unwrap(),
+        TagDeleteOutcome::StaleVersion
+    );
+    assert_eq!(count(&pool).await, before_audits);
+    // Fail the final directory audit, after all member chunks have been appended.
+    sqlx::raw_sql(
+        "CREATE FUNCTION fail_tag_delete_audit() RETURNS trigger LANGUAGE plpgsql AS $$ \
+        BEGIN IF NEW.action='tag.delete' THEN RAISE EXCEPTION 'audit unavailable'; END IF; \
+        RETURN NEW; END $$; CREATE TRIGGER fail_tag_delete_audit BEFORE INSERT ON audit_logs \
+        FOR EACH ROW EXECUTE FUNCTION fail_tag_delete_audit()",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert!(tags.delete(tag_id, 1, context(actor)).await.is_err());
+    assert_eq!(count(&pool).await, before_audits);
+    let unchanged: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM posts p JOIN post_tags pt ON pt.post_id=p.id \
+        WHERE pt.tag_id=$1 AND p.version=1",
+    )
+    .bind(tag_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(unchanged, 1001);
+    assert!(tags.find_by_slug("shared").await.unwrap().is_some());
+    sqlx::raw_sql(
+        "DROP TRIGGER fail_tag_delete_audit ON audit_logs; DROP FUNCTION fail_tag_delete_audit()",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    assert_eq!(
+        tags.delete(tag_id, 1, context(actor)).await.unwrap(),
+        TagDeleteOutcome::Deleted
+    );
+    assert!(tags.find_by_slug("shared").await.unwrap().is_none());
+    let members: i64 = sqlx::query_scalar("SELECT count(*) FROM posts WHERE version=2")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(members, 1001);
+    let audited: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM audit_logs a JOIN posts p ON a.target_id=p.id::text \
+        WHERE a.action='post.tag_removed' AND a.actor_id=$1 AND host(a.ip_address)='2001:db8::42' \
+        AND a.metadata=jsonb_build_object('tag_id',$2::text,'version',p.version)",
+    )
+    .bind(actor)
+    .bind(tag_id.to_string())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(audited, 1001);
+    assert_eq!(count(&pool).await, before_audits + 1002);
+    let metadata = assert_actor(&pool, "tag.delete", &tag_id.to_string(), actor).await;
+    assert_eq!(metadata, json!({"affected_posts":1001}));
+    pool.close().await;
 }
 
 #[tokio::test]

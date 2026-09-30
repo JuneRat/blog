@@ -171,17 +171,20 @@ impl TagRepository for PostgresTagRepository {
         // 删除目录仅移除关联；文章保留并递增版本，旧编辑器不能复活该关联。
         let affected: Vec<(Uuid, i64)> = sqlx::query_as("UPDATE posts SET version=version+1, updated_at=now() WHERE id IN (SELECT post_id FROM post_tags WHERE tag_id=$1) RETURNING id,version")
             .bind(id).fetch_all(&mut *tx).await.map_err(map_sqlx_error)?;
-        for (post_id, version) in &affected {
-            audit_content(
-                &mut tx,
-                actor_id,
-                "post.tag_removed",
-                "post",
-                *post_id,
-                serde_json::json!({"tag_id":id,"version":version}),
-            )
-            .await?;
-        }
+        let targets: Vec<_> = affected.iter().map(|(id, _)| id.to_string()).collect();
+        let entries: Vec<_> = affected
+            .iter()
+            .zip(&targets)
+            .map(|((_, version), target)| crate::audit::AuditEntry {
+                actor_id: actor_id.actor_id,
+                ip_address: actor_id.ip_address,
+                action: "post.tag_removed",
+                target_type: "post",
+                target_id: target,
+                metadata: serde_json::json!({"tag_id":id,"version":version}),
+            })
+            .collect();
+        crate::audit::append_audit_logs(&mut tx, &entries).await?;
         sqlx::query("DELETE FROM tags WHERE id = $1")
             .bind(id)
             .execute(&mut *tx)
