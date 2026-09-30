@@ -32,7 +32,7 @@ pub struct ThrottleConfig {
     pub client_lock_secs: u64,
     /// 失败计数窗口（秒）：窗口内无新失败则计数归零。
     pub window_secs: i64,
-    /// 计数条目上限；淘汰最早的空闲主体，无空闲条目时拒绝新主体。
+    /// 计数条目上限；只淘汰没有失败、锁定或在飞请求的主体，否则拒绝新主体。
     pub max_entries: usize,
 }
 
@@ -140,14 +140,16 @@ impl InMemoryLoginThrottle {
         });
     }
 
-    /// 为新主体腾容量：淘汰窗口起点最早、且没有在飞请求的条目。内存因此有界。
+    /// 为新主体腾容量；容量压力不能清除尚有效的失败预算或锁定。
     fn ensure_capacity(&self, state: &mut HashMap<ThrottleSubject, FailureState>) {
         if state.len() < self.config.max_entries {
             return;
         }
         let mut oldest: Vec<(ThrottleSubject, OffsetDateTime)> = state
             .iter()
-            .filter(|(_, entry)| entry.in_flight == 0)
+            .filter(|(_, entry)| {
+                entry.in_flight == 0 && entry.failures == 0 && entry.locked_until.is_none()
+            })
             .map(|(subject, entry)| (subject.clone(), entry.window_started_at))
             .collect();
         oldest.sort_by_key(|(_, started)| *started);
@@ -461,6 +463,36 @@ mod tests {
         assert!(throttle.state.lock().unwrap().is_empty());
     }
 
+    #[test]
+    fn capacity_preserves_active_lock_and_failure_budget_until_expiry() {
+        let (throttle, now) = throttle(ThrottleConfig {
+            max_entries: 2,
+            user_max_failures: 2,
+            user_lock_secs: 60,
+            window_secs: 60,
+            ..ThrottleConfig::default()
+        });
+        let locked = ThrottleSubject::User("locked".into());
+        let limited = ThrottleSubject::User("limited".into());
+        let newcomer = ThrottleSubject::User("new".into());
+        for _ in 0..2 {
+            assert!(throttle.reserve(&locked).unwrap().allowed);
+            throttle.record_failure(&locked).unwrap();
+        }
+        assert!(throttle.reserve(&limited).unwrap().allowed);
+        throttle.record_failure(&limited).unwrap();
+        assert!(!throttle.reserve(&newcomer).unwrap().allowed);
+        assert!(!throttle.reserve(&locked).unwrap().allowed);
+        assert_eq!(failures_of(&throttle, &limited), 1);
+        assert!(throttle.reserve(&limited).unwrap().allowed);
+        throttle.record_failure(&limited).unwrap();
+        assert!(!throttle.reserve(&limited).unwrap().allowed);
+
+        *now.lock().unwrap() += time::Duration::seconds(61);
+        assert!(throttle.reserve(&newcomer).unwrap().allowed);
+        assert!(throttle.reserve(&locked).unwrap().allowed);
+    }
+
     #[tokio::test]
     async fn success_clears_account_history_but_not_client_history() {
         let (throttle, _) = throttle(ThrottleConfig::default());
@@ -520,7 +552,7 @@ mod tests {
         assert_eq!(failures_of(&throttle, &subject), 0, "窗口过期后计数归零");
     }
 
-    /// 容量淘汰：超出 max_entries 时丢弃窗口起点最早的主体（而不是拒绝新主体）。
+    /// 容量淘汰只回收没有失败历史的空闲主体。
     #[tokio::test]
     async fn capacity_eviction_drops_the_oldest_subject() {
         let (throttle, now) = throttle(ThrottleConfig {
@@ -534,13 +566,13 @@ mod tests {
         let c = ThrottleSubject::User("c".into());
 
         throttle.reserve(&a).unwrap();
-        throttle.record_failure(&a).unwrap();
+        throttle.release(&a).unwrap();
         *now.lock().unwrap() += time::Duration::seconds(1);
         throttle.reserve(&b).unwrap();
         throttle.record_failure(&b).unwrap();
         *now.lock().unwrap() += time::Duration::seconds(1);
-        // 第三个主体触发淘汰：a 的窗口起点最早，先被丢弃。
-        throttle.reserve(&c).unwrap();
+        // a 没有失败预算可以回收；b 的有效失败计数必须保留。
+        assert!(throttle.reserve(&c).unwrap().allowed);
         throttle.record_failure(&c).unwrap();
 
         assert_eq!(failures_of(&throttle, &a), 0, "被淘汰的主体的计数归零");
