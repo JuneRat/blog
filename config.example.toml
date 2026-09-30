@@ -7,15 +7,16 @@ config_version = 1
 # 推荐通过 DATABASE_URL 注入。留空（不设置 url）时 serve 进入安装向导。
 # url = "postgres://blog:change-me@127.0.0.1:5432/blog"
 migrations_dir = "migrations/postgres"
-# 连接池与超时；0 的查询限制沿用数据库角色/DSN 设置。
+# serve 未配置查询期限时使用有界 HTTP 默认；CLI/维护未配置时沿用数据库限制。
+# 显式 0 沿用数据库角色/DSN 设置，部署方须确认服务器仍有执行期限。
 # max_connections = 5
 # min_connections = 0
 # acquire_timeout_ms = 5000
 # idle_timeout_secs = 600
 # max_lifetime_secs = 1800
-# statement_timeout_ms = 0
-# lock_timeout_ms = 0
-# idle_in_transaction_timeout_ms = 0
+# statement_timeout_ms = 20000 # serve 默认；须短于 HTTP 请求期限
+# lock_timeout_ms = 3000      # serve 默认；须短于语句期限
+# idle_in_transaction_timeout_ms = 60000 # serve 默认
 # connect_retries = 3
 # connect_retry_backoff_ms = 250
 

@@ -131,6 +131,64 @@ fn observability_configuration_is_validated_and_scoped() {
         0
     );
 }
+
+#[test]
+fn http_database_deadlines_are_bounded_without_changing_cli_or_explicit_policy() {
+    let defaults = config("", &[]);
+    let http = defaults.http_database_pool().unwrap();
+    assert_eq!(
+        (
+            http.statement_timeout_ms,
+            http.lock_timeout_ms,
+            http.idle_in_transaction_timeout_ms
+        ),
+        (20_000, 3_000, 60_000)
+    );
+    assert_eq!(defaults.database_pool().unwrap().statement_timeout_ms, 0);
+    let short = config("[server]\nrequest_timeout_secs=1", &[])
+        .http_database_pool()
+        .unwrap();
+    assert!(short.statement_timeout_ms < 1000);
+    assert!(short.lock_timeout_ms < short.statement_timeout_ms);
+    let delegated = config(
+        "[database]\nstatement_timeout_ms=0\nlock_timeout_ms=0\nidle_in_transaction_timeout_ms=0",
+        &[],
+    )
+    .http_database_pool()
+    .unwrap();
+    assert_eq!(
+        (
+            delegated.statement_timeout_ms,
+            delegated.lock_timeout_ms,
+            delegated.idle_in_transaction_timeout_ms
+        ),
+        (0, 0, 0)
+    );
+    for invalid in [
+        "statement_timeout_ms=30000",
+        "statement_timeout_ms=10000\nlock_timeout_ms=10000",
+    ] {
+        assert!(
+            config(&format!("[database]\n{invalid}"), &[])
+                .check(ConfigScope::Serve)
+                .is_err()
+        );
+        assert!(
+            config(&format!("[database]\n{invalid}"), &[])
+                .database_pool()
+                .is_ok()
+        );
+    }
+    let shown = defaults.show(ConfigScope::Serve, true).unwrap();
+    let statement = shown["fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|field| field["key"] == "database.statement_timeout_ms")
+        .unwrap();
+    assert_eq!(statement["value"], 20_000);
+    assert_eq!(statement["source"], "default:serve");
+}
 use std::path::Path;
 
 fn config(source: &str, env: &[(&str, &str)]) -> DeploymentConfig {

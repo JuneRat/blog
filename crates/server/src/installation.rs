@@ -117,7 +117,7 @@ impl Installer for Setup {
                     .into(),
             ));
         }
-        let database = deployment.database().map_err(UseCaseError::Invalid)?;
+        let database = deployment.http_database().map_err(UseCaseError::Invalid)?;
         let schema_contract =
             infrastructure::schema_contract::SchemaContract::load(&database.migrations_dir)?;
         let pool = infrastructure::installation::connect(&database_url).await?;
@@ -199,7 +199,7 @@ pub async fn serve(
     // Validate deployment-owned options before opening the installer.
     let site = config.site(addr)?;
     config.bootstrap_site()?;
-    config.database_pool()?;
+    config.http_database_pool()?;
     let bind = site.bind.clone();
     let metrics_listener = crate::observability::bind(config.metrics_bind()?).await?;
     let telemetry = interfaces::observability::Telemetry::new(&crate::observability::build_info());

@@ -65,7 +65,7 @@ TOML 可以先只配置路径、代理或 `[bootstrap]`：没有数据库连接�
 
 ## 连接池、查询超时与数据库 TLS
 
-参数对运行池与 CLI 池生效，支持现有 TOML 和 `.env`，不需要额外环境文件。首次安装的临时初始化池仍使用最多 2 个连接、30 秒语句限制和 10 秒锁限制；安装后的运行池使用下表。维护凭据继续独立，池策略共用；长迁移或批量维护可用独立进程环境覆盖限制。
+参数对运行池与 CLI 池生效，支持现有 TOML 和 `.env`，不需要额外环境文件。首次安装的临时初始化池仍使用最多 2 个连接、30 秒语句限制和 10 秒锁限制；安装后的运行池使用下表。`serve` 未配置查询期限时使用 HTTP 默认；CLI 和维护未配置时继续沿用数据库限制。长迁移或批量维护可用独立进程环境覆盖限制。
 
 | TOML 字段 | 环境变量 | 默认值 | 范围 / 语义 |
 |---|---|---:|---|
@@ -74,13 +74,15 @@ TOML 可以先只配置路径、代理或 `[bootstrap]`：没有数据库连接�
 | `database.acquire_timeout_ms` | `BLOG_DB_ACQUIRE_TIMEOUT_MS` | 5000 | 1–120000 毫秒 |
 | `database.idle_timeout_secs` | `BLOG_DB_IDLE_TIMEOUT_SECS` | 600 | 0–86400 秒；0 禁用连接空闲回收 |
 | `database.max_lifetime_secs` | `BLOG_DB_MAX_LIFETIME_SECS` | 1800 | 0–86400 秒；0 禁用连接寿命限制 |
-| `database.statement_timeout_ms` | `BLOG_DB_STATEMENT_TIMEOUT_MS` | 0 | 0–86400000 毫秒 |
-| `database.lock_timeout_ms` | `BLOG_DB_LOCK_TIMEOUT_MS` | 0 | 0–86400000 毫秒 |
-| `database.idle_in_transaction_timeout_ms` | `BLOG_DB_IDLE_IN_TRANSACTION_TIMEOUT_MS` | 0 | 0–86400000 毫秒 |
+| `database.statement_timeout_ms` | `BLOG_DB_STATEMENT_TIMEOUT_MS` | serve：20000；CLI：0 | 0–86400000 毫秒；HTTP 默认不超过请求期限的 2/3 |
+| `database.lock_timeout_ms` | `BLOG_DB_LOCK_TIMEOUT_MS` | serve：3000；CLI：0 | 0–86400000 毫秒；HTTP 默认不超过语句期限的 1/4 |
+| `database.idle_in_transaction_timeout_ms` | `BLOG_DB_IDLE_IN_TRANSACTION_TIMEOUT_MS` | serve：60000；CLI：0 | 0–86400000 毫秒 |
 | `database.connect_retries` | `BLOG_DB_CONNECT_RETRIES` | 3 | 0–10 次额外建连尝试 |
 | `database.connect_retry_backoff_ms` | `BLOG_DB_CONNECT_RETRY_BACKOFF_MS` | 250 | 1–5000 毫秒，指数退避上限 5 秒 |
 
-语句、锁、事务空闲限制为 **0 时不覆盖 PostgreSQL 角色、数据库或 DSN 已有设置**，并非强制关闭服务器限制。非零时作为每条新连接的启动参数应用，连接替换后仍生效。生产 HTTP 可从 `statement_timeout_ms=30000`、`lock_timeout_ms=5000`、`idle_in_transaction_timeout_ms=60000` 开始，依据慢查询与维护耗时调整；迁移和维护可在独立环境中使用更长限制。池的 `idle_timeout_secs` 回收空闲连接，与 PostgreSQL 的“事务中空闲超时”不同。
+语句、锁、事务空闲限制显式设为 **0 时不覆盖 PostgreSQL 角色、数据库或 DSN 已有设置**，并非强制关闭服务器限制；部署方须确认继承的限制有效。非零时作为每条新连接的启动参数应用，连接替换后仍生效。`serve` 要求非零语句期限短于 HTTP 请求期限、非零锁期限短于非零语句期限；缩短请求期限会同步收紧未配置的数据库默认。`config show --for serve --sources` 展示派生后的值和 `default:serve` 来源，`--for database` 展示 CLI 策略。依据慢查询与维护耗时调整；大规模迁移应先使用独立 `migrate` 进程执行，再启动网站。池的 `idle_timeout_secs` 回收空闲连接，与 PostgreSQL 的“事务中空闲超时”不同。
+
+HTTP 返回超时只表示停止等待处理器，不能当作 PostgreSQL 工作已取消的证明。数据库语句/锁期限负责终止已发送的 SQL；回归覆盖慢语句与外部事务持锁，确认 HTTP 返回 408 后单连接池仍在数据库期限内恢复使用。
 
 重试仅发生在池首次建立时，且只针对临时网络故障、启动中或连接容量不足等错误；参数、凭据、证书错误不由应用层重试。每次尝试受获取超时约束，退避有上限。不自动重放 SQL 或事务，尤其不重放提交结果不确定的写入。SQLx 后续补充池连接仍遵循其内部连接管理策略。
 

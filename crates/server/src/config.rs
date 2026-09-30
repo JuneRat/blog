@@ -205,6 +205,45 @@ impl DeploymentConfig {
         Ok(pool)
     }
 
+    /// HTTP defaults bound work on PostgreSQL even after the request future is
+    /// dropped. Explicit zero still delegates to role/DSN policy; CLI defaults
+    /// stay unchanged so migrations and maintenance can use longer deadlines.
+    pub fn http_database_pool(&self) -> Result<infrastructure::DatabasePoolConfig, String> {
+        let mut pool = self.database_pool()?;
+        let budget = self.http_limits()?.requests.request.as_millis() as u64;
+        if self.value("database.statement_timeout_ms")?.1 == "default" {
+            pool.statement_timeout_ms = 20_000.min(budget * 2 / 3);
+        }
+        if self.value("database.lock_timeout_ms")?.1 == "default" {
+            let statement = if pool.statement_timeout_ms == 0 {
+                budget
+            } else {
+                pool.statement_timeout_ms
+            };
+            pool.lock_timeout_ms = 3_000.min(statement / 4);
+        }
+        if self.value("database.idle_in_transaction_timeout_ms")?.1 == "default" {
+            pool.idle_in_transaction_timeout_ms = 60_000;
+        }
+        if pool.statement_timeout_ms >= budget {
+            return Err("serve 的 statement_timeout_ms 必须短于 request_timeout_secs；显式 0 沿用数据库限制".into());
+        }
+        if pool.statement_timeout_ms != 0 && pool.lock_timeout_ms >= pool.statement_timeout_ms {
+            return Err(
+                "serve 的 lock_timeout_ms 必须短于 statement_timeout_ms；显式 0 沿用数据库限制"
+                    .into(),
+            );
+        }
+        pool.validate()?;
+        Ok(pool)
+    }
+
+    pub fn http_database(&self) -> Result<DatabaseConfig, String> {
+        let mut database = self.database()?;
+        database.pool = self.http_database_pool()?;
+        Ok(database)
+    }
+
     pub fn maintenance_url(&self) -> Result<String, String> {
         if let Some(url) = self.optional_string("maintenance.database_url")? {
             application::installation::validate_database_url(&url).map_err(|_| {
@@ -351,7 +390,7 @@ impl DeploymentConfig {
         match scope {
             ConfigScope::Serve => {
                 self.configured_database_url()?;
-                self.database_pool()?;
+                self.http_database_pool()?;
                 self.site(None)?;
                 self.bootstrap_site()?;
                 self.path_value("database.migrations_dir")?;
@@ -386,6 +425,21 @@ impl DeploymentConfig {
         let mut fields = Vec::new();
         for field in FIELDS.iter().filter(|field| field.in_scope(scope)) {
             let (mut value, mut source) = self.value(field.key)?;
+            if source == "default" && matches!(scope, ConfigScope::Serve | ConfigScope::All) {
+                let pool = self.http_database_pool()?;
+                let timeout = match field.key {
+                    "database.statement_timeout_ms" => Some(pool.statement_timeout_ms),
+                    "database.lock_timeout_ms" => Some(pool.lock_timeout_ms),
+                    "database.idle_in_transaction_timeout_ms" => {
+                        Some(pool.idle_in_transaction_timeout_ms)
+                    }
+                    _ => None,
+                };
+                if let Some(timeout) = timeout {
+                    value = Some(toml::Value::Integer(timeout as i64));
+                    source = "default:serve".into();
+                }
+            }
             if field.key == "maintenance.database_url" && value.is_none() {
                 (value, source) = self.value("database.url")?;
                 source = format!("fallback:{source}");

@@ -84,7 +84,11 @@ async fn run(command: Command, mut config: config::DeploymentConfig) -> Result<(
         }
         return installation::serve(config, addr.clone(), None).await;
     }
-    let database = config.database()?;
+    let database = if matches!(command, Command::Serve { .. }) {
+        config.http_database()?
+    } else {
+        config.database()?
+    };
     if matches!(command, Command::Media { .. }) {
         config.media_dir()?;
     }
