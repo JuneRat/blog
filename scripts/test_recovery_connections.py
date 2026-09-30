@@ -13,7 +13,9 @@ class RecoveryConnectionTests(unittest.TestCase):
                "&sslkey=%2Fprivate%2Fkey.pem&ssl_min_protocol_version=TLSv1.3"
                "&channel_binding=require&connect_timeout=3"
                "&options=-cstatement_timeout%3D2000&application_name=restore-check")
-        with patch.dict(os.environ, {"PGSSLMODE": "disable", "PGDATABASE": "wrong"}, clear=True):
+        inherited = {"PGSSLMODE": "disable", "PGDATABASE": "wrong", "PGSERVICE": "other",
+                     "PGSERVICEFILE": "/private/other-service.conf", "PGHOSTADDR": "192.0.2.1"}
+        with patch.dict(os.environ, inherited, clear=True):
             pg = recovery.PgTools(url)
             for tool in ("psql", "pg_dump", "pg_restore", "createdb"):
                 command, env = pg.command(tool, ["--version"], "blog_restore_unit")
@@ -32,6 +34,8 @@ class RecoveryConnectionTests(unittest.TestCase):
                 self.assertEqual(env["PGOPTIONS"], "-cstatement_timeout=2000")
                 self.assertEqual(env["PGAPPNAME"], "restore-check")
                 self.assertNotIn("p@ss", " ".join(command))
+                for variable in ("PGSERVICE", "PGSERVICEFILE", "PGHOSTADDR"):
+                    self.assertNotIn(variable, env)
 
     def test_ambiguous_or_unhandled_policies_fail_before_a_command_is_built(self):
         for suffix in ("sslmode=", "sslmode=require&sslmode=disable", "sslmode",

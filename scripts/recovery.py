@@ -118,7 +118,11 @@ class PgTools:
             return ["docker", "exec", "-i", self.container, "env",
                     f"PGUSER={selected['PGUSER']}", f"PGDATABASE={selected['PGDATABASE']}",
                     tool, *args], os.environ.copy()
-        env = os.environ.copy()
+        # libpq expands a service file before applying environment defaults;
+        # it could override even an explicit URL's TLS policy or destination.
+        # A separate inherited hostaddr would also redirect the validated host.
+        env = {key: value for key, value in os.environ.items()
+               if key not in {"PGSERVICE", "PGSERVICEFILE", "PGHOSTADDR"}}
         env.update(selected)
         return [tool, *args], env
 
