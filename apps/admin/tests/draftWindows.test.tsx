@@ -186,9 +186,69 @@ it("离页直接读取表单store，保存和删除不会被待写任务复活",
   act(() => { window.dispatchEvent(new Event("beforeunload")); });
   expect(read(a).value.content).toBe(store.content);
   fireEvent.click(screen.getByRole("button", { name: "提交" }));
-  act(() => { vi.advanceTimersByTime(DRAFT_WRITE_INTERVAL_MS); });
+  act(() => { window.dispatchEvent(new Event("pagehide")); vi.advanceTimersByTime(DRAFT_WRITE_INTERVAL_MS); });
   expect(localStorage.getItem(draftKey(scope, a))).toBeNull();
   store = template;
+});
+
+it("保存A后修改B再撤销回A，会清除陈旧副本和保存时间反馈", () => {
+  vi.useFakeTimers();
+  const mounted = mount(a, "A");
+  change("A", "已保存的A");
+  act(() => { vi.advanceTimersByTime(DRAFT_WRITE_INTERVAL_MS); });
+  fireEvent.click(section("A").getByRole("button", { name: "保存服务器" }));
+  expect(localStorage.getItem(draftKey(scope, a))).toBeNull();
+
+  change("A", "等待后已写盘的B");
+  act(() => { vi.advanceTimersByTime(DRAFT_WRITE_INTERVAL_MS); });
+  expect(read(a).value.content).toBe("等待后已写盘的B");
+  change("A", "已保存的A");
+  expect(localStorage.getItem(draftKey(scope, a))).toBeNull();
+  expect(section("A").queryByText(/本机恢复副本：/)).toBeNull();
+  act(() => { window.dispatchEvent(new Event("pagehide")); });
+  mounted.unmount();
+  mount({ tabId: a.tabId, writerId: "reopened-after-undo" }, "Reopen");
+  expect(screen.queryByText("发现本机未保存的编辑")).toBeNull();
+});
+
+it.each([false, true])("删除A后首次新输入B解除抑制，回到A仍保存最新值（B已写盘：%s）", (flushB) => {
+  vi.useFakeTimers();
+  mount(a, "A");
+  change("A", "已删除副本的A");
+  act(() => { vi.advanceTimersByTime(DRAFT_WRITE_INTERVAL_MS); });
+  fireEvent.click(section("A").getByRole("button", { name: "删除本机副本" }));
+  act(() => { window.dispatchEvent(new Event("pagehide")); });
+  expect(localStorage.getItem(draftKey(scope, a))).toBeNull();
+
+  change("A", "真实新输入B");
+  if (flushB) {
+    act(() => { vi.advanceTimersByTime(DRAFT_WRITE_INTERVAL_MS); });
+    expect(read(a).value.content).toBe("真实新输入B");
+  }
+  change("A", "已删除副本的A");
+  act(() => { vi.advanceTimersByTime(DRAFT_WRITE_INTERVAL_MS); });
+  expect(read(a).value.content).toBe("已删除副本的A");
+  act(() => { window.dispatchEvent(new Event("pagehide")); });
+  expect(read(a).value.content).toBe("已删除副本的A");
+});
+
+it("明确恢复相同输入解除先前删除抑制，BFCache返回仍能补写副本", () => {
+  vi.useFakeTimers();
+  mount(a, "A");
+  change("A", "需要重新恢复的A");
+  act(() => { vi.advanceTimersByTime(DRAFT_WRITE_INTERVAL_MS); });
+  fireEvent.click(section("A").getByRole("button", { name: "删除本机副本" }));
+  const source = JSON.stringify(snapshot({ ...template, content: "需要重新恢复的A" }, 1));
+  localStorage.setItem(draftKey(scope, b), source);
+  fireEvent.click(section("A").getByRole("button", { name: "查找其它恢复副本" }));
+  fireEvent.click(section("A").getByRole("button", { name: "恢复本机编辑" }));
+  act(() => { window.dispatchEvent(new Event("pagehide")); });
+  // A paused editor's own source can be safely cleaned, then must be recreated on return.
+  localStorage.removeItem(draftKey(scope, a));
+  act(() => { window.dispatchEvent(new Event("pageshow")); });
+  expect(read(a).value.content).toBe("需要重新恢复的A");
+  expect(read(a).baselineVersion).toBe(1);
+  expect(localStorage.getItem(draftKey(scope, b))).toBe(source);
 });
 
 it("切换身份与实体时补写旧槽，创建ID迁移不会复活new槽", () => {

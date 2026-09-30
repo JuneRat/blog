@@ -52,12 +52,18 @@ export function useLocalDraft<T>({ owner, kind, id, ready, disabled, dirty, valu
   const latest = useRef<Pending | null>(null);
   const lastWritten = useRef<Pending | null>(null);
 
+  function observeInput(currentValue: T) {
+    // Suppress delayed notifications only until the first genuinely different input.
+    // Clearing at observation also covers edits reverted within one coalescing window.
+    if (deletedValue.current && !draftValueEquals(deletedValue.current.value, currentValue)) deletedValue.current = null;
+  }
   function persist(input: Pending) {
     const currentValue = input.readValue?.() ?? input.value;
     const currentDirty = input.readDirty?.() ?? input.dirty;
-    if (deletedValue.current && draftValueEquals(deletedValue.current.value, currentValue)) return;
+    observeInput(currentValue);
+    if (currentDirty && deletedValue.current) return;
     const previous = lastWritten.current;
-    if (previous?.key === input.key && previous.baselineVersion === input.baselineVersion &&
+    if (currentDirty && previous?.key === input.key && previous.baselineVersion === input.baselineVersion &&
       previous.dirty === currentDirty && draftValueEquals(previous.value, currentValue)) return;
     const currentScope = () => mounted.current && scope.current.key === input.key && scope.current.visit === input.visit;
     try {
@@ -94,6 +100,7 @@ export function useLocalDraft<T>({ owner, kind, id, ready, disabled, dirty, valu
   }, [key, visit, ready, template, dirty, revision]);
 
   useLayoutEffect(() => {
+    if (deletedValue.current) observeInput(readValue?.() ?? value);
     const eligible = key && ready && state.key === key && state.visit === visit && migratingFrom.current !== key &&
       !(state.reviewing && state.candidates.some(candidate => candidate.key === key)) && !state.error;
     latest.current = eligible ? { key, visit, value, dirty, baselineVersion, readValue, readDirty } : null;
@@ -164,6 +171,7 @@ export function useLocalDraft<T>({ owner, kind, id, ready, disabled, dirty, valu
   }
   function restoreCandidate(candidate: DraftCandidate<T>) {
     writes.cancel();
+    deletedValue.current = null;
     restoredSource.current = candidate;
     try {
       // Persist our clone before hiding the source from this tab's future recovery list.
