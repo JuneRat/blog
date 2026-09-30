@@ -2,7 +2,8 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
-import { api } from "../src/api";
+import { tagsApi } from "../src/api/taxonomy";
+import { identityApi } from "../src/api/identity";
 import { paths } from "../src/router";
 
 /**
@@ -20,27 +21,25 @@ vi.mock("../src/auth", () => ({
   }),
 }));
 
-vi.mock("../src/api", async (importOriginal) => {
-  const original = await importOriginal<typeof import("../src/api")>();
-  return {
-    ...original,
-    api: {
-      listTags: vi.fn(),
-      changeOwnPassword: vi.fn(),
-    },
-  };
+vi.mock("../src/api/taxonomy", async (load) => {
+  const original = await load<typeof import("../src/api/taxonomy")>();
+  return { ...original, tagsApi: { ...original.tagsApi, listTags: vi.fn() } };
+});
+vi.mock("../src/api/identity", async (load) => {
+  const original = await load<typeof import("../src/api/identity")>();
+  return { ...original, identityApi: { ...original.identityApi, changeOwnPassword: vi.fn() } };
 });
 
 beforeEach(() => {
   vi.resetAllMocks();
   window.history.replaceState(null, "", paths.tags);
-  vi.mocked(api.listTags).mockResolvedValue([]);
+  vi.mocked(tagsApi.listTags).mockResolvedValue([]);
 });
 afterEach(cleanup);
 
 describe("自助改密入口", () => {
   it("外壳右上角打开改密弹窗，提交后调用改密接口", async () => {
-    vi.mocked(api.changeOwnPassword).mockResolvedValue({ user_id: "me", csrf_token: "csrf-new" });
+    vi.mocked(identityApi.changeOwnPassword).mockResolvedValue({ user_id: "me", csrf_token: "csrf-new" });
     render(<App />);
     // 等懒加载的屏幕挂载，确认外壳与内容都在。
     await screen.findByText(/还没有标签/);
@@ -55,7 +54,7 @@ describe("自助改密入口", () => {
     fireEvent.click(screen.getByRole("button", { name: "更新密码" }));
 
     await waitFor(() =>
-      expect(api.changeOwnPassword).toHaveBeenCalledWith({
+      expect(identityApi.changeOwnPassword).toHaveBeenCalledWith({
         current_password: "old-secret",
         new_password: "new-secret-value",
       }),

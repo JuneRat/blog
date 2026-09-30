@@ -1,6 +1,7 @@
 import { Alert, App as AntdApp, Button, Form, Input, Modal, Space, Typography } from "antd";
 import { useState } from "react";
-import { ApiError, api, setCsrfToken, withRequestId } from "../api";
+import { ApiError, setCsrfToken, withRequestId } from "../api/client";
+import { identityApi } from "../api/identity";
 import { messageOf as apiMessageOf } from "../apiError";
 
 /**
@@ -89,7 +90,7 @@ export function PasswordChangeModal({ open, onClose }: PasswordChangeModalProps)
     setError(null);
     setBusy(true);
     try {
-      const result = await api.changeOwnPassword({
+      const result = await identityApi.changeOwnPassword({
         // 留空即不下发该字段（JSON.stringify 会丢掉 undefined）：这是 OAuth 用户
         // 设置初始密码的路径，服务端要求此时凭据「必须为空」。
         current_password: current === "" ? undefined : current,

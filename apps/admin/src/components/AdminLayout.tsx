@@ -1,17 +1,14 @@
-import { invalidateAfterWrite } from "../queryEffects";
-import { Alert, Avatar, Breadcrumb, Button, Flex, Layout, Menu, Modal, Space, Typography, theme } from "antd";
+import { Alert, Avatar, Breadcrumb, Button, Flex, Layout, Menu, Space, Typography, theme } from "antd";
 import type { MenuProps } from "antd";
 import type { ReactNode } from "react";
-import { useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
-import { api, ApiError, withRequestId } from "../api";
-import { permissionMessageOf } from "../apiError";
+import { lazy, Suspense, useState } from "react";
 import { useAuth } from "../auth";
-import { PasswordChangeModal } from "./PasswordChangeModal";
-import { CoverPicker } from "./CoverPicker";
 import { navigate, paths, useRoute } from "../router";
 import type { Route } from "../router";
 import { useLeaveConfirmation } from "../unsaved";
+
+const PasswordChangeModal = lazy(() => import("./PasswordChangeModal").then(module => ({ default: module.PasswordChangeModal })));
+const AvatarChangeModal = lazy(() => import("./AvatarChangeModal").then(module => ({ default: module.AvatarChangeModal })));
 
 const { Header, Sider, Content } = Layout;
 
@@ -120,54 +117,14 @@ function selectedKey(route: Route): string {
 }
 
 export function AdminLayout({ children, readerOnly = false }: { children: ReactNode; readerOnly?: boolean }) {
-  const queryClient = useQueryClient();
   const { token } = theme.useToken();
   const route = useRoute();
   // 测试里 mock 的 auth 只给 status/me，缺少的字段用可选调用兜住，
   // 免得外壳把整屏带崩（真实 AuthProvider 一定提供这些方法）。
-  const { me, refresh, logout, logoutError } = useAuth();
+  const { me, logout, logoutError } = useAuth();
   const confirmLeave = useLeaveConfirmation();
   const [passwordOpen, setPasswordOpen] = useState(false);
-  /** 头像弹窗：选择值单独存一份，点「保存」前不影响头部显示。 */
   const [avatarOpen, setAvatarOpen] = useState(false);
-  const [avatarValue, setAvatarValue] = useState<string | null>(null);
-  const [avatarVersion, setAvatarVersion] = useState<number | null>(null);
-  const [avatarBusy, setAvatarBusy] = useState(false);
-  const [avatarError, setAvatarError] = useState<string | null>(null);
-  const canReadMedia = me?.permissions.includes("media.read") ?? false;
-  const canUploadMedia = me?.permissions.includes("media.upload") ?? false;
-
-  /** 打开头像弹窗：以当前头像为起点，取消不改动任何数据。 */
-  function openAvatar(): void {
-    setAvatarValue(me?.avatar_media_id ?? null);
-    setAvatarVersion(me?.version ?? null);
-    setAvatarError(null);
-    setAvatarOpen(true);
-  }
-
-  /** 保存头像：本人自助接口；成功后刷新 `/me` 让头部立即更新。 */
-  async function saveAvatar(): Promise<void> {
-    if (avatarVersion === null || avatarBusy) return;
-    setAvatarBusy(true);
-    setAvatarError(null);
-    try {
-      await api.setOwnAvatar(avatarValue, avatarVersion);
-      void invalidateAfterWrite(queryClient, "profile");
-      await refresh?.();
-      setAvatarOpen(false);
-    } catch (e) {
-      if (e instanceof ApiError && e.code === "version_conflict") {
-        setAvatarVersion(null);
-        setAvatarError(withRequestId("个人资料已在其他窗口更新，请关闭窗口后重新选择头像。", e.requestId));
-        // 保留当前选择供查看；刷新成功后也必须重新打开弹窗确认，不能静默重试覆盖。
-        try { await refresh?.(); } catch { /* 下次打开仍使用旧版本，服务端继续拒绝覆盖。 */ }
-      } else {
-        setAvatarError(permissionMessageOf(e));
-      }
-    } finally {
-      setAvatarBusy(false);
-    }
-  }
 
   /**
    * 菜单导航：离开前先过统一的确认口径。
@@ -214,7 +171,7 @@ export function AdminLayout({ children, readerOnly = false }: { children: ReactN
             {/* 头像入口：显示当前头像，点击直接打开自助更换弹窗。 */}
             <Button
               type="text"
-              onClick={openAvatar}
+              onClick={() => setAvatarOpen(true)}
               aria-label="更换头像"
               title="更换头像"
               style={{ paddingInline: 4 }}
@@ -263,38 +220,10 @@ export function AdminLayout({ children, readerOnly = false }: { children: ReactN
           </div>
         </Content>
       </Layout>
-      <PasswordChangeModal open={passwordOpen} onClose={() => setPasswordOpen(false)} />
-      {/* 只挂载打开的弹窗：关闭即卸载，避免残留列表/文件输入。 */}
-      {avatarOpen && (
-        <Modal
-          title="更换头像"
-          open
-          okText="保存"
-          cancelText="取消"
-          confirmLoading={avatarBusy}
-          okButtonProps={{ disabled: avatarVersion === null }}
-          onOk={() => void saveAvatar()}
-          onCancel={() => setAvatarOpen(false)}
-          destroyOnHidden
-        >
-          <CoverPicker
-            value={avatarValue}
-            onChange={setAvatarValue}
-            // 服务端下发的地址只对「当前头像 id」有效：一旦在弹窗里换了图，
-            // 必须回退到 mediaUrl(value) 显示新图，否则预览停在旧头像上。
-            currentUrl={
-              avatarValue === (me?.avatar_media_id ?? null) ? (me?.avatar_url ?? null) : null
-            }
-            canReadMedia={canReadMedia}
-            canUploadMedia={canUploadMedia}
-            disabled={avatarBusy}
-            label="头像"
-          />
-          {avatarError !== null && (
-            <Alert type="error" showIcon title={avatarError} style={{ marginTop: 12 }} />
-          )}
-        </Modal>
-      )}
+      <Suspense fallback={<Typography.Text role="status">正在加载账号设置…</Typography.Text>}>
+        {passwordOpen && <PasswordChangeModal open onClose={() => setPasswordOpen(false)} />}
+        {avatarOpen && <AvatarChangeModal onClose={() => setAvatarOpen(false)} />}
+      </Suspense>
     </Layout>
   );
 }

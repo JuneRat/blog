@@ -1,6 +1,6 @@
 import { Alert, Button, Space, Typography, theme } from "antd";
 import { useEffect, useRef, useState } from "react";
-import { api } from "../api";
+import { contentApi } from "../api/content";
 import { messageOf } from "../apiError";
 
 /** Render unsaved Markdown with the same server rules as publication. */
@@ -22,7 +22,7 @@ export function ContentPreview({ content, disabled }: { content: string; disable
     setBusy(true);
     setError(null);
     try {
-      const result = await api.previewContent(content);
+      const result = await contentApi.previewContent(content);
       if (current === revision.current) setHtml(result.content_html);
     } catch (e) {
       if (current === revision.current) setError(messageOf(e));

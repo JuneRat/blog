@@ -1,4 +1,4 @@
-import { ApiError, withRequestId } from "./api";
+import { ApiError, withRequestId } from "./api/client";
 
 /**
  * `ApiError` → 用户可读文案的唯一出处。

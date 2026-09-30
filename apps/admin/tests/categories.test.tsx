@@ -2,7 +2,8 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
-import { ApiError, categoryApi } from "../src/api";
+import { ApiError } from "../src/api/client";
+import { categoryApi } from "../src/api/taxonomy";
 import { paths } from "../src/router";
 import type { CategorySummary } from "../src/types";
 
@@ -13,12 +14,9 @@ vi.mock("../src/auth", () => ({
   }),
 }));
 
-vi.mock("../src/api", async (importOriginal) => {
-  const original = await importOriginal<typeof import("../src/api")>();
-  return {
-    ...original,
-    categoryApi: { list: vi.fn(), create: vi.fn(), update: vi.fn(), remove: vi.fn() },
-  };
+vi.mock("../src/api/taxonomy", async (load) => {
+  const original = await load<typeof import("../src/api/taxonomy")>();
+  return { ...original, categoryApi: { list: vi.fn(), create: vi.fn(), update: vi.fn(), remove: vi.fn() } };
 });
 
 const tech: CategorySummary = {

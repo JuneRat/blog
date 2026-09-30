@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import { Alert, Button, Space } from 'antd';
-import { commentsApi } from '../api';
+import { commentsApi } from "../api/comments";
 import { permissionMessageOf } from '../apiError';
 
 export function CommentEditor({ value, onChange, disabled = false }: { value: string; onChange: (value: string) => void; disabled?: boolean }) {

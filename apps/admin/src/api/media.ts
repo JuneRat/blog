@@ -1,5 +1,5 @@
 import type * as Wire from "./generated";
-import * as s from "./schemas";
+import * as s from "./schemas/media";
 import { json, request, requestBinary, requestEmpty } from "./client";
 import type { MediaAsset, MediaPage, MediaUsageView } from "../types";
 

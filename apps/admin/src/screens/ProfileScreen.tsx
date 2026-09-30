@@ -2,7 +2,8 @@ import { invalidateAfterWrite } from "../queryEffects";
 import { Alert, Button, Form, Input, Space, Spin, Typography } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { ApiError, api } from "../api";
+import { ApiError } from "../api/client";
+import { identityApi } from "../api/identity";
 import { messageOf } from "../apiError";
 import { useAuth } from "../auth";
 import type { Profile } from "../types";
@@ -12,7 +13,7 @@ export function ProfileScreen() {
   const { me } = useAuth();
   const profile = useQuery({
     queryKey: ["own-profile", me?.user_id],
-    queryFn: () => api.me(),
+    queryFn: () => identityApi.me(),
     staleTime: 0,
     gcTime: 0,
   });
@@ -55,7 +56,7 @@ function ProfileForm({ initial }: { initial: Profile }) {
     setError(null);
     setNotice(null);
     try {
-      const profile = await api.updateOwnProfile({
+      const profile = await identityApi.updateOwnProfile({
         display_name: displayName.trim() || null,
         bio: bio === "" ? null : bio,
         expected_version: saved.version,
@@ -86,7 +87,7 @@ function ProfileForm({ initial }: { initial: Profile }) {
     setError(null);
     setNotice(null);
     try {
-      accept(await api.me());
+      accept(await identityApi.me());
     } catch (e) {
       setError(messageOf(e));
     } finally {

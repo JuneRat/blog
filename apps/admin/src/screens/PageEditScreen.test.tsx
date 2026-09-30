@@ -33,24 +33,13 @@ vi.mock("../auth", () => ({
   }),
 }));
 
-vi.mock("../api", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../api")>();
-  return {
-    ...actual,
-    api: {
-      getPage: vi.fn(),
-      createPage: vi.fn(),
-      updatePage: vi.fn(),
-      publishPage: vi.fn(),
-      schedulePage: vi.fn(),
-      archivePage: vi.fn(),
-      unpublishPage: vi.fn(),
-      trashPage: vi.fn(),
-    },
-  };
+vi.mock("../api/pages", async (load) => {
+  const original = await load<typeof import("../api/pages")>();
+  return { ...original, pagesApi: { ...original.pagesApi, getPage: vi.fn(), createPage: vi.fn(), updatePage: vi.fn(), publishPage: vi.fn(), schedulePage: vi.fn(), archivePage: vi.fn(), unpublishPage: vi.fn(), trashPage: vi.fn() } };
 });
 
-import { ApiError, api } from "../api";
+import { ApiError } from "../api/client";
+import { pagesApi } from "../api/pages";
 import { AdminProviders } from "../providers";
 import { PageEditScreen } from "./PageEditScreen";
 import type { PageDetail } from "../types";
@@ -64,11 +53,11 @@ function renderPage(ui: React.ReactElement): ReturnType<typeof render> {
   return render(<AdminProviders>{ui}</AdminProviders>);
 }
 
-const getPage = vi.mocked(api.getPage);
-const createPage = vi.mocked(api.createPage);
-const updatePage = vi.mocked(api.updatePage);
-const publishPage = vi.mocked(api.publishPage);
-const trashPage = vi.mocked(api.trashPage);
+const getPage = vi.mocked(pagesApi.getPage);
+const createPage = vi.mocked(pagesApi.createPage);
+const updatePage = vi.mocked(pagesApi.updatePage);
+const publishPage = vi.mocked(pagesApi.publishPage);
+const trashPage = vi.mocked(pagesApi.trashPage);
 
 function pageDetail(overrides: Partial<PageDetail> = {}): PageDetail {
   return {

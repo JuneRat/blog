@@ -1,5 +1,5 @@
 import type * as Wire from "./generated";
-import * as s from "./schemas";
+import * as s from "./schemas/preview";
 import { json, request } from "./client";
 
 export const contentApi = {

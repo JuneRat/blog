@@ -15,7 +15,7 @@ import type { TableProps } from "antd";
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
-import { seriesApi } from "../api";
+import { seriesApi } from "../api/taxonomy";
 import { permissionMessageOf } from "../apiError";
 import { useAuth } from "../auth";
 import { CoverPicker } from "../components/CoverPicker";

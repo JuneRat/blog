@@ -1,7 +1,7 @@
 import { Alert, Checkbox, Form, Input, Select, Typography } from "antd";
 import type { FormInstance } from "antd";
 import { useQuery } from "@tanstack/react-query";
-import { api, categoryApi, seriesApi } from "../../api";
+import { tagsApi, categoryApi, seriesApi } from "../../api/taxonomy";
 import { queryKeys } from "../../queryClient";
 import { permissionMessageOf } from "../../apiError";
 import { navigate, paths } from "../../router";
@@ -34,7 +34,7 @@ export function PostMetadataFields({
    */
   const tagsQuery = useQuery({
     queryKey: queryKeys.tags(),
-    queryFn: () => api.listTags(),
+    queryFn: () => tagsApi.listTags(),
   });
   const categoriesQuery = useQuery({
     queryKey: queryKeys.categories(),

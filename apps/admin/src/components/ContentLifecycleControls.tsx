@@ -1,6 +1,7 @@
 import { Button, Input, Space, Typography } from "antd";
 import { useEffect, useState } from "react";
-import { dateTimeInput, formatDateTime, inputToInstant, invalidLocalTime, useTimeZone } from "../timeZone";
+import { dateTimeInput, formatDateTime, inputToInstant, invalidLocalTime } from "../timeZone";
+import { useTimeZone } from "../timeZoneContext";
 
 export type ContentAction = "publish" | "unpublish" | "schedule" | "archive";
 

@@ -3,7 +3,11 @@ import { contentPage, postSummary } from "./contentFixtures";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
-import { ApiError, api, categoryApi, commentsApi, mediaApi, seriesApi } from "../src/api";
+import { ApiError } from "../src/api/client";
+import { postsApi } from "../src/api/posts";
+import { tagsApi, categoryApi, seriesApi } from "../src/api/taxonomy";
+import { commentsApi } from "../src/api/comments";
+import { mediaApi } from "../src/api/media";
 import { navigate, paths } from "../src/router";
 import type { MediaAsset, MediaPage, PostDetail } from "../src/types";
 
@@ -14,20 +18,21 @@ vi.mock("../src/auth", () => ({
   }),
 }));
 
-vi.mock("../src/api", async (importOriginal) => {
-  const original = await importOriginal<typeof import("../src/api")>();
-  return {
-    ...original,
-    categoryApi: { list: vi.fn() },
-    commentsApi: { policy: vi.fn(), savePolicy: vi.fn() },
-    seriesApi: { list: vi.fn() },
-    mediaApi: { list: vi.fn(), detail: vi.fn(), upload: vi.fn(), remove: vi.fn() },
-    api: {
-      getPost: vi.fn(), createPost: vi.fn(), updatePost: vi.fn(),
-      publishPost: vi.fn(), unpublishPost: vi.fn(), listTags: vi.fn(),
-      listPosts: vi.fn(),
-    },
-  };
+vi.mock("../src/api/taxonomy", async (load) => {
+  const original = await load<typeof import("../src/api/taxonomy")>();
+  return { ...original, categoryApi: { list: vi.fn() }, seriesApi: { list: vi.fn() }, tagsApi: { ...original.tagsApi, listTags: vi.fn() } };
+});
+vi.mock("../src/api/comments", async (load) => {
+  const original = await load<typeof import("../src/api/comments")>();
+  return { ...original, commentsApi: { policy: vi.fn(), savePolicy: vi.fn() } };
+});
+vi.mock("../src/api/media", async (load) => {
+  const original = await load<typeof import("../src/api/media")>();
+  return { ...original, mediaApi: { list: vi.fn(), detail: vi.fn(), upload: vi.fn(), remove: vi.fn() } };
+});
+vi.mock("../src/api/posts", async (load) => {
+  const original = await load<typeof import("../src/api/posts")>();
+  return { ...original, postsApi: { ...original.postsApi, getPost: vi.fn(), createPost: vi.fn(), updatePost: vi.fn(), publishPost: vi.fn(), unpublishPost: vi.fn(), listPosts: vi.fn() } };
 });
 
 const post: PostDetail = {
@@ -74,14 +79,14 @@ function input(label: string): HTMLInputElement {
 beforeEach(() => {
   vi.resetAllMocks();
   window.history.replaceState(null, "", paths.editPost(post.id));
-  vi.mocked(api.getPost).mockResolvedValue(post);
+  vi.mocked(postsApi.getPost).mockResolvedValue(post);
   vi.mocked(commentsApi.policy).mockResolvedValue({ enabled: true, version: 1 });
   // 标签目录：空目录即可（编辑器只渲染选择区）。
-  vi.mocked(api.listTags).mockResolvedValue([]);
+  vi.mocked(tagsApi.listTags).mockResolvedValue([]);
   // 编辑器读的是顶层 categoryApi（不是 api.categoryApi），mock 必须打在同一处。
   vi.mocked(categoryApi.list).mockResolvedValue([]);
   vi.mocked(seriesApi.list).mockResolvedValue([]);
-  vi.mocked(api.listPosts).mockResolvedValue(contentPage([]));
+  vi.mocked(postsApi.listPosts).mockResolvedValue(contentPage([]));
 });
 afterEach(cleanup);
 
@@ -89,7 +94,7 @@ describe("文章编辑器回归", () => {
   it("创建跳转保留等待期间的输入，返回新建页则完整清空", async () => {
     window.history.replaceState(null, "", paths.newPost);
     const pending = deferred<PostDetail>();
-    vi.mocked(api.createPost).mockReturnValue(pending.promise);
+    vi.mocked(postsApi.createPost).mockReturnValue(pending.promise);
     render(<App />);
     // 屏幕按路由懒加载：首屏渲染是 Suspense 占位，必须等真实编辑器挂载。
     await screen.findByLabelText("标题");
@@ -98,7 +103,7 @@ describe("文章编辑器回归", () => {
     fireEvent.click(screen.getByRole("button", { name: /保存草稿|保存预约内容|更新已发布内容/ }));
     // antd Form 的 onFinish 在校验之后才触发；必须等请求真正发出，
     // 此时再输入才是「请求飞行期间」（见 PageEditScreen.test.tsx 的同名用例）。
-    await waitFor(() => expect(api.createPost).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(postsApi.createPost).toHaveBeenCalledTimes(1));
     fireEvent.change(input("正文（Markdown）"), { target: { value: "等待期间的新输入" } });
     await act(async () => { pending.resolve(post); });
     expect(window.location.pathname).toBe(paths.editPost(post.id));
@@ -117,8 +122,8 @@ describe("文章编辑器回归", () => {
     fireEvent.change(input("标题"), { target: { value: "第二篇" } });
     fireEvent.click(screen.getByRole("button", { name: /保存草稿|保存预约内容|更新已发布内容/ }));
     // onFinish 是异步的：先等第二次创建真正发出，再核对载荷。
-    await waitFor(() => expect(api.createPost).toHaveBeenCalledTimes(2));
-    expect(api.createPost).toHaveBeenLastCalledWith({
+    await waitFor(() => expect(postsApi.createPost).toHaveBeenCalledTimes(2));
+    expect(postsApi.createPost).toHaveBeenLastCalledWith({
       slug: undefined, title: "第二篇", excerpt: undefined, content: "", visibility: "public",
       tag_ids: [], series: [],
     });
@@ -126,8 +131,8 @@ describe("文章编辑器回归", () => {
   });
 
   it("新建页不继承已发布文章的版本、可见性或冲突提示", async () => {
-    vi.mocked(api.getPost).mockResolvedValue({ ...post, status: "published", visibility: "private", version: 7 });
-    vi.mocked(api.updatePost).mockRejectedValue(new ApiError(409, "版本冲突", "version_conflict"));
+    vi.mocked(postsApi.getPost).mockResolvedValue({ ...post, status: "published", visibility: "private", version: 7 });
+    vi.mocked(postsApi.updatePost).mockRejectedValue(new ApiError(409, "版本冲突", "version_conflict"));
     render(<App />);
     await screen.findByDisplayValue(post.title);
     fireEvent.click(screen.getByRole("button", { name: /保存草稿|保存预约内容|更新已发布内容/ }));
@@ -142,8 +147,8 @@ describe("文章编辑器回归", () => {
   });
 
   it("发布收到版本冲突后继续保留原正文和原版本", async () => {
-    vi.mocked(api.publishPost).mockRejectedValue(new ApiError(409, "版本冲突", "version_conflict"));
-    vi.mocked(api.updatePost).mockRejectedValue(new ApiError(409, "版本冲突", "version_conflict"));
+    vi.mocked(postsApi.publishPost).mockRejectedValue(new ApiError(409, "版本冲突", "version_conflict"));
+    vi.mocked(postsApi.updatePost).mockRejectedValue(new ApiError(409, "版本冲突", "version_conflict"));
     render(<App />);
     await screen.findByDisplayValue(post.title);
     fireEvent.click(screen.getByRole("button", { name: "发布" }));
@@ -152,24 +157,24 @@ describe("文章编辑器回归", () => {
     expect(screen.getByText("v1")).toBeTruthy();
     fireEvent.change(input("标题"), { target: { value: "新的标题" } });
     fireEvent.click(screen.getByRole("button", { name: /保存草稿|保存预约内容|更新已发布内容/ }));
-    await waitFor(() => expect(api.updatePost).toHaveBeenCalledWith(post.id, expect.objectContaining({
+    await waitFor(() => expect(postsApi.updatePost).toHaveBeenCalledWith(post.id, expect.objectContaining({
       expected_version: 1, content: post.content,
     })));
   });
 
   it("改名后仍用原 ID 发布，地址不变且保留等待期间的新编辑", async () => {
     const pending = deferred<PostDetail>();
-    vi.mocked(api.updatePost).mockReturnValue(pending.promise);
-    vi.mocked(api.publishPost).mockResolvedValue({ ...post, slug: "renamed", status: "published", version: 3 });
+    vi.mocked(postsApi.updatePost).mockReturnValue(pending.promise);
+    vi.mocked(postsApi.publishPost).mockResolvedValue({ ...post, slug: "renamed", status: "published", version: 3 });
     render(<App />);
     await screen.findByDisplayValue(post.title);
     fireEvent.change(input("slug"), { target: { value: "renamed" } });
     fireEvent.click(screen.getByRole("button", { name: "发布" }));
     // 发布按钮是同步 onClick（先保存再发布）：等 updatePost 真正发出后再改输入。
-    await waitFor(() => expect(api.updatePost).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(postsApi.updatePost).toHaveBeenCalledTimes(1));
     fireEvent.change(input("正文（Markdown）"), { target: { value: "继续编辑" } });
     await act(async () => { pending.resolve({ ...post, slug: "renamed", version: 2 }); });
-    expect(api.publishPost).toHaveBeenCalledWith(post.id, 2);
+    expect(postsApi.publishPost).toHaveBeenCalledWith(post.id, 2);
     expect(window.location.pathname).toBe(paths.editPost(post.id));
     expect(input("正文（Markdown）").value).toBe("继续编辑");
     expect(screen.getByText("状态已更新为已发布。还有未保存的改动。")).toBeTruthy();
@@ -178,7 +183,7 @@ describe("文章编辑器回归", () => {
   it("改名保存不改变编辑地址，旧 slug 被复用后重新打开仍编辑原 ID", async () => {
     const renamed = { ...post, slug: "renamed", version: 2 };
     const replacement = { ...post, id: "replacement-id", title: "占用旧地址的新文章" };
-    vi.mocked(api.updatePost).mockResolvedValueOnce(renamed);
+    vi.mocked(postsApi.updatePost).mockResolvedValueOnce(renamed);
     render(<App />);
     await screen.findByDisplayValue(post.title);
     fireEvent.change(input("slug"), { target: { value: renamed.slug } });
@@ -187,8 +192,8 @@ describe("文章编辑器回归", () => {
     expect(window.location.pathname).toBe(paths.editPost(post.id));
 
     // 原地址已被另一篇占用，列表同时出现两个实体；书签继续指向原 ID。
-    vi.mocked(api.listPosts).mockResolvedValue(contentPage([postSummary(renamed), postSummary(replacement)]));
-    vi.mocked(api.getPost).mockImplementation(async (id) =>
+    vi.mocked(postsApi.listPosts).mockResolvedValue(contentPage([postSummary(renamed), postSummary(replacement)]));
+    vi.mocked(postsApi.getPost).mockImplementation(async (id) =>
       id === post.id ? renamed : replacement,
     );
     act(() => { navigate(paths.list); });
@@ -197,11 +202,11 @@ describe("文章编辑器回归", () => {
     await screen.findByDisplayValue(renamed.slug);
     expect(input("标题").value).toBe(post.title);
 
-    vi.mocked(api.updatePost).mockResolvedValueOnce({ ...renamed, title: "继续修改原文章", version: 3 });
+    vi.mocked(postsApi.updatePost).mockResolvedValueOnce({ ...renamed, title: "继续修改原文章", version: 3 });
     fireEvent.change(input("标题"), { target: { value: "继续修改原文章" } });
     fireEvent.click(screen.getByRole("button", { name: /保存草稿|保存预约内容|更新已发布内容/ }));
     await screen.findByText("v3");
-    expect(api.updatePost).toHaveBeenLastCalledWith(post.id, expect.objectContaining({
+    expect(postsApi.updatePost).toHaveBeenLastCalledWith(post.id, expect.objectContaining({
       expected_version: 2, new_slug: undefined, title: "继续修改原文章",
     }));
     expect(window.location.pathname).toBe(paths.editPost(post.id));
@@ -214,7 +219,7 @@ describe("文章编辑器回归", () => {
     render(<App />);
     await screen.findByDisplayValue(post.title);
 
-    vi.mocked(api.getPost).mockRejectedValueOnce(new ApiError(404, "未找到", "not_found"));
+    vi.mocked(postsApi.getPost).mockRejectedValueOnce(new ApiError(404, "未找到", "not_found"));
     act(() => { navigate(paths.editPost("missing")); });
     await screen.findByText(/文章未能加载/);
     // 表单仍是上一篇的内容（这正是危险所在）。
@@ -223,14 +228,14 @@ describe("文章编辑器回归", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /保存草稿|保存预约内容|更新已发布内容/ }));
     expect(await screen.findByText(/文章未能加载/)).toBeTruthy();
-    expect(api.updatePost).not.toHaveBeenCalled();
-    expect(api.createPost).not.toHaveBeenCalled();
+    expect(postsApi.updatePost).not.toHaveBeenCalled();
+    expect(postsApi.createPost).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "发布" }));
-    expect(api.publishPost).not.toHaveBeenCalled();
+    expect(postsApi.publishPost).not.toHaveBeenCalled();
 
     // 加载成功后恢复编辑与提交能力。
-    vi.mocked(api.getPost).mockResolvedValueOnce({
+    vi.mocked(postsApi.getPost).mockResolvedValueOnce({
       ...post, id: "missing", slug: "missing", title: "补回", version: 5,
     });
     fireEvent.click(screen.getByRole("button", { name: "重新加载" }));
@@ -243,17 +248,17 @@ describe("文章编辑器回归", () => {
   // 「改完标题 → 返回列表」会命中旧缓存，看到保存前的标题与 slug。
   it("保存后返回列表看到新标题（写后必须失效列表缓存）", async () => {
     window.history.replaceState(null, "", paths.list);
-    vi.mocked(api.listPosts).mockResolvedValue(contentPage([postSummary({ ...post, title: "原始标题" })]));
+    vi.mocked(postsApi.listPosts).mockResolvedValue(contentPage([postSummary({ ...post, title: "原始标题" })]));
     render(<App />);
     await screen.findByText("原始标题"); // 让列表缓存先落地
 
     act(() => { navigate(paths.editPost(post.id)); });
     await screen.findByDisplayValue("原始标题");
     fireEvent.change(input("标题"), { target: { value: "改过的标题" } });
-    vi.mocked(api.updatePost).mockResolvedValue({ ...post, title: "改过的标题", version: 2 });
-    vi.mocked(api.listPosts).mockResolvedValue(contentPage([postSummary({ ...post, title: "改过的标题", version: 2 })]));
+    vi.mocked(postsApi.updatePost).mockResolvedValue({ ...post, title: "改过的标题", version: 2 });
+    vi.mocked(postsApi.listPosts).mockResolvedValue(contentPage([postSummary({ ...post, title: "改过的标题", version: 2 })]));
     fireEvent.click(screen.getByRole("button", { name: /保存草稿|保存预约内容|更新已发布内容/ }));
-    await waitFor(() => expect(api.updatePost).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(postsApi.updatePost).toHaveBeenCalledTimes(1));
 
     // 走侧栏返回列表（真实路径；保存后没有未保存改动，不会弹确认）。
     fireEvent.click(screen.getByRole("menuitem", { name: "文章" }));
@@ -264,23 +269,23 @@ describe("文章编辑器回归", () => {
   // 失效列表，保存成功而发布失败时，返回列表看到的还是保存前的数据。
   it("发布失败时，先行保存的结果仍会反映到列表", async () => {
     window.history.replaceState(null, "", paths.list);
-    vi.mocked(api.listPosts).mockResolvedValue(contentPage([postSummary({ ...post, title: "原始标题" })]));
+    vi.mocked(postsApi.listPosts).mockResolvedValue(contentPage([postSummary({ ...post, title: "原始标题" })]));
     render(<App />);
     await screen.findByText("原始标题"); // 列表缓存先落地
 
     act(() => { navigate(paths.editPost(post.id)); });
     await screen.findByDisplayValue("原始标题");
     fireEvent.change(input("标题"), { target: { value: "改过的标题" } });
-    vi.mocked(api.updatePost).mockResolvedValue({ ...post, title: "改过的标题", version: 2 });
-    vi.mocked(api.publishPost).mockRejectedValue(
+    vi.mocked(postsApi.updatePost).mockResolvedValue({ ...post, title: "改过的标题", version: 2 });
+    vi.mocked(postsApi.publishPost).mockRejectedValue(
       new ApiError(500, "发布失败", "internal", "req-9"),
     );
-    vi.mocked(api.listPosts).mockResolvedValue(contentPage([postSummary({ ...post, title: "改过的标题", version: 2 })]));
+    vi.mocked(postsApi.listPosts).mockResolvedValue(contentPage([postSummary({ ...post, title: "改过的标题", version: 2 })]));
 
     fireEvent.click(screen.getByRole("button", { name: "发布" }));
     // 先行保存发出并成功（版本 2），随后发布失败。
-    await waitFor(() => expect(api.updatePost).toHaveBeenCalledTimes(1));
-    expect(api.publishPost).toHaveBeenCalledWith(post.id, 2);
+    await waitFor(() => expect(postsApi.updatePost).toHaveBeenCalledTimes(1));
+    expect(postsApi.publishPost).toHaveBeenCalledWith(post.id, 2);
     expect(await screen.findByText(/发布失败（错误编号 req-9）/)).toBeTruthy();
 
     // 保存已经生效：返回列表必须是新标题。
@@ -293,7 +298,7 @@ describe("文章编辑器封面", () => {
   // 编辑器里的封面控件与正文图片面板共用同一份文件输入习惯：上传即选中。
   it("从媒体库选择封面，保存时提交 cover_media_id", async () => {
     vi.mocked(mediaApi.list).mockResolvedValue(pageOf([asset()]));
-    vi.mocked(api.updatePost).mockResolvedValue({
+    vi.mocked(postsApi.updatePost).mockResolvedValue({
       ...post, cover_media_id: "media-1", cover_url: "/media/media-1", version: 2,
     });
     render(<App />);
@@ -308,7 +313,7 @@ describe("文章编辑器封面", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /保存草稿|保存预约内容|更新已发布内容/ }));
     await waitFor(() =>
-      expect(api.updatePost).toHaveBeenCalledWith(
+      expect(postsApi.updatePost).toHaveBeenCalledWith(
         post.id,
         expect.objectContaining({ cover_media_id: "media-1", expected_version: 1 }),
       ),
@@ -316,10 +321,10 @@ describe("文章编辑器封面", () => {
   });
 
   it("移除封面：保存时提交 cover_media_id: null（后端按绝对值移除）", async () => {
-    vi.mocked(api.getPost).mockResolvedValue({
+    vi.mocked(postsApi.getPost).mockResolvedValue({
       ...post, cover_media_id: "media-1", cover_url: "/media/media-1",
     });
-    vi.mocked(api.updatePost).mockResolvedValue({
+    vi.mocked(postsApi.updatePost).mockResolvedValue({
       ...post, cover_media_id: null, cover_url: null, version: 2,
     });
     render(<App />);
@@ -329,7 +334,7 @@ describe("文章编辑器封面", () => {
     fireEvent.click(screen.getByRole("button", { name: /保存草稿|保存预约内容|更新已发布内容/ }));
 
     await waitFor(() =>
-      expect(api.updatePost).toHaveBeenCalledWith(
+      expect(postsApi.updatePost).toHaveBeenCalledWith(
         post.id,
         expect.objectContaining({ cover_media_id: null }),
       ),
@@ -342,7 +347,7 @@ describe("文章编辑器封面", () => {
       id: "new-media", original_name: "new-cover.png", url: "/media/new-media",
     });
     vi.mocked(mediaApi.upload).mockResolvedValue(uploaded);
-    vi.mocked(api.updatePost).mockResolvedValue({
+    vi.mocked(postsApi.updatePost).mockResolvedValue({
       ...post, cover_media_id: "new-media", cover_url: "/media/new-media", version: 2,
     });
     render(<App />);
@@ -361,7 +366,7 @@ describe("文章编辑器封面", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /保存草稿|保存预约内容|更新已发布内容/ }));
     await waitFor(() =>
-      expect(api.updatePost).toHaveBeenCalledWith(
+      expect(postsApi.updatePost).toHaveBeenCalledWith(
         post.id,
         expect.objectContaining({ cover_media_id: "new-media" }),
       ),
@@ -404,7 +409,7 @@ describe("文章编辑器封面", () => {
 it("评论开关使用编辑器版本并保留未保存正文，保存后衔接新版本", async () => {
   const pending = deferred<{enabled:boolean;version:number}>();
   vi.mocked(commentsApi.savePolicy).mockReturnValue(pending.promise);
-  vi.mocked(api.updatePost).mockResolvedValue({...post,content:"未保存正文",version:3});
+  vi.mocked(postsApi.updatePost).mockResolvedValue({...post,content:"未保存正文",version:3});
   render(<App />);
   await screen.findByDisplayValue(post.title);
   fireEvent.change(input("正文（Markdown）"), {target:{value:"未保存正文"}});
@@ -416,13 +421,13 @@ it("评论开关使用编辑器版本并保留未保存正文，保存后衔接�
   await act(async () => { pending.resolve({enabled:false,version:2}); });
   expect(input("正文（Markdown）").value).toBe("未保存正文");
   fireEvent.click(screen.getByRole("button",{name:/保存草稿|保存预约内容|更新已发布内容/}));
-  await waitFor(() => expect(api.updatePost).toHaveBeenCalledWith(post.id,expect.objectContaining({content:"未保存正文",expected_version:2})));
+  await waitFor(() => expect(postsApi.updatePost).toHaveBeenCalledWith(post.id,expect.objectContaining({content:"未保存正文",expected_version:2})));
 });
 
 it("评论开关读取到更新版本时不能替编辑器接受并发正文变更", async () => {
   vi.mocked(commentsApi.policy).mockResolvedValue({enabled:true,version:8});
   vi.mocked(commentsApi.savePolicy).mockRejectedValue(new ApiError(409,"版本冲突","version_conflict"));
-  vi.mocked(api.updatePost).mockRejectedValue(new ApiError(409,"版本冲突","version_conflict"));
+  vi.mocked(postsApi.updatePost).mockRejectedValue(new ApiError(409,"版本冲突","version_conflict"));
   render(<App />);
   await screen.findByDisplayValue(post.title);
   const toggle = screen.getByRole("switch",{name:"允许此文章评论"});
@@ -432,5 +437,5 @@ it("评论开关读取到更新版本时不能替编辑器接受并发正文变�
   await waitFor(() => expect(screen.getByRole("button",{name:/保存草稿|保存预约内容|更新已发布内容/}).hasAttribute("disabled")).toBe(false));
   fireEvent.change(input("正文（Markdown）"),{target:{value:"我的正文"}});
   fireEvent.click(screen.getByRole("button",{name:/保存草稿|保存预约内容|更新已发布内容/}));
-  await waitFor(() => expect(api.updatePost).toHaveBeenCalledWith(post.id,expect.objectContaining({expected_version:1})));
+  await waitFor(() => expect(postsApi.updatePost).toHaveBeenCalledWith(post.id,expect.objectContaining({expected_version:1})));
 });

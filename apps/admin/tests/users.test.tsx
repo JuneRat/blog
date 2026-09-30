@@ -3,7 +3,8 @@ import { meResponse } from "./httpFixtures";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
-import { ApiError, api } from "../src/api";
+import { ApiError } from "../src/api/client";
+import { identityApi } from "../src/api/identity";
 import { paths } from "../src/router";
 import type { AdminUser, Me, RoleSummary } from "../src/types";
 
@@ -31,19 +32,9 @@ vi.mock("../src/auth", () => ({
   }),
 }));
 
-vi.mock("../src/api", async (importOriginal) => {
-  const original = await importOriginal<typeof import("../src/api")>();
-  return {
-    ...original,
-    api: {
-      listUsers: vi.fn(),
-      createUser: vi.fn(),
-      listRoles: vi.fn(),
-      assignRole: vi.fn(),
-      removeRole: vi.fn(),
-      changeUserStatus: vi.fn(),
-    },
-  };
+vi.mock("../src/api/identity", async (load) => {
+  const original = await load<typeof import("../src/api/identity")>();
+  return { ...original, identityApi: { ...original.identityApi, listUsers: vi.fn(), createUser: vi.fn(), listRoles: vi.fn(), assignRole: vi.fn(), removeRole: vi.fn(), changeUserStatus: vi.fn() } };
 });
 
 function me(permissions: string[], userId = "u-me"): Me {
@@ -79,38 +70,38 @@ beforeEach(() => {
   window.history.replaceState(null, "", paths.users);
   auth.me = me(["user.manage", "role.manage"]);
   auth.refresh = vi.fn(async () => {});
-  vi.mocked(api.listUsers).mockResolvedValue([]);
-  vi.mocked(api.listRoles).mockResolvedValue(roles);
+  vi.mocked(identityApi.listUsers).mockResolvedValue([]);
+  vi.mocked(identityApi.listRoles).mockResolvedValue(roles);
 });
 afterEach(cleanup);
 
 describe("用户与角色管理", () => {
   it("停用前确认，取消不写入；确认携带 UUID 和列表版本", async () => {
-    vi.mocked(api.listUsers).mockResolvedValue([user()]);
-    vi.mocked(api.changeUserStatus).mockResolvedValue({ id: "u-author", status: "disabled", version: 8 });
+    vi.mocked(identityApi.listUsers).mockResolvedValue([user()]);
+    vi.mocked(identityApi.changeUserStatus).mockResolvedValue({ id: "u-author", status: "disabled", version: 8 });
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: "停用 author" }));
     fireEvent.click(await screen.findByRole("button", { name: /取\s*消/ }));
-    expect(api.changeUserStatus).not.toHaveBeenCalled();
+    expect(identityApi.changeUserStatus).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "停用 author" }));
-    vi.mocked(api.listUsers).mockResolvedValue([user({ status: "disabled", version: 8, can_login: false })]);
+    vi.mocked(identityApi.listUsers).mockResolvedValue([user({ status: "disabled", version: 8, can_login: false })]);
     fireEvent.click(await screen.findByRole("button", { name: "确认停用" }));
     await screen.findByText(/已停用 author/);
-    expect(api.changeUserStatus).toHaveBeenCalledWith("u-author", "disabled", 7);
+    expect(identityApi.changeUserStatus).toHaveBeenCalledWith("u-author", "disabled", 7);
     await screen.findByRole("button", { name: "启用 author" });
     expect(screen.getByText("本地密码")).toBeTruthy();
     expect(screen.getByText("账号未启用")).toBeTruthy();
   });
 
   it("启用账号需要新版本，自己的停用成功后刷新认证状态", async () => {
-    vi.mocked(api.listUsers).mockResolvedValue([user({ status: "disabled", version: 8, can_login: false })]);
-    vi.mocked(api.changeUserStatus).mockResolvedValue({ id: "u-author", status: "active", version: 9 });
+    vi.mocked(identityApi.listUsers).mockResolvedValue([user({ status: "disabled", version: 8, can_login: false })]);
+    vi.mocked(identityApi.changeUserStatus).mockResolvedValue({ id: "u-author", status: "active", version: 9 });
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: "启用 author" }));
-    vi.mocked(api.listUsers).mockResolvedValue([user({ id: "u-me", username: "me", version: 9 })]);
+    vi.mocked(identityApi.listUsers).mockResolvedValue([user({ id: "u-me", username: "me", version: 9 })]);
     fireEvent.click(await screen.findByRole("button", { name: "确认启用" }));
     await screen.findByText(/已启用 author/);
-    expect(api.changeUserStatus).toHaveBeenCalledWith("u-author", "active", 8);
+    expect(identityApi.changeUserStatus).toHaveBeenCalledWith("u-author", "active", 8);
     fireEvent.click(await screen.findByRole("button", { name: "停用 me" }));
     await screen.findByText(/你将退出登录/);
     fireEvent.click(screen.getByRole("button", { name: "确认停用" }));
@@ -118,20 +109,20 @@ describe("用户与角色管理", () => {
   });
 
   it("状态版本冲突不重试写入，刷新列表供核对", async () => {
-    vi.mocked(api.listUsers).mockResolvedValue([user()]);
-    vi.mocked(api.changeUserStatus).mockRejectedValue(new ApiError(409, "冲突", "version_conflict"));
+    vi.mocked(identityApi.listUsers).mockResolvedValue([user()]);
+    vi.mocked(identityApi.changeUserStatus).mockRejectedValue(new ApiError(409, "冲突", "version_conflict"));
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: "停用 author" }));
-    vi.mocked(api.listUsers).mockResolvedValue([user({ version: 10, display_name: "其他人更新" })]);
+    vi.mocked(identityApi.listUsers).mockResolvedValue([user({ version: 10, display_name: "其他人更新" })]);
     fireEvent.click(await screen.findByRole("button", { name: "确认停用" }));
     await screen.findByText(/请核对最新列表后重试/);
     await screen.findByText("其他人更新");
-    expect(api.changeUserStatus).toHaveBeenCalledTimes(1);
+    expect(identityApi.changeUserStatus).toHaveBeenCalledTimes(1);
   });
 
   it("只持有 role.manage 看得到状态，但没有启停入口", async () => {
     auth.me = me(["role.manage"]);
-    vi.mocked(api.listUsers).mockResolvedValue([user()]);
+    vi.mocked(identityApi.listUsers).mockResolvedValue([user()]);
     render(<App />);
     await screen.findByText("已启用");
     expect(screen.queryByRole("button", { name: "停用 author" })).toBeNull();
@@ -139,7 +130,7 @@ describe("用户与角色管理", () => {
 
   it("最后 Admin、无所有权权限及已删除账号禁用状态操作", async () => {
     auth.me = me(["user.manage", "admin.manage"]);
-    vi.mocked(api.listUsers).mockResolvedValue([
+    vi.mocked(identityApi.listUsers).mockResolvedValue([
       user({ username: "last", is_last_loginable_admin: true, roles: ["admin"] }),
       user({ id: "deleted", username: "deleted", deleted: true }),
     ]);
@@ -157,15 +148,15 @@ describe("用户与角色管理", () => {
 
     // 屏幕按路由懒加载：等真实屏幕挂载后再断言，避免撞上 Suspense 占位。
     expect(await screen.findByText(/无法查看或管理账号/)).toBeTruthy();
-    expect(vi.mocked(api.listUsers)).not.toHaveBeenCalled();
-    expect(vi.mocked(api.listRoles)).not.toHaveBeenCalled();
+    expect(vi.mocked(identityApi.listUsers)).not.toHaveBeenCalled();
+    expect(vi.mocked(identityApi.listRoles)).not.toHaveBeenCalled();
   });
 
   it("用户名冲突按 username_taken 定位到用户名文案", async () => {
     render(<App />);
     await waitFor(() => expect(screen.getByLabelText("用户名")).toBeTruthy());
 
-    vi.mocked(api.createUser).mockRejectedValue(
+    vi.mocked(identityApi.createUser).mockRejectedValue(
       new ApiError(409, "username 已被占用", "username_taken", "req-1"),
     );
     fireEvent.change(screen.getByLabelText("用户名"), { target: { value: "author" } });
@@ -178,7 +169,7 @@ describe("用户与角色管理", () => {
     render(<App />);
     await waitFor(() => expect(screen.getByLabelText("用户名")).toBeTruthy());
 
-    vi.mocked(api.createUser).mockRejectedValue(
+    vi.mocked(identityApi.createUser).mockRejectedValue(
       new ApiError(409, "email 已被占用", "email_taken", "req-2"),
     );
     fireEvent.change(screen.getByLabelText("用户名"), { target: { value: "newcomer" } });
@@ -199,7 +190,7 @@ describe("用户与角色管理", () => {
       roles: ["admin"],
       is_last_loginable_admin: true,
     });
-    vi.mocked(api.listUsers).mockResolvedValue([owner]);
+    vi.mocked(identityApi.listUsers).mockResolvedValue([owner]);
     render(<App />);
 
     const remove = await screen.findByRole("button", { name: "移除 owner 的角色 admin" });
@@ -216,8 +207,8 @@ describe("用户与角色管理", () => {
       })),
       user({ id: "u-other", username: "zz-owner", roles: ["admin"] }),
     ];
-    vi.mocked(api.listUsers).mockImplementation(async (limit = 50, offset = 0) => rows.slice(offset, offset + limit));
-    vi.mocked(api.removeRole).mockImplementation(async () => {
+    vi.mocked(identityApi.listUsers).mockImplementation(async (limit = 50, offset = 0) => rows.slice(offset, offset + limit));
+    vi.mocked(identityApi.removeRole).mockImplementation(async () => {
       rows[0] = { ...rows[0], is_last_loginable_admin: true };
       rows[50] = { ...rows[50], roles: [] };
       return null;
@@ -227,33 +218,33 @@ describe("用户与角色管理", () => {
     const firstAdmin = await screen.findByRole("button", { name: "移除 owner-a 的角色 admin" });
     expect((firstAdmin as HTMLButtonElement).disabled).toBe(false);
     expect(screen.queryByText("zz-owner")).toBeNull();
-    expect(api.listUsers).toHaveBeenLastCalledWith(51, 0);
+    expect(identityApi.listUsers).toHaveBeenLastCalledWith(51, 0);
     fireEvent.click(screen.getByRole("button", { name: "下一页" }));
     const remove = await screen.findByRole("button", { name: "移除 zz-owner 的角色 admin" });
-    expect(api.listUsers).toHaveBeenLastCalledWith(51, 50);
+    expect(identityApi.listUsers).toHaveBeenLastCalledWith(51, 50);
     expect(screen.getByText("第 2 页")).toBeTruthy();
     expect((screen.getByRole("button", { name: "下一页" }) as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(remove);
     await waitFor(() => expect(screen.queryByRole("button", { name: "移除 zz-owner 的角色 admin" })).toBeNull());
-    expect(api.removeRole).toHaveBeenCalledWith("zz-owner", "admin");
+    expect(identityApi.removeRole).toHaveBeenCalledWith("zz-owner", "admin");
     await waitFor(() => expect((screen.getByRole("button", { name: "上一页" }) as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(screen.getByRole("button", { name: "上一页" }));
     await screen.findByText("（最后 Admin）");
-    expect(api.listUsers).toHaveBeenLastCalledWith(51, 0);
+    expect(identityApi.listUsers).toHaveBeenLastCalledWith(51, 0);
     expect((screen.getByRole("button", { name: "移除 owner-a 的角色 admin" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("后端 last_admin 竞态显示专属文案并刷新权威状态", async () => {
-    vi.mocked(api.listUsers).mockResolvedValue([
+    vi.mocked(identityApi.listUsers).mockResolvedValue([
       user({ id: "u-owner", username: "owner", roles: ["admin"] }),
     ]);
     render(<App />);
 
     const remove = await screen.findByRole("button", { name: "移除 owner 的角色 admin" });
-    vi.mocked(api.removeRole).mockRejectedValue(
+    vi.mocked(identityApi.removeRole).mockRejectedValue(
       new ApiError(403, "不能移除最后一个可登录的 Admin", "last_admin", "req-3"),
     );
-    vi.mocked(api.listUsers).mockResolvedValue([
+    vi.mocked(identityApi.listUsers).mockResolvedValue([
       user({ id: "u-owner", username: "owner", roles: ["admin"], is_last_loginable_admin: true }),
     ]);
     fireEvent.click(remove);
@@ -265,19 +256,19 @@ describe("用户与角色管理", () => {
   });
 
   it("账号列表加载失败后可原地重试", async () => {
-    vi.mocked(api.listUsers).mockRejectedValueOnce(new Error("连接中断"));
+    vi.mocked(identityApi.listUsers).mockRejectedValueOnce(new Error("连接中断"));
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: "重试账号列表" }));
     await waitFor(() => expect(screen.queryByText("连接中断")).toBeNull());
     expect(screen.getByText("还没有账号。")).toBeTruthy();
-    expect(api.listUsers).toHaveBeenLastCalledWith(51, 0);
+    expect(identityApi.listUsers).toHaveBeenLastCalledWith(51, 0);
   });
 
   it("角色目录加载失败时显示错误并可重试，而不是伪装成空列表", async () => {
-    vi.mocked(api.listUsers).mockResolvedValue([user()]);
+    vi.mocked(identityApi.listUsers).mockResolvedValue([user()]);
     // 用非 5xx：Query 策略只对 5xx 自动重试，500 会把错误提示推迟到重试耗尽
     // 之后（约 3 秒）。这条用例测的是「失败可见 + 可重试」，不是重试时序。
-    vi.mocked(api.listRoles).mockRejectedValueOnce(
+    vi.mocked(identityApi.listRoles).mockRejectedValueOnce(
       new ApiError(403, "无权查看角色目录", "forbidden", "req-roles"),
     );
     render(<App />);
@@ -288,13 +279,13 @@ describe("用户与角色管理", () => {
     expect(screen.queryByText("暂无可分配角色")).toBeNull();
 
     // 重试成功后恢复分配控件。
-    vi.mocked(api.listRoles).mockResolvedValue(roles);
+    vi.mocked(identityApi.listRoles).mockResolvedValue(roles);
     fireEvent.click(screen.getByRole("button", { name: "重试" }));
     await waitFor(() => expect(screen.getByLabelText("为 author 选择角色")).toBeTruthy());
   });
 
   it("越过委派上限的 forbidden 提示包含请求编号", async () => {
-    vi.mocked(api.listUsers).mockResolvedValue([user()]);
+    vi.mocked(identityApi.listUsers).mockResolvedValue([user()]);
     render(<App />);
 
     const select = await screen.findByLabelText("为 author 选择角色");
@@ -305,7 +296,7 @@ describe("用户与角色管理", () => {
     const add = screen.getByRole("button", { name: "为 author 添加角色" }) as HTMLButtonElement;
     await waitFor(() => expect(add.disabled).toBe(false));
 
-    vi.mocked(api.assignRole).mockRejectedValue(
+    vi.mocked(identityApi.assignRole).mockRejectedValue(
       new ApiError(403, "无权执行该操作", "forbidden", "req-4"),
     );
     fireEvent.click(add);
@@ -316,10 +307,10 @@ describe("用户与角色管理", () => {
 
   it("改自己的角色成功后主动刷新权限，保持登录", async () => {
     auth.me = me(["user.manage", "role.manage"], "u-me");
-    vi.mocked(api.listUsers).mockResolvedValue([
+    vi.mocked(identityApi.listUsers).mockResolvedValue([
       user({ id: "u-me", username: "me", roles: ["editor"] }),
     ]);
-    vi.mocked(api.removeRole).mockResolvedValue(null);
+    vi.mocked(identityApi.removeRole).mockResolvedValue(null);
     render(<App />);
 
     const remove = await screen.findByRole("button", { name: "移除 me 的角色 editor" });

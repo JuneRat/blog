@@ -1,7 +1,7 @@
 import { Alert, Table, Tag, Typography } from "antd";
 import type { TableProps } from "antd";
 import { useQuery } from "@tanstack/react-query";
-import { api } from "../api";
+import { identityApi } from "../api/identity";
 import { messageOf } from "../apiError";
 import { useAuth } from "../auth";
 import { queryKeys } from "../queryClient";
@@ -21,7 +21,7 @@ export function RoleListScreen() {
    */
   const roles = useQuery({
     queryKey: queryKeys.roles(),
-    queryFn: () => api.listRoles(),
+    queryFn: () => identityApi.listRoles(),
     enabled: canAdminister,
   });
   const errorText = roles.error === null ? null : messageOf(roles.error);

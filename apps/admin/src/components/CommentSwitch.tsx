@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { Alert, Select, Space, Switch, Typography } from 'antd';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { commentsApi } from '../api';
+import { commentsApi } from "../api/comments";
 import { permissionMessageOf } from '../apiError';
 import { queryKeys } from '../queryClient';
 import { invalidateAfterWrite } from '../queryEffects';

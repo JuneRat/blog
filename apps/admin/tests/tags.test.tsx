@@ -1,8 +1,10 @@
+import { postsApi } from "../src/api/posts";
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
-import { ApiError, api, categoryApi, seriesApi } from "../src/api";
+import { ApiError } from "../src/api/client";
+import { tagsApi, categoryApi, seriesApi } from "../src/api/taxonomy";
 import { paths } from "../src/router";
 import type { TagSummary } from "../src/types";
 
@@ -13,19 +15,9 @@ vi.mock("../src/auth", () => ({
   }),
 }));
 
-vi.mock("../src/api", async (importOriginal) => {
-  const original = await importOriginal<typeof import("../src/api")>();
-  return {
-    ...original,
-    categoryApi: { list: vi.fn() },
-    seriesApi: { list: vi.fn() },
-    api: {
-      listTags: vi.fn(),
-      createTag: vi.fn(),
-      renameTag: vi.fn(),
-      deleteTag: vi.fn(),
-    },
-  };
+vi.mock("../src/api/taxonomy", async (load) => {
+  const original = await load<typeof import("../src/api/taxonomy")>();
+  return { ...original, categoryApi: { list: vi.fn() }, seriesApi: { list: vi.fn() }, tagsApi: { ...original.tagsApi, listTags: vi.fn(), createTag: vi.fn(), renameTag: vi.fn(), deleteTag: vi.fn() } };
 });
 
 const rust: TagSummary = {
@@ -47,15 +39,15 @@ const essay: TagSummary = {
 beforeEach(() => {
   vi.resetAllMocks();
   window.history.replaceState(null, "", paths.tags);
-  vi.mocked(api.listTags).mockResolvedValue([essay, rust]);
+  vi.mocked(tagsApi.listTags).mockResolvedValue([essay, rust]);
 });
 afterEach(cleanup);
 
 describe("标签管理屏", () => {
   it("列出目录并创建标签", async () => {
-    vi.mocked(api.createTag).mockResolvedValue({ ...rust, id: "new" });
+    vi.mocked(tagsApi.createTag).mockResolvedValue({ ...rust, id: "new" });
     // 创建后重取到的目录包含新标签（断言用户看得到，而不是断言「拉了几次」）。
-    vi.mocked(api.listTags)
+    vi.mocked(tagsApi.listTags)
       .mockResolvedValueOnce([essay, rust])
       .mockResolvedValue([
         essay,
@@ -72,7 +64,7 @@ describe("标签管理屏", () => {
     fireEvent.click(screen.getByRole("button", { name: "创建标签" }));
 
     await waitFor(() =>
-      expect(api.createTag).toHaveBeenCalledWith({ name: "新标签", slug: "new-tag" }),
+      expect(tagsApi.createTag).toHaveBeenCalledWith({ name: "新标签", slug: "new-tag" }),
     );
     // 创建后目录刷新：新标签出现在列表里。
     expect(await screen.findByText("新标签")).toBeTruthy();
@@ -84,15 +76,15 @@ describe("标签管理屏", () => {
     fireEvent.click(screen.getByRole("button", { name: "创建标签" }));
     // antd Form 的校验是异步的，onFinish 在微任务里才跑，这里要等文案出现。
     expect(await screen.findByText("名称与 slug 都不能为空。")).toBeTruthy();
-    expect(api.createTag).not.toHaveBeenCalled();
+    expect(tagsApi.createTag).not.toHaveBeenCalled();
   });
 
   it("改名携带当前版本，冲突时展示错误并重载", async () => {
-    vi.mocked(api.renameTag).mockRejectedValue(
+    vi.mocked(tagsApi.renameTag).mockRejectedValue(
       new ApiError(409, "版本冲突：内容已被并发修改", "version_conflict", "req-1"),
     );
     // 冲突后重取到的目录里是别人改过的名字（服务端当前值）。
-    vi.mocked(api.listTags)
+    vi.mocked(tagsApi.listTags)
       .mockResolvedValueOnce([essay, rust])
       .mockResolvedValue([essay, { ...rust, name: "Rust（他人改名）" }]);
     render(<App />);
@@ -103,14 +95,14 @@ describe("标签管理屏", () => {
     fireEvent.change(input, { target: { value: "Rust 语言" } });
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
 
-    await waitFor(() => expect(api.renameTag).toHaveBeenCalledWith("rust", { name: "Rust 语言", expected_version: 1 }));
+    await waitFor(() => expect(tagsApi.renameTag).toHaveBeenCalledWith("rust", { name: "Rust 语言", expected_version: 1 }));
     expect(screen.getByText(/版本冲突/)).toBeTruthy();
     // 目录已重载：显示服务端当前名称，而不是本地那次的编辑值。
     expect(await screen.findByText("Rust（他人改名）")).toBeTruthy();
   });
 
   it("删除被引用的标签展示服务端 tag_in_use 文案", async () => {
-    vi.mocked(api.deleteTag).mockRejectedValue(
+    vi.mocked(tagsApi.deleteTag).mockRejectedValue(
       new ApiError(409, "标签仍被文章引用（3 篇），先解除关联再删除", "tag_in_use", "req-2"),
     );
     render(<App />);
@@ -119,7 +111,7 @@ describe("标签管理屏", () => {
     fireEvent.click(within(screen.getByRole("row", { name: /Rust/ })).getByRole("button", { name: "删除" }));
     // 确认弹窗由 antd 的 modal.confirm 渲染，必须点掉它才会发请求。
     fireEvent.click(await screen.findByRole("button", { name: "确定" }));
-    await waitFor(() => expect(api.deleteTag).toHaveBeenCalledWith("rust", 1));
+    await waitFor(() => expect(tagsApi.deleteTag).toHaveBeenCalledWith("rust", 1));
     expect(screen.getByText(/3 篇/)).toBeTruthy();
   });
 
@@ -128,7 +120,7 @@ describe("标签管理屏", () => {
     await waitFor(() => expect(screen.getByText("Rust")).toBeTruthy());
     fireEvent.click(within(screen.getByRole("row", { name: /随笔/ })).getByRole("button", { name: "删除" }));
     fireEvent.click(await screen.findByRole("button", { name: "取消" }));
-    expect(api.deleteTag).not.toHaveBeenCalled();
+    expect(tagsApi.deleteTag).not.toHaveBeenCalled();
   });
 });
 
@@ -148,20 +140,22 @@ describe("文章编辑器标签选择", () => {
     tag_ids: ["tag-rust"],
     category_id: null,
     series: [],
+    cover_media_id: null,
+    cover_url: null,
   };
 
   beforeEach(() => {
     window.history.replaceState(null, "", paths.editPost(post.id));
-    vi.mocked(api.listTags).mockResolvedValue([essay, rust]);
+    vi.mocked(tagsApi.listTags).mockResolvedValue([essay, rust]);
     vi.mocked(categoryApi.list).mockResolvedValue([]);
     vi.mocked(seriesApi.list).mockResolvedValue([]);
-    const apiAny = api as unknown as Record<string, ReturnType<typeof vi.fn>>;
+    const apiAny = vi.mocked(postsApi);
     apiAny.getPost = vi.fn().mockResolvedValue(post);
     apiAny.updatePost = vi.fn();
   });
 
   it("详情预选当前标签，勾选变化随保存提交", async () => {
-    const apiAny = api as unknown as Record<string, ReturnType<typeof vi.fn>>;
+    const apiAny = vi.mocked(postsApi);
     apiAny.updatePost.mockResolvedValue({ ...post, version: 4 });
 
     render(<App />);

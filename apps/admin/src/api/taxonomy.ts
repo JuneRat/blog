@@ -1,5 +1,6 @@
+import { z } from "zod";
 import type * as Wire from "./generated";
-import * as s from "./schemas";
+import * as s from "./schemas/taxonomy";
 import { json, request, requestEmpty } from "./client";
 import type {
   SeriesSummary,
@@ -18,7 +19,7 @@ import type {
 
 export const tagsApi = {
   listTags: (): Promise<TagSummary[]> =>
-    request(s.array(s.tagSummary), "/api/admin/v1/tags"),
+    request(z.array(s.tagSummary), "/api/admin/v1/tags"),
 
   createTag: (input: CreateTagInput): Promise<TagSummary> =>
     request(s.tagSummary, "/api/admin/v1/tags", {
@@ -41,7 +42,7 @@ export const tagsApi = {
 
 export const categoryApi = {
   list: (): Promise<CategorySummary[]> =>
-    request(s.array(s.categorySummary), "/api/admin/v1/categories"),
+    request(z.array(s.categorySummary), "/api/admin/v1/categories"),
 
   /** 创建。slug 冲突是 409 conflict；slug 创建后不可改。 */
   create: (input: CreateCategoryInput): Promise<CategorySummary> =>
@@ -74,7 +75,7 @@ export const categoryApi = {
 
 export const seriesApi = {
   list: (): Promise<SeriesSummary[]> =>
-    request(s.array(s.seriesSummary), "/api/admin/v1/series"),
+    request(z.array(s.seriesSummary), "/api/admin/v1/series"),
 
   create: (input: CreateSeriesInput): Promise<SeriesSummary> =>
     request(s.seriesSummary, "/api/admin/v1/series", {
@@ -102,7 +103,7 @@ export const seriesApi = {
   /** 管理目录：系列全部成员（含他人草稿/私密）；需 series.manage。 */
   members: (slug: string): Promise<SeriesMemberRow[]> =>
     request(
-      s.array(s.seriesMemberRow),
+      z.array(s.seriesMemberRow),
       `/api/admin/v1/series/${encodeURIComponent(slug)}/members`,
     ),
 

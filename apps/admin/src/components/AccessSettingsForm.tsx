@@ -1,14 +1,14 @@
 import { Alert, Divider, Flex, Switch, Typography } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
-import { api } from "../api";
+import { identityApi } from "../api/identity";
 import { CommentSwitch } from "./CommentSwitch";
 import { messageOf } from "../apiError";
 
 const queryKey = ["accessSettings"];
 export function AccessSettingsForm() {
   const client = useQueryClient();
-  const policy = useQuery({ queryKey, queryFn: api.accessSettings });
+  const policy = useQuery({ queryKey, queryFn: identityApi.accessSettings });
   const [busy, setBusy] = useState(false);
   const inFlight = useRef(false);
   const [error, setError] = useState<string | null>(null);
@@ -17,7 +17,7 @@ export function AccessSettingsForm() {
     if (!policy.data || inFlight.current) return;
     inFlight.current = true; setBusy(true); setError(null); setSaved(false);
     try {
-      const updated = await api.saveAccessSettings({ ...policy.data, [key]: value });
+      const updated = await identityApi.saveAccessSettings({ ...policy.data, [key]: value });
       client.setQueryData(queryKey, updated); setSaved(true);
     } catch (cause) {
       setError(messageOf(cause));

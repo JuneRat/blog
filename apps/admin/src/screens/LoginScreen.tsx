@@ -1,6 +1,6 @@
 import { Alert, Button, Card, Flex, Form, Input, Typography } from "antd";
 import { useEffect, useRef, useState } from "react";
-import { api } from "../api";
+import { identityApi } from "../api/identity";
 import { messageOf } from "../apiError";
 import { useAuth } from "../auth";
 
@@ -26,7 +26,7 @@ export function LoginScreen() {
   const next = new URLSearchParams(window.location.search).get("next") || "/admin/";
   useEffect(() => {
     let active = true;
-    void api.registrationStatus()
+    void identityApi.registrationStatus()
       .then((result) => {
         if (active) setRegistrationEnabled(result.enabled);
       })
@@ -65,7 +65,7 @@ export function LoginScreen() {
     setSubmitting(true);
     setError(null);
     try {
-      const login = await api.loginWithPassword({ username: name, password: pass, next });
+      const login = await identityApi.loginWithPassword({ username: name, password: pass, next });
       // 成功后立即从内存状态抹掉口令，再刷新会话。
       clearPassword();
       // 登录成功后重新读取会话与内存 CSRF token，路由守卫随即进入后台。

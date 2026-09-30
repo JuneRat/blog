@@ -1,11 +1,12 @@
-import { formatDateTime, useTimeZone } from "../timeZone";
+import { formatDateTime } from "../timeZone";
+import { useTimeZone } from "../timeZoneContext";
 import { invalidateAfterWrite } from "../queryEffects";
 import { statusLabel } from "../components/ContentLifecycleControls";
 import { Alert, App as AntdApp, Button, Flex, Space, Table, Typography } from "antd";
 import type { TableProps } from "antd";
 import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { api } from "../api";
+import { postsApi } from "../api/posts";
 import { permissionMessageOf } from "../apiError";
 import { useAuth } from "../auth";
 import { useContentList } from "../useContentList";
@@ -30,7 +31,7 @@ export function PostListScreen() {
    * 错误分两处：`posts.error` 是**取数失败**（含权限口径文案），`actionError` 是
    * 写操作失败；展示时动作错误优先。
    */
-  const { query: posts, filter, setFilter, setPage } = useContentList("posts", api.listPosts);
+  const { query: posts, filter, setFilter, setPage } = useContentList("posts", postsApi.listPosts);
   const queryClient = useQueryClient();
   const [actionError, setActionError] = useState<string | null>(null);
   const errorText = actionError ?? (posts.error === null ? null : permissionMessageOf(posts.error));
@@ -47,7 +48,7 @@ export function PostListScreen() {
       onOk: async () => {
         setError(null);
         try {
-          await api.trashPost(post.id, post.version);
+          await postsApi.trashPost(post.id, post.version);
           await invalidateAfterWrite(queryClient, "post");
         } catch (e) {
           setError(permissionMessageOf(e));

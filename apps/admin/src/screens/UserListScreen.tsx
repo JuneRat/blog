@@ -14,7 +14,8 @@ import {
 import type { TableProps } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { ApiError, api, withRequestId } from "../api";
+import { ApiError, withRequestId } from "../api/client";
+import { identityApi } from "../api/identity";
 import { messageOf as apiMessageOf } from "../apiError";
 import { useAuth } from "../auth";
 import { queryKeys } from "../queryClient";
@@ -110,12 +111,12 @@ export function UserListScreen() {
    */
   const users = useQuery({
     queryKey: queryKeys.userList(page),
-    queryFn: () => api.listUsers(USER_PAGE_SIZE + 1, (page - 1) * USER_PAGE_SIZE),
+    queryFn: () => identityApi.listUsers(USER_PAGE_SIZE + 1, (page - 1) * USER_PAGE_SIZE),
     enabled: canAdminister,
   });
   const roles = useQuery({
     queryKey: queryKeys.roles(),
-    queryFn: () => api.listRoles(),
+    queryFn: () => identityApi.listRoles(),
     enabled: canManageRoles,
   });
   /** 取数失败与写操作失败分开：展示时动作错误优先。 */
@@ -134,7 +135,7 @@ export function UserListScreen() {
     setNotice(null);
     setBusy(true);
     try {
-      const created = await api.createUser({
+      const created = await identityApi.createUser({
         username: (draft.username ?? "").trim(),
         email: email === "" ? undefined : email,
         display_name: displayName === "" ? undefined : displayName,
@@ -160,9 +161,9 @@ export function UserListScreen() {
     setBusy(true);
     try {
       if (action === "assign") {
-        await api.assignRole(user.username, role);
+        await identityApi.assignRole(user.username, role);
       } else {
-        await api.removeRole(user.username, role);
+        await identityApi.removeRole(user.username, role);
       }
       setNotice(
         action === "assign"
@@ -189,7 +190,7 @@ export function UserListScreen() {
     setNotice(null);
     const status = user.status === "active" ? "disabled" : "active";
     try {
-      await api.changeUserStatus(user.id, status, user.version);
+      await identityApi.changeUserStatus(user.id, status, user.version);
       setNotice(status === "disabled"
         ? `已停用 ${user.username}，其登录会话已撤销。`
         : `已启用 ${user.username}，该账号需要重新登录。`);

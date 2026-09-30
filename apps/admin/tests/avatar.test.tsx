@@ -1,7 +1,9 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { api, ApiError, mediaApi } from "../src/api";
+import { identityApi } from "../src/api/identity";
+import { ApiError } from "../src/api/client";
+import { mediaApi } from "../src/api/media";
 import { AdminLayout } from "../src/components/AdminLayout";
 import { AdminProviders } from "../src/providers";
 import { MediaLibraryScreen } from "../src/screens/MediaLibraryScreen";
@@ -28,13 +30,13 @@ vi.mock("../src/auth", () => ({
   }),
 }));
 
-vi.mock("../src/api", async (importOriginal) => {
-  const original = await importOriginal<typeof import("../src/api")>();
-  return {
-    ...original,
-    api: { ...original.api, setOwnAvatar: vi.fn() },
-    mediaApi: { ...original.mediaApi, list: vi.fn(), upload: vi.fn() },
-  };
+vi.mock("../src/api/identity", async (load) => {
+  const original = await load<typeof import("../src/api/identity")>();
+  return { ...original, identityApi: { ...original.identityApi, setOwnAvatar: vi.fn() } };
+});
+vi.mock("../src/api/media", async (load) => {
+  const original = await load<typeof import("../src/api/media")>();
+  return { ...original, mediaApi: { ...original.mediaApi, list: vi.fn(), upload: vi.fn() } };
 });
 
 const asset: MediaAsset = {
@@ -110,7 +112,7 @@ describe("外壳头像入口", () => {
   it("选择头像后保存：刷新 /me 和已展示的媒体引用计数", async () => {
     h.me = me(null);
     let saved = false;
-    vi.mocked(api.setOwnAvatar).mockImplementation(async () => { saved = true; return profile("m1"); });
+    vi.mocked(identityApi.setOwnAvatar).mockImplementation(async () => { saved = true; return profile("m1"); });
     vi.mocked(mediaApi.list).mockImplementation(async () => ({
       items: [{ ...asset, reference_count: saved ? 1 : 0 }], total: 1, page: 1, per_page: 24,
     }));
@@ -124,26 +126,26 @@ describe("外壳头像入口", () => {
     fireEvent.click(await screen.findByRole("button", { name: /^选\s*择$/ }));
     fireEvent.click(await screen.findByRole("button", { name: /保\s*存/ }));
 
-    await waitFor(() => expect(api.setOwnAvatar).toHaveBeenCalledWith("m1", 3));
+    await waitFor(() => expect(identityApi.setOwnAvatar).toHaveBeenCalledWith("m1", 3));
     await waitFor(() => expect(h.refresh).toHaveBeenCalled());
     await screen.findByText("被 1 处引用");
   });
 
   it("移除头像：保存时提交 null", async () => {
     h.me = me("m1");
-    vi.mocked(api.setOwnAvatar).mockResolvedValue(profile(null));
+    vi.mocked(identityApi.setOwnAvatar).mockResolvedValue(profile(null));
 
     renderLayout();
     fireEvent.click(screen.getByRole("button", { name: /更换头像/ }));
     fireEvent.click(await screen.findByRole("button", { name: "移除封面" }));
     fireEvent.click(await screen.findByRole("button", { name: /保\s*存/ }));
 
-    await waitFor(() => expect(api.setOwnAvatar).toHaveBeenCalledWith(null, 3));
+    await waitFor(() => expect(identityApi.setOwnAvatar).toHaveBeenCalledWith(null, 3));
   });
 
   it("保存失败时在弹窗内展示服务端文案，不刷新 /me", async () => {
     h.me = me(null);
-    vi.mocked(api.setOwnAvatar).mockRejectedValue(new Error("头像保存失败"));
+    vi.mocked(identityApi.setOwnAvatar).mockRejectedValue(new Error("头像保存失败"));
 
     renderLayout();
     fireEvent.click(screen.getByRole("button", { name: /更换头像/ }));
@@ -158,7 +160,7 @@ describe("外壳头像入口", () => {
 
   it("打开时锁定版本；冲突保留选择，重新打开后才使用刷新版本", async () => {
     h.me = me(null);
-    vi.mocked(api.setOwnAvatar).mockRejectedValueOnce(new ApiError(409, "版本冲突", "version_conflict", "req-avatar"));
+    vi.mocked(identityApi.setOwnAvatar).mockRejectedValueOnce(new ApiError(409, "版本冲突", "version_conflict", "req-avatar"));
     h.refresh.mockImplementation(async () => { h.me = { ...me(null), version: 4 }; });
     renderLayout();
     fireEvent.click(screen.getByRole("button", { name: /更换头像/ }));
@@ -168,17 +170,17 @@ describe("外壳头像入口", () => {
     fireEvent.click(await screen.findByRole("button", { name: /^选\s*择$/ }));
     fireEvent.click(await screen.findByRole("button", { name: /保\s*存/ }));
     await screen.findByText(/请关闭窗口后重新选择头像/);
-    expect(api.setOwnAvatar).toHaveBeenCalledWith("m1", 3);
+    expect(identityApi.setOwnAvatar).toHaveBeenCalledWith("m1", 3);
     expect((screen.getByRole("button", { name: /保\s*存/ }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByRole("button", { name: "移除封面" })).toBeTruthy();
     expect(screen.getByText(/req-avatar/)).toBeTruthy();
-    expect(api.setOwnAvatar).toHaveBeenCalledTimes(1);
+    expect(identityApi.setOwnAvatar).toHaveBeenCalledTimes(1);
 
     fireEvent.click(screen.getByRole("button", { name: /取\s*消/ }));
-    vi.mocked(api.setOwnAvatar).mockResolvedValueOnce(profile(null));
+    vi.mocked(identityApi.setOwnAvatar).mockResolvedValueOnce(profile(null));
     fireEvent.click(screen.getByRole("button", { name: /更换头像/ }));
     fireEvent.click(await screen.findByRole("button", { name: /保\s*存/ }));
-    await waitFor(() => expect(api.setOwnAvatar).toHaveBeenLastCalledWith(null, 4));
+    await waitFor(() => expect(identityApi.setOwnAvatar).toHaveBeenLastCalledWith(null, 4));
   });
 
 });

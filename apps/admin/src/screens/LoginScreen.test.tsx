@@ -16,16 +16,17 @@ vi.mock("../auth", () => ({
   }),
 }));
 
-vi.mock("../api", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../api")>();
-  return { ...actual, api: { loginWithPassword: vi.fn(), registrationStatus: vi.fn(async () => ({enabled:false})), register: vi.fn() } };
+vi.mock("../api/identity", async (load) => {
+  const original = await load<typeof import("../api/identity")>();
+  return { ...original, identityApi: { ...original.identityApi, loginWithPassword: vi.fn(), registrationStatus: vi.fn(async () => ({enabled:false})), register: vi.fn() } };
 });
 
-import { ApiError, api } from "../api";
+import { ApiError } from "../api/client";
+import { identityApi } from "../api/identity";
 import { AdminProviders } from "../providers";
 import { LoginScreen } from "./LoginScreen";
 
-const loginWithPassword = vi.mocked(api.loginWithPassword);
+const loginWithPassword = vi.mocked(identityApi.loginWithPassword);
 
 /**
  * 登录屏在真实应用里总处于 AdminProviders 内（主题、zh_CN locale、antd App 上下文）。
@@ -125,8 +126,8 @@ describe("LoginScreen", () => {
 });
 
 it("registers without a nickname and returns to username/email login", async () => {
-  vi.mocked(api.registrationStatus).mockResolvedValueOnce({ enabled: true });
-  vi.mocked(api.register).mockResolvedValueOnce({ message: "注册成功，请登录" });
+  vi.mocked(identityApi.registrationStatus).mockResolvedValueOnce({ enabled: true });
+  vi.mocked(identityApi.register).mockResolvedValueOnce({ message: "注册成功，请登录" });
   renderLogin();
   fireEvent.click(await screen.findByRole("button", { name: "注册账号" }));
   fireEvent.change(screen.getByLabelText("用户名"), { target: { value: "reader" } });
@@ -134,7 +135,7 @@ it("registers without a nickname and returns to username/email login", async () 
   fireEvent.change(screen.getByLabelText("密码"), { target: { value: "harbor-lantern-2026" } });
   fireEvent.click(screen.getByRole("button", { name: "注册" }));
   expect(await screen.findByText("注册成功，请登录。")).toBeTruthy();
-  expect(api.register).toHaveBeenCalledWith({ username: "reader", display_name: null, email: "reader@example.com", password: "harbor-lantern-2026" });
+  expect(identityApi.register).toHaveBeenCalledWith({ username: "reader", display_name: null, email: "reader@example.com", password: "harbor-lantern-2026" });
   loginWithPassword.mockResolvedValueOnce({ user_id: "reader-id", next: "/admin/" });
   fillForm("reader@example.com", "harbor-lantern-2026");
   fireEvent.click(submitButton());

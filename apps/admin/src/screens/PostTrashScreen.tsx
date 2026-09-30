@@ -3,7 +3,8 @@ import { Alert, App as AntdApp, Button, Flex, Table, Typography } from "antd";
 import type { TableProps } from "antd";
 import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { api } from "../api";
+import { pagesApi } from "../api/pages";
+import { postsApi } from "../api/posts";
 import { permissionMessageOf } from "../apiError";
 import { useAuth } from "../auth";
 import { useContentList } from "../useContentList";
@@ -42,8 +43,8 @@ export function PostTrashScreen({kind = "post"}: {kind?: "post" | "page"} = {}) 
   const canRestore = me?.permissions.some((p) => isPage ? p === "page.delete" : p === "post.delete" || p === "post.delete_any") ?? false;
   const { query: trash, filter, setFilter, setPage: setRequested } = useContentList<PostSummary | PageSummary>(
     isPage ? "page-trash" : "trash",
-    f => isPage ? api.listPageTrash(f.page, f) :
-      f.scope || f.author || f.q || f.category_id || f.status || f.visibility ? api.listTrash(f.page, f.author, f) : api.listTrash(f.page),
+    f => isPage ? pagesApi.listPageTrash(f.page, f) :
+      f.scope || f.author || f.q || f.category_id || f.status || f.visibility ? postsApi.listTrash(f.page, f.author, f) : postsApi.listTrash(f.page),
   );
   const data = trash.data;
   const errorText =
@@ -54,8 +55,8 @@ export function PostTrashScreen({kind = "post"}: {kind?: "post" | "page"} = {}) 
     setActionError(null);
     setNotice(null);
     try {
-      if (purge) await (isPage ? api.purgePage(post.id, post.version) : api.purgePost(post.id, post.version));
-      else await (isPage ? api.restorePage(post.id, post.version) : api.restorePost(post.id, post.version));
+      if (purge) await (isPage ? pagesApi.purgePage(post.id, post.version) : postsApi.purgePost(post.id, post.version));
+      else await (isPage ? pagesApi.restorePage(post.id, post.version) : postsApi.restorePost(post.id, post.version));
       // 先给出成功反馈，再重取：即使重取失败，用户也知道操作已经生效。
       setNotice(purge ? `已永久删除「${post.title || post.slug}」。` : `已恢复「${post.title || post.slug}」。`);
       // 恢复改变列表与使用位置；永久删除还会移除媒体引用、目录关联和文章评论。

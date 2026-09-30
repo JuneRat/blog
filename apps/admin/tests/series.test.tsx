@@ -3,7 +3,10 @@ import { contentPage } from "./contentFixtures";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
-import { ApiError, api, categoryApi, mediaApi, seriesApi } from "../src/api";
+import { ApiError } from "../src/api/client";
+import { postsApi } from "../src/api/posts";
+import { tagsApi, categoryApi, seriesApi } from "../src/api/taxonomy";
+import { mediaApi } from "../src/api/media";
 import { paths } from "../src/router";
 import type { MediaAsset, MediaPage, SeriesMemberRow, SeriesSummary } from "../src/types";
 
@@ -17,15 +20,17 @@ vi.mock("../src/auth", () => ({
   }),
 }));
 
-vi.mock("../src/api", async (importOriginal) => {
-  const original = await importOriginal<typeof import("../src/api")>();
-  return {
-    ...original,
-    seriesApi: { list: vi.fn(), create: vi.fn(), update: vi.fn(), remove: vi.fn(), reorder: vi.fn(), members: vi.fn() },
-    categoryApi: { list: vi.fn() },
-    mediaApi: { list: vi.fn(), detail: vi.fn(), upload: vi.fn(), remove: vi.fn() },
-    api: { ...original.api, listPosts: vi.fn(), listTags: vi.fn() },
-  };
+vi.mock("../src/api/taxonomy", async (load) => {
+  const original = await load<typeof import("../src/api/taxonomy")>();
+  return { ...original, seriesApi: { list: vi.fn(), create: vi.fn(), update: vi.fn(), remove: vi.fn(), reorder: vi.fn(), members: vi.fn() }, categoryApi: { list: vi.fn() }, tagsApi: { ...original.tagsApi, listTags: vi.fn() } };
+});
+vi.mock("../src/api/media", async (load) => {
+  const original = await load<typeof import("../src/api/media")>();
+  return { ...original, mediaApi: { list: vi.fn(), detail: vi.fn(), upload: vi.fn(), remove: vi.fn() } };
+});
+vi.mock("../src/api/posts", async (load) => {
+  const original = await load<typeof import("../src/api/posts")>();
+  return { ...original, postsApi: { ...original.postsApi, listPosts: vi.fn() } };
 });
 
 const guide: SeriesSummary = {
@@ -75,8 +80,8 @@ beforeEach(() => {
   window.history.replaceState(null, "", paths.series);
   vi.mocked(seriesApi.list).mockResolvedValue([guide]);
   vi.mocked(seriesApi.members).mockResolvedValue(posts);
-  vi.mocked(api.listPosts).mockResolvedValue(contentPage([]));
-  vi.mocked(api.listTags).mockResolvedValue([]);
+  vi.mocked(postsApi.listPosts).mockResolvedValue(contentPage([]));
+  vi.mocked(tagsApi.listTags).mockResolvedValue([]);
   vi.mocked(categoryApi.list).mockResolvedValue([]);
   // 封面选择器打开时才取媒体库第一页；默认给一张可选图片。
   vi.mocked(mediaApi.list).mockResolvedValue(pageOf([asset()]));
@@ -273,12 +278,12 @@ describe("文章编辑器系列校验", () => {
 
   beforeEach(() => {
     window.history.replaceState(null, "", paths.newPost);
-    vi.mocked(api.listTags).mockResolvedValue([]);
+    vi.mocked(tagsApi.listTags).mockResolvedValue([]);
     vi.mocked(categoryApi.list).mockResolvedValue([]);
     vi.mocked(seriesApi.list).mockResolvedValue([
       { id: "ser-1", slug: "guide", name: "指南", description: null, version: 1, post_count: 0, pub_post_count: 0, cover_media_id: null, cover_url: null },
     ]);
-    const apiAny = api as unknown as Record<string, ReturnType<typeof vi.fn>>;
+    const apiAny = vi.mocked(postsApi);
     apiAny.createPost = vi.fn().mockResolvedValue(post);
     apiAny.getPost = vi.fn().mockResolvedValue(post);
     apiAny.updatePost = vi.fn();
@@ -306,7 +311,7 @@ describe("文章编辑器系列校验", () => {
     expect(
       await screen.findByText("系列排序权重必须是非负整数。"),
     ).toBeTruthy();
-    const apiAny = api as unknown as Record<string, ReturnType<typeof vi.fn>>;
+    const apiAny = vi.mocked(postsApi);
     expect(apiAny.createPost).not.toHaveBeenCalled();
   });
 
@@ -318,7 +323,7 @@ describe("文章编辑器系列校验", () => {
     fireEvent.click(screen.getByRole("button", { name: /保存草稿|保存预约内容|更新已发布内容/ }));
 
     expect(await screen.findByText(/非负整数/)).toBeTruthy();
-    const apiAny = api as unknown as Record<string, ReturnType<typeof vi.fn>>;
+    const apiAny = vi.mocked(postsApi);
     expect(apiAny.createPost).not.toHaveBeenCalled();
   });
 
@@ -329,7 +334,7 @@ describe("文章编辑器系列校验", () => {
     fireEvent.change(await screen.findByLabelText("指南 · 排序权重"), { target: { value: "3" } });
     fireEvent.click(screen.getByRole("button", { name: /保存草稿|保存预约内容|更新已发布内容/ }));
 
-    const apiAny = api as unknown as Record<string, ReturnType<typeof vi.fn>>;
+    const apiAny = vi.mocked(postsApi);
     await waitFor(() =>
       expect(apiAny.createPost).toHaveBeenCalledWith(
         expect.objectContaining({ series: [{ series_id: "ser-1", position: 3 }] }),
@@ -349,7 +354,7 @@ describe("文章编辑器系列校验", () => {
     await selectOption("系列", "笔记");
     fireEvent.click(screen.getByRole("button", { name: /保存草稿|保存预约内容|更新已发布内容/ }));
 
-    await waitFor(() => expect(api.createPost).toHaveBeenCalledWith(
+    await waitFor(() => expect(postsApi.createPost).toHaveBeenCalledWith(
       expect.objectContaining({ series: [
         { series_id: "ser-1", position: 7 },
         { series_id: "ser-2", position: 0 },
@@ -382,7 +387,7 @@ describe("系列屏：混合系列不可读不连带清空独著系列", () => {
       if (slug === "solo") return [{ ...ownPost }];
       throw new ApiError(403, "无权执行该操作", "forbidden", "req-x");
     });
-    vi.mocked(api.listTags).mockResolvedValue([]);
+    vi.mocked(tagsApi.listTags).mockResolvedValue([]);
     vi.mocked(categoryApi.list).mockResolvedValue([]);
   });
 

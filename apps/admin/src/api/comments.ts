@@ -1,5 +1,6 @@
 import type * as Wire from "./generated";
-import * as s from "./schemas";
+import * as s from "./schemas/comments";
+import { previewResult } from "./schemas/preview";
 import { json, request, requestEmpty } from "./client";
 import type { CommentItem, CommentPolicy } from "./responseTypes";
 
@@ -25,7 +26,7 @@ export const commentsApi = {
       },
     ),
   preview: (body: string) =>
-    request(s.previewResult, "/api/v1/comments/preview", {
+    request(previewResult, "/api/v1/comments/preview", {
       method: "POST",
       body: json<Wire.CommentPreviewInput>({ body }),
     }),

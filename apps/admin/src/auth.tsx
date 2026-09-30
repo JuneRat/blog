@@ -8,10 +8,11 @@ import {
   useState,
 } from "react";
 import type { ReactNode } from "react";
-import { ApiError, api, loginUrl, setCsrfToken, setUnauthorizedHandler } from "./api";
+import { ApiError, setCsrfToken, setUnauthorizedHandler } from "./api/client";
+import { identityApi, loginUrl } from "./api/identity";
 import { messageOf } from "./apiError";
 import type { Me, ProviderSummary } from "./types";
-import { TimeZoneContext } from "./timeZone";
+import { TimeZoneContext } from "./timeZoneContext";
 
 type Status = "loading" | "anonymous" | "authenticated";
 
@@ -54,7 +55,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const refresh = useCallback(async () => {
     try {
-      const current = await api.me();
+      const current = await identityApi.me();
       setCsrfToken(current.csrf_token);
       setMe(current);
       statusRef.current = "authenticated";
@@ -98,7 +99,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     let cancelled = false;
     void (async () => {
       try {
-        const list = await api.providers();
+        const list = await identityApi.providers();
         if (!cancelled) {
           setProviders(list);
           setProvidersLoaded(true);
@@ -121,7 +122,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setLogoutError(null);
     suppressUnauthorizedRef.current = true;
     try {
-      await api.logout();
+      await identityApi.logout();
     } catch (error) {
       // 401 表示会话本就失效，等价于已退出，继续本地清理；
       // 其它失败（网络、403 CSRF、5xx）会话仍然有效：绝不能假装退出——

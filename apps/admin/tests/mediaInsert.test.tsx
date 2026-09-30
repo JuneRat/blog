@@ -2,7 +2,10 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
-import { api, categoryApi, mediaApi, seriesApi } from "../src/api";
+import { postsApi } from "../src/api/posts";
+import { tagsApi, categoryApi, seriesApi } from "../src/api/taxonomy";
+import { pagesApi } from "../src/api/pages";
+import { mediaApi } from "../src/api/media";
 import { navigate, paths } from "../src/router";
 import type { MediaAsset, PostDetail } from "../src/types";
 
@@ -18,24 +21,21 @@ vi.mock("../src/auth", () => ({
   }),
 }));
 
-vi.mock("../src/api", async (importOriginal) => {
-  const original = await importOriginal<typeof import("../src/api")>();
-  return {
-    ...original,
-    categoryApi: { list: vi.fn() },
-    seriesApi: { list: vi.fn() },
-    mediaApi: { list: vi.fn(), detail: vi.fn(), upload: vi.fn(), remove: vi.fn() },
-    api: {
-      getPost: vi.fn(),
-      getPage: vi.fn(),
-      createPost: vi.fn(),
-      createPage: vi.fn(),
-      updatePost: vi.fn(),
-      publishPost: vi.fn(),
-      unpublishPost: vi.fn(),
-      listTags: vi.fn(),
-    },
-  };
+vi.mock("../src/api/taxonomy", async (load) => {
+  const original = await load<typeof import("../src/api/taxonomy")>();
+  return { ...original, categoryApi: { list: vi.fn() }, seriesApi: { list: vi.fn() }, tagsApi: { ...original.tagsApi, listTags: vi.fn() } };
+});
+vi.mock("../src/api/media", async (load) => {
+  const original = await load<typeof import("../src/api/media")>();
+  return { ...original, mediaApi: { list: vi.fn(), detail: vi.fn(), upload: vi.fn(), remove: vi.fn() } };
+});
+vi.mock("../src/api/posts", async (load) => {
+  const original = await load<typeof import("../src/api/posts")>();
+  return { ...original, postsApi: { ...original.postsApi, getPost: vi.fn(), createPost: vi.fn(), updatePost: vi.fn(), publishPost: vi.fn(), unpublishPost: vi.fn() } };
+});
+vi.mock("../src/api/pages", async (load) => {
+  const original = await load<typeof import("../src/api/pages")>();
+  return { ...original, pagesApi: { ...original.pagesApi, getPage: vi.fn(), createPage: vi.fn() } };
 });
 
 const post: PostDetail = {
@@ -96,8 +96,8 @@ beforeEach(() => {
   vi.resetAllMocks();
   state.permissions = ["post.update", "media.read", "media.upload"];
   window.history.replaceState(null, "", paths.editPost(post.id));
-  vi.mocked(api.getPost).mockResolvedValue(post);
-  vi.mocked(api.listTags).mockResolvedValue([]);
+  vi.mocked(postsApi.getPost).mockResolvedValue(post);
+  vi.mocked(tagsApi.listTags).mockResolvedValue([]);
   vi.mocked(categoryApi.list).mockResolvedValue([]);
   vi.mocked(seriesApi.list).mockResolvedValue([]);
   vi.mocked(mediaApi.list).mockResolvedValue({
@@ -126,7 +126,7 @@ describe("编辑器内插入图片", () => {
       expect(contentBox().value).toBe("A\n\n![photo.png](/media/media-1)\n\nB"),
     );
     // 插入只改本地表单：必须显式保存才落库。
-    expect(api.updatePost).not.toHaveBeenCalled();
+    expect(postsApi.updatePost).not.toHaveBeenCalled();
   });
 
   it("跨页搜索旧图片后保留正文光标和替代文字，不触发保存", async () => {
@@ -152,7 +152,7 @@ describe("编辑器内插入图片", () => {
     await screen.findByText('山间-2.png');
     fireEvent.click(screen.getByRole('button', { name: '插入' }));
     await waitFor(() => expect(contentBox().value).toBe('A\n\n![历史插图](/media/found-2)\n\nB'));
-    expect(api.updatePost).not.toHaveBeenCalled();
+    expect(postsApi.updatePost).not.toHaveBeenCalled();
   });
 
   it("替代文字非空时写入 alt 而不是文件名", async () => {
@@ -188,9 +188,9 @@ describe("编辑器内插入图片", () => {
     state.permissions.push("post.create", "page.create", "page.update");
     const editPath = kind === "post" ? paths.editPost : paths.editPage;
     const newPath = kind === "post" ? paths.newPost : paths.newPage;
-    const create = kind === "post" ? api.createPost : api.createPage;
+    const create = kind === "post" ? postsApi.createPost : pagesApi.createPage;
     window.history.replaceState(null, "", editPath(post.id));
-    vi.mocked(api.getPage).mockResolvedValue(post);
+    vi.mocked(pagesApi.getPage).mockResolvedValue(post);
     const oldUpload = deferred<MediaAsset>();
     const newUpload = deferred<MediaAsset>();
     const save = deferred<PostDetail>();
@@ -279,7 +279,7 @@ describe("编辑器内插入图片", () => {
 
   it("页面编辑器同样支持插入（Page 无作者，共用同一实现）", async () => {
     window.history.replaceState(null, "", paths.editPage("page-id"));
-    vi.mocked(api.getPage).mockResolvedValue({
+    vi.mocked(pagesApi.getPage).mockResolvedValue({
       id: "page-id",
       slug: "about",
       title: "关于",

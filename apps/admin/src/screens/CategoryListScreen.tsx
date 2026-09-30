@@ -3,7 +3,7 @@ import { Alert, App as AntdApp, Button, Form, Input, Select, Space, Table, Typog
 import type { TableProps } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { categoryApi } from "../api";
+import { categoryApi } from "../api/taxonomy";
 import { permissionMessageOf } from "../apiError";
 import { useAuth } from "../auth";
 import { queryKeys } from "../queryClient";

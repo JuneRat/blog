@@ -1,5 +1,5 @@
 import { queryOptions } from "@tanstack/react-query";
-import { mediaApi } from "./api";
+import { mediaApi } from "./api/media";
 import { queryKeys } from "./queryClient";
 
 /** All media selectors share the library cache and cancellation semantics. */

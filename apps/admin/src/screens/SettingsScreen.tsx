@@ -19,7 +19,8 @@ import {
 } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useState } from "react";
-import { ApiError, settingsApi, themeSettingsApi } from "../api";
+import { ApiError } from "../api/client";
+import { settingsApi, themeSettingsApi } from "../api/settings";
 import { permissionMessageOf } from "../apiError";
 import { useAuth } from "../auth";
 import { AccessSettingsForm } from "../components/AccessSettingsForm";

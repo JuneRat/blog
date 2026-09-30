@@ -24,20 +24,21 @@ vi.mock("../src/auth", () => ({
   }),
 }));
 
-vi.mock("../src/api", async (importOriginal) => {
-  const original = await importOriginal<typeof import("../src/api")>();
-  return {
-    ...original,
-    api: { changeOwnPassword: vi.fn() },
-    setCsrfToken: vi.fn(),
-  };
+vi.mock("../src/api/identity", async (load) => {
+  const original = await load<typeof import("../src/api/identity")>();
+  return { ...original, identityApi: { ...original.identityApi, changeOwnPassword: vi.fn() } };
+});
+vi.mock("../src/api/client", async (load) => {
+  const original = await load<typeof import("../src/api/client")>();
+  return { ...original, setCsrfToken: vi.fn() };
 });
 
-import { ApiError, api, setCsrfToken } from "../src/api";
+import { ApiError, setCsrfToken } from "../src/api/client";
+import { identityApi } from "../src/api/identity";
 import { PasswordChangeModal } from "../src/components/PasswordChangeModal";
 import { AdminProviders } from "../src/providers";
 
-const changeOwnPassword = vi.mocked(api.changeOwnPassword);
+const changeOwnPassword = vi.mocked(identityApi.changeOwnPassword);
 const setToken = vi.mocked(setCsrfToken);
 
 /** antd 的 Form.Item 用 label 关联输入框；两字中文按钮的空格已在 AdminProviders 关闭。 */

@@ -1,8 +1,5 @@
 import { Temporal } from "@js-temporal/polyfill";
-import { createContext, useContext } from "react";
 
-export const TimeZoneContext = createContext("UTC");
-export const useTimeZone = () => useContext(TimeZoneContext);
 
 /** API values are instants, never browser-local wall times. */
 export function formatDateTime(value: string, timeZone: string): string {

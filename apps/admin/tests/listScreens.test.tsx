@@ -3,7 +3,10 @@ import { contentPage } from "./contentFixtures";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
-import { ApiError, api, categoryApi, seriesApi } from "../src/api";
+import { ApiError } from "../src/api/client";
+import { postsApi } from "../src/api/posts";
+import { pagesApi } from "../src/api/pages";
+import { tagsApi, categoryApi, seriesApi } from "../src/api/taxonomy";
 import { navigate, paths } from "../src/router";
 import type { PageDetail, PageSummary, PostDetail, PostSummary } from "../src/types";
 
@@ -33,28 +36,17 @@ vi.mock("../src/auth", () => ({
   }),
 }));
 
-vi.mock("../src/api", async (importOriginal) => {
-  const original = await importOriginal<typeof import("../src/api")>();
-  return {
-    ...original,
-    categoryApi: { list: vi.fn() },
-    seriesApi: { list: vi.fn() },
-    api: {
-      ...original.api,
-      listPosts: vi.fn(),
-      trashPost: vi.fn(),
-      listPages: vi.fn(),
-      getPage: vi.fn(),
-      updatePage: vi.fn(),
-      publishPage: vi.fn(),
-      unpublishPage: vi.fn(),
-      listTrash: vi.fn(),
-      restorePost: vi.fn(),
-      purgePost: vi.fn(),
-      getPost: vi.fn(),
-      listTags: vi.fn(),
-    },
-  };
+vi.mock("../src/api/taxonomy", async (load) => {
+  const original = await load<typeof import("../src/api/taxonomy")>();
+  return { ...original, categoryApi: { list: vi.fn() }, seriesApi: { list: vi.fn() }, tagsApi: { ...original.tagsApi, listTags: vi.fn() } };
+});
+vi.mock("../src/api/posts", async (load) => {
+  const original = await load<typeof import("../src/api/posts")>();
+  return { ...original, postsApi: { ...original.postsApi, listPosts: vi.fn(), trashPost: vi.fn(), listTrash: vi.fn(), restorePost: vi.fn(), purgePost: vi.fn(), getPost: vi.fn() } };
+});
+vi.mock("../src/api/pages", async (load) => {
+  const original = await load<typeof import("../src/api/pages")>();
+  return { ...original, pagesApi: { ...original.pagesApi, listPages: vi.fn(), getPage: vi.fn(), updatePage: vi.fn(), publishPage: vi.fn(), unpublishPage: vi.fn() } };
 });
 
 function summary(overrides: Partial<PostSummary> = {}): PostSummary {
@@ -117,17 +109,17 @@ const trashed = summary({ id: "post-gone", slug: "gone", title: "已删除的稿
 beforeEach(() => {
   vi.resetAllMocks();
   state.permissions = ["post.create", "post.delete", "post.purge", "page.create"];
-  vi.mocked(api.listPosts).mockResolvedValue(contentPage([rustPost, draftPost]));
-  vi.mocked(api.listPages).mockResolvedValue(contentPage([aboutPage, contactPage]));
-  vi.mocked(api.listTrash).mockResolvedValue({ items: [trashed], total: 1, page: 1, per_page: 10 });
-  vi.mocked(api.getPost).mockResolvedValue(rustDetail);
-  vi.mocked(api.getPage).mockResolvedValue(aboutDetail);
-  vi.mocked(api.listTags).mockResolvedValue([]);
+  vi.mocked(postsApi.listPosts).mockResolvedValue(contentPage([rustPost, draftPost]));
+  vi.mocked(pagesApi.listPages).mockResolvedValue(contentPage([aboutPage, contactPage]));
+  vi.mocked(postsApi.listTrash).mockResolvedValue({ items: [trashed], total: 1, page: 1, per_page: 10 });
+  vi.mocked(postsApi.getPost).mockResolvedValue(rustDetail);
+  vi.mocked(pagesApi.getPage).mockResolvedValue(aboutDetail);
+  vi.mocked(tagsApi.listTags).mockResolvedValue([]);
   vi.mocked(categoryApi.list).mockResolvedValue([]);
   vi.mocked(seriesApi.list).mockResolvedValue([]);
-  vi.mocked(api.trashPost).mockResolvedValue(rustDetail);
-  vi.mocked(api.restorePost).mockResolvedValue(rustDetail);
-  vi.mocked(api.purgePost).mockResolvedValue(undefined);
+  vi.mocked(postsApi.trashPost).mockResolvedValue(rustDetail);
+  vi.mocked(postsApi.restorePost).mockResolvedValue(rustDetail);
+  vi.mocked(postsApi.purgePost).mockResolvedValue(undefined);
 });
 afterEach(cleanup);
 
@@ -153,13 +145,13 @@ describe("我的文章列表", () => {
 
   it("搜索提交给服务器并重置页码，展示跨页匹配结果", async () => {
     window.history.replaceState(null, "", `${paths.list}?page=2`);
-    vi.mocked(api.listPosts).mockResolvedValue(contentPage([rustPost], 2, 25));
+    vi.mocked(postsApi.listPosts).mockResolvedValue(contentPage([rustPost], 2, 25));
     render(<App />);
     await screen.findByText("Rust 指南");
-    vi.mocked(api.listPosts).mockResolvedValue(contentPage([draftPost], 1, 1));
+    vi.mocked(postsApi.listPosts).mockResolvedValue(contentPage([draftPost], 1, 1));
     fireEvent.change(screen.getByRole("searchbox", { name: "搜索内容" }), { target: { value: "正文关键词" } });
     fireEvent.click(screen.getByRole("button", { name: "搜索" }));
-    await waitFor(() => expect(api.listPosts).toHaveBeenLastCalledWith({ page: 1, q: "正文关键词" }));
+    await waitFor(() => expect(postsApi.listPosts).toHaveBeenLastCalledWith({ page: 1, q: "正文关键词" }));
     await screen.findByText("draft-note");
     expect(screen.queryByText("Rust 指南")).toBeNull();
     expect(new URLSearchParams(window.location.search).get("q")).toBe("正文关键词");
@@ -185,14 +177,14 @@ describe("我的文章列表", () => {
     await screen.findByText("Rust 指南");
 
     // 移入回收站后后端不再返回这一行：用它证明列表真的刷新了。
-    vi.mocked(api.listPosts).mockResolvedValue(contentPage([draftPost]));
+    vi.mocked(postsApi.listPosts).mockResolvedValue(contentPage([draftPost]));
 
     fireEvent.click(within(screen.getByRole("row", { name: /Rust 指南/ })).getByRole("button", { name: "移入回收站" }));
     // 确认弹窗标题带上文章标题，锁住「按行传参」而不是只按位置。
     expect(await screen.findByRole("dialog", { name: "将「Rust 指南」移入回收站？" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "确定" }));
 
-    await waitFor(() => expect(api.trashPost).toHaveBeenCalledWith(rustPost.id, 3));
+    await waitFor(() => expect(postsApi.trashPost).toHaveBeenCalledWith(rustPost.id, 3));
     // 被移走的行从界面消失，另一行还在。
     await waitFor(() => expect(screen.queryByText("Rust 指南")).toBeNull());
     expect(screen.getByText("draft-note")).toBeTruthy();
@@ -206,12 +198,12 @@ describe("我的文章列表", () => {
     fireEvent.click(within(screen.getByRole("row", { name: /Rust 指南/ })).getByRole("button", { name: "移入回收站" }));
     fireEvent.click(await screen.findByRole("button", { name: "取消" }));
 
-    expect(api.trashPost).not.toHaveBeenCalled();
+    expect(postsApi.trashPost).not.toHaveBeenCalled();
     expect(window.location.pathname).toBe(paths.list);
   });
 
   it("移入回收站失败时展示服务端文案，列表保持原样", async () => {
-    vi.mocked(api.trashPost).mockRejectedValue(
+    vi.mocked(postsApi.trashPost).mockRejectedValue(
       new ApiError(409, "版本冲突：内容已被并发修改", "version_conflict", "req-2"),
     );
     render(<App />);
@@ -227,7 +219,7 @@ describe("我的文章列表", () => {
   });
 
   it("空列表展示带新建引导的空状态", async () => {
-    vi.mocked(api.listPosts).mockResolvedValue(contentPage([]));
+    vi.mocked(postsApi.listPosts).mockResolvedValue(contentPage([]));
     render(<App />);
 
     expect(await screen.findByText("还没有文章。点击「新建草稿」开始。")).toBeTruthy();
@@ -236,7 +228,7 @@ describe("我的文章列表", () => {
   it("加载失败时展示错误文案与空状态", async () => {
     // 用不会重试的 4xx：QueryClient 只对 5xx 退避重试（1s/2s），
     // 换成 500 这条用例得等三次尝试才看得到错误态。
-    vi.mocked(api.listPosts).mockRejectedValue(
+    vi.mocked(postsApi.listPosts).mockRejectedValue(
       new ApiError(403, "无权查看文章", "forbidden", "req-load"),
     );
     render(<App />);
@@ -281,14 +273,14 @@ describe("独立页面列表", () => {
   });
 
   it("空列表展示带新建引导的空状态", async () => {
-    vi.mocked(api.listPages).mockResolvedValue(contentPage([]));
+    vi.mocked(pagesApi.listPages).mockResolvedValue(contentPage([]));
     render(<App />);
 
     expect(await screen.findByText("还没有页面。点击「新建页面」开始。")).toBeTruthy();
   });
 
   it("加载失败时展示 403 前缀文案与空状态", async () => {
-    vi.mocked(api.listPages).mockRejectedValue(
+    vi.mocked(pagesApi.listPages).mockRejectedValue(
       new ApiError(403, "无权查看页面", "forbidden", null),
     );
     render(<App />);
@@ -314,7 +306,7 @@ describe("文章回收站", () => {
   });
 
   it("空回收站展示 0 篇且不能翻页", async () => {
-    vi.mocked(api.listTrash).mockResolvedValue({ items: [], total: 0, page: 1, per_page: 10 });
+    vi.mocked(postsApi.listTrash).mockResolvedValue({ items: [], total: 0, page: 1, per_page: 10 });
     render(<App />);
 
     expect(await screen.findByText("共 0 篇")).toBeTruthy();
@@ -324,22 +316,22 @@ describe("文章回收站", () => {
     ).toBe(true);
   });
 
-  it("恢复：以 ID 与当前版本调用 api.restorePost，并刷新列表", async () => {
+  it("恢复：以 ID 与当前版本调用 postsApi.restorePost，并刷新列表", async () => {
     render(<App />);
     await screen.findByText("已删除的稿子");
 
     // 恢复后后端不再返回这一行：用它证明列表真的刷新了。
-    vi.mocked(api.listTrash).mockResolvedValue({ items: [], total: 0, page: 1, per_page: 10 });
+    vi.mocked(postsApi.listTrash).mockResolvedValue({ items: [], total: 0, page: 1, per_page: 10 });
 
     fireEvent.click(screen.getByRole("button", { name: "恢复" }));
 
-    await waitFor(() => expect(api.restorePost).toHaveBeenCalledWith(trashed.id, 4));
+    await waitFor(() => expect(postsApi.restorePost).toHaveBeenCalledWith(trashed.id, 4));
     expect(await screen.findByText("共 0 篇")).toBeTruthy();
     expect(screen.queryByText("gone")).toBeNull();
     expect(screen.getByText("已恢复「已删除的稿子」。")).toBeTruthy();
   });
 
-  it("永久删除：确认后以 ID 与当前版本调用 api.purgePost", async () => {
+  it("永久删除：确认后以 ID 与当前版本调用 postsApi.purgePost", async () => {
     render(<App />);
     await screen.findByText("已删除的稿子");
 
@@ -347,22 +339,22 @@ describe("文章回收站", () => {
     expect(await screen.findByRole("dialog", { name: "永久删除「已删除的稿子」？" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "确定" }));
 
-    await waitFor(() => expect(api.purgePost).toHaveBeenCalledWith(trashed.id, 4));
+    await waitFor(() => expect(postsApi.purgePost).toHaveBeenCalledWith(trashed.id, 4));
   });
 
-  it("永久删除：取消时不调用 api.purgePost", async () => {
+  it("永久删除：取消时不调用 postsApi.purgePost", async () => {
     render(<App />);
     await screen.findByText("已删除的稿子");
 
     fireEvent.click(screen.getByRole("button", { name: "永久删除" }));
     fireEvent.click(await screen.findByRole("button", { name: "取消" }));
 
-    expect(api.purgePost).not.toHaveBeenCalled();
+    expect(postsApi.purgePost).not.toHaveBeenCalled();
   });
 
   it("分页：上一页/下一页切换到服务端回显的页码", async () => {
     // 服务端会回显本次返回的是第几页；界面页码以它为准，fixture 必须照实回显。
-    vi.mocked(api.listTrash).mockImplementation(async (target = 1) => ({
+    vi.mocked(postsApi.listTrash).mockImplementation(async (target = 1) => ({
       items: [trashed],
       total: 25,
       page: target,
@@ -386,7 +378,7 @@ describe("文章回收站", () => {
   });
 
   it("恢复失败时展示服务端文案与错误编号", async () => {
-    vi.mocked(api.restorePost).mockRejectedValue(
+    vi.mocked(postsApi.restorePost).mockRejectedValue(
       new ApiError(409, "版本冲突：内容已被并发修改", "version_conflict", "req-3"),
     );
     render(<App />);
@@ -400,7 +392,7 @@ describe("文章回收站", () => {
   });
 
   it("加载失败时展示错误文案与空状态，且不渲染分页", async () => {
-    vi.mocked(api.listTrash).mockRejectedValue(
+    vi.mocked(postsApi.listTrash).mockRejectedValue(
       new ApiError(409, "回收数据已被并发修改", "version_conflict", "req-7"),
     );
     render(<App />);
@@ -416,7 +408,7 @@ describe("文章回收站", () => {
 
     // 第一次列表拉取正常，操作后的那次重载失败。
     // 用不会重试的 4xx：QueryClient 只对 5xx 退避重试，5xx 会把失败推迟几秒。
-    vi.mocked(api.listTrash).mockRejectedValueOnce(
+    vi.mocked(postsApi.listTrash).mockRejectedValueOnce(
       new ApiError(409, "回收数据已被并发修改", "version_conflict", "req-9"),
     );
     fireEvent.click(screen.getByRole("button", { name: "恢复" }));
@@ -429,7 +421,7 @@ describe("文章回收站", () => {
 
   it("删除当前页最后一条后回退一页，而不是停在空页", async () => {
     const second = summary({ id: "post-2", slug: "second", title: "第二页的稿子", version: 2 });
-    vi.mocked(api.listTrash).mockImplementation(async (target = 1) =>
+    vi.mocked(postsApi.listTrash).mockImplementation(async (target = 1) =>
       target === 1
         ? { items: [trashed], total: 11, page: 1, per_page: 10 }
         : { items: [second], total: 11, page: 2, per_page: 10 },
@@ -442,7 +434,7 @@ describe("文章回收站", () => {
     expect(screen.getByText("第 2 页")).toBeTruthy();
 
     // 第 2 页唯一一条被删除后，服务端该页为空 → 必须回退到第 1 页。
-    vi.mocked(api.listTrash).mockImplementation(async (target = 1) =>
+    vi.mocked(postsApi.listTrash).mockImplementation(async (target = 1) =>
       target === 1
         ? { items: [trashed], total: 10, page: 1, per_page: 10 }
         : { items: [], total: 10, page: 2, per_page: 10 },
@@ -457,7 +449,7 @@ describe("文章回收站", () => {
   });
 
   it("403 时给出「没有权限：」前缀（与文章/页面列表同口径）", async () => {
-    vi.mocked(api.restorePost).mockRejectedValue(
+    vi.mocked(postsApi.restorePost).mockRejectedValue(
       new ApiError(403, "无权执行该操作", "forbidden", "req-11"),
     );
     render(<App />);
@@ -475,14 +467,14 @@ describe("跨屏缓存一致性", () => {
   // 否则（列表缓存 30s 内仍然新鲜）回去看不到刚恢复的那篇。
   it("回收站恢复后，文章列表能看到它", async () => {
     window.history.replaceState(null, "", paths.list);
-    vi.mocked(api.listPosts).mockResolvedValue(contentPage([draftPost]));
+    vi.mocked(postsApi.listPosts).mockResolvedValue(contentPage([draftPost]));
     render(<App />);
     await screen.findByText("draft-note"); // 列表缓存先落地（此时没有那篇）
     expect(screen.queryByText("已删除的稿子")).toBeNull();
 
     act(() => { navigate(paths.postTrash); });
     await screen.findByText("已删除的稿子");
-    vi.mocked(api.listPosts).mockResolvedValue(contentPage([draftPost, trashed]));
+    vi.mocked(postsApi.listPosts).mockResolvedValue(contentPage([draftPost, trashed]));
     fireEvent.click(screen.getByRole("button", { name: "恢复" }));
     await screen.findByText("已恢复「已删除的稿子」。");
 
@@ -493,17 +485,17 @@ describe("跨屏缓存一致性", () => {
   // 与文章编辑器对称：页面保存后返回列表也不能看到旧标题。
   it("页面保存后，页面列表看到新标题", async () => {
     window.history.replaceState(null, "", paths.pages);
-    vi.mocked(api.listPages).mockResolvedValue(contentPage([aboutPage]));
+    vi.mocked(pagesApi.listPages).mockResolvedValue(contentPage([aboutPage]));
     render(<App />);
     await screen.findByText("关于"); // 列表缓存先落地
 
     act(() => { navigate(paths.editPage(aboutPage.id)); });
     await screen.findByDisplayValue("关于");
     fireEvent.change(screen.getByLabelText("标题"), { target: { value: "关于我们" } });
-    vi.mocked(api.updatePage).mockResolvedValue({ ...aboutDetail, title: "关于我们", version: 3 });
-    vi.mocked(api.listPages).mockResolvedValue(contentPage([{ ...aboutPage, title: "关于我们", version: 3 }]));
+    vi.mocked(pagesApi.updatePage).mockResolvedValue({ ...aboutDetail, title: "关于我们", version: 3 });
+    vi.mocked(pagesApi.listPages).mockResolvedValue(contentPage([{ ...aboutPage, title: "关于我们", version: 3 }]));
     fireEvent.click(screen.getByRole("button", { name: /保存草稿|保存预约内容|更新已发布内容/ }));
-    await waitFor(() => expect(api.updatePage).toHaveBeenCalled());
+    await waitFor(() => expect(pagesApi.updatePage).toHaveBeenCalled());
 
     fireEvent.click(screen.getByRole("menuitem", { name: "独立页面" }));
     expect(await screen.findByText("关于我们")).toBeTruthy();
@@ -514,21 +506,21 @@ describe("跨屏缓存一致性", () => {
     // aboutPage 是已发布状态，按钮是「撤回为草稿」，需要 page.unpublish（只影响本条用例）。
     state.permissions = ["page.create", "page.unpublish"];
     window.history.replaceState(null, "", paths.pages);
-    vi.mocked(api.listPages).mockResolvedValue(contentPage([aboutPage]));
+    vi.mocked(pagesApi.listPages).mockResolvedValue(contentPage([aboutPage]));
     render(<App />);
     await screen.findByText("关于"); // 列表缓存先落地
 
     act(() => { navigate(paths.editPage(aboutPage.id)); });
     await screen.findByDisplayValue("关于");
     fireEvent.change(screen.getByLabelText("标题"), { target: { value: "关于我们" } });
-    vi.mocked(api.updatePage).mockResolvedValue({ ...aboutDetail, title: "关于我们", version: 3 });
-    vi.mocked(api.unpublishPage).mockRejectedValue(
+    vi.mocked(pagesApi.updatePage).mockResolvedValue({ ...aboutDetail, title: "关于我们", version: 3 });
+    vi.mocked(pagesApi.unpublishPage).mockRejectedValue(
       new ApiError(500, "撤回失败", "internal", "req-8"),
     );
 
     fireEvent.click(screen.getByRole("button", { name: "撤回为草稿" }));
-    await waitFor(() => expect(api.unpublishPage).toHaveBeenCalledWith(aboutPage.id, aboutDetail.version));
-    expect(api.updatePage).not.toHaveBeenCalled();
+    await waitFor(() => expect(pagesApi.unpublishPage).toHaveBeenCalledWith(aboutPage.id, aboutDetail.version));
+    expect(pagesApi.updatePage).not.toHaveBeenCalled();
     expect(await screen.findByText(/撤回失败（错误编号 req-8）/)).toBeTruthy();
 
     fireEvent.click(screen.getByRole("menuitem", { name: "独立页面" }));
@@ -541,7 +533,7 @@ describe("跨屏缓存一致性", () => {
 describe("内容服务端分页", () => {
   it.each(["post", "page"] as const)("%s 翻页期间保持页码与行一致，切换筛选回到首页", async kind => {
     const isPost = kind === "post";
-    const listing = isPost ? vi.mocked(api.listPosts) : vi.mocked(api.listPages);
+    const listing = isPost ? vi.mocked(postsApi.listPosts) : vi.mocked(pagesApi.listPages);
     const first = isPost ? rustPost : aboutPage;
     const second = isPost ? draftPost : contactPage;
     // 两种摘要的共同展示字段一致；文章摘要保留作者字段。
@@ -565,18 +557,18 @@ describe("内容服务端分页", () => {
 
   it("删除第二页最后一篇后回退首页，并重新读取已缓存的首页", async () => {
     window.history.replaceState(null, "", paths.list);
-    vi.mocked(api.listPosts).mockImplementation(async filter => contentPage([filter?.page === 2 ? draftPost : rustPost], filter?.page ?? 1, 21));
+    vi.mocked(postsApi.listPosts).mockImplementation(async filter => contentPage([filter?.page === 2 ? draftPost : rustPost], filter?.page ?? 1, 21));
     render(<App />);
     await screen.findByText("Rust 指南");
     fireEvent.click(screen.getByRole("button", { name: "下一页" }));
     await screen.findByText(draftPost.slug);
     fireEvent.click(screen.getByRole("button", { name: "移入回收站" }));
     await screen.findByRole("dialog");
-    vi.mocked(api.listPosts).mockImplementation(async filter => contentPage(filter?.page === 2 ? [] : [{ ...rustPost, title: "刷新后的首页" }], filter?.page ?? 1, 20));
+    vi.mocked(postsApi.listPosts).mockImplementation(async filter => contentPage(filter?.page === 2 ? [] : [{ ...rustPost, title: "刷新后的首页" }], filter?.page ?? 1, 20));
     fireEvent.click(screen.getByRole("button", { name: "确定" }));
     await screen.findByText("刷新后的首页");
     expect(new URLSearchParams(window.location.search).get("page")).toBe("1");
-    expect(api.trashPost).toHaveBeenCalledWith(draftPost.id, draftPost.version);
+    expect(postsApi.trashPost).toHaveBeenCalledWith(draftPost.id, draftPost.version);
   });
 });
 
@@ -589,21 +581,21 @@ describe("跨页搜索与协作范围", () => {
     await screen.findByText("Rust 指南");
     fireEvent.mouseDown(screen.getByRole("combobox", { name: "文章范围" }));
     fireEvent.click(await screen.findByText("全部文章"));
-    await waitFor(() => expect(api.listPosts).toHaveBeenLastCalledWith({ page: 1, scope: "all" }));
+    await waitFor(() => expect(postsApi.listPosts).toHaveBeenLastCalledWith({ page: 1, scope: "all" }));
     fireEvent.change(screen.getByRole("searchbox", { name: "筛选作者" }), { target: { value: "disabled-author" } });
     fireEvent.click(screen.getByRole("button", { name: "筛选作者" }));
-    await waitFor(() => expect(api.listPosts).toHaveBeenLastCalledWith({ page: 1, scope: "all", author: "disabled-author" }));
+    await waitFor(() => expect(postsApi.listPosts).toHaveBeenLastCalledWith({ page: 1, scope: "all", author: "disabled-author" }));
   });
 
   it("从编辑器返回列表保留搜索和页码，刷新所需参数也留在地址中", async () => {
     window.history.replaceState(null, "", `${paths.list}?page=2&q=Rust`);
-    vi.mocked(api.listPosts).mockResolvedValue(contentPage([rustPost], 2, 25));
+    vi.mocked(postsApi.listPosts).mockResolvedValue(contentPage([rustPost], 2, 25));
     render(<App />);
     await screen.findByText("Rust 指南");
     fireEvent.click(screen.getByRole("button", { name: "编辑" }));
     await screen.findByLabelText("正文（Markdown）");
     await act(async () => navigate(paths.list));
-    await waitFor(() => expect(api.listPosts).toHaveBeenLastCalledWith(expect.objectContaining({ page: 2, q: "Rust" })));
+    await waitFor(() => expect(postsApi.listPosts).toHaveBeenLastCalledWith(expect.objectContaining({ page: 2, q: "Rust" })));
     expect((screen.getByRole("searchbox", { name: "搜索内容" }) as HTMLInputElement).value).toBe("Rust");
     await waitFor(() => expect(new URLSearchParams(window.location.search).get("page")).toBe("2"));
     expect(new URLSearchParams(window.location.search).get("q")).toBe("Rust");
@@ -615,6 +607,6 @@ describe("跨页搜索与协作范围", () => {
     await screen.findByText("关于");
     fireEvent.change(screen.getByRole("searchbox", { name: "搜索内容" }), { target: { value: "联系" } });
     fireEvent.click(screen.getByRole("button", { name: "搜索" }));
-    await waitFor(() => expect(api.listPages).toHaveBeenLastCalledWith({ page: 1, q: "联系" }));
+    await waitFor(() => expect(pagesApi.listPages).toHaveBeenLastCalledWith({ page: 1, q: "联系" }));
   });
 });

@@ -2,7 +2,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
-import { mediaApi } from "../src/api";
+import { mediaApi } from "../src/api/media";
 import { paths } from "../src/router";
 import type { MediaAsset, MediaPage } from "../src/types";
 
@@ -13,18 +13,15 @@ vi.mock("../src/auth", () => ({
   }),
 }));
 
-vi.mock("../src/api", async (importOriginal) => {
-  const original = await importOriginal<typeof import("../src/api")>();
-  return {
-    ...original,
-    mediaApi: {
+vi.mock("../src/api/media", async (load) => {
+  const original = await load<typeof import("../src/api/media")>();
+  return { ...original, mediaApi: {
       list: vi.fn(),
       detail: vi.fn(),
       upload: vi.fn(),
       remove: vi.fn(),
       restore: vi.fn(),
-    },
-  };
+    } };
 });
 
 function asset(overrides: Partial<MediaAsset> = {}): MediaAsset {

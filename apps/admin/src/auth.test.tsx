@@ -3,8 +3,8 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, expect, it, vi } from "vitest";
 import { App } from "./App";
 import { AuthProvider } from "./auth";
-import { setCsrfToken, setUnauthorizedHandler } from "./api";
-import type { CommentItem } from "./api";
+import { setCsrfToken, setUnauthorizedHandler } from "./api/client";
+import type { CommentItem } from "./api/generated";
 import type { Me } from "./types";
 import { paths } from "./router";
 import { jsonResponse } from "../tests/httpFixtures";

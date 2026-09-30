@@ -1,5 +1,5 @@
 import { QueryClient } from "@tanstack/react-query";
-import { ApiError } from "./api";
+import { ApiError } from "./api/client";
 import type { AuditFilter, ContentListFilter } from "./types";
 
 /**

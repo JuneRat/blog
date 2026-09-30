@@ -1,14 +1,18 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { TimeZoneContext } from "../src/timeZone";
+import { TimeZoneContext } from "../src/timeZoneContext";
 import { App } from "../src/App";
-import { ApiError, auditApi } from "../src/api";
+import { ApiError } from "../src/api/client";
+import { auditApi } from "../src/api/audit";
 import type { AuditRecord } from "../src/types";
 
 const auth = vi.hoisted(() => ({ permissions: ["audit.read"] as string[] }));
 vi.mock("../src/auth", () => ({ useAuth: () => ({ status: "authenticated", me: { user_id: "owner", permissions: auth.permissions } }) }));
-vi.mock("../src/api", async (original) => ({ ...await original<typeof import("../src/api")>(), auditApi: { list: vi.fn() } }));
+vi.mock("../src/api/audit", async (load) => {
+  const original = await load<typeof import("../src/api/audit")>();
+  return { ...original, auditApi: { list: vi.fn() } };
+});
 const item: AuditRecord = {
   id: "log-1", created_at: "2026-09-27T10:00:00Z", actor_id: "former-user", actor_display: null,
   ip_address: "2001:db8::42", action: "post.update", target_type: "post", target_id: "post-1",

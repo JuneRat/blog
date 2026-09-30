@@ -1,5 +1,6 @@
+import { z } from "zod";
 import type * as Wire from "./generated";
-import * as s from "./schemas";
+import * as s from "./schemas/identity";
 import { json, request, requestEmpty, requestLogout } from "./client";
 import type {
   AdminUser,
@@ -45,7 +46,7 @@ export const identityApi = {
     }),
 
   providers: (): Promise<ProviderSummary[]> =>
-    request(s.array(s.providerSummary), "/auth/providers"),
+    request(z.array(s.providerSummary), "/auth/providers"),
 
   loginWithPassword: (
     input: PasswordLoginInput,
@@ -61,7 +62,7 @@ export const identityApi = {
     if (offset !== undefined) query.set("offset", String(offset));
     const encoded = query.toString();
     const suffix = encoded.length > 0 ? `?${encoded}` : "";
-    return request(s.array(s.adminUser), `/api/admin/v1/users${suffix}`);
+    return request(z.array(s.adminUser), `/api/admin/v1/users${suffix}`);
   },
 
   createUser: (input: CreateUserInput): Promise<CreatedUser> =>
@@ -88,7 +89,7 @@ export const identityApi = {
     ),
 
   listRoles: (): Promise<RoleSummary[]> =>
-    request(s.array(s.roleSummary), "/api/admin/v1/roles"),
+    request(z.array(s.roleSummary), "/api/admin/v1/roles"),
 
   assignRole: (username: string, role: string): Promise<unknown> =>
     requestEmpty(rolePath(username, role), { method: "PUT" }),

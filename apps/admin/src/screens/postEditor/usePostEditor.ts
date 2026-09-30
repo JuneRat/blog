@@ -9,8 +9,9 @@ import {
   statusLabel,
   type ContentAction,
 } from "../../components/ContentLifecycleControls";
-import { ApiError, api } from "../../api";
-import type { EditPostInput } from "../../api";
+import { ApiError } from "../../api/client";
+import { postsApi } from "../../api/posts";
+import type { EditPostInput } from "../../api/generated";
 import { permissionMessageOf } from "../../apiError";
 import { useAuth } from "../../auth";
 import { navigate, paths } from "../../router";
@@ -64,7 +65,7 @@ export function usePostEditor(id: string | null) {
   const comparison = useConflictSnapshot({
     active: conflict,
     id,
-    load: api.getPost,
+    load: postsApi.getPost,
   });
   const localSavedRef = useRef<
     (id: string, version: number, merged: FormState, dirty: boolean) => void
@@ -222,7 +223,7 @@ export function usePostEditor(id: string | null) {
     void (async () => {
       setLoading(true);
       try {
-        const post = await api.getPost(id);
+        const post = await postsApi.getPost(id);
         if (!cancelled) applyServer(post);
       } catch (e) {
         if (!cancelled) setError(permissionMessageOf(e));
@@ -287,7 +288,7 @@ export function usePostEditor(id: string | null) {
     try {
       if (id === null) {
         const sent = readForm();
-        const created = await api.createPost({
+        const created = await postsApi.createPost({
           slug: sent.slug.trim().length > 0 ? sent.slug.trim() : undefined,
           title: sent.title,
           excerpt:
@@ -308,7 +309,7 @@ export function usePostEditor(id: string | null) {
         return;
       }
       const sent = readForm();
-      const saved = await api.updatePost(id, {
+      const saved = await postsApi.updatePost(id, {
         ...editPayload(),
         expected_version: version ?? undefined,
       });
@@ -338,7 +339,7 @@ export function usePostEditor(id: string | null) {
     setError(null);
     setBusy(true);
     try {
-      const result = await api.getPost(id);
+      const result = await postsApi.getPost(id);
       if (!isCurrent()) return;
       applyServer(result);
       setNotice("已重新加载服务器最新内容。");
@@ -367,7 +368,7 @@ export function usePostEditor(id: string | null) {
         try {
           // 确认期间继续输入时，提交当前输入；版本始终绑定已展示的快照。
           const sent = readForm();
-          const saved = await api.updatePost(id, {
+          const saved = await postsApi.updatePost(id, {
             ...editPayload(),
             expected_version: latest.version,
           });
@@ -424,7 +425,7 @@ export function usePostEditor(id: string | null) {
       let expected = version ?? undefined;
       if (savesContent && hadUnsavedEdits && postStatus !== "archived") {
         const sent = readForm();
-        const saved = await api.updatePost(id, {
+        const saved = await postsApi.updatePost(id, {
           ...editPayload(),
           expected_version: expected,
         });
@@ -441,12 +442,12 @@ export function usePostEditor(id: string | null) {
       // 发布/撤回不改正文：只同步状态，保留（可能还在变化的）表单。
       const result =
         action === "publish"
-          ? await api.publishPost(id, expected)
+          ? await postsApi.publishPost(id, expected)
           : action === "schedule"
-            ? await api.schedulePost(id, at!, expected)
+            ? await postsApi.schedulePost(id, at!, expected)
             : action === "archive"
-              ? await api.archivePost(id, expected)
-              : await api.unpublishPost(id, expected);
+              ? await postsApi.archivePost(id, expected)
+              : await postsApi.unpublishPost(id, expected);
       invalidateRelated();
       if (!isCurrent()) return;
       applyStatus(result);

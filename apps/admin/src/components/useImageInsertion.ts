@@ -2,7 +2,7 @@ import { invalidateAfterWrite } from "../queryEffects";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { RefObject } from "react";
-import { mediaApi } from "../api";
+import { mediaApi } from "../api/media";
 import { permissionMessageOf } from "../apiError";
 import type { MediaAsset } from "../types";
 import { defaultAltText, insertImageMarkdown, uploadRejection } from "../media";

@@ -23,6 +23,14 @@ export default defineConfig({
     outDir: "dist",
     emptyOutDir: true,
     sourcemap: false,
+    // Keep the scheduling polyfill out of the bootstrap's shared runtime chunk.
+    rolldownOptions: {
+      output: {
+        codeSplitting: {
+          groups: [{ name: "temporal", test: /node_modules[\\/](?:@js-temporal[\\/]polyfill|jsbi)[\\/]/ }],
+        },
+      },
+    },
   },
   server: {
     port: 5173,

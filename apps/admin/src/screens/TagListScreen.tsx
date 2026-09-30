@@ -3,7 +3,7 @@ import { Alert, App as AntdApp, Button, Form, Input, Space, Table, Typography } 
 import type { TableProps } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { api } from "../api";
+import { tagsApi } from "../api/taxonomy";
 import { permissionMessageOf } from "../apiError";
 import { useAuth } from "../auth";
 import { queryKeys } from "../queryClient";
@@ -35,7 +35,7 @@ export function TagListScreen() {
    * 错误分两处：`tags.error` 是**取数失败**（含权限口径文案），
    * `actionError` 是前端校验与写操作失败；展示时动作错误优先。
    */
-  const tags = useQuery({ queryKey: queryKeys.tags(), queryFn: () => api.listTags() });
+  const tags = useQuery({ queryKey: queryKeys.tags(), queryFn: () => tagsApi.listTags() });
   const queryClient = useQueryClient();
   const [actionError, setActionError] = useState<string | null>(null);
   const errorText =
@@ -65,7 +65,7 @@ export function TagListScreen() {
     setNotice(null);
     setBusy(true);
     try {
-      await api.createTag({ name, slug });
+      await tagsApi.createTag({ name, slug });
       form.setFieldsValue(EMPTY_DRAFT);
       setNotice(`已创建标签 ${name}。slug 创建后不可修改。`);
       await load();
@@ -90,7 +90,7 @@ export function TagListScreen() {
     setNotice(null);
     setBusy(true);
     try {
-      const updated = await api.renameTag(tag.slug, {
+      const updated = await tagsApi.renameTag(tag.slug, {
         name,
         expected_version: tag.version,
       });
@@ -118,7 +118,7 @@ export function TagListScreen() {
         setNotice(null);
         setBusy(true);
         try {
-          await api.deleteTag(tag.slug, tag.version);
+          await tagsApi.deleteTag(tag.slug, tag.version);
           setNotice(`已删除标签 ${tag.name}。`);
           await load();
         } catch (e) {

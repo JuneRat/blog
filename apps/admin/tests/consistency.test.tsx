@@ -2,7 +2,11 @@ import { contentPage, postSummary } from "./contentFixtures";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
-import { api, categoryApi, commentsApi, mediaApi, seriesApi } from "../src/api";
+import { postsApi } from "../src/api/posts";
+import { tagsApi, categoryApi, seriesApi } from "../src/api/taxonomy";
+import { pagesApi } from "../src/api/pages";
+import { commentsApi } from "../src/api/comments";
+import { mediaApi } from "../src/api/media";
 import { navigate, paths } from "../src/router";
 import type { MediaAsset, PageDetail, PostDetail } from "../src/types";
 
@@ -12,15 +16,26 @@ vi.mock("../src/auth", () => ({
     "media.read", "media.upload", "comment.moderate",
   ] } }),
 }));
-vi.mock("../src/api", async (original) => ({
-  ...await original<typeof import("../src/api")>(),
-  api: { getPost: vi.fn(), updatePost: vi.fn(), publishPost: vi.fn(), unpublishPost: vi.fn(),
-    listPosts: vi.fn(), listTags: vi.fn(), getPage: vi.fn(), updatePage: vi.fn() },
-  categoryApi: { list: vi.fn() },
-  seriesApi: { list: vi.fn(), members: vi.fn() },
-  commentsApi: { list: vi.fn(), policy: vi.fn() },
-  mediaApi: { list: vi.fn(), detail: vi.fn(), upload: vi.fn() },
-}));
+vi.mock("../src/api/posts", async (load) => {
+  const original = await load<typeof import("../src/api/posts")>();
+  return { ...original, postsApi: { ...original.postsApi, getPost: vi.fn(), updatePost: vi.fn(), publishPost: vi.fn(), unpublishPost: vi.fn(), listPosts: vi.fn() } };
+});
+vi.mock("../src/api/taxonomy", async (load) => {
+  const original = await load<typeof import("../src/api/taxonomy")>();
+  return { ...original, tagsApi: { ...original.tagsApi, listTags: vi.fn() }, categoryApi: { list: vi.fn() }, seriesApi: { list: vi.fn(), members: vi.fn() } };
+});
+vi.mock("../src/api/pages", async (load) => {
+  const original = await load<typeof import("../src/api/pages")>();
+  return { ...original, pagesApi: { ...original.pagesApi, getPage: vi.fn(), updatePage: vi.fn() } };
+});
+vi.mock("../src/api/comments", async (load) => {
+  const original = await load<typeof import("../src/api/comments")>();
+  return { ...original, commentsApi: { list: vi.fn(), policy: vi.fn() } };
+});
+vi.mock("../src/api/media", async (load) => {
+  const original = await load<typeof import("../src/api/media")>();
+  return { ...original, mediaApi: { list: vi.fn(), detail: vi.fn(), upload: vi.fn() } };
+});
 
 let post: PostDetail;
 let page: PageDetail;
@@ -60,21 +75,21 @@ beforeEach(() => {
     cover_media_id: null, cover_url: null };
   page = { id: "page", slug: "about", title: "关于页面", content: "页面正文", status: "draft",
     visibility: "public", version: 1, published_at: null, updated_at: "2026-09-28T00:00:00Z" };
-  vi.mocked(api.getPost).mockImplementation(async () => post);
-  vi.mocked(api.updatePost).mockImplementation(async (_id, body) => {
+  vi.mocked(postsApi.getPost).mockImplementation(async () => post);
+  vi.mocked(postsApi.updatePost).mockImplementation(async (_id, body) => {
     post = { ...post, title: body.title ?? post.title, content: body.content ?? post.content, version: post.version + 1 };
     return post;
   });
-  vi.mocked(api.publishPost).mockImplementation(async () => {
+  vi.mocked(postsApi.publishPost).mockImplementation(async () => {
     post = { ...post, status: "published", version: post.version + 1 };
     return post;
   });
-  vi.mocked(api.unpublishPost).mockImplementation(async () => {
+  vi.mocked(postsApi.unpublishPost).mockImplementation(async () => {
     post = { ...post, status: "draft", version: post.version + 1 };
     return post;
   });
-  vi.mocked(api.listPosts).mockImplementation(async () => contentPage([postSummary(post)]));
-  vi.mocked(api.listTags).mockImplementation(async () => [
+  vi.mocked(postsApi.listPosts).mockImplementation(async () => contentPage([postSummary(post)]));
+  vi.mocked(tagsApi.listTags).mockImplementation(async () => [
     { id: "tag", name: "技术标签", slug: "tech", version: 1, public_post_count: count() },
   ]);
   vi.mocked(categoryApi.list).mockImplementation(async () => [
@@ -93,8 +108,8 @@ beforeEach(() => {
   }], total: 1, enabled: true }));
   vi.mocked(mediaApi.list).mockImplementation(async () => ({ items: [media()], total: 1, page: 1, per_page: 24 }));
   vi.mocked(mediaApi.detail).mockImplementation(async () => ({ media: media(), references: references(), hidden_references: 0 }));
-  vi.mocked(api.getPage).mockImplementation(async () => page);
-  vi.mocked(api.updatePage).mockImplementation(async (_id, body) => {
+  vi.mocked(pagesApi.getPage).mockImplementation(async () => page);
+  vi.mocked(pagesApi.updatePage).mockImplementation(async (_id, body) => {
     page = { ...page, title: body.title ?? page.title, content: body.content ?? page.content, version: page.version + 1 };
     return page;
   });
@@ -178,6 +193,6 @@ describe("写入后跨屏一致性（先访问旧缓存，再提交，再返回�
     change("正文（Markdown）", post.content);
     go(paths.media);
     await screen.findByText("pasted.png");
-    expect(api.updatePost).not.toHaveBeenCalled();
+    expect(postsApi.updatePost).not.toHaveBeenCalled();
   });
 });

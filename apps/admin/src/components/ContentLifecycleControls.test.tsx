@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { TimeZoneContext } from "../timeZone";
+import { TimeZoneContext } from "../timeZoneContext";
 import { ContentLifecycleControls } from "./ContentLifecycleControls";
 
 afterEach(() => {

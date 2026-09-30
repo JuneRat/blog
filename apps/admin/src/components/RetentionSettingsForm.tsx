@@ -1,8 +1,9 @@
 import { Alert, Button, Form, InputNumber, Space, Typography } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import { ApiError, retentionApi } from "../api";
-import type { RetentionSettings } from "../api";
+import { ApiError } from "../api/client";
+import { retentionApi } from "../api/settings";
+import type { RetentionSettings } from "../api/generated";
 import { permissionMessageOf } from "../apiError";
 import { queryKeys } from "../queryClient";
 

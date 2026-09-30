@@ -11,7 +11,7 @@ import {
 } from "antd";
 import { useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { mediaApi } from "../api";
+import { mediaApi } from "../api/media";
 import { permissionMessageOf } from "../apiError";
 import { MEDIA_ACCEPT, MEDIA_MAX_BYTES, MEDIA_PUBLIC_NOTICE, formatBytes, mediaUrl, uploadRejection } from "../media";
 import { MediaBrowser } from "./MediaBrowser";

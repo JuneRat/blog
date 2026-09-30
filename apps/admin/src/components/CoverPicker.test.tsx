@@ -8,7 +8,7 @@ import {
 } from "@testing-library/react";
 import { QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { mediaApi } from "../api";
+import { mediaApi } from "../api/media";
 import { mediaPageQuery } from "../mediaQueries";
 import { createQueryClient } from "../queryClient";
 import { invalidateAfterWrite } from "../queryEffects";
@@ -16,9 +16,9 @@ import { AdminProviders } from "../providers";
 import { CoverPicker } from "./CoverPicker";
 import type { MediaAsset, MediaPage } from "../types";
 
-vi.mock("../api", async (load) => {
-  const actual = await load<typeof import("../api")>();
-  return { ...actual, mediaApi: { ...actual.mediaApi, list: vi.fn(), upload: vi.fn() } };
+vi.mock("../api/media", async (load) => {
+  const original = await load<typeof import("../api/media")>();
+  return { ...original, mediaApi: { ...original.mediaApi, list: vi.fn(), upload: vi.fn() } };
 });
 beforeEach(() => vi.resetAllMocks());
 afterEach(cleanup);

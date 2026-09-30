@@ -1,8 +1,10 @@
-import { formatDateTime, useTimeZone } from "../timeZone";
+import { formatDateTime } from "../timeZone";
+import { useTimeZone } from "../timeZoneContext";
 import { useEffect, useState } from 'react';
 import { Alert, App, Button, Card, Modal, Pagination, Select, Space, Tag, Typography } from 'antd';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { commentsApi, type CommentItem } from '../api';
+import { commentsApi } from "../api/comments";
+import type { CommentItem } from "../api/generated";
 import { permissionMessageOf } from '../apiError';
 import { CommentEditor } from '../components/CommentEditor';
 import { paths, navigate } from '../router';

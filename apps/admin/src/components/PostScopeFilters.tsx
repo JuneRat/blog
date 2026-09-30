@@ -1,7 +1,7 @@
 import { useId } from "react";
 import { Alert, Flex, Input, Select } from "antd";
 import { useQuery } from "@tanstack/react-query";
-import { categoryApi } from "../api";
+import { categoryApi } from "../api/taxonomy";
 import { useAuth } from "../auth";
 import { queryKeys } from "../queryClient";
 import { permissionMessageOf } from "../apiError";

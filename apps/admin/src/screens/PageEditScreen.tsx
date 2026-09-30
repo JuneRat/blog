@@ -22,14 +22,15 @@ import {
 } from "antd";
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ApiError, api } from "../api";
+import { ApiError } from "../api/client";
+import { pagesApi } from "../api/pages";
 import { permissionMessageOf } from "../apiError";
 import { useAuth } from "../auth";
 import { navigate, paths } from "../router";
 import { useUnsavedGuard } from "../unsaved";
 import { MediaInsertPanel } from "../components/MediaInsertPanel";
 import { useImageInsertion } from "../components/useImageInsertion";
-import type { EditPageInput } from "../api";
+import type { EditPageInput } from "../api/generated";
 import type { PageDetail, Visibility } from "../types";
 
 interface FormState {
@@ -131,7 +132,7 @@ function PageEditor({ id }: { id: string | null }) {
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [conflict, setConflict] = useState(false);
-  const comparison = useConflictSnapshot({ active: conflict, id, load: api.getPage });
+  const comparison = useConflictSnapshot({ active: conflict, id, load: pagesApi.getPage });
   const localSavedRef = useRef<(id: string, version: number, merged: FormState, dirty: boolean) => void>(() => {});
   const [deleteConflict, setDeleteConflict] = useState(false);
   const baselineRef = useRef<FormState>(EMPTY_FORM);
@@ -258,7 +259,7 @@ function PageEditor({ id }: { id: string | null }) {
     void (async () => {
       setLoading(true);
       try {
-        const page = await api.getPage(id);
+        const page = await pagesApi.getPage(id);
         if (!cancelled) applyServer(page);
       } catch (e) {
         if (!cancelled) setError(permissionMessageOf(e));
@@ -304,7 +305,7 @@ function PageEditor({ id }: { id: string | null }) {
     try {
       if (id === null) {
         const sent = readForm();
-        const created = await api.createPage({
+        const created = await pagesApi.createPage({
           slug: sent.slug.trim().length > 0 ? sent.slug.trim() : undefined,
           title: sent.title,
           content: sent.content,
@@ -317,7 +318,7 @@ function PageEditor({ id }: { id: string | null }) {
         return;
       }
       const sent = readForm();
-      const saved = await api.updatePage(id, {
+      const saved = await pagesApi.updatePage(id, {
         ...editPayload(),
         expected_version: version ?? undefined,
       });
@@ -348,7 +349,7 @@ function PageEditor({ id }: { id: string | null }) {
     setError(null);
     setBusy(true);
     try {
-      const result = await api.getPage(id);
+      const result = await pagesApi.getPage(id);
       if (!isCurrent()) return;
       applyServer(result);
       setNotice("已重新加载服务器最新内容。");
@@ -375,7 +376,7 @@ function PageEditor({ id }: { id: string | null }) {
         setBusy(true);
         try {
           const sent = readForm();
-          const saved = await api.updatePage(id, {
+          const saved = await pagesApi.updatePage(id, {
             ...editPayload(),
             expected_version: latest.version,
           });
@@ -415,7 +416,7 @@ function PageEditor({ id }: { id: string | null }) {
       let expected = version ?? undefined;
       if (savesContent && hadUnsavedEdits && pageStatus !== "archived") {
         const sent = readForm();
-        const saved = await api.updatePage(id, {
+        const saved = await pagesApi.updatePage(id, {
           ...editPayload(),
           expected_version: expected,
         });
@@ -430,10 +431,10 @@ function PageEditor({ id }: { id: string | null }) {
          */
       }
       const result = action === "publish"
-        ? await api.publishPage(id, expected)
-        : action === "schedule" ? await api.schedulePage(id, at!, expected)
-        : action === "archive" ? await api.archivePage(id, expected)
-        : await api.unpublishPage(id, expected);
+        ? await pagesApi.publishPage(id, expected)
+        : action === "schedule" ? await pagesApi.schedulePage(id, at!, expected)
+        : action === "archive" ? await pagesApi.archivePage(id, expected)
+        : await pagesApi.unpublishPage(id, expected);
       invalidateRelated();
       if (!isCurrent()) return;
       applyStatus(result);
@@ -464,7 +465,7 @@ function PageEditor({ id }: { id: string | null }) {
         setNotice(null);
         setDeleteConflict(false);
         try {
-          await api.trashPage(id, version);
+          await pagesApi.trashPage(id, version);
           invalidateRelated();
           navigate(paths.pages, { replace: true });
         } catch (cause) {

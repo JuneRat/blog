@@ -1,5 +1,5 @@
 import type * as Wire from "./generated";
-import * as s from "./schemas";
+import * as s from "./schemas/content";
 import { json, request, requestEmpty } from "./client";
 import type {
   ContentListFilter,

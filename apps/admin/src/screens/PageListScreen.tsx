@@ -1,8 +1,9 @@
-import { formatDateTime, useTimeZone } from "../timeZone";
+import { formatDateTime } from "../timeZone";
+import { useTimeZone } from "../timeZoneContext";
 import { statusLabel } from "../components/ContentLifecycleControls";
 import { Alert, Button, Flex, Table, Typography } from "antd";
 import type { TableProps } from "antd";
-import { api } from "../api";
+import { pagesApi } from "../api/pages";
 import { permissionMessageOf } from "../apiError";
 import { useAuth } from "../auth";
 import { useContentList } from "../useContentList";
@@ -20,7 +21,7 @@ export function PageListScreen() {
   const timeZone = useTimeZone();
   const { me } = useAuth();
   /** 只读列表：失败按管理屏口径加「没有权限：」前缀（本屏没有写操作）。 */
-  const { query: pages, filter, setFilter, setPage } = useContentList("pages", api.listPages);
+  const { query: pages, filter, setFilter, setPage } = useContentList("pages", pagesApi.listPages);
   const errorText = pages.error === null ? null : permissionMessageOf(pages.error);
   const canCreate = me?.permissions.includes("page.create") ?? false;
 

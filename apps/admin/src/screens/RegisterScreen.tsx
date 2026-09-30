@@ -1,6 +1,6 @@
 import { Alert, Button, Card, Flex, Form, Input, Typography } from "antd";
 import { useRef, useState } from "react";
-import { api } from "../api";
+import { identityApi } from "../api/identity";
 import type { RegistrationInput } from "../api/generated";
 import { messageOf } from "../apiError";
 
@@ -19,7 +19,7 @@ export function RegisterScreen({ onBack, onRegistered }: {
     setBusy(true);
     setError(null);
     try {
-      await api.register({
+      await identityApi.register({
         ...input,
         username: input.username.trim(),
         email: input.email.trim(),

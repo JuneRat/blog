@@ -1,4 +1,4 @@
-import * as s from "./schemas";
+import * as s from "./schemas/audit";
 import { request } from "./client";
 import type { AuditFilter, AuditPage } from "../types";
 

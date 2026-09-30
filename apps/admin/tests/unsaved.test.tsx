@@ -4,7 +4,8 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConfigProvider } from "antd";
 import { App } from "../src/App";
-import { api, categoryApi, seriesApi } from "../src/api";
+import { postsApi } from "../src/api/posts";
+import { tagsApi, categoryApi, seriesApi } from "../src/api/taxonomy";
 import { navigate, paths } from "../src/router";
 import type { PostDetail } from "../src/types";
 
@@ -25,22 +26,13 @@ vi.mock("../src/auth", () => ({
   }),
 }));
 
-vi.mock("../src/api", async (importOriginal) => {
-  const original = await importOriginal<typeof import("../src/api")>();
-  return {
-    ...original,
-    categoryApi: { list: vi.fn() },
-    seriesApi: { list: vi.fn() },
-    api: {
-      getPost: vi.fn(),
-      createPost: vi.fn(),
-      updatePost: vi.fn(),
-      publishPost: vi.fn(),
-      unpublishPost: vi.fn(),
-      listTags: vi.fn(),
-      listPosts: vi.fn(),
-    },
-  };
+vi.mock("../src/api/taxonomy", async (load) => {
+  const original = await load<typeof import("../src/api/taxonomy")>();
+  return { ...original, categoryApi: { list: vi.fn() }, seriesApi: { list: vi.fn() }, tagsApi: { ...original.tagsApi, listTags: vi.fn() } };
+});
+vi.mock("../src/api/posts", async (load) => {
+  const original = await load<typeof import("../src/api/posts")>();
+  return { ...original, postsApi: { ...original.postsApi, getPost: vi.fn(), createPost: vi.fn(), updatePost: vi.fn(), publishPost: vi.fn(), unpublishPost: vi.fn(), listPosts: vi.fn() } };
 });
 
 const post: PostDetail = {
@@ -70,11 +62,11 @@ async function openDirtyEditor(): Promise<void> {
 beforeEach(() => {
   vi.resetAllMocks();
   window.history.replaceState(null, "", paths.editPost(post.id));
-  vi.mocked(api.getPost).mockResolvedValue(post);
-  vi.mocked(api.listTags).mockResolvedValue([]);
+  vi.mocked(postsApi.getPost).mockResolvedValue(post);
+  vi.mocked(tagsApi.listTags).mockResolvedValue([]);
   vi.mocked(categoryApi.list).mockResolvedValue([]);
   vi.mocked(seriesApi.list).mockResolvedValue([]);
-  vi.mocked(api.listPosts).mockResolvedValue(contentPage([]));
+  vi.mocked(postsApi.listPosts).mockResolvedValue(contentPage([]));
 });
 afterEach(cleanup);
 
@@ -99,7 +91,7 @@ describe("未保存离开保护", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(title.value).toBe("未保存的标题");
     expect(body.value).toBe("未保存的正文\n\n第二段");
-    expect(api.getPost).toHaveBeenCalledTimes(1);
+    expect(postsApi.getPost).toHaveBeenCalledTimes(1);
     expect(window.history.length).toBe(length);
 
     act(() => window.history.back());
@@ -159,7 +151,7 @@ describe("未保存离开保护", () => {
     expect(window.history.state).toEqual(currentState);
     expect(screen.getAllByRole("dialog")).toHaveLength(1);
     expect(titleInput().value).toBe("跨多页仍保留");
-    expect(api.getPost).toHaveBeenCalledTimes(1);
+    expect(postsApi.getPost).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByRole("button", { name: "放弃修改并离开" }));
     await screen.findByText(/还没有标签/);
     expect(window.location.pathname).toBe(paths.tags);
@@ -171,14 +163,14 @@ describe("未保存离开保护", () => {
   it("保存完成时取消待决离开，保存期间继续输入仍受后退保护", async () => {
     window.history.replaceState(null, "", paths.list);
     let finish!: (value: PostDetail) => void;
-    vi.mocked(api.createPost).mockReturnValue(new Promise(resolve => { finish = resolve; }));
+    vi.mocked(postsApi.createPost).mockReturnValue(new Promise(resolve => { finish = resolve; }));
     render(<ConfigProvider theme={{ token: { motion: false } }}><App /></ConfigProvider>);
     await screen.findByText(/还没有文章/);
     act(() => navigate(paths.newPost));
     await screen.findByLabelText("标题");
     fireEvent.change(titleInput(), { target: { value: post.title } });
     fireEvent.click(screen.getByRole("button", { name: /保存草稿|保存预约内容|更新已发布内容/ }));
-    await waitFor(() => expect(api.createPost).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(postsApi.createPost).toHaveBeenCalledTimes(1));
     fireEvent.change(screen.getByLabelText("正文（Markdown）"), { target: { value: "保存期间的新正文" } });
     act(() => window.history.back());
     await screen.findByRole("dialog", { name: "有未保存的修改" });
@@ -186,7 +178,7 @@ describe("未保存离开保护", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(window.location.pathname).toBe(paths.editPost(post.id));
     expect((screen.getByLabelText("正文（Markdown）") as HTMLTextAreaElement).value).toBe("保存期间的新正文");
-    expect(api.getPost).not.toHaveBeenCalled();
+    expect(postsApi.getPost).not.toHaveBeenCalled();
     act(() => window.history.back());
     fireEvent.click(await screen.findByRole("button", { name: "留在此页" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
@@ -242,11 +234,11 @@ describe("未保存离开保护", () => {
   });
 
   it("保存成功后不再拦截离开", async () => {
-    vi.mocked(api.updatePost).mockResolvedValue({ ...post, title: "改过的标题", version: 2 });
+    vi.mocked(postsApi.updatePost).mockResolvedValue({ ...post, title: "改过的标题", version: 2 });
     await openDirtyEditor();
 
     fireEvent.click(screen.getByRole("button", { name: /保存草稿|保存预约内容|更新已发布内容/ }));
-    await waitFor(() => expect(api.updatePost).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(postsApi.updatePost).toHaveBeenCalledTimes(1));
     await screen.findByText("已保存。");
 
     // 服务端已接受，脏标记应清掉：这时点菜单直接走，不再弹确认。

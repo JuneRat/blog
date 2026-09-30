@@ -3,7 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AdminProviders } from "../src/providers";
 import { PostEditScreen } from "../src/screens/PostEditScreen";
 import { PageEditScreen } from "../src/screens/PageEditScreen";
-import { ApiError, api, categoryApi, commentsApi, seriesApi } from "../src/api";
+import { ApiError } from "../src/api/client";
+import { pagesApi } from "../src/api/pages";
+import { postsApi } from "../src/api/posts";
+import { tagsApi, categoryApi, seriesApi } from "../src/api/taxonomy";
+import { contentApi } from "../src/api/content";
+import { commentsApi } from "../src/api/comments";
 import { draftIdentity, draftKey, draftScope } from "../src/draftStorage";
 import type { PageDetail, PostDetail } from "../src/types";
 
@@ -12,13 +17,25 @@ vi.mock("../src/auth", () => ({ useAuth: () => ({
   me: { user_id: auth.user, permissions: ["post.publish", "post.unpublish", "page.publish", "page.unpublish", "page.archive"] },
 }) }));
 vi.mock("../src/router", async (load) => ({ ...await load<typeof import("../src/router")>(), navigate: vi.fn() }));
-vi.mock("../src/api", async (load) => {
-  const actual = await load<typeof import("../src/api")>();
-  return { ...actual, api: { ...actual.api,
-    getPost: vi.fn(), getPage: vi.fn(), createPost: vi.fn(), createPage: vi.fn(), updatePost: vi.fn(), updatePage: vi.fn(),
-    unpublishPost: vi.fn(), unpublishPage: vi.fn(), archivePost: vi.fn(), archivePage: vi.fn(), previewContent: vi.fn(), listTags: vi.fn(),
-  }, categoryApi: { ...actual.categoryApi, list: vi.fn() }, seriesApi: { ...actual.seriesApi, list: vi.fn() },
-    commentsApi: { ...actual.commentsApi, policy: vi.fn() } };
+vi.mock("../src/api/posts", async (load) => {
+  const original = await load<typeof import("../src/api/posts")>();
+  return { ...original, postsApi: { ...original.postsApi, getPost: vi.fn(), createPost: vi.fn(), updatePost: vi.fn(), unpublishPost: vi.fn(), archivePost: vi.fn() } };
+});
+vi.mock("../src/api/pages", async (load) => {
+  const original = await load<typeof import("../src/api/pages")>();
+  return { ...original, pagesApi: { ...original.pagesApi, getPage: vi.fn(), createPage: vi.fn(), updatePage: vi.fn(), unpublishPage: vi.fn(), archivePage: vi.fn() } };
+});
+vi.mock("../src/api/content", async (load) => {
+  const original = await load<typeof import("../src/api/content")>();
+  return { ...original, contentApi: { ...original.contentApi, previewContent: vi.fn() } };
+});
+vi.mock("../src/api/taxonomy", async (load) => {
+  const original = await load<typeof import("../src/api/taxonomy")>();
+  return { ...original, tagsApi: { ...original.tagsApi, listTags: vi.fn() }, categoryApi: { ...original.categoryApi, list: vi.fn() }, seriesApi: { ...original.seriesApi, list: vi.fn() } };
+});
+vi.mock("../src/api/comments", async (load) => {
+  const original = await load<typeof import("../src/api/comments")>();
+  return { ...original, commentsApi: { ...original.commentsApi, policy: vi.fn() } };
 });
 const page: PageDetail = { id: "writing-id", slug: "writing", title: "服务器标题", content: "服务器正文", status: "draft", visibility: "public", version: 1, published_at: null, updated_at: "2026-09-28T00:00:00Z" };
 const post: PostDetail = { ...page, author_id: "writer-1", excerpt: "", tag_ids: [], category_id: null, series: [], cover_media_id: null, cover_url: null };
@@ -30,40 +47,40 @@ function content() { return screen.getByLabelText("正文（Markdown）") as HTM
 function deferred<T>() { let resolve!: (v: T) => void; const promise = new Promise<T>(done => { resolve = done; }); return { promise, resolve }; }
 beforeEach(() => {
   vi.resetAllMocks(); localStorage.clear(); auth.user = "writer-1";
-  vi.mocked(api.getPage).mockResolvedValue(page); vi.mocked(api.getPost).mockResolvedValue(post);
-  vi.mocked(api.listTags).mockResolvedValue([]); vi.mocked(categoryApi.list).mockResolvedValue([]); vi.mocked(seriesApi.list).mockResolvedValue([]);
+  vi.mocked(pagesApi.getPage).mockResolvedValue(page); vi.mocked(postsApi.getPost).mockResolvedValue(post);
+  vi.mocked(tagsApi.listTags).mockResolvedValue([]); vi.mocked(categoryApi.list).mockResolvedValue([]); vi.mocked(seriesApi.list).mockResolvedValue([]);
   vi.mocked(commentsApi.policy).mockResolvedValue({ enabled: true, version: 1 });
 });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 describe("写作恢复与发布边界", () => {
   it.each(["post", "page"] as const)("%s 撤回不保存未公开编辑，失败也保留输入", async kind => {
-    if (kind === "post") vi.mocked(api.getPost).mockResolvedValue({ ...post, status: "published" });
-    else vi.mocked(api.getPage).mockResolvedValue({ ...page, status: "published" });
-    const unpublish = kind === "post" ? vi.mocked(api.unpublishPost) : vi.mocked(api.unpublishPage);
+    if (kind === "post") vi.mocked(postsApi.getPost).mockResolvedValue({ ...post, status: "published" });
+    else vi.mocked(pagesApi.getPage).mockResolvedValue({ ...page, status: "published" });
+    const unpublish = kind === "post" ? vi.mocked(postsApi.unpublishPost) : vi.mocked(pagesApi.unpublishPage);
     unpublish.mockRejectedValue(new ApiError(500, "撤回失败"));
     render(editor(kind)); await screen.findByDisplayValue(page.content);
     fireEvent.change(content(), { target: { value: "" } });
     fireEvent.click(screen.getByRole("button", { name: "撤回为草稿" }));
     await screen.findByText(/撤回失败/);
     expect(unpublish).toHaveBeenCalledWith(page.id, 1);
-    expect(api.updatePage).not.toHaveBeenCalled(); expect(api.updatePost).not.toHaveBeenCalled();
+    expect(pagesApi.updatePage).not.toHaveBeenCalled(); expect(postsApi.updatePost).not.toHaveBeenCalled();
     expect(content().value).toBe("");
   });
 
   it.each(["post", "page"] as const)("%s 归档不保存本地编辑", async kind => {
     if (kind === "post") {
-      vi.mocked(api.getPost).mockResolvedValue({ ...post, status: "published" });
-      vi.mocked(api.archivePost).mockResolvedValue({ ...post, status: "archived", version: 2 });
+      vi.mocked(postsApi.getPost).mockResolvedValue({ ...post, status: "published" });
+      vi.mocked(postsApi.archivePost).mockResolvedValue({ ...post, status: "archived", version: 2 });
     } else {
-      vi.mocked(api.getPage).mockResolvedValue({ ...page, status: "published" });
-      vi.mocked(api.archivePage).mockResolvedValue({ ...page, status: "archived", version: 2 });
+      vi.mocked(pagesApi.getPage).mockResolvedValue({ ...page, status: "published" });
+      vi.mocked(pagesApi.archivePage).mockResolvedValue({ ...page, status: "archived", version: 2 });
     }
     render(editor(kind)); await screen.findByDisplayValue(page.content);
     fireEvent.change(content(), { target: { value: "待完善的改写" } });
     fireEvent.click(screen.getByRole("button", { name: "归档" }));
     await screen.findByText(/状态已更新为已归档/);
-    expect(api.updatePage).not.toHaveBeenCalled(); expect(api.updatePost).not.toHaveBeenCalled();
+    expect(pagesApi.updatePage).not.toHaveBeenCalled(); expect(postsApi.updatePost).not.toHaveBeenCalled();
     expect(content().value).toBe("待完善的改写");
   });
 
@@ -76,9 +93,9 @@ describe("写作恢复与发布边界", () => {
     expect(content().value).toBe(page.content);
     fireEvent.click(screen.getByRole("button", { name: "恢复本机编辑" }));
     expect(content().value).toBe("浏览器关闭前的编辑");
-    expect(api.updatePost).not.toHaveBeenCalled(); expect(api.updatePage).not.toHaveBeenCalled();
-    if (kind === "post") vi.mocked(api.updatePost).mockResolvedValue({ ...post, content: "浏览器关闭前的编辑", version: 2 });
-    else vi.mocked(api.updatePage).mockResolvedValue({ ...page, content: "浏览器关闭前的编辑", version: 2 });
+    expect(postsApi.updatePost).not.toHaveBeenCalled(); expect(pagesApi.updatePage).not.toHaveBeenCalled();
+    if (kind === "post") vi.mocked(postsApi.updatePost).mockResolvedValue({ ...post, content: "浏览器关闭前的编辑", version: 2 });
+    else vi.mocked(pagesApi.updatePage).mockResolvedValue({ ...page, content: "浏览器关闭前的编辑", version: 2 });
     fireEvent.click(screen.getByRole("button", { name: "保存草稿" }));
     await screen.findByText("已保存。");
     expect(localStorage.getItem(ownKey(auth.user, page.id, kind))).toBeNull();
@@ -95,7 +112,7 @@ describe("写作恢复与发布边界", () => {
     auth.user = "writer-2"; mounted.rerender(editor("page")); await screen.findByDisplayValue(page.content);
     expect(screen.queryByText("发现本机未保存的编辑")).toBeNull();
     expect(content().value).toBe(page.content);
-    vi.mocked(api.getPage).mockRejectedValueOnce(new ApiError(404, "未找到"));
+    vi.mocked(pagesApi.getPage).mockRejectedValueOnce(new ApiError(404, "未找到"));
     mounted.rerender(editor("page", "missing")); await screen.findByText("页面未能加载。");
     expect(localStorage.getItem(key)).toBe(stored);
     mounted.rerender(editor("page", null)); await screen.findByText("新建页面");
@@ -107,8 +124,8 @@ describe("写作恢复与发布边界", () => {
     const mounted = render(editor("page", null));
     fireEvent.change(content(), { target: { value: "未建档的新页面" } });
     await screen.findByRole("button", { name: "删除本机副本" });
-    if (state === "pending") vi.mocked(api.getPage).mockReturnValue(pending.promise);
-    else vi.mocked(api.getPage).mockRejectedValue(new ApiError(404, "未找到"));
+    if (state === "pending") vi.mocked(pagesApi.getPage).mockReturnValue(pending.promise);
+    else vi.mocked(pagesApi.getPage).mockRejectedValue(new ApiError(404, "未找到"));
     mounted.rerender(editor("page", "unavailable"));
     if (state === "failed") await screen.findByText("页面未能加载。");
     mounted.rerender(editor("page", null));
@@ -119,11 +136,11 @@ describe("写作恢复与发布边界", () => {
   });
 
   it("创建时清除新建槽，将请求期间输入保留在新 UUID 下", async () => {
-    const pending = deferred<PageDetail>(); vi.mocked(api.createPage).mockReturnValue(pending.promise);
+    const pending = deferred<PageDetail>(); vi.mocked(pagesApi.createPage).mockReturnValue(pending.promise);
     const mounted = render(editor("page", null));
     fireEvent.change(content(), { target: { value: "首次保存" } });
     fireEvent.click(screen.getByRole("button", { name: "保存草稿" }));
-    await waitFor(() => expect(api.createPage).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(pagesApi.createPage).toHaveBeenCalledTimes(1));
     fireEvent.change(content(), { target: { value: "保存期间继续写" } });
     await act(async () => pending.resolve({ ...page, content: "首次保存" }));
     expect(localStorage.getItem(ownKey("writer-1", null))).toBeNull();
@@ -134,8 +151,8 @@ describe("写作恢复与发布边界", () => {
   });
 
   it.each([ ["post", "route"], ["post", "account"], ["page", "route"], ["page", "account"] ] as const)("%s %s 切换后的旧保存响应不能回填或清除当前副本", async (kind, transition) => {
-    const get = vi.mocked(kind === "post" ? api.getPost : api.getPage);
-    const update = vi.mocked(kind === "post" ? api.updatePost : api.updatePage);
+    const get = vi.mocked(kind === "post" ? postsApi.getPost : pagesApi.getPage);
+    const update = vi.mocked(kind === "post" ? postsApi.updatePost : pagesApi.updatePage);
     const pending = deferred<PostDetail>(); update.mockReturnValue(pending.promise);
     const mounted = render(editor(kind)); await screen.findByDisplayValue(page.content);
     fireEvent.change(content(), { target: { value: "旧会话提交" } });
@@ -154,8 +171,8 @@ describe("写作恢复与发布边界", () => {
   });
 
   it.each(["post", "page"] as const)("%s 冲突覆盖绑定已展示版本，后续更新仍返回冲突并保留输入", async kind => {
-    const get = vi.mocked(kind === "post" ? api.getPost : api.getPage);
-    const update = vi.mocked(kind === "post" ? api.updatePost : api.updatePage);
+    const get = vi.mocked(kind === "post" ? postsApi.getPost : pagesApi.getPage);
+    const update = vi.mocked(kind === "post" ? postsApi.updatePost : pagesApi.updatePage);
     get.mockResolvedValueOnce(post).mockResolvedValueOnce({ ...post, content: "同事修改", version: 2 }).mockResolvedValue({ ...post, content: "同事再次修改", version: 3 });
     update.mockRejectedValue(new ApiError(409, "版本冲突", "version_conflict"));
     render(editor(kind)); await screen.findByDisplayValue(page.content);
@@ -169,8 +186,8 @@ describe("写作恢复与发布边界", () => {
   });
 
   it.each(["post", "page"] as const)("%s 旧版本本机恢复保留原提交前提，普通保存不能覆盖当前服务器版本", async kind => {
-    const get = vi.mocked(kind === "post" ? api.getPost : api.getPage);
-    const update = vi.mocked(kind === "post" ? api.updatePost : api.updatePage);
+    const get = vi.mocked(kind === "post" ? postsApi.getPost : pagesApi.getPage);
+    const update = vi.mocked(kind === "post" ? postsApi.updatePost : pagesApi.updatePage);
     const mounted = render(editor(kind)); await screen.findByDisplayValue(page.content);
     fireEvent.change(content(), { target: { value: "基于 v1 的离线修改" } });
     await screen.findByRole("button", { name: "删除本机副本" }); mounted.unmount();
@@ -193,11 +210,11 @@ describe("写作恢复与发布边界", () => {
     const previousKey = ownKey("writer-1", page.id);
     localStorage.setItem(`${previousKey}-previous`, localStorage.getItem(previousKey)!);
     localStorage.removeItem(previousKey);
-    vi.mocked(api.getPage).mockResolvedValue({ ...page, content: "服务器新正文", version: 2 });
-    const pending = deferred<PageDetail>(); vi.mocked(api.updatePage).mockReturnValue(pending.promise);
+    vi.mocked(pagesApi.getPage).mockResolvedValue({ ...page, content: "服务器新正文", version: 2 });
+    const pending = deferred<PageDetail>(); vi.mocked(pagesApi.updatePage).mockReturnValue(pending.promise);
     render(editor("page")); await screen.findByText("发现本机未保存的编辑");
     fireEvent.click(screen.getByRole("button", { name: "保存草稿" }));
-    await waitFor(() => expect(api.updatePage).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(pagesApi.updatePage).toHaveBeenCalledTimes(1));
     const restore = screen.getByRole("button", { name: "恢复本机编辑" }) as HTMLButtonElement;
     expect(restore.disabled).toBe(true);
     expect((screen.getByRole("button", { name: "忽略此恢复副本" }) as HTMLButtonElement).disabled).toBe(true);
@@ -217,15 +234,15 @@ describe("写作恢复与发布边界", () => {
   });
 
   it("预览未保存正文并忽略过期响应，不触发保存", async () => {
-    const pending = deferred<{ content_html: string }>(); vi.mocked(api.previewContent).mockReturnValueOnce(pending.promise).mockResolvedValue({ content_html: "<strong>新正文</strong>" });
+    const pending = deferred<{ content_html: string }>(); vi.mocked(contentApi.previewContent).mockReturnValueOnce(pending.promise).mockResolvedValue({ content_html: "<strong>新正文</strong>" });
     render(editor("page")); await screen.findByDisplayValue(page.content);
     fireEvent.click(screen.getByRole("button", { name: "预览正文" }));
-    expect(api.previewContent).toHaveBeenCalledWith(page.content);
+    expect(contentApi.previewContent).toHaveBeenCalledWith(page.content);
     fireEvent.change(content(), { target: { value: "**新正文**" } });
     await act(async () => pending.resolve({ content_html: "<p>过期正文</p>" }));
     expect(screen.queryByLabelText("正文预览")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "预览正文" }));
     expect((await screen.findByLabelText("正文预览")).innerHTML).toBe("<strong>新正文</strong>");
-    expect(api.updatePage).not.toHaveBeenCalled();
+    expect(pagesApi.updatePage).not.toHaveBeenCalled();
   });
 });

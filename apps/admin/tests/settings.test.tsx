@@ -2,7 +2,11 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
-import { ApiError, api, commentsApi, mediaApi, settingsApi, themeSettingsApi, retentionApi } from "../src/api";
+import { ApiError } from "../src/api/client";
+import { identityApi } from "../src/api/identity";
+import { commentsApi } from "../src/api/comments";
+import { mediaApi } from "../src/api/media";
+import { settingsApi, themeSettingsApi, retentionApi } from "../src/api/settings";
 import { paths } from "../src/router";
 import type { SiteSettings } from "../src/types";
 
@@ -16,17 +20,21 @@ vi.mock("../src/auth", () => ({
   }),
 }));
 
-vi.mock("../src/api", async (importOriginal) => {
-  const original = await importOriginal<typeof import("../src/api")>();
-  return {
-    ...original,
-    api: { ...original.api, accessSettings: vi.fn(), saveAccessSettings: vi.fn() },
-    commentsApi: { ...original.commentsApi, policy: vi.fn(), savePolicy: vi.fn() },
-    settingsApi: { get: vi.fn(), save: vi.fn() },
-    themeSettingsApi: { get: vi.fn(), save: vi.fn() },
-    retentionApi: { get: vi.fn(), save: vi.fn() },
-    mediaApi: { ...original.mediaApi, list: vi.fn(), upload: vi.fn() },
-  };
+vi.mock("../src/api/identity", async (load) => {
+  const original = await load<typeof import("../src/api/identity")>();
+  return { ...original, identityApi: { ...original.identityApi, accessSettings: vi.fn(), saveAccessSettings: vi.fn() } };
+});
+vi.mock("../src/api/comments", async (load) => {
+  const original = await load<typeof import("../src/api/comments")>();
+  return { ...original, commentsApi: { ...original.commentsApi, policy: vi.fn(), savePolicy: vi.fn() } };
+});
+vi.mock("../src/api/settings", async (load) => {
+  const original = await load<typeof import("../src/api/settings")>();
+  return { ...original, settingsApi: { get: vi.fn(), save: vi.fn() }, themeSettingsApi: { get: vi.fn(), save: vi.fn() }, retentionApi: { get: vi.fn(), save: vi.fn() } };
+});
+vi.mock("../src/api/media", async (load) => {
+  const original = await load<typeof import("../src/api/media")>();
+  return { ...original, mediaApi: { ...original.mediaApi, list: vi.fn(), upload: vi.fn() } };
 });
 
 const fallbackView: SiteSettings = {
@@ -62,7 +70,7 @@ beforeEach(() => {
   vi.resetAllMocks();
   window.history.replaceState(null, "", paths.settings);
   vi.mocked(settingsApi.get).mockResolvedValue(fallbackView);
-  vi.mocked(api.accessSettings).mockResolvedValue({ registration_enabled: false, guest_comments_enabled: false, version: 0 });
+  vi.mocked(identityApi.accessSettings).mockResolvedValue({ registration_enabled: false, guest_comments_enabled: false, version: 0 });
   vi.mocked(commentsApi.policy).mockResolvedValue({ enabled: true, moderation: 'all', version: 4 });
   vi.mocked(retentionApi.get).mockResolvedValue({ comment_ip_days: 180, comment_version: 0, audit_days: 180, audit_version: 0 });
   vi.mocked(themeSettingsApi.get).mockResolvedValue({ slug: "default", effective_slug: "default", source: "fallback", version: 0, available: [{ slug: "default", name: "Default" }, { slug: "paper", name: "Paper" }] });
