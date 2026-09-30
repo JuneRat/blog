@@ -21,10 +21,11 @@ ADR 记录问题、选择、理由和代价。每篇页首说明决策状态与�
 | [0013 TanStack Query](0013-tanstack-query.md) | 已采纳 | 更新 [0012](0012-admin-data-layer.md) 的取数方案；当前缓存与测试约定见[后台开发指南](../admin-development.md) |
 | [0014 内容提交与后台稳定身份](0014-content-commits-and-stable-admin-identity.md) | 部分被替代 | [0015](0015-rendered-content-runtime-and-module-boundaries.md) 扩展正文派生物；[0016](0016-confirmed-blog-schema.md) 更新归档、恢复及时间语义 |
 | [0015 持久化 HTML、渲染与装配](0015-rendered-content-runtime-and-module-boundaries.md) | 部分被替代 | 分层与渲染原则保留，[0016](0016-confirmed-blog-schema.md) 扩展至评论 HTML；[0017](0017-explicit-html-rebuild.md) 将自动重建改为显式维护 |
-| [0016 新博客数据库设计与独立会话版本](0016-confirmed-blog-schema.md) | 已采纳 | 19 表方案；局部替代 0008/0009/0010/0014，扩展 0015；交付与验收状态见[实施路线](../product-roadmap.md#已采纳数据库设计的实施) |
+| [0016 新博客数据库设计与独立会话版本](0016-confirmed-blog-schema.md) | 已采纳 | 19 表基线；局部替代 0008/0009/0010/0014，扩展 0015；0020 追加任务运行表；交付与验收状态见[实施路线](../product-roadmap.md#已采纳数据库设计的实施) |
 | [0017 HTML 显式重建](0017-explicit-html-rebuild.md) | 已采纳 | 局部替代 0015 的自动重建入口，普通启动和结构迁移不再重建 HTML；0019 补充后台显式入口 |
 | [0018 有界 HTML 维护与只读预检](0018-bounded-html-maintenance.md) | 已采纳 | 细化 0017 的执行控制，由应用层编排预算、游标与部分完成结果；0019 扩展后台异步任务 |
-| [0019 后台显式 HTML 重建与服务进程单任务](0019-admin-html-maintenance.md) | 已采纳 | 复用 0017/0018 的显式维护与事务契约，增加后台入口、进度和进程生命周期，不引入持久队列 |
+| [0019 后台显式 HTML 重建与服务进程单任务](0019-admin-html-maintenance.md) | 部分被替代 | 显式维护和事务契约保留；0020 替代内存状态、进程内去重和重启边界 |
+| [0020 固定后台任务、持久计划与跨进程租约](0020-persistent-admin-tasks.md) | 已采纳 | 追加任务运行/计划两表，统一三种白名单任务，提供有界历史、一次性计划和跨进程执行协调；CLI 仍独立 |
 
 ## 状态含义
 

@@ -19,6 +19,22 @@
 
 评论管理位于 `/admin/comments`。评论接口、开关和版本规则见[评论 API](comments.md#接口)。
 
+## 后台任务
+
+后台 `/admin/tasks` 仅管理 `html_rebuild`、`retention`、`publish_due`，以下路由均复用 `settings.manage` 和通用会话/CSRF/Origin/no-store 契约。未登录返回 401，无权限返回 403；恢复隔离只允许读取。
+
+| 方法与路径（省略 `/api/admin/v1`） | 载荷与结果 |
+|---|---|
+| `GET /tasks` | 可选 `kind`、`cursor`、`limit`；limit 默认 20，范围 1–100。返回 `{available,retention_available,pending_html,latest,schedules,runs:{items,next_cursor}}`；`latest` 分别保留每类最新任务，不受本页历史挤占 |
+| `POST /tasks` | `{kind,run_at:null}` 立即执行；仅 HTML 可传未来 365 天内、含时区 RFC3339 的 `run_at`。202 返回任务；已有同类活动请求时返回原记录 |
+| `POST /tasks/{id}/retry` | 明确重试可重试记录，202 返回新 ID，并用 `retry_of` 指向旧记录；以响应 `can_retry` 为准 |
+| `POST /tasks/{id}/cancel` | 只取消 queued 的手动、一次性或重试请求，200 返回 cancelled 记录；running 或不可取消记录返回 409，以 `can_cancel` 为准 |
+| `PUT /tasks/retention-schedule` | `{enabled,interval_seconds,next_run_at,version}`；间隔 3,600–2,592,000 秒，版本用于 CAS。启用时可给含时区的未来时间，null 表示按当前时间加间隔；停用时清空下次时间 |
+
+任务状态为 `queued/running/completed/failed/interrupted/cancelled`，触发来源为 `manual/once/periodic/retry`。单条含 ID、类型、状态、执行/创建/开始/完成时间、`retry_of`、报告和两个可操作标志。报告分别提供 `html`、`retention`、`publication` 或 null，以及经过安全处理的 `error`；运行中 HTML 剩余量未知时为 null。每类终态历史最多 500 条，仍需按游标读取，不能用本页条数推算全部历史。
+
+retention 默认间隔 86,400 秒且禁用，publish_due 固定 30 秒启用、没有可编辑计划入口。保留期不可用不阻止其他任务或网站登录。旧 `GET/POST /maintenance/html-rebuild` 保留为同一持久任务的兼容投影，queued 映射为 running、cancelled 映射为 interrupted；完整计划和历史使用新路由。生命周期、专用维护连接及 CLI 边界见[任务操作](operations-and-recovery.md#后台任务管理)。
+
 ## 首次安装
 
 仅安装模式提供以下入口，不使用管理会话。正常站点 `/api/install` 返回 404，`/install` 跳转 `/admin/`；完整启动条件见[首次安装](installation.md)。
@@ -190,7 +206,7 @@ Page 没有作者，使用站点级 `page.*` 权限。
 
 `navigation` 是有序数组，单项为 `{ "label": "关于", "page_slug": "about", "placement": "header" }`。位置为 header/footer，每个位置按数组顺序展示；最多 20 项，名称 trim 后为 1–40 字符且无控制字符，目标必须为合法且非系统保留的 Page slug，同一位置不可重复目标。允许预先配置尚未公开的页面，公开渲染只输出当时可读的目标。省略或 null 保留已有导航，`[]` 清空；与站点设置共用版本及事务审计。
 
-`site` 除首页每页数量、时区和导航外的字段是整组替换，省略或传 `null` 的 logo 会被清除；新 logo 要求图片存在且未移入回收站，原有引用可继续保留。未配置的设置版本为 0。保留期默认各 180 天，范围 1–36,500 整数天；更新只合并两项字段并保留其他 JSON 设置，两组版本任一过期返回 409。未知字段拒绝，相同值不增版。评论全站开关与 IP 保留期共享 comments 分组版本。清理由独立维护命令执行，HTTP 不提供立即清理接口。`/settings/oauth` 等未知分组返回 404。生效优先级见[配置参考](configuration.md)。
+`site` 除首页每页数量、时区和导航外的字段是整组替换，省略或传 `null` 的 logo 会被清除；新 logo 要求图片存在且未移入回收站，原有引用可继续保留。未配置的设置版本为 0。保留期默认各 180 天，范围 1–36,500 整数天；更新只合并两项字段并保留其他 JSON 设置，两组版本任一过期返回 409。未知字段拒绝，相同值不增版。评论全站开关与 IP 保留期共享 comments 分组版本。清理由独立维护命令或具备维护能力的后台任务执行；任务入口、计划和权限见上文[后台任务](#后台任务)。`/settings/oauth` 等未知分组返回 404。生效优先级见[配置参考](configuration.md)。
 
 ## 媒体
 

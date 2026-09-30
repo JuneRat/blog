@@ -1,6 +1,6 @@
 # 数据库设计
 
-本文记录已确认的 PostgreSQL 18 目标设计，共 **19 张表：18 张业务表和 `sessions`**。字段、外键、CHECK 与索引以 [migrations/postgres](../migrations/postgres) 的迁移链为准，[汇总 DDL](sql/postgres-core.sql) 是自动生成的 DDL 参考，选择理由见 [ADR-0016](adr/0016-confirmed-blog-schema.md)。
+本文记录已确认的 PostgreSQL 18 设计：原 **19 表基线**包含 18 张业务表和 `sessions`，固定后台任务追加两张运行表后共 **21 张应用表**。字段、外键、CHECK 与索引以 [migrations/postgres](../migrations/postgres) 的迁移链为准，[汇总 DDL](sql/postgres-core.sql) 是自动生成的 DDL 参考，选择理由见 [ADR-0016](adr/0016-confirmed-blog-schema.md) 与 [ADR-0020](adr/0020-persistent-admin-tasks.md)。
 
 **新建库基线、身份会话、媒体、内容、目录与评论已接入。** `migrate` 现在执行新的 [0001_initial_schema.sql](../migrations/postgres/0001_initial_schema.sql)，原九个迁移已替换，仅支持空库或已应用新基线的库；检测到旧结构时退出，不自动清库。保留期任务、独立授权、新库恢复、正式媒体显式清理和已有业务写入口的事务审计已接入，生产上线验收仍待完成。实际适配边界见[当前数据库实现](database-current.md)，后续验收见[路线图](product-roadmap.md#已采纳数据库设计的实施)。
 
@@ -17,10 +17,11 @@
 | 评论 | `comments` | 多级回复、根评论、审核与回收站 |
 | 系统 | `settings`、`audit_logs` | 分组配置与成功业务变更审计 |
 | 会话 | `sessions` | 令牌摘要、认证版本快照与期限 |
+| 后台任务 | `task_runs`、`task_schedules` | 三种固定任务的执行、报告、租约及受控计划 |
 
 实体 UUIDv7 由应用生成；关系表使用复合主键。`permissions.code`、`settings.key` 与 `sessions.token_hash` 直接作主键，不额外添加 UUID。时间使用 `timestamptz`，状态使用文本加 CHECK。`updated_at` 由实际写入维护，默认值不代替更新逻辑。
 
-三个版本字段分别存储，不放入 metadata：
+既有业务版本字段分别存储，不放入 metadata：
 
 | 字段 | 用途与更新规则 |
 |---|---|
@@ -196,7 +197,7 @@ Post/Page 统一使用 draft、scheduled、published、archived 四种状态，�
 
 ## 8. 与原实现的主要差异
 
-原结构与目标结构都为 19 张应用表，但不能因表数相同而互换。下表保留设计变更的对照；新初始迁移和主要业务已落地，剩余界面与上线验收以[当前数据库实现](database-current.md)和路线图为准。
+原结构和本篇最初采纳的基线都为 19 张应用表，但不能因表数相同而互换；后续固定任务迁移另追加两表。下表保留基线设计变更的对照；新初始迁移和主要业务已落地，当前结构与上线验收以[当前数据库实现](database-current.md)和路线图为准。
 
 | 范围 | 原实现 | 已采纳目标 |
 |---|---|---|

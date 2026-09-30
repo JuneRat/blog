@@ -56,6 +56,7 @@ const SettingsScreen = lazy(() =>
 const AuditLogScreen = lazy(() =>
   import("./screens/AuditLogScreen").then((m) => ({ default: m.AuditLogScreen })),
 );
+const TaskManagementScreen = lazy(() => import("./screens/TaskManagementScreen").then(m => ({ default: m.TaskManagementScreen })));
 
 function Loading(): React.ReactNode {
   return (
@@ -157,6 +158,8 @@ function AdminRoutes() {
           <RoleListScreen />
         ) : route.name === "settings" ? (
           <SettingsScreen />
+        ) : route.name === "tasks" ? (
+          <TaskManagementScreen />
         ) : route.name === "auditLogs" ? (
           <AuditLogScreen />
         ) : (

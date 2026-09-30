@@ -5,7 +5,6 @@ import { AccessSettingsForm } from "../components/AccessSettingsForm";
 import { RetentionSettingsForm } from "../components/RetentionSettingsForm";
 import { SiteSettingsForm } from "./settings/SiteSettingsForm";
 import { ThemeSettingsForm } from "./settings/ThemeSettingsForm";
-import { HtmlRebuildPanel } from "./settings/HtmlRebuildPanel";
 
 /** Each group owns its form; navigation reads their combined unsaved state. */
 export function SettingsScreen() {
@@ -21,7 +20,6 @@ export function SettingsScreen() {
       { key: "theme", label: "主题外观", forceRender: true, children: <div style={{ paddingTop: 8 }}><ThemeSettingsForm onDirtyChange={setThemeDirty} /></div> },
       { key: "access", label: "账号与评论", children: <AccessSettingsForm /> },
       { key: "retention", label: "数据保留", forceRender: true, children: <div style={{ paddingTop: 8 }}><RetentionSettingsForm onDirtyChange={setRetentionDirty} /></div> },
-      { key: "maintenance", label: "内容维护", children: <HtmlRebuildPanel active={activeTab === "maintenance"} /> },
     ]} />
   </>;
 }

@@ -100,9 +100,12 @@ SQLx 已启用 Rustls。连接公网/远程数据库时可在 `DATABASE_URL` 使
 | 当前主题 | `settings.theme` | 后续请求；仅限启动时已加载的主题 |
 | 评论开关 | `settings.comments` | 后续请求 |
 | 评论 IP / 审计保留期 | `settings.comments.ip_retention_days` / `settings.audit.retention_days` | 下次维护任务，默认各 180 天 |
+| 固定后台任务计划 | `task_schedules` | 后续领取；retention 默认每天且禁用，publish_due 固定 30 秒启用；HTML 可提交未来一次性请求 |
 | OAuth 提供商配置、`secret_ref` | `settings.oauth` | 后续认证操作；密钥通过环境引用，变更环境密钥需要重启 |
 
 标题和描述使用 **数据库已保存字段 > 内置默认值**。默认标题为 `Sun's Blog`，描述为 `一个 Rust 博客`。缺失字段回退；已保存的空描述是合法选择，不回退。公开读取失败时使用内置默认值，管理接口返回错误。后台未配置时仍显示 `source: "fallback"`、`version: 0`。
+
+后台 retention 使用既有 `maintenance.database_url` / `BLOG_MAINTENANCE_DATABASE_URL` 选择规则，无覆盖时复用站点连接；与运行连接相同则复用池。显式维护连接失败或权限不足时，后台清理不可用，不阻止网站登录；错库连接不能通过任务租约校验，不会执行该任务的业务变更。配置专用维护连接意味着 HTTP 进程持有该角色限定的清理能力，不为受限应用账号补授审计删除权限。Compose 仍不将 `.env` 的维护覆盖传入 HTTP 服务；分离账号需由部署方在受保护的站点 TOML 中明确配置。计划、取消和恢复隔离规则见[后台任务管理](operations-and-recovery.md#后台任务管理)。
 
 `[bootstrap] title` / `description` 只提供首次安装初始值，与首个 Admin 一起提交到数据库；启动现有站点时不重新应用。标题最多 200 字符且不能为空，描述最多 500 字符且允许为空，使用后台相同的校验规则。没有提供的初始字段不会强制写入。
 

@@ -31,6 +31,7 @@ describe("parseRoute", () => {
     expect(parseRoute("/admin/profile")).toEqual({ name: "profile" });
     expect(parseRoute("/admin/roles")).toEqual({ name: "roleList" });
     expect(parseRoute("/admin/settings")).toEqual({ name: "settings" });
+    expect(parseRoute("/admin/tasks")).toEqual({ name: "tasks" });
     expect(parseRoute("/admin/audit-logs")).toEqual({ name: "auditLogs" });
   });
 
@@ -50,6 +51,7 @@ describe("parseRoute", () => {
     expect(parseRoute("/admin/profile/author")).toEqual({ name: "invalid" });
     expect(parseRoute("/admin/roles/owner")).toEqual({ name: "invalid" });
     expect(parseRoute("/admin/settings/site")).toEqual({ name: "invalid" });
+    expect(parseRoute("/admin/tasks/history")).toEqual({ name: "invalid" });
     expect(parseRoute("/admin/audit-logs/edit")).toEqual({ name: "invalid" });
   });
 });

@@ -121,6 +121,8 @@ sh scripts/compose-backup.sh maintenance
 
 此入口使用独立维护容器，读取站点配置或可选维护连接，和备份共用操作锁；正常 HTTP 服务无需停止。每日调度使用 `ops/blog-maintenance.service` / `.timer`，按实际部署修改 `/opt/blog` 和运行用户后安装并启用 timer。无需额外的环境文件。正式媒体物理清理使用同一脚本的 `media-plan` / `media-apply`，复核与重试规则见[运维说明](operations-and-recovery.md#正式媒体物理清理)。
 
+也可在「任务管理」手动执行清理或启用默认关闭的后台每日周期。默认 `blog_owner` 可直接执行；分离 app 账号模式下，`.env` 的维护连接仍仅传给 ops，不自动赋予 HTTP 维护能力。需要后台清理时，由部署方在受保护的站点 TOML 中显式设置 `[maintenance] database_url`，连接同一数据库且只授予规定的维护权限。启用后台周期后应停用重复的外部 timer；运行账号不增加 audit_logs DELETE，能力失败不会阻止网站登录。完整计划与历史见[后台任务管理](operations-and-recovery.md#后台任务管理)。
+
 ## 可选：分离数据库权限
 
 需要数据库强制限制日常服务修改结构、删除审计时，按[数据库账号说明](operations-and-recovery.md#数据库账号与保留期)创建不拥有对象、不继承其他角色的 `blog_app` 和 `blog_maintenance` LOGIN 角色。使用 `docker compose exec db psql -U postgres -d blog`，通过 `CREATE ROLE ... LOGIN` 和 `\password` 设置密码，再授权：

@@ -35,7 +35,7 @@ flowchart TD
 
 [后台 SPA](../apps/admin/package.json) 不属于 Cargo workspace。它使用 React、TypeScript、Vite、Ant Design 和 TanStack Query，通过管理 API 访问同一应用层；公开主题与后台组件各自独立。
 
-首次安装属于部署生命周期：`application::installation` 定义输入、初始凭据校验及安装端口，`interfaces::http_install` 提供内嵌页面和 HTTP 边界，`server::installation` 发布 TOML 和临时恢复日志并装配站点，`infrastructure::installation` 实现空库检查和原子权限/Admin 初始化。日志先安全落盘，再发布 TOML；数据库完成标记、初始站点设置与 Admin 同事务提交。提交后清理日志，失败只记警告，由后续启动核对标记后重试；动态路由原地切换，随后才启动预约发布任务。完成状态由数据库保存，正常部署不依赖安装日志。故障续装与部署边界见[首次安装](installation.md)。
+首次安装属于部署生命周期：`application::installation` 定义输入、初始凭据校验及安装端口，`interfaces::http_install` 提供内嵌页面和 HTTP 边界，`server::installation` 发布 TOML 和临时恢复日志并装配站点，`infrastructure::installation` 实现空库检查和原子权限/Admin 初始化。日志先安全落盘，再发布 TOML；数据库完成标记、初始站点设置与 Admin 同事务提交。提交后清理日志，失败只记警告，由后续启动核对标记后重试；动态路由原地切换，随后才激活统一任务监督器。迁移和站点预装配不插入默认任务计划，避免破坏空库检查。完成状态由数据库保存，正常部署不依赖安装日志。故障续装与部署边界见[首次安装](installation.md)。
 
 ## 模块与公开契约
 
@@ -105,7 +105,7 @@ Post/Page 管理 API 及 Post CLI 通过稳定 UUID 定位资源，公开 URL �
 
 除 `config`、`migrate`、`rebuild-html`、`media purge` 与独立的 `maintenance` 外，其余命令在执行前同步权限注册表。只有 `serve` 读取网站配置并加载主题；主题目录损坏或公开 URL 无效不会阻止账号、密码、OAuth 或 HTML 维护。启动参数统一由 `server::config` 按 CLI > env > TOML > 默认值解析，并按命令校验；运行期设置仍走应用用例和数据库端口，TOML 不覆盖后台保存。`config check/show` 仅做离线诊断，不连接数据库。配置项见[配置参考](configuration.md)。
 
-结构迁移与 HTML 重建没有组合入口：普通启动和业务命令仅调用 `migrate_schema`，不会扫描全库旧渲染版本。`rebuild-html` 由接口层解析参数、映射 JSON 与退出码；[应用维护用例](../crates/application/src/html_rebuild.rs)定义批次端口，负责参数校验、跨来源预算、游标推进和部分完成结果；`server` 只装配依赖及处理结构、恢复隔离。基础设施负责有界查询、渲染、CAS、引用同步与审计事务。只读预检使用 `verify_schema`，不进入 SQLx 迁移执行路径。历史内容重建失败只影响显式维护进程；规则升级需要在部署流程安排重建，见 [ADR-0017](adr/0017-explicit-html-rebuild.md)、[ADR-0018](adr/0018-bounded-html-maintenance.md) 和[运维步骤](operations-and-recovery.md#html-显式重建)。
+结构迁移与 HTML 重建没有组合入口：普通命令的结构准备仅调用 `migrate_schema`，不会扫描全库旧渲染版本；serve 的监督器另行处理已明确提交的 queued 重建请求，不因启动本身创建重建。`rebuild-html` 由接口层解析参数、映射 JSON 与退出码；[应用维护用例](../crates/application/src/html_rebuild.rs)定义批次端口，负责参数校验、跨来源预算、游标推进和部分完成结果；`server` 只装配依赖及处理结构、恢复隔离。基础设施负责有界查询、渲染、CAS、引用同步与审计事务。只读预检使用 `verify_schema`，不进入 SQLx 迁移执行路径。历史内容重建失败只影响该次显式维护，规则升级需要在部署流程安排重建，见 [ADR-0017](adr/0017-explicit-html-rebuild.md)、[ADR-0018](adr/0018-bounded-html-maintenance.md) 和[运维步骤](operations-and-recovery.md#html-显式重建)。
 
 服务装配共享一个 `RenderingRuntime`，供 Post/Page 仓储及所有主题使用。接口层组合 HTTP 路由；监听 socket、连接信息和退出信号由 `server` 持有。默认主题必须加载成功，其他无效主题被跳过；详见主题文档。
 
@@ -113,9 +113,13 @@ Post/Page 管理 API 及 Post CLI 通过稳定 UUID 定位资源，公开 URL �
 
 `interfaces::observability` 提供固定探针、版本 DTO 及请求指标，现有请求上下文中间件按路由模板采集计数和响应头延迟。`server::observability` 管理独立指标监听器与运行池快照；`server` 将同一指标实例跨安装切换传递，并统一关闭业务和管理监听器。JSON 格式与日志过滤来自部署配置，详见[可观测性](observability.md)。
 
-预约发布由 `application::publishing::PublishDueInteractor` 编排，受控 CLI 和每 30 秒的定时触发共用同一用例；`server` 只持有定时器、恢复隔离与关闭策略。`ScheduledPublicationStore` 在基础设施中以 `SKIP LOCKED` 执行 Post/Page 原子批次，保持状态、版本和审计一致。错误返回后已提交批次保持生效，下一次触发继续处理剩余到期内容。
+预约发布由 `application::publishing::PublishDueInteractor` 编排，受控 CLI 和每 30 秒的固定任务触发共用同一用例。服务只运行统一任务监督器，不另启旧发布定时器；`ScheduledPublicationStore` 在基础设施中以 `SKIP LOCKED` 执行 Post/Page 原子批次，保持状态、版本和审计一致。错误返回后已提交批次保持生效，下一次触发继续处理剩余到期内容。
 
 保留期清理由 `application::retention::RetentionMaintenance` 校验批次参数并聚合结果；`RetentionCleanupStore` 每批在锁内重读策略，事务内清理并审计。达到批次上限或因行锁没有进展时返回 `has_more`，避免忙循环；dry-run 只统计一次，不计入已执行批次。独立维护凭据及恢复隔离守卫仍由部署入口控制。
+
+后台任务仅有 HTML 重建、保留期和到期发布三种白名单。应用定义参数、状态、授权与任务端口，不依赖 Tokio；基础设施持久化 `task_runs`、`task_schedules`，负责活动唯一约束、领取/续租/终态 CAS、有界历史和业务事务内的租约核验。server 持有固定监督器、取消与 worker，接口只接受短请求或读取进度。同步 HTML observer 仅更新最新快照，由受控异步 writer 串行保存，最终报告与终态保持有租约条件的提交；不按进度数量创建后台任务。
+
+每类任务只允许一个活动执行，计划与报告跨重启保留；queued 到期后继续领取，过期 running 标为 interrupted 且不自动重试。关闭在途执行后，已提交数据保持生效；恢复模式连默认计划初始化、租约与进度写入也禁用。CLI 仍直接执行原用例，不加入后台队列或租约；完整任务协调不代表 OAuth/限流已具备多实例能力。选择与限制见 [ADR-0020](adr/0020-persistent-admin-tasks.md)。
 
 正式媒体清理由 `application::media_cleanup` 协调计划生成、全量预检、数据库提交和按凭据删除文件，事务契约不暴露 SQLx。`infrastructure::media_cleanup` 实现引用/版本重检、删除与审计同事务提交，以及本地路径和哈希校验；CLI 只解析参数、输出结果。Compose 脚本负责容器停写与操作锁，不维护另一套业务删除规则。
 

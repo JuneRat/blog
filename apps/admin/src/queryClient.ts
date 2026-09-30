@@ -48,6 +48,8 @@ export const queryKeys = {
   themeSettings: () => ["settings", "theme"] as const,
   retentionSettings: () => ["settings", "retention"] as const,
   htmlRebuild: () => ["maintenance", "html-rebuild"] as const,
+  tasksAll: () => ["tasks"] as const,
+  tasks: (kind?: string, cursor?: string) => ["tasks", kind ?? "all", cursor ?? "first"] as const,
 };
 
 /**
