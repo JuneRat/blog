@@ -6,14 +6,16 @@ use application::error::UseCaseError;
 use application::media::{
     MediaDto, MediaInteractor, MediaReadMetadata, MediaUsageDto, UploadMediaCmd,
 };
-use axum::body::Bytes;
+use axum::body::{Body, Bytes};
 use axum::extract::{DefaultBodyLimit, Path, Query, State};
-use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use axum::middleware;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tracing::Instrument as _;
 use uuid::Uuid;
 
 use crate::http_admin::AdminAuth;
@@ -291,21 +293,51 @@ pub struct MediaReadState {
     pub media: Arc<MediaInteractor>,
 }
 
+/// A response owns its slot until its body finishes or is dropped. The 64 KiB
+/// pull buffer bounds file data independently of image size and socket speed.
+pub const MEDIA_READ_CONCURRENCY: usize = 32;
+const MEDIA_READ_CHUNK_BYTES: usize = 64 * 1024;
+const MEDIA_READ_QUEUE_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(250);
+const MEDIA_READ_CHUNK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+#[derive(Clone)]
+struct MediaHttpState {
+    media: Arc<MediaInteractor>,
+    slots: Arc<Semaphore>,
+}
+
 pub fn media_read_router(state: MediaReadState) -> Router {
     Router::new()
-        .route("/media/{id}", get(read_media))
-        .with_state(state)
+        .route("/media/{id}", get(read_media).head(read_media))
+        .with_state(MediaHttpState {
+            media: state.media,
+            slots: Arc::new(Semaphore::new(MEDIA_READ_CONCURRENCY)),
+        })
 }
 
 async fn read_media(
-    State(state): State<MediaReadState>,
+    State(state): State<MediaHttpState>,
     Path(id): Path<String>,
+    method: Method,
+    request_id: RequestId,
     headers: HeaderMap,
 ) -> Response {
     let Ok(id) = Uuid::parse_str(&id) else {
         return media_not_found();
     };
-    match file_response(&state.media, id, &headers).await {
+    let permit =
+        match tokio::time::timeout(MEDIA_READ_QUEUE_TIMEOUT, state.slots.acquire_owned()).await {
+            Ok(Ok(permit)) => permit,
+            _ => {
+                return admin_error(
+                    UseCaseError::RateLimited {
+                        retry_after_secs: 1,
+                    },
+                    &request_id,
+                );
+            }
+        };
+    match file_response(&state.media, id, &headers, method == Method::HEAD, permit).await {
         Ok(response) => response,
         Err(UseCaseError::NotFound(_)) => media_not_found(),
         Err(e) => {
@@ -320,9 +352,16 @@ async fn file_response(
     media: &MediaInteractor,
     id: Uuid,
     request: &HeaderMap,
+    head: bool,
+    permit: OwnedSemaphorePermit,
 ) -> Result<Response, UseCaseError> {
     let metadata = media.read_metadata(id).await?;
     let etag = format!("\"{}\"", metadata.checksum_sha256);
+    // HEAD verifies the same object/length as an ordinary GET without reading
+    // any chunks. A conditional GET retains its existing metadata-only fast path.
+    if head {
+        let _ = media.open(&metadata).await?;
+    }
     if let Some(value) = request
         .get(header::IF_NONE_MATCH)
         .and_then(|v| v.to_str().ok())
@@ -332,13 +371,58 @@ async fn file_response(
         insert_media_headers(response.headers_mut(), &metadata, &etag);
         return Ok(response);
     }
-    let bytes = media.read(&metadata).await?;
-    let mut response = (StatusCode::OK, bytes).into_response();
+    let body = if head {
+        Body::empty()
+    } else {
+        let opened = media.open(&metadata).await?;
+        media_body(opened, permit)
+    };
+    let mut response = (StatusCode::OK, body).into_response();
     insert_media_headers(response.headers_mut(), &metadata, &etag);
     Ok(response)
 }
 
+fn media_body(opened: application::ports::OpenedMedia, permit: OwnedSemaphorePermit) -> Body {
+    let request_span = tracing::Span::current();
+    let stream = futures_util::stream::try_unfold(
+        (opened.reader, permit, opened.byte_size),
+        move |(mut reader, permit, remaining)| {
+            let request_span = request_span.clone();
+            async move {
+                if remaining == 0 {
+                    return Ok(None);
+                }
+                let limit = remaining.min(MEDIA_READ_CHUNK_BYTES as u64) as usize;
+                let chunk =
+                    match tokio::time::timeout(MEDIA_READ_CHUNK_TIMEOUT, reader.read_chunk(limit))
+                        .await
+                    {
+                        Ok(Ok(Some(chunk))) if !chunk.is_empty() && chunk.len() <= limit => chunk,
+                        Ok(Err(error)) => {
+                            // Headers may already be sent: terminate the stream, never
+                            // substitute an apparently successful truncated image.
+                            tracing::error!(%error, "读取媒体响应流失败");
+                            return Err(std::io::Error::other("读取媒体响应流失败"));
+                        }
+                        _ => {
+                            tracing::error!(remaining, "媒体响应流超时、提前结束或返回无效块");
+                            return Err(std::io::Error::other("读取媒体响应流失败"));
+                        }
+                    };
+                let remaining = remaining - chunk.len() as u64;
+                Ok::<_, std::io::Error>(Some((Bytes::from(chunk), (reader, permit, remaining))))
+            }
+            .instrument(request_span)
+        },
+    );
+    Body::from_stream(stream)
+}
+
 fn insert_media_headers(headers: &mut HeaderMap, metadata: &MediaReadMetadata, etag: &str) {
+    headers.insert(
+        header::CONTENT_LENGTH,
+        HeaderValue::from_str(&metadata.byte_size.to_string()).expect("numeric media length"),
+    );
     headers.insert(
         header::X_CONTENT_TYPE_OPTIONS,
         HeaderValue::from_static("nosniff"),

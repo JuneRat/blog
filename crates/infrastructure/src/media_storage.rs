@@ -13,11 +13,11 @@
 use std::path::{Component, Path, PathBuf};
 
 use application::error::UseCaseError;
-use application::ports::MediaStorage;
+use application::ports::{MediaReader, MediaStorage, OpenedMedia};
 use async_trait::async_trait;
 use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 /// 暂存子目录名（相对媒体根）。
 const STAGING_DIR: &str = "staging";
@@ -112,13 +112,23 @@ impl MediaStorage for LocalMediaStorage {
         }
     }
 
-    async fn read(&self, key: &str) -> Result<Option<Vec<u8>>, UseCaseError> {
+    async fn open(&self, key: &str) -> Result<Option<OpenedMedia>, UseCaseError> {
         let target = self.resolve(key)?;
-        match tokio::fs::read(&target).await {
-            Ok(bytes) => Ok(Some(bytes)),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(map_io(e)),
+        let mut file = match tokio::fs::File::open(&target).await {
+            Ok(file) => file,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(map_io(e)),
+        };
+        let metadata = file.metadata().await.map_err(map_io)?;
+        if !metadata.is_file() {
+            return Err(UseCaseError::Repository("媒体对象不是普通文件".into()));
         }
+        // Bound Tokio's internal blocking file buffer as well as the caller's chunks.
+        file.set_max_buf_size(64 * 1024);
+        Ok(Some(OpenedMedia {
+            byte_size: metadata.len(),
+            reader: Box::new(LocalMediaReader { file }),
+        }))
     }
 
     async fn delete(&self, key: &str) -> Result<(), UseCaseError> {
@@ -159,6 +169,23 @@ impl MediaStorage for LocalMediaStorage {
             }
         }
         Ok(removed)
+    }
+}
+
+struct LocalMediaReader {
+    file: tokio::fs::File,
+}
+
+#[async_trait]
+impl MediaReader for LocalMediaReader {
+    async fn read_chunk(&mut self, max_bytes: usize) -> Result<Option<Vec<u8>>, UseCaseError> {
+        if max_bytes == 0 {
+            return Err(UseCaseError::Repository("媒体读取块上限必须为正数".into()));
+        }
+        let mut bytes = vec![0; max_bytes.min(64 * 1024)];
+        let read = self.file.read(&mut bytes).await.map_err(map_io)?;
+        bytes.truncate(read);
+        Ok((read != 0).then_some(bytes))
     }
 }
 
@@ -211,6 +238,35 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("blog-media-{name}-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[tokio::test]
+    async fn opened_files_report_length_and_are_read_in_bounded_chunks() {
+        let root = temp_root("stream");
+        let storage = LocalMediaStorage::new(&root);
+        tokio::fs::create_dir_all(root.join("objects"))
+            .await
+            .unwrap();
+        let key = "objects/image.png";
+        let bytes = vec![7; 3 * 64 * 1024 + 19];
+        tokio::fs::write(root.join(key), &bytes).await.unwrap();
+        let mut opened = storage.open(key).await.unwrap().unwrap();
+        assert_eq!(opened.byte_size, bytes.len() as u64);
+        assert!(opened.reader.read_chunk(0).await.is_err());
+        let mut actual = Vec::new();
+        while let Some(chunk) = opened.reader.read_chunk(4096).await.unwrap() {
+            assert!(!chunk.is_empty() && chunk.len() <= 4096);
+            actual.extend(chunk);
+        }
+        assert_eq!(actual, bytes);
+        assert!(opened.reader.read_chunk(4096).await.unwrap().is_none());
+        assert!(storage.open("objects/missing.png").await.unwrap().is_none());
+        assert!(
+            storage.open("objects").await.is_err(),
+            "directories cannot masquerade as media"
+        );
+        drop(opened);
+        tokio::fs::remove_dir_all(root).await.unwrap();
     }
 
     #[tokio::test]

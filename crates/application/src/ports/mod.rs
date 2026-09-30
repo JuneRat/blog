@@ -34,8 +34,9 @@ pub use identity::{
     ThrottleSubject, UserProfileStore, UserQuery,
 };
 pub use media::{
-    ImageInspector, MediaChangeOutcome, MediaContentKind, MediaRefGuard, MediaRepository,
-    MediaStorage, MediaUsageRow, MediaUsageSource, MediaWithUsage, SITE_MEDIA_CONTENT_ID,
+    ImageInspector, MediaChangeOutcome, MediaContentKind, MediaReader, MediaRefGuard,
+    MediaRepository, MediaStorage, MediaUsageRow, MediaUsageSource, MediaWithUsage, OpenedMedia,
+    SITE_MEDIA_CONTENT_ID,
 };
 pub use rendering::{
     CommentRenderer, ContentRenderer, DateTimeFormatter, RenderedContent, ThemeRenderer,

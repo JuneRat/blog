@@ -134,6 +134,20 @@ pub trait MediaRepository: Send + Sync {
     ) -> Result<MediaChangeOutcome, UseCaseError>;
 }
 
+/// 已打开的媒体对象；元数据与按需读取器属于同一次打开。
+pub struct OpenedMedia {
+    /// 打开时确认的文件长度；读取期间持有同一个对象，不重新按路径打开。
+    pub byte_size: u64,
+    pub reader: Box<dyn MediaReader>,
+}
+
+/// 按需拉取媒体字节，调用方控制单个块的上限。无需依赖 HTTP 或异步运行时。
+#[async_trait]
+pub trait MediaReader: Send {
+    /// EOF 返回 None；成功块非空且长度不超过 max_bytes。
+    async fn read_chunk(&mut self, max_bytes: usize) -> Result<Option<Vec<u8>>, UseCaseError>;
+}
+
 /// 媒体文件存储端口。
 ///
 /// `key` 是相对于媒体根目录的存储路径（形如 `objects/<uuid>.png`），由应用层按随机
@@ -146,8 +160,21 @@ pub trait MediaStorage: Send + Sync {
     /// 暂存 → 正式（原子重命名）。正式已存在视为成功。
     async fn promote(&self, key: &str) -> Result<(), UseCaseError>;
 
-    /// 读取正式文件；不存在返回 None。
-    async fn read(&self, key: &str) -> Result<Option<Vec<u8>>, UseCaseError>;
+    /// 打开正式文件并确认存在性、类型和长度，不预先读取文件内容。
+    /// 不存在返回 None；返回的 reader 持有这个已打开的对象。
+    async fn open(&self, key: &str) -> Result<Option<OpenedMedia>, UseCaseError>;
+
+    /// 需要完整字节的非 HTTP 调用方使用；公开下载应使用 open 按需拉取。
+    async fn read(&self, key: &str) -> Result<Option<Vec<u8>>, UseCaseError> {
+        let Some(mut opened) = self.open(key).await? else {
+            return Ok(None);
+        };
+        let mut bytes = Vec::new();
+        while let Some(chunk) = opened.reader.read_chunk(64 * 1024).await? {
+            bytes.extend_from_slice(&chunk);
+        }
+        Ok(Some(bytes))
+    }
 
     /// 幂等删除正式与暂存文件；两处都不存在按成功处理。
     async fn delete(&self, key: &str) -> Result<(), UseCaseError>;

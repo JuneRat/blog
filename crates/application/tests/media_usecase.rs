@@ -282,8 +282,16 @@ impl MediaStorage for FakeStorage {
         Ok(())
     }
 
-    async fn read(&self, key: &str) -> Result<Option<Vec<u8>>, UseCaseError> {
-        Ok(self.objects.lock().unwrap().get(key).cloned())
+    async fn open(
+        &self,
+        key: &str,
+    ) -> Result<Option<application::ports::OpenedMedia>, UseCaseError> {
+        Ok(self.objects.lock().unwrap().get(key).cloned().map(|bytes| {
+            application::ports::OpenedMedia {
+                byte_size: bytes.len() as u64,
+                reader: Box::new(FakeReader { bytes, position: 0 }),
+            }
+        }))
     }
 
     async fn delete(&self, key: &str) -> Result<(), UseCaseError> {
@@ -314,6 +322,27 @@ impl MediaStorage for FakeStorage {
             objects.remove(key);
         }
         Ok(stale.len() as i64)
+    }
+}
+
+struct FakeReader {
+    bytes: Vec<u8>,
+    position: usize,
+}
+
+#[async_trait]
+impl application::ports::MediaReader for FakeReader {
+    async fn read_chunk(&mut self, max_bytes: usize) -> Result<Option<Vec<u8>>, UseCaseError> {
+        if self.position == self.bytes.len() {
+            return Ok(None);
+        }
+        let end = self
+            .position
+            .saturating_add(max_bytes)
+            .min(self.bytes.len());
+        let chunk = self.bytes[self.position..end].to_vec();
+        self.position = end;
+        Ok(Some(chunk))
     }
 }
 
@@ -370,6 +399,33 @@ async fn upload(fixture: &Fixture, owner: Uuid) -> application::media::MediaDto 
 async fn read(fixture: &Fixture, id: Uuid) -> Vec<u8> {
     let metadata = fixture.interactor.read_metadata(id).await.unwrap();
     fixture.interactor.read(&metadata).await.unwrap()
+}
+
+#[tokio::test]
+async fn open_checks_file_presence_and_length_before_streaming() {
+    let f = fixture();
+    let dto = upload(&f, Uuid::now_v7()).await;
+    let metadata = f.interactor.read_metadata(dto.id).await.unwrap();
+    let opened = f.interactor.open(&metadata).await.unwrap();
+    assert_eq!(opened.byte_size, dto.byte_size as u64);
+    drop(opened);
+    let key = format!("objects/{}.png", dto.id);
+    f.storage
+        .objects
+        .lock()
+        .unwrap()
+        .get_mut(&key)
+        .unwrap()
+        .push(0);
+    assert!(matches!(
+        f.interactor.open(&metadata).await,
+        Err(UseCaseError::Repository(_))
+    ));
+    f.storage.objects.lock().unwrap().remove(&key);
+    assert!(matches!(
+        f.interactor.open(&metadata).await,
+        Err(UseCaseError::Repository(_))
+    ));
 }
 
 #[tokio::test]

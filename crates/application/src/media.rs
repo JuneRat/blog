@@ -149,6 +149,7 @@ pub struct MediaPage {
 pub struct MediaReadMetadata {
     pub mime: String,
     pub checksum_sha256: String,
+    pub byte_size: u64,
     id: Uuid,
     storage_key: String,
 }
@@ -296,9 +297,31 @@ impl MediaInteractor {
         Ok(MediaReadMetadata {
             mime: snapshot.mime,
             checksum_sha256: snapshot.checksum_sha256,
+            byte_size: snapshot.byte_size as u64,
             id: snapshot.id,
             storage_key: snapshot.storage_key,
         })
+    }
+
+    /// 在返回下载响应前确认文件仍存在且长度与登记记录一致；不读取正文。
+    pub async fn open(
+        &self,
+        metadata: &MediaReadMetadata,
+    ) -> Result<crate::ports::OpenedMedia, UseCaseError> {
+        let opened = self
+            .storage
+            .open(&metadata.storage_key)
+            .await?
+            .ok_or_else(|| {
+                UseCaseError::Repository(format!("媒体记录存在但文件缺失：{}", metadata.id))
+            })?;
+        if opened.byte_size != metadata.byte_size {
+            return Err(UseCaseError::Repository(format!(
+                "媒体文件长度与记录不一致：{}",
+                metadata.id
+            )));
+        }
+        Ok(opened)
     }
 
     /// 仅在调用方确实需要响应体时读取文件；存储定位来自已加载的媒体记录。
