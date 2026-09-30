@@ -22,6 +22,7 @@ ammonia.workspace = true
 html5ever = "0.40"
 # Match Axum's single percent-decoding pass for media path parameters.
 percent-encoding = "2"
+url.workspace = true
 time.workspace = true
 # Bundle IANA rules so containers do not depend on host tzdata or TZ.
 jiff = { version = "0.2", default-features = false, features = ["std", "tzdb-bundle-always"] }

@@ -32,6 +32,7 @@ use html5ever::tendril::StrTendril;
 use html5ever::tokenizer::{
     BufferQueue, TagKind, Token, TokenSink, TokenSinkResult, Tokenizer, TokenizerOpts,
 };
+use url::Url;
 use uuid::Uuid;
 
 /// 站内媒体地址前缀，与 `application::media::MEDIA_URL_PREFIX` 一致。
@@ -60,12 +61,24 @@ pub(crate) fn extract_media_ids_from_html(html: &str) -> Vec<Uuid> {
 
 /// 解析读取路由实际接受的 `/media/<uuid>` 站内地址。
 ///
-/// 查询串和 fragment 不参与路由身份；路径参数与 Axum 一样只做一次 UTF-8
-/// 百分号解码，然后使用相同的 UUID 解析器。只认根相对路径，外域和协议相对
-/// 地址不因此成为本站引用；额外路径片段和二次编码也不会误认。
-fn parse_media_url(url: &str) -> Option<Uuid> {
-    let path = url.split(['?', '#']).next()?;
-    let rest = path.strip_prefix(MEDIA_URL_PREFIX)?;
+/// Match the browser's special-URL normalization before Axum sees the path:
+/// C0 trimming, TAB/LF/CR removal, backslashes and (encoded) dot segments.
+/// Only root-relative paths qualify; reject every slash/backslash authority
+/// spelling before parsing so the synthetic origin cannot admit an external URL.
+/// Query/fragment do not change identity and UUID decoding still happens once.
+fn parse_media_url(source: &str) -> Option<Uuid> {
+    let source = source.trim_matches(|ch: char| ch <= '\u{20}');
+    let source = source.replace(['\t', '\n', '\r'], "");
+    let mut chars = source.chars();
+    if !matches!(chars.next(), Some('/' | '\\')) || matches!(chars.next(), Some('/' | '\\')) {
+        return None;
+    }
+    let origin = Url::parse("https://media.invalid/").expect("fixed media origin is valid");
+    let resolved = origin.join(&source).ok()?;
+    if resolved.origin() != origin.origin() {
+        return None;
+    }
+    let rest = resolved.path().strip_prefix(MEDIA_URL_PREFIX)?;
     let decoded = percent_encoding::percent_decode_str(rest)
         .decode_utf8()
         .ok()?;
@@ -321,6 +334,54 @@ mod tests {
             format!("/%6Dedia/{canonical}"),
         ] {
             assert_eq!(parse_media_url(&target), None, "{target}");
+        }
+    }
+
+    #[test]
+    fn normalization_matches_the_shared_browser_and_recovery_contract() {
+        #[derive(serde::Deserialize)]
+        struct Fixture {
+            cases: Vec<Case>,
+        }
+        #[derive(serde::Deserialize)]
+        struct Case {
+            name: String,
+            source: String,
+            expected_id: Option<Uuid>,
+        }
+        let fixture: Fixture = serde_json::from_str(include_str!(
+            "../tests/fixtures/media_url_normalization.json"
+        ))
+        .unwrap();
+        for case in fixture.cases {
+            assert_eq!(
+                parse_media_url(&case.source),
+                case.expected_id,
+                "{}: {:?}",
+                case.name,
+                case.source
+            );
+        }
+    }
+
+    #[test]
+    fn rendered_dot_segments_and_backslashes_still_protect_the_image() {
+        let media = id(25);
+        for source in [
+            format!("/media/./{media}"),
+            format!("/other/../media/{media}"),
+            format!("/media/%2E%2e/media/{media}"),
+            format!("\\media\\{media}"),
+            format!("/me\tdi\na\r/{media}"),
+            format!(" \t/media/{media}\r "),
+        ] {
+            let html = crate::rendering::SanitizingMarkdownRenderer::new()
+                .render_markdown(&format!("<img src=\"{source}\">"));
+            assert_eq!(
+                extract_media_ids_from_html(&html),
+                vec![media],
+                "{source:?}"
+            );
         }
     }
 }

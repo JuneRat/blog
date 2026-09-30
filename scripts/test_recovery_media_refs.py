@@ -1,10 +1,22 @@
 import json
+from pathlib import Path
 import unittest
 
 import recovery_inventory as inventory
 
 
 class MediaUrlTests(unittest.TestCase):
+    def test_shared_browser_and_rust_normalization_contract(self):
+        path = Path(__file__).resolve().parent.parent / "crates/infrastructure/tests/fixtures/media_url_normalization.json"
+        matrix = json.loads(path.read_text())
+        for case in matrix["cases"]:
+            with self.subTest(case=case["name"]):
+                self.assertEqual(inventory.media_url_id(case["source"]), case["expected_id"])
+        for version in (0, 1):
+            for source in (f'/media/./{matrix["media_id"]}', f'/media/%2e/{matrix["media_id"]}',
+                           f'\\media\\{matrix["media_id"]}', f' /media/{matrix["media_id"]}'):
+                self.assertIsNone(inventory.media_url_id(source, version))
+
     def relations(self, pipeline_version, actual):
         canonical = "12345678-1234-5678-9abc-123456789abc"
         query = "12345678-1234-5678-9abc-123456789abd"

@@ -139,7 +139,7 @@ async fn old_html_backfills_trashed_media_atomically_and_blocks_purge_until_comp
         let id = media(&pool, true).await;
         let purge = PostgresMediaPurgeStore::new(common::database(pool.clone()), None);
         let old_plan = plan(&purge, id).await;
-        let source = format!("![historical](/media/{id}?v=1#preview)");
+        let source = format!("![historical](/other/../media/{id}?v=1#preview)\n\n<img src=\"\\media\\{id}\">");
         let html = SanitizingMarkdownRenderer::new().render_markdown(&source);
         let post = Uuid::now_v7();
         let page = Uuid::now_v7();
@@ -202,6 +202,79 @@ async fn an_existing_purge_receipt_can_finish_its_file_only_retry_after_upgrade(
         purge.commit(&committed).await.unwrap();
         assert!(purge.has_receipt(&committed, &committed.plan.items[0]).await.unwrap());
         assert!(purge.may_remove_file(&committed, &committed.plan.items[0]).await.unwrap());
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn each_normalized_url_protects_its_own_media_without_claiming_external_images() {
+    isolated(|pool| async move {
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("fixtures/media_url_normalization.json")).unwrap();
+        let fixture_id = Uuid::parse_str(fixture["media_id"].as_str().unwrap()).unwrap();
+        let encoded = |id: Uuid| {
+            id.to_string()
+                .bytes()
+                .map(|byte| format!("%{byte:02X}"))
+                .collect::<String>()
+        };
+        let mut source = String::new();
+        let mut local = Vec::new();
+        let mut normalized_image = None;
+        for case in fixture["cases"].as_array().unwrap() {
+            let expected = !case["expected_id"].is_null();
+            let id = if expected {
+                media(&pool, false).await
+            } else {
+                Uuid::now_v7()
+            };
+            let target = case["source"]
+                .as_str()
+                .unwrap()
+                .replace(&fixture_id.to_string(), &id.to_string())
+                .replace(&fixture_id.simple().to_string(), &id.simple().to_string())
+                .replace(&encoded(fixture_id), &encoded(id));
+            source.push_str(&format!(
+                "<img src=\"{}\">\n\n",
+                target.replace('&', "&amp;").replace('"', "&quot;")
+            ));
+            if expected {
+                local.push(id);
+            }
+            if case["name"] == "encoded-parent" {
+                normalized_image = Some(id);
+            }
+        }
+        let author = common::seed_user(&pool, "normalization-author").await;
+        let posts = PostgresPostRepository::new(
+            common::database(pool.clone()),
+            Arc::new(RenderingRuntime::default()),
+        );
+        posts
+            .insert_post(
+                &draft(author, "normalized-images", &source),
+                &[],
+                None.into(),
+            )
+            .await
+            .unwrap();
+        for id in local {
+            assert_eq!(refs(&pool, id).await, 1);
+        }
+        let id = normalized_image.unwrap();
+        sqlx::query("UPDATE media SET deleted_at=now() WHERE id=$1")
+            .bind(id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(
+            PostgresMediaPurgeStore::new(common::database(pool.clone()), None)
+                .candidates(&[id])
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("referenced")
+        );
     })
     .await;
 }

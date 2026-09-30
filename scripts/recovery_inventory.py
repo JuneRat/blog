@@ -86,15 +86,46 @@ def validate_media(root, records):
 _HYPHENATED_UUID = r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}"
 _MEDIA_UUID = re.compile(r"(?:[0-9a-fA-F]{32}|" + _HYPHENATED_UUID
                          + r"|\{" + _HYPHENATED_UUID + r"\}|urn:uuid:" + _HYPHENATED_UUID + r")")
+_C0_AND_SPACE = "".join(chr(value) for value in range(33))
+
+
+def normalized_root_path(source):
+    """Special-URL path normalization, restricted to root-relative input.
+
+    Authority/scheme parsing is unnecessary: reject both leading separators in
+    every slash/backslash combination before normalizing. Keep repeated slashes,
+    remove WHATWG dot segments (including encoded dots), and preserve the final
+    slash. Non-ASCII/other escaped path bytes cannot become a UUID afterward.
+    The shared Rust/Python/browser fixture locks this restricted contract.
+    """
+    source = re.sub(r"[\t\n\r]", "", source.strip(_C0_AND_SPACE))
+    if not source or source[0] not in "/\\" or (len(source) > 1 and source[1] in "/\\"):
+        return None
+    path = re.split(r"[?#]", source, maxsplit=1)[0].replace("\\", "/")
+    parts = path[1:].split("/")
+    normalized = []
+    for index, part in enumerate(parts):
+        dot = part.lower()
+        if dot in (".", "%2e"):
+            if index == len(parts) - 1:
+                normalized.append("")
+        elif dot in ("..", ".%2e", "%2e.", "%2e%2e"):
+            if normalized:
+                normalized.pop()
+            if index == len(parts) - 1:
+                normalized.append("")
+        else:
+            normalized.append(part)
+    return "/" + "/".join(normalized)
 
 
 def media_url_id(source, pipeline_version=2):
-    # Match media_refs.rs and Axum Path<String>: root-relative path, query and
-    # fragment excluded, one strict UTF-8 percent decode, Rust's UUID forms.
+    # Pipeline 2 matches browser path normalization, then Axum Path<String>'s
+    # single UTF-8 percent decode. Legacy 0/1 keep their original raw contract.
     if pipeline_version not in (0, 1, 2):
         raise RecoveryError(f"unsupported content pipeline version: {pipeline_version}")
-    path = re.split(r"[?#]", source, maxsplit=1)[0] if pipeline_version == 2 else source
-    if not path.startswith("/media/"):
+    path = normalized_root_path(source) if pipeline_version == 2 else source
+    if path is None or not path.startswith("/media/"):
         return None
     try:
         value = path[len("/media/"):]
