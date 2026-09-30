@@ -6,7 +6,7 @@
 
 ## 环境准备
 
-- Rust stable，包含 `rustfmt`、`clippy`，支持仓库使用的 Rust 2024 edition。
+- Rust 1.98.1，包含 `rustfmt`、`clippy`；CI 与 [Docker 构建](../Dockerfile)使用同一版本，支持 Rust 2024 edition。升级时同步修改两处版本。
 - Node.js 22；pnpm 版本以 [apps/admin/package.json](../apps/admin/package.json) 的 `packageManager` 为准。
 - PostgreSQL 18，可通过 Docker 启动；开发数据库和检查脚本需要 Python 3。
 
@@ -195,7 +195,7 @@ pnpm dev
 (cd apps/admin && pnpm build)
 ```
 
-`check.sh` 执行 Cargo 依赖边界检查及其测试、格式检查、Clippy、Rust 工作区测试、后台类型检查与测试，以及恢复、媒体清理和验收工具测试；前端生产构建通常单独运行。设置 `BLOG_RECOVERY_TEST=1` 可追加真实恢复异常演练；设置 `BLOG_ACCEPTANCE_TEST=1` 则构建服务端和后台，执行[首次安装到恢复的全链路验收](acceptance.md)。两者都需要 loopback 的 `BLOG_TEST_ADMIN_URL` 与匹配的 PostgreSQL 工具；容器工具设置 `BLOG_TEST_PG_CONTAINER`。演练创建并清理专用库，不使用开发库；恢复角色与清理细节见[恢复验证](operations-and-recovery.md#验证与部署证据)。CI 包含后端、前端与全链路验收三个 job，入口见 [ci.yml](../.github/workflows/ci.yml)。
+`check.sh` 执行 Cargo 依赖边界检查及其测试、格式检查、Clippy、Rust 工作区测试、后台类型检查与测试，以及恢复、媒体清理和验收工具测试；前端生产构建通常单独运行。设置 `BLOG_RECOVERY_TEST=1` 可追加真实恢复异常演练；设置 `BLOG_ACCEPTANCE_TEST=1` 则构建服务端和后台，执行[首次安装到恢复的全链路验收](acceptance.md)。两者都需要 loopback 的 `BLOG_TEST_ADMIN_URL` 与匹配的 PostgreSQL 工具；容器工具设置 `BLOG_TEST_PG_CONTAINER`。演练创建并清理专用库，不使用开发库；恢复角色与清理细节见[恢复验证](operations-and-recovery.md#验证与部署证据)。CI 包含后端、前端、全链路验收与依赖安全四个 job，入口见 [ci.yml](../.github/workflows/ci.yml)。依赖安全 job 另在每周三 UTC 03:00 执行，发现无需修改锁文件就已新增的漏洞公告；定时执行不启动数据库与浏览器测试。
 
 按改动范围也可运行：
 
@@ -211,6 +211,32 @@ PYTHONPATH=scripts python3 -B -m unittest scripts/test_recovery.py
 基础设施和服务端集成测试通过 `BLOG_TEST_ADMIN_URL` 连接本地管理库，为各测试套件删除并重建独立的测试数据库。该连接必须指向可创建数据库的本地测试实例；不要把业务数据放入测试库，也不要同时启动同一套集成测试的多个副本。具体库名由测试代码维护，测试过程不使用开发库 `blog` 保存业务样本。
 
 模板桥接已由正式渲染运行时实现，测试统一使用工作区入口；历史测量见[实验记录](template-bridge-experiment.md)。
+
+### 依赖更新与安全审计
+
+[Dependabot 配置](../.github/dependabot.yml)每周检查 Cargo、后台 npm/pnpm、GitHub Actions 与 Docker。GitHub [官方支持列表](https://docs.github.com/en/code-security/reference/supply-chain-security/supported-ecosystems-and-repositories)目前只列出 pnpm 7–10，本项目采用 pnpm 12.5.1；npm 更新规则已接入，但不能把它视为 pnpm 12 锁文件自动更新的兼容保证。前端更新须通过原版本 `pnpm install --frozen-lockfile`、测试、构建及原生审计；若机器人更新失败，手动使用 `packageManager` 指定的 pnpm 更新并评审锁文件差异。
+
+本地独立执行安全检查，无需启动数据库；扫描器安装与公告数据库放在临时目录，不改全局工具版本：
+
+```bash
+AUDIT_TMP=$(mktemp -d)
+cargo install cargo-audit --version 0.22.2 --locked --root "$AUDIT_TMP/cargo-audit"
+git clone --depth 1 https://github.com/RustSec/advisory-db.git "$AUDIT_TMP/advisory-db"
+python3 -B scripts/audit_dependencies.py \
+  --cargo-audit "$AUDIT_TMP/cargo-audit/bin/cargo-audit" \
+  --advisory-db "$AUDIT_TMP/advisory-db" \
+  --report-dir "$AUDIT_TMP/reports"
+pnpm --dir apps/admin audit --audit-level low
+PYTHONPATH=scripts python3 -B -m unittest scripts/test_audit_dependencies.py
+```
+
+Rust 检查先生成所有工作区 feature、所有平台、普通/构建/开发依赖的 `cargo tree`，再对完整 `Cargo.lock` 运行 RustSec 审计。原始 JSON、依赖图和公告数据库 Git commit 一起保留，CI 上传为 `rustsec-audit`；图生成、公告获取或审计失败均不放行。数据库先通过公开 Git 仓库获取，审计本身使用 `--no-fetch --no-yanked`；此门禁检查 RustSec 公告，不额外查询 crate 的 yanked 状态，也不使用 `--ignore` 隐藏公告。依赖缓存完整时可加 `--offline`，缺少任一平台依赖则明确失败。
+
+唯一已解释情况是 [RUSTSEC-2023-0071](https://rustsec.org/advisories/RUSTSEC-2023-0071.html)：截至 2026-09-30，`rsa 0.9.10` 尚无修复版本，Cargo 为 SQLx 未启用的 MySQL 可选依赖保留了锁定条目。审计脚本只在公告 ID、crate 来源、版本与 checksum 精确匹配，且全平台 feature 图同时不包含 `rsa` 与 `sqlx-mysql` 时记录“不可达”并通过；完整漏洞仍留在报告里。启用 MySQL、引入任意版本 RSA、发布修复版本或出现任何其他公告都会阻断，必须重新评审或升级，不能扩大例外。
+
+pnpm 12 的[锁文件](https://pnpm.io/lockfile)包含多个 YAML 文档，第一份锁定包管理器自身，后续文档描述项目；安全清单须取全部文档中的包，单文档解析可能误报干净。CI 使用 `packageManager` 指定版本的[原生 `pnpm audit`](https://pnpm.io/cli/audit)，检查全部严重级别及生产/开发依赖，不使用 `--ignore-registry-errors`。该命令将依赖名称与版本发送给配置的 npm registry 安全端点；registry 请求失败也会使门禁失败。
+
+[2026-09-30 审计证据](validation/dependency-audit-2026-09-30.json)记录工具校验、完整锁文件结果、全平台 feature 图与可复现命令。本次 npm 验证下载完整公开 OSV 目录，在本地扫描两份 YAML 文档的 210 个包版本（含 pnpm 自身），未发现漏洞；这份结果不代表未经执行的原生 npm registry 审计通过。
 
 ## 常见问题
 

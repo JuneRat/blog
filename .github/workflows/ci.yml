@@ -4,6 +4,8 @@ on:
   push:
     branches: [master]
   pull_request:
+  schedule:
+    - cron: "0 3 * * 3"
 
 permissions:
   contents: read
@@ -13,6 +15,7 @@ env:
 
 jobs:
   check:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
 
     services:
@@ -47,6 +50,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: 1.98.1
           components: rustfmt, clippy
 
       - uses: Swatinem/rust-cache@v2
@@ -82,6 +86,7 @@ jobs:
           PYTHONPATH=scripts python3 -B -m unittest scripts/test_recovery_postgres.py
 
   web:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
 
     defaults:
@@ -93,6 +98,8 @@ jobs:
 
       # 版本取 package.json 的 packageManager 字段。
       - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: apps/admin/package.json
 
       - uses: actions/setup-node@v4
         with:
@@ -118,6 +125,7 @@ jobs:
           retention-days: 1
 
   acceptance:
+    if: github.event_name != 'schedule'
     needs: web
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -144,6 +152,8 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.98.1
 
       - uses: Swatinem/rust-cache@v2
 
@@ -191,4 +201,55 @@ jobs:
           name: acceptance-report
           path: acceptance-report.json
           if-no-files-found: ignore
+          retention-days: 14
+
+  security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.98.1
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install the pinned RustSec scanner in the runner's temporary directory
+        run: cargo install cargo-audit --version 0.22.2 --locked --root "$RUNNER_TEMP/cargo-audit"
+
+      - name: Download the public RustSec advisory database
+        run: git clone --depth 1 https://github.com/RustSec/advisory-db.git "$RUNNER_TEMP/rustsec-advisory-db"
+
+      - name: RustSec audit with full lockfile and all-platform feature evidence
+        run: |
+          python3 -B scripts/audit_dependencies.py \
+            --cargo-audit "$RUNNER_TEMP/cargo-audit/bin/cargo-audit" \
+            --advisory-db "$RUNNER_TEMP/rustsec-advisory-db" \
+            --report-dir "$RUNNER_TEMP/dependency-audit"
+
+      - uses: pnpm/action-setup@v4
+        if: ${{ !cancelled() }}
+        with:
+          package_json_file: apps/admin/package.json
+
+      - uses: actions/setup-node@v4
+        if: ${{ !cancelled() }}
+        with:
+          node-version: 22
+
+      # Native pnpm understands every YAML document, including pinned pnpm itself.
+      # Registry errors fail the gate; do not add --ignore-registry-errors.
+      - name: Audit the complete pnpm lockfile
+        if: ${{ !cancelled() }}
+        run: pnpm --dir apps/admin audit --audit-level low
+
+      - name: Save the full RustSec report and dependency graph
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rustsec-audit
+          path: ${{ runner.temp }}/dependency-audit
+          if-no-files-found: error
           retention-days: 14

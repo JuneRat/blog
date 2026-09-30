@@ -1,5 +1,23 @@
 version: 2
 updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+  # GitHub's supported pnpm versions currently stop at v10. Keep this rule for
+  # npm manifests, but require pnpm 12's native audit and frozen install in CI;
+  # do not assume Dependabot can update its multi-document lockfile yet.
+  - package-ecosystem: npm
+    directory: /apps/admin
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
   - package-ecosystem: docker
     directory: /
     schedule:
