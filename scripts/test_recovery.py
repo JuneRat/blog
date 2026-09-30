@@ -97,7 +97,7 @@ class RecoveryTests(unittest.TestCase):
         media_id="00000000-0000-0000-0000-000000000001"
         parser=inventory.Images()
         parser.feed(f'<img src="/media/{media_id}"><a href="/media/{media_id}">link</a><img src="https://example.com/media/{media_id}"><img src="/media/00000000-0000-0000-0000-000000000002?x=1">')
-        self.assertEqual(parser.ids,{media_id})
+        self.assertEqual(parser.ids,{media_id,"00000000-0000-0000-0000-000000000002"})
 
     def test_schema_rejects_old_migration_even_if_table_count_matches(self):
         class Pg:

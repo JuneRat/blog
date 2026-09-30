@@ -115,13 +115,13 @@ sitemap 的 50,000 条限制是整个文件的预算：首页、文章、Page、
 
 1. 用 pulldown-cmark 转换 Markdown，启用表格与删除线。
 2. 用 ammonia 清洗 HTML。
-3. 从这份清洗结果提取 `<img src="/media/{uuid}">`，按 UUID 排序、去重。
+3. 从这份清洗结果提取本站根路径 `<img src="/media/{uuid}">`，按 UUID 排序、去重。查询串和 fragment 不改变媒体身份；路径参数与 HTTP 入口一样只进行一次 UTF-8 百分号解码。外域绝对 URL 和 `//host/media/...` 不计为本站引用。
 
 注释、被清洗掉的标签、普通链接和纯文本不形成图片引用。独立封面由保存侧并入引用集合；它不属于正文渲染结果。媒体引用提取不会在异步数据库线程上再次解析 HTML。
 
 [内容仓储](../crates/infrastructure/src/persistence/content.rs) 在事务外等待渲染，然后把源文、`content_html`、`content_render_version` 和媒体关系同事务提交。公开 Post/Page 详情直接读取保存的 HTML，不在每次访问时转换 Markdown。
 
-清洗规则改变时需要递增 `CONTENT_RENDER_VERSION`（评论使用 `COMMENT_RENDER_VERSION`），并显式运行 `blog rebuild-html`。该命令分批重建不匹配的记录，以业务版本和源文作条件，避免覆盖并发编辑；HTML 与引用一起更新，不增加编辑版本或改变业务更新时间。启动、结构迁移和普通业务命令不扫描或重建历史 HTML，公开读取仍使用已存储的清洗结果。涉及清洗安全规则的升级必须在恢复公开访问前完成重建；步骤与失败重试见[运维](operations-and-recovery.md#html-显式重建)。
+`CONTENT_RENDER_VERSION` 标记 Markdown 转换、清洗与媒体引用提取的整个派生流水线；任一步规则改变时都需要递增版本（评论使用 `COMMENT_RENDER_VERSION`），并显式运行 `blog rebuild-html`。当前正文版本 2 修复了带查询串、fragment 或编码路径的图片引用。该命令分批重建不匹配的记录，即使 HTML 字节相同也重新同步引用；以业务版本和源文作条件，避免覆盖并发编辑，不增加编辑版本或改变业务更新时间。启动、结构迁移和普通业务命令不扫描或重建历史 HTML，公开读取仍使用已存储的清洗结果。涉及清洗安全规则的升级必须在恢复公开访问前完成重建；媒体物理清理要求所有 Post/Page 派生版本已匹配。步骤与失败重试见[运维](operations-and-recovery.md#html-显式重建)。
 
 ## 执行策略与实际预算
 

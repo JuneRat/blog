@@ -1083,6 +1083,7 @@ dependencies = [
  "jiff",
  "jsonwebtoken",
  "minijinja",
+ "percent-encoding",
  "pulldown-cmark",
  "reqwest",
  "serde",

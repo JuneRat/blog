@@ -3,6 +3,8 @@ import hashlib
 from html.parser import HTMLParser
 import json
 from pathlib import Path, PurePosixPath
+import re
+from urllib.parse import unquote
 import uuid
 from schema_contract import SchemaError as RecoveryError, expected_migrations, load_contract
 
@@ -81,9 +83,36 @@ def validate_media(root, records):
     return len(seen)
 
 
+_HYPHENATED_UUID = r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}"
+_MEDIA_UUID = re.compile(r"(?:[0-9a-fA-F]{32}|" + _HYPHENATED_UUID
+                         + r"|\{" + _HYPHENATED_UUID + r"\}|urn:uuid:" + _HYPHENATED_UUID + r")")
+
+
+def media_url_id(source, pipeline_version=2):
+    # Match media_refs.rs and Axum Path<String>: root-relative path, query and
+    # fragment excluded, one strict UTF-8 percent decode, Rust's UUID forms.
+    if pipeline_version not in (0, 1, 2):
+        raise RecoveryError(f"unsupported content pipeline version: {pipeline_version}")
+    path = re.split(r"[?#]", source, maxsplit=1)[0] if pipeline_version == 2 else source
+    if not path.startswith("/media/"):
+        return None
+    try:
+        value = path[len("/media/"):]
+        if pipeline_version == 2:
+            value = unquote(value, errors="strict")
+        if not _MEDIA_UUID.fullmatch(value):
+            return None
+        return str(uuid.UUID(value))
+    except (ValueError, UnicodeDecodeError):
+        return None
+
+
 class Images(HTMLParser):
-    def __init__(self):
+    def __init__(self, pipeline_version=2):
+        if pipeline_version not in (0, 1, 2):
+            raise RecoveryError(f"unsupported content pipeline version: {pipeline_version}")
         super().__init__(convert_charrefs=True)
+        self.pipeline_version = pipeline_version
         self.ids = set()
 
     def handle_starttag(self, tag, attrs):
@@ -91,11 +120,8 @@ class Images(HTMLParser):
             return
         # Rust's tokenizer uses the first src; sanitize output never duplicates it.
         source = next((value for key,value in attrs if key == "src"), None)
-        if source and source.startswith("/media/"):
-            try:
-                self.ids.add(str(uuid.UUID(source[len("/media/"):])))
-            except ValueError:
-                pass
+        if source and (media_id := media_url_id(source, self.pipeline_version)) is not None:
+            self.ids.add(media_id)
 
     handle_startendtag = handle_starttag
 
@@ -104,9 +130,12 @@ def validate_relations(pg, database=None):
     expected = set()
     for table, kind in (("posts","post"),("pages","page")):
         cover = "cover_media_id" if table == "posts" else "NULL"
-        rows = query_json(pg, f"SELECT COALESCE(jsonb_agg(jsonb_build_object('id',id,'html',content_html,'cover',{cover})),'[]') FROM {table}", database)
+        rows = query_json(pg, f"SELECT COALESCE(jsonb_agg(jsonb_build_object('id',id,'html',content_html,'cover',{cover},'pipeline_version',content_render_version)),'[]') FROM {table}", database)
         for row in rows:
-            images = Images(); images.feed(row["html"]); images.close()
+            # A stored derived result must be checked against the pipeline that
+            # created it. Legacy backups can be released, then explicitly rebuilt;
+            # the native purge guard refuses new deletion until that upgrade ends.
+            images = Images(row["pipeline_version"]); images.feed(row["html"]); images.close()
             for mid in images.ids | ({row["cover"]} if row["cover"] else set()):
                 expected.add((mid,kind,row["id"]))
     rows = query_json(pg, "SELECT COALESCE(jsonb_agg(jsonb_build_array(mid,kind,sid)),'[]') FROM (SELECT avatar_media_id AS mid,'user' AS kind,id AS sid FROM users WHERE avatar_media_id IS NOT NULL UNION ALL SELECT cover_media_id,'series',id FROM series WHERE cover_media_id IS NOT NULL UNION ALL SELECT (value->>'logo_media_id')::uuid,'site','00000000-0000-0000-0000-000000000000'::uuid FROM settings WHERE key='site' AND value->>'logo_media_id' IS NOT NULL) refs", database)

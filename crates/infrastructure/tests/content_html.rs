@@ -242,7 +242,7 @@ async fn schema_migration_leaves_html_for_explicit_rebuild_without_editing_busin
     let before_post = stored(&pool, "posts", record.snapshot.id).await;
     let before_page = stored(&pool, "pages", page_record.id).await;
     // 结构就绪不会隐式重建派生物；显式重建才刷新 HTML，且不改业务版本。
-    sqlx::raw_sql("UPDATE posts SET content_html='',content_render_version=2; UPDATE pages SET content_html='',content_render_version=2;")
+    sqlx::raw_sql("UPDATE posts SET content_html='',content_render_version=1; UPDATE pages SET content_html='',content_render_version=1;")
         .execute(&pool).await.unwrap();
     infrastructure::migrate_schema(&common::database(pool.clone()), "../../migrations/postgres")
         .await
@@ -250,7 +250,7 @@ async fn schema_migration_leaves_html_for_explicit_rebuild_without_editing_busin
     for (table, id) in [("posts", record.snapshot.id), ("pages", page_record.id)] {
         let (_, html, render_version, _, _) = stored(&pool, table, id).await;
         assert_eq!(html, "");
-        assert_eq!(render_version, 2);
+        assert_eq!(render_version, 1);
     }
     let runtime = Arc::new(RenderingRuntime::default());
     let rebuilder = HtmlRebuildInteractor::new(Arc::new(PostgresHtmlRebuildStore::new(
@@ -303,7 +303,7 @@ async fn rebuild_cannot_overwrite_a_concurrent_editor_commit() {
         .await
         .unwrap();
     let id = record.snapshot.id;
-    sqlx::query("UPDATE posts SET content_render_version=2 WHERE id=$1")
+    sqlx::query("UPDATE posts SET content_render_version=1 WHERE id=$1")
         .bind(id)
         .execute(&pool)
         .await

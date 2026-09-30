@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use super::{
     content::CONTENT_RENDER_VERSION,
-    media::{media_ids_for, sync_media_refs},
+    media::{media_ids_for, sync_rebuilt_media_refs},
     sql::map_sqlx_error,
 };
 use crate::COMMENT_RENDER_VERSION;
@@ -106,8 +106,8 @@ impl HtmlRebuildStore for PostgresHtmlRebuildStore {
         let mut progress = RebuildBatch::default();
         for id in ids {
             let attempt: Result<bool, UseCaseError> = async {
-                let row: Option<(String, i64, Option<Uuid>)> = sqlx::query_as(&format!(
-                    "SELECT content, version, {cover} FROM {table}
+                let row: Option<(String, i64, Option<Uuid>, String)> = sqlx::query_as(&format!(
+                    "SELECT content, version, {cover}, content_html FROM {table}
                      WHERE id=$1 AND content_render_version<>$2"
                 ))
                 .bind(id)
@@ -115,7 +115,7 @@ impl HtmlRebuildStore for PostgresHtmlRebuildStore {
                 .fetch_optional(&self.pool)
                 .await
                 .map_err(map_sqlx_error)?;
-                let Some((source, version, cover_media_id)) = row else {
+                let Some((source, version, cover_media_id, persisted_html)) = row else {
                     // 已删除或由其他保存/重建更新；仍计入本轮已检查并推进游标。
                     return Ok(false);
                 };
@@ -129,6 +129,21 @@ impl HtmlRebuildStore for PostgresHtmlRebuildStore {
                 };
                 application::rendering_budget::validate_html(&rendered.content_html)
                     .map_err(|error| UseCaseError::Invalid(error.to_string()))?;
+                // Historical HTML proves an existing relationship when the old
+                // extractor missed it. Parse before the transaction, off the
+                // async database thread; rebuild batches process one row at a time.
+                let persisted_ids = if media_kind.is_some() {
+                    tokio::task::spawn_blocking(move || {
+                        media_ids_for(
+                            &crate::media_refs::extract_media_ids_from_html(&persisted_html),
+                            cover_media_id,
+                        )
+                    })
+                    .await
+                    .map_err(|error| UseCaseError::Render(error.to_string()))?
+                } else {
+                    vec![]
+                };
                 let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
                 let changed = sqlx::query(&format!(
                     "UPDATE {table} SET content_html=$2, content_render_version=$3
@@ -145,11 +160,12 @@ impl HtmlRebuildStore for PostgresHtmlRebuildStore {
                 .rows_affected();
                 if changed == 1 {
                     if let Some(media_kind) = media_kind {
-                        sync_media_refs(
+                        sync_rebuilt_media_refs(
                             &mut tx,
                             media_kind,
                             id,
                             &media_ids_for(&rendered.media_ids, cover_media_id),
+                            &persisted_ids,
                         )
                         .await?;
                     }

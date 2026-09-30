@@ -49,6 +49,23 @@ impl PostgresMediaPurgeStore {
             endpoint,
         })
     }
+
+    async fn require_current_references(connection: &mut PgConnection) -> Result<(), UseCaseError> {
+        let outdated: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM posts WHERE content_render_version<>$1) \
+             OR EXISTS(SELECT 1 FROM pages WHERE content_render_version<>$1)",
+        )
+        .bind(crate::CONTENT_RENDER_VERSION)
+        .fetch_one(connection)
+        .await
+        .map_err(db)?;
+        if outdated {
+            return Err(invalid(
+                "stored media references use an older pipeline; finish blog rebuild-html before media purge",
+            ));
+        }
+        Ok(())
+    }
 }
 
 const COLUMNS: &str = "id,path,size,checksum_sha256,version,to_char(deleted_at AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS deleted_at";
@@ -90,6 +107,8 @@ impl MediaPurgeStore for PostgresMediaPurgeStore {
             .await
     }
     async fn candidates(&self, ids: &[Uuid]) -> Result<Vec<PurgeItem>, UseCaseError> {
+        Self::require_current_references(&mut *self.database.pool.acquire().await.map_err(db)?)
+            .await?;
         let rows = sqlx::query(&format!(
             "SELECT {COLUMNS} FROM media WHERE id=ANY($1) ORDER BY id"
         ))
@@ -134,6 +153,7 @@ impl MediaPurgeStore for PostgresMediaPurgeStore {
         if self.identity_on(&mut tx).await? != plan.plan.database {
             return Err(invalid("plan belongs to a different database/endpoint"));
         }
+        let mut references_checked = false;
         let mut items: Vec<_> = plan.plan.items.iter().collect();
         items.sort_by_key(|item| item.id);
         for expected in items {
@@ -151,6 +171,13 @@ impl MediaPurgeStore for PostgresMediaPurgeStore {
                 }
                 if item(row) != *expected {
                     return Err(invalid("stale media plan"));
+                }
+                // A missing historical bookkeeping row is not proof of no
+                // reference. Already committed receipts may still finish their
+                // file-only retry after an application upgrade.
+                if !references_checked {
+                    Self::require_current_references(&mut tx).await?;
+                    references_checked = true;
                 }
                 if sqlx::query_scalar::<_, bool>(REFERENCED)
                     .bind(expected.id)

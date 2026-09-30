@@ -58,13 +58,18 @@ pub(crate) fn extract_media_ids_from_html(html: &str) -> Vec<Uuid> {
     ids.into_iter().collect()
 }
 
-/// 解析 `/media/<uuid>`。
+/// 解析读取路由实际接受的 `/media/<uuid>` 站内地址。
 ///
-/// 只接受恰好一个路径片段且为合法 UUID：插入功能生成的地址就是这个形状，
-/// 允许额外后缀或查询串会让「引用的是哪个资产」产生歧义。
+/// 查询串和 fragment 不参与路由身份；路径参数与 Axum 一样只做一次 UTF-8
+/// 百分号解码，然后使用相同的 UUID 解析器。只认根相对路径，外域和协议相对
+/// 地址不因此成为本站引用；额外路径片段和二次编码也不会误认。
 fn parse_media_url(url: &str) -> Option<Uuid> {
-    let rest = url.strip_prefix(MEDIA_URL_PREFIX)?;
-    Uuid::parse_str(rest).ok()
+    let path = url.split(['?', '#']).next()?;
+    let rest = path.strip_prefix(MEDIA_URL_PREFIX)?;
+    let decoded = percent_encoding::percent_decode_str(rest)
+        .decode_utf8()
+        .ok()?;
+    Uuid::parse_str(&decoded).ok()
 }
 
 /// 收集 `<img>` 起始标签 `src` 属性的 sink。
@@ -236,8 +241,8 @@ mod tests {
             "<a href=\"/media/00000000-0000-0000-0000-000000000001\">链接</a>\n",
             "<img data-src=\"/media/00000000-0000-0000-0000-000000000003\">\n",
             "<img src=\"/media/not-a-uuid\">\n",
-            "<img src=\"/media/00000000-0000-0000-0000-000000000004?size=large\">\n",
             "<img src=\"https://cdn.example.com/media/00000000-0000-0000-0000-000000000005\">\n",
+            "<img src=\"//cdn.example.com/media/00000000-0000-0000-0000-000000000006\">\n",
             "<img src=\"/assets/theme/photo.png\">\n",
         );
         assert!(
@@ -283,5 +288,39 @@ mod tests {
         let mut sorted = ids.clone();
         sorted.sort();
         assert_eq!(ids, sorted, "输出必须已排序，便于仓储按同一顺序校验");
+    }
+
+    #[test]
+    fn media_identity_matches_query_fragment_and_once_decoded_path_parameters() {
+        let media = id(24);
+        let canonical = media.to_string();
+        let encoded = canonical
+            .bytes()
+            .map(|byte| format!("%{byte:02X}"))
+            .collect::<String>();
+        for target in [
+            format!("/media/{canonical}?v=1&size=large"),
+            format!("/media/{canonical}#preview"),
+            format!("/media/{canonical}?v=1#preview"),
+            format!("/media/{encoded}?v=1"),
+            format!("/media/%7B{canonical}%7D#preview"),
+            format!("/media/{}", media.simple()),
+            format!("/media/urn:uuid:{canonical}"),
+        ] {
+            assert_eq!(parse_media_url(&target), Some(media), "{target}");
+            let markdown = format!("![visible]({target})");
+            assert_eq!(extract_media_ids(&markdown), vec![media], "{target}");
+        }
+        for target in [
+            format!("https://cdn.example.com/media/{canonical}?v=1"),
+            format!("//cdn.example.com/media/{canonical}#preview"),
+            format!("/media/{canonical}/extra?v=1"),
+            format!("/media/%2524{canonical}"),
+            format!("/media/{canonical}%2F"),
+            format!("/media/{canonical}%FF"),
+            format!("/%6Dedia/{canonical}"),
+        ] {
+            assert_eq!(parse_media_url(&target), None, "{target}");
+        }
     }
 }

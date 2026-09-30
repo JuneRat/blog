@@ -549,9 +549,9 @@ async fn html_rebuild_audits_roll_back_derived_content_and_references() {
     sqlx::query("INSERT INTO media(id,path,filename,mime_type,size,width,height,checksum_sha256) VALUES($1,'objects/rebuild.png','rebuild.png','image/png',1,1,1,repeat('b',64))")
         .bind(media).execute(&pool).await.unwrap();
     let source = format!("![Image](/media/{media})");
-    sqlx::query("INSERT INTO posts(id,author_id,title,slug,content,content_html,content_render_version) VALUES($1,$2,'Post','rebuild-post',$3,'stale',2)")
+    sqlx::query("INSERT INTO posts(id,author_id,title,slug,content,content_html,content_render_version) VALUES($1,$2,'Post','rebuild-post',$3,'stale',1)")
         .bind(post).bind(user).bind(&source).execute(&pool).await.unwrap();
-    sqlx::query("INSERT INTO pages(id,title,slug,content,content_html,content_render_version) VALUES($1,'Page','rebuild-page',$2,'stale',2)")
+    sqlx::query("INSERT INTO pages(id,title,slug,content,content_html,content_render_version) VALUES($1,'Page','rebuild-page',$2,'stale',1)")
         .bind(page).bind(&source).execute(&pool).await.unwrap();
     sqlx::query("INSERT INTO comments(id,post_id,author_name,content,content_html,content_render_version) VALUES($1,$2,'Reader','**Private comment source**','stale',2)")
         .bind(comment).bind(post).execute(&pool).await.unwrap();
@@ -622,7 +622,15 @@ async fn html_rebuild_audits_roll_back_derived_content_and_references() {
         assert_eq!(*actor, None);
         assert_eq!(action, &format!("{kind}.html.rebuild"));
         assert_eq!(target, &id.to_string());
-        assert_eq!(*metadata, json!({"version":1,"render_version":1}));
+        let render_version = if kind == "comment" {
+            infrastructure::COMMENT_RENDER_VERSION
+        } else {
+            infrastructure::CONTENT_RENDER_VERSION
+        };
+        assert_eq!(
+            *metadata,
+            json!({"version":1,"render_version":render_version})
+        );
     }
     let refs: i64 = sqlx::query_scalar("SELECT count(*) FROM media_refs")
         .fetch_one(&pool)

@@ -31,6 +31,29 @@ pub(crate) async fn sync_media_refs(
     content_id: Uuid,
     ids: &[Uuid],
 ) -> Result<(), UseCaseError> {
+    sync_media_refs_with_history(tx, kind, content_id, ids, &[]).await
+}
+
+/// Rebuilding may repair a missing bookkeeping row for an image already present
+/// in this source's persisted HTML/cover. That historical relationship survives
+/// soft deletion; it does not authorize attaching a new image or another source.
+pub(super) async fn sync_rebuilt_media_refs(
+    tx: &mut sqlx::PgConnection,
+    kind: MediaContentKind,
+    content_id: Uuid,
+    ids: &[Uuid],
+    persisted_ids: &[Uuid],
+) -> Result<(), UseCaseError> {
+    sync_media_refs_with_history(tx, kind, content_id, ids, persisted_ids).await
+}
+
+async fn sync_media_refs_with_history(
+    tx: &mut sqlx::PgConnection,
+    kind: MediaContentKind,
+    content_id: Uuid,
+    ids: &[Uuid],
+    persisted_ids: &[Uuid],
+) -> Result<(), UseCaseError> {
     let ids = media_ids_for(ids, None);
     let media: Vec<(Uuid, Option<OffsetDateTime>)> = sqlx::query_as(
         "SELECT id, deleted_at FROM media WHERE id=ANY($1::uuid[]) ORDER BY id FOR SHARE",
@@ -47,9 +70,9 @@ pub(crate) async fn sync_media_refs(
             .await
             .map_err(map_sqlx_error)?;
     if media.len() != ids.len()
-        || media
-            .iter()
-            .any(|(id, deleted)| deleted.is_some() && !previous.contains(id))
+        || media.iter().any(|(id, deleted)| {
+            deleted.is_some() && !previous.contains(id) && !persisted_ids.contains(id)
+        })
     {
         return Err(UseCaseError::Invalid(
             "引用了不存在或已移入回收站的图片".into(),

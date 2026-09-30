@@ -20,6 +20,8 @@ ammonia.workspace = true
 # 不用手写扫描：注释、属性值里的 `>`、实体转义与 script/style 原始文本都不是
 # 字符串查找能正确处理的东西，而这里判断错会直接变成破图或幽灵占用。
 html5ever = "0.40"
+# Match Axum's single percent-decoding pass for media path parameters.
+percent-encoding = "2"
 time.workspace = true
 # Bundle IANA rules so containers do not depend on host tzdata or TZ.
 jiff = { version = "0.2", default-features = false, features = ["std", "tzdb-bundle-always"] }
@@ -92,6 +94,10 @@ required-features = ["sqlx-test-support"]
 
 [[test]]
 name = "media_cleanup"
+required-features = ["sqlx-test-support"]
+
+[[test]]
+name = "media_reference_urls"
 required-features = ["sqlx-test-support"]
 
 [[test]]

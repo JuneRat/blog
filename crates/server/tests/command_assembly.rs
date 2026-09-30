@@ -238,7 +238,7 @@ async fn maintenance_does_not_require_a_working_website() {
     // Damaged legacy body content must not pull the HTML rebuild into password,
     // role or OAuth repair commands. There is intentionally no matching media.
     sqlx::query(
-        "UPDATE posts SET content = $1, content_render_version = 2 WHERE slug = 'assembly-post'",
+        "UPDATE posts SET content = $1, content_render_version = 1 WHERE slug = 'assembly-post'",
     )
     .bind(format!("![missing](/media/{})", uuid::Uuid::now_v7()))
     .execute(&pool)
@@ -547,7 +547,7 @@ async fn html_batch_failure_reports_its_record_and_committed_progress_then_resum
         } else {
             "**valid**".into()
         };
-        sqlx::query("INSERT INTO posts(id,author_id,slug,content,content_html,content_render_version) SELECT $1,id,$2,$3,'stale',2 FROM users")
+        sqlx::query("INSERT INTO posts(id,author_id,slug,content,content_html,content_render_version) SELECT $1,id,$2,$3,'stale',1 FROM users")
             .bind(uuid::Uuid::from_u128(n)).bind(format!("partial-{n}")).bind(source).execute(&pool).await.unwrap();
     }
     let output = cli(&url, &["rebuild-html", "--batch-size", "3"], None, "unused");
@@ -567,7 +567,7 @@ async fn html_batch_failure_reports_its_record_and_committed_progress_then_resum
             .fetch_all(&pool)
             .await
             .unwrap();
-    assert_eq!(versions, [infrastructure::CONTENT_RENDER_VERSION, 2, 2]);
+    assert_eq!(versions, [infrastructure::CONTENT_RENDER_VERSION, 1, 1]);
     sqlx::query("UPDATE posts SET content='**repaired**' WHERE id=$1")
         .bind(uuid::Uuid::from_u128(2))
         .execute(&pool)

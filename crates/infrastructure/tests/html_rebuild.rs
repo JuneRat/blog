@@ -29,8 +29,8 @@ impl ContentRenderer for ChangingRenderer {
                 .unwrap();
         } else if source == "change-candidates" {
             // ID 已选入同批，但正文读取前可能已被其他写入者重建或删除。
-            sqlx::query("UPDATE posts SET content_html='<p>current</p>',content_render_version=1 WHERE id=$1")
-                .bind(Uuid::from_u128(2)).execute(&self.pool).await.unwrap();
+            sqlx::query("UPDATE posts SET content_html='<p>current</p>',content_render_version=$2 WHERE id=$1")
+                .bind(Uuid::from_u128(2)).bind(infrastructure::CONTENT_RENDER_VERSION).execute(&self.pool).await.unwrap();
             sqlx::query("DELETE FROM posts WHERE id=$1")
                 .bind(Uuid::from_u128(3))
                 .execute(&self.pool)
@@ -51,7 +51,7 @@ async fn batch_skips_candidates_changed_before_their_source_is_loaded() {
         (3, "removed"),
         (4, "last"),
     ] {
-        sqlx::query("INSERT INTO posts(id,author_id,slug,content,content_html,content_render_version) VALUES($1,$2,$3,$3,'stale',2)")
+        sqlx::query("INSERT INTO posts(id,author_id,slug,content,content_html,content_render_version) VALUES($1,$2,$3,$3,'stale',1)")
             .bind(Uuid::from_u128(n)).bind(author).bind(source).execute(&pool).await.unwrap();
     }
     let renderer = Arc::new(ChangingRenderer {
@@ -79,7 +79,7 @@ async fn cursor_passes_conflicting_rows_and_next_run_revisits_remaining_old_vers
     let pool = common::fresh_database("blog_html_cursor_test").await;
     let author = common::seed_user(&pool, "cursor-author").await;
     for (n, source) in [(1, "first"), (2, "second")] {
-        sqlx::query("INSERT INTO posts(id,author_id,slug,content,content_html,content_render_version) VALUES($1,$2,$3,$3,'stale',2)")
+        sqlx::query("INSERT INTO posts(id,author_id,slug,content,content_html,content_render_version) VALUES($1,$2,$3,$3,'stale',1)")
             .bind(Uuid::from_u128(n)).bind(author).bind(source).execute(&pool).await.unwrap();
     }
     let renderer = Arc::new(ChangingRenderer {
@@ -112,7 +112,7 @@ async fn cursor_passes_conflicting_rows_and_next_run_revisits_remaining_old_vers
             .fetch_one(&pool)
             .await
             .unwrap();
-    assert_eq!(first, ("stale".into(), 2, 2));
+    assert_eq!(first, ("stale".into(), 1, 2));
     let runtime = Arc::new(RenderingRuntime::default());
     let result = HtmlRebuildInteractor::new(Arc::new(PostgresHtmlRebuildStore::new(
         common::database(pool.clone()),
