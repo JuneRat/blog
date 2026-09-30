@@ -7,7 +7,8 @@ use axum::{
     response::IntoResponse,
 };
 use prometheus::{
-    HistogramOpts, HistogramVec, IntCounterVec, IntGauge, IntGaugeVec, Opts, Registry, TextEncoder,
+    HistogramOpts, HistogramVec, IntCounter, IntCounterVec, IntGauge, IntGaugeVec, Opts, Registry,
+    TextEncoder,
 };
 use serde::Serialize;
 use std::time::Instant;
@@ -42,6 +43,9 @@ pub struct Telemetry {
     pool: IntGaugeVec,
     installed: IntGauge,
     workloads: workloads::WorkloadMetrics,
+    settings_reads: IntCounterVec,
+    settings_available: IntGauge,
+    settings_recoveries: IntCounter,
 }
 
 impl Telemetry {
@@ -96,6 +100,25 @@ impl Telemetry {
         .unwrap();
         info.with_label_values(&[build.version, build.revision])
             .set(1);
+        let settings_reads = IntCounterVec::new(
+            Opts::new(
+                "blog_site_settings_reads_total",
+                "Site settings reads, including failures hidden by public fallback",
+            ),
+            &["result"],
+        )
+        .unwrap();
+        let settings_available = IntGauge::new(
+            "blog_site_settings_read_available",
+            "Latest site settings read succeeded: one, zero on failure, minus one before any read",
+        )
+        .unwrap();
+        settings_available.set(-1);
+        let settings_recoveries = IntCounter::new(
+            "blog_site_settings_read_recoveries_total",
+            "Successful reads following a site settings read failure",
+        )
+        .unwrap();
         for metric in [
             Box::new(requests.clone()) as Box<dyn prometheus::core::Collector>,
             Box::new(duration.clone()),
@@ -104,6 +127,9 @@ impl Telemetry {
             Box::new(pool.clone()),
             Box::new(installed.clone()),
             Box::new(info),
+            Box::new(settings_reads.clone()),
+            Box::new(settings_available.clone()),
+            Box::new(settings_recoveries.clone()),
         ] {
             registry
                 .register(metric)
@@ -118,6 +144,9 @@ impl Telemetry {
             cancelled,
             pool,
             installed,
+            settings_reads,
+            settings_available,
+            settings_recoveries,
         }
     }
 
@@ -169,6 +198,27 @@ impl application::rendering_observer::RenderingObserver for Telemetry {
         event: application::rendering_observer::RenderingEvent,
     ) {
         self.workloads.observe(kind, event);
+    }
+}
+
+impl application::ports::SettingsReadObserver for Telemetry {
+    fn observe_site_read(
+        &self,
+        outcome: application::ports::SiteSettingsReadOutcome,
+        recovered: bool,
+    ) {
+        use application::ports::SiteSettingsReadOutcome;
+        let result = match outcome {
+            SiteSettingsReadOutcome::Configured => "configured",
+            SiteSettingsReadOutcome::Missing => "missing",
+            SiteSettingsReadOutcome::Failed => "error",
+        };
+        self.settings_reads.with_label_values(&[result]).inc();
+        self.settings_available
+            .set(i64::from(outcome != SiteSettingsReadOutcome::Failed));
+        if recovered {
+            self.settings_recoveries.inc();
+        }
     }
 }
 

@@ -44,7 +44,8 @@ pub use rendering::{
 };
 pub use runtime::{Clock, HealthCheck, SaveOutcome};
 pub use site::{
-    SettingsStore, SiteSettingsRecord, SiteSettingsValue, ThemeSettingsRecord, ThemeSettingsStore,
+    SettingsReadObserver, SettingsStore, SiteSettingsReadOutcome, SiteSettingsRecord,
+    SiteSettingsValue, ThemeSettingsRecord, ThemeSettingsStore,
 };
 pub use taxonomy::{
     CategoryDeleteOutcome, CategoryLookup, CategoryRepository, CategoryWithUsage, ReorderOutcome,

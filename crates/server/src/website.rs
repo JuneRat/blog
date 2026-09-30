@@ -52,7 +52,10 @@ pub async fn build_router(
 
     let clock = Arc::new(SystemClock);
     let media_guard = Arc::new(infrastructure::PostgresMediaRepository::new(pool.clone()));
-    let settings_store = Arc::new(infrastructure::PostgresSettingsStore::new(pool.clone()));
+    let settings_store = Arc::new(
+        infrastructure::PostgresSettingsStore::new(pool.clone())
+            .with_read_observer(Arc::new(telemetry.clone())),
+    );
     let settings = Arc::new(
         SettingsInteractor::new(
             settings_store.clone(),

@@ -7,6 +7,19 @@ use uuid::Uuid;
 use super::runtime::SaveOutcome;
 use crate::error::UseCaseError;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SiteSettingsReadOutcome {
+    Configured,
+    Missing,
+    Failed,
+}
+
+/// Observe storage availability independently of public rendering's fallback.
+/// No settings values or database error strings cross this boundary.
+pub trait SettingsReadObserver: Send + Sync {
+    fn observe_site_read(&self, outcome: SiteSettingsReadOutcome, recovered: bool);
+}
+
 /// settings.site 分组的存储形态。
 ///
 /// 字段 Option 化以容忍**历史/手工写入的不完整行**：缺字段按「该字段未配置」

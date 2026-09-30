@@ -111,3 +111,15 @@ time() - blog_scheduled_publication_last_success_timestamp_seconds
 CI 的 Compose 演练覆盖安装前后的探针、版本身份、JSON 请求关联、管理端口映射、数据库暂停后的两秒 readiness 失败、liveness 与指标继续响应，以及数据库恢复与容器替换。生产告警阈值、容量与 RPO/RTO 仍按[部署验收](product-roadmap.md)确定。
 
 每次候选部署在[上线验收记录](release-acceptance-template.md)填写告警阈值、持续时间、接收人和恢复时间目标，关联实际触发与恢复证据。混合压测的客户端延迟包含响应体及写入前的版本读取；上方 HTTP 直方图只统计单次请求到响应头的耗时，二者应分别展示。
+
+## 站点设置读取降级
+
+公开页面继续在站点设置读取失败时使用装配回退值；未设置与读取失败分别观察，不以页面仍返回 200 推断配置正常。存储适配器首次失败记 WARN，持续失败每分钟至多重复一次，后续首次成功记 INFO 恢复；日志和指标不包含设置正文或数据库错误字符串。
+
+| 指标 | 含义 |
+|---|---|
+| `blog_site_settings_reads_total{result}` | `configured`、`missing` 或 `error`，包含公开回退隐藏的读取失败 |
+| `blog_site_settings_read_available` | 最近一次读取成功为 1、失败为 0、尚未读取为 -1；不是整体数据库健康检查 |
+| `blog_site_settings_read_recoveries_total` | 连续失败后首次成功的次数 |
+
+告警结合 `increase(blog_site_settings_reads_total{result="error"}[5m])` 与最近读取状态；设置行不存在是合法初始状态，计入 `missing`，不会标为降级。

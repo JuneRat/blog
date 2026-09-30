@@ -19,6 +19,33 @@ fn telemetry() -> Telemetry {
     })
 }
 
+#[test]
+fn site_settings_failure_and_recovery_metrics_do_not_depend_on_http_status() {
+    use application::ports::{SettingsReadObserver, SiteSettingsReadOutcome};
+    let metrics = telemetry();
+    assert!(
+        metrics
+            .encode()
+            .unwrap()
+            .contains("blog_site_settings_read_available -1")
+    );
+    metrics.observe_site_read(SiteSettingsReadOutcome::Missing, false);
+    metrics.observe_site_read(SiteSettingsReadOutcome::Failed, false);
+    assert!(
+        metrics
+            .encode()
+            .unwrap()
+            .contains("blog_site_settings_read_available 0")
+    );
+    metrics.observe_site_read(SiteSettingsReadOutcome::Configured, true);
+    let output = metrics.encode().unwrap();
+    assert!(output.contains("blog_site_settings_reads_total{result=\"error\"} 1"));
+    assert!(output.contains("blog_site_settings_reads_total{result=\"missing\"} 1"));
+    assert!(output.contains("blog_site_settings_reads_total{result=\"configured\"} 1"));
+    assert!(output.contains("blog_site_settings_read_recoveries_total 1"));
+    assert!(output.contains("blog_site_settings_read_available 1"));
+}
+
 #[tokio::test]
 async fn metrics_use_templates_bounded_methods_and_count_errors_without_secrets() {
     let metrics = telemetry();

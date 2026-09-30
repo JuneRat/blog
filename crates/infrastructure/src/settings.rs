@@ -5,11 +5,16 @@
 
 use application::error::UseCaseError;
 use application::ports::{
-    MediaContentKind, SITE_MEDIA_CONTENT_ID, SaveOutcome, SettingsStore, SiteSettingsRecord,
-    SiteSettingsValue, ThemeSettingsRecord, ThemeSettingsStore,
+    MediaContentKind, SITE_MEDIA_CONTENT_ID, SaveOutcome, SettingsReadObserver, SettingsStore,
+    SiteSettingsReadOutcome, SiteSettingsRecord, SiteSettingsValue, ThemeSettingsRecord,
+    ThemeSettingsStore,
 };
 use async_trait::async_trait;
 use sqlx::PgPool;
+use std::{
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
 use time::OffsetDateTime;
 
 use crate::audit::record_change;
@@ -18,23 +23,72 @@ use crate::persistence::{media_ids_for, sync_media_refs};
 /// site 配置存 settings（key='site'，value 为 JSONB 对象，含 schema_version）。
 pub struct PostgresSettingsStore {
     pool: PgPool,
+    read_health: Mutex<ReadHealth>,
+    observer: Option<Arc<dyn SettingsReadObserver>>,
+}
+
+#[derive(Default)]
+struct ReadHealth {
+    degraded: bool,
+    last_warning: Option<Instant>,
 }
 
 impl PostgresSettingsStore {
     pub fn new(database: crate::Database) -> Self {
         let pool = database.pool;
-        Self { pool }
+        Self {
+            pool,
+            read_health: Mutex::default(),
+            observer: None,
+        }
+    }
+
+    pub fn with_read_observer(mut self, observer: Arc<dyn SettingsReadObserver>) -> Self {
+        self.observer = Some(observer);
+        self
+    }
+
+    fn observe_read(&self, outcome: SiteSettingsReadOutcome) {
+        let mut health = self
+            .read_health
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let failed = outcome == SiteSettingsReadOutcome::Failed;
+        let recovered = health.degraded && !failed;
+        if failed {
+            let now = Instant::now();
+            if health
+                .last_warning
+                .is_none_or(|last| now.duration_since(last) >= Duration::from_secs(60))
+            {
+                tracing::warn!("读取站点设置失败，公开页面可能使用回退值");
+                health.last_warning = Some(now);
+            }
+        } else if recovered {
+            tracing::info!("站点设置读取已恢复");
+            health.last_warning = None;
+        }
+        health.degraded = failed;
+        if let Some(observer) = &self.observer {
+            observer.observe_site_read(outcome, recovered);
+        }
     }
 }
 
 #[async_trait]
 impl SettingsStore for PostgresSettingsStore {
     async fn find_site(&self) -> Result<Option<SiteSettingsRecord>, UseCaseError> {
+        let result = sqlx::query_as("SELECT value, version FROM settings WHERE key = 'site'")
+            .fetch_optional(&self.pool)
+            .await;
+        let outcome = match &result {
+            Ok(Some(_)) => SiteSettingsReadOutcome::Configured,
+            Ok(None) => SiteSettingsReadOutcome::Missing,
+            Err(_) => SiteSettingsReadOutcome::Failed,
+        };
+        self.observe_read(outcome);
         let row: Option<(sqlx::types::Json<SiteSettingsValue>, i64)> =
-            sqlx::query_as("SELECT value, version FROM settings WHERE key = 'site'")
-                .fetch_optional(&self.pool)
-                .await
-                .map_err(|e| UseCaseError::Repository(e.to_string()))?;
+            result.map_err(|e| UseCaseError::Repository(e.to_string()))?;
         Ok(row.map(|(value, version)| SiteSettingsRecord {
             value: value.0,
             version,
