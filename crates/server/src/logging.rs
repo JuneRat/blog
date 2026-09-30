@@ -87,6 +87,50 @@ pub fn notice(message: fmt::Arguments<'_>) {
     eprintln!("{}", output.notice(message, OffsetDateTime::now_utc()));
 }
 
+/// 记录轮询失败与恢复；空闲轮询成功时保持安静，不推断是否有文章发布失败。
+#[derive(Default)]
+pub(crate) struct PublicationLog {
+    consecutive_failures: u64,
+}
+
+impl PublicationLog {
+    pub(crate) fn record(
+        &mut self,
+        result: &Result<usize, application::UseCaseError>,
+        elapsed: std::time::Duration,
+        pool: infrastructure::PoolSnapshot,
+    ) {
+        let elapsed_ms = elapsed.as_millis() as u64;
+        match result {
+            Err(error) => {
+                self.consecutive_failures = self.consecutive_failures.saturating_add(1);
+                tracing::error!(
+                    %error,
+                    consecutive_failures = self.consecutive_failures,
+                    elapsed_ms,
+                    pool_size = pool.connections,
+                    pool_idle = pool.idle_connections,
+                    pool_max = pool.max_connections,
+                    "预约发布轮询失败，下次轮询重试"
+                );
+            }
+            Ok(published_count) if self.consecutive_failures > 0 => {
+                let failed_polls = std::mem::take(&mut self.consecutive_failures);
+                tracing::info!(
+                    failed_polls,
+                    published_count = *published_count,
+                    elapsed_ms,
+                    pool_size = pool.connections,
+                    pool_idle = pool.idle_connections,
+                    pool_max = pool.max_connections,
+                    "预约发布轮询已恢复"
+                );
+            }
+            Ok(_) => {}
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -116,6 +160,74 @@ mod tests {
         type Writer = Self;
         fn make_writer(&'a self) -> Self::Writer {
             self.clone()
+        }
+    }
+
+    #[test]
+    fn publication_logs_count_failures_and_report_recovery_once_even_without_due_content() {
+        let capture = Capture::default();
+        let dispatch = subscriber(
+            EnvFilter::new("info"),
+            &LogOutput {
+                zone: SiteTimeZone::default(),
+                json: true,
+            },
+            capture.clone(),
+        );
+        let failed_pool = infrastructure::PoolSnapshot {
+            connections: 5,
+            idle_connections: 0,
+            max_connections: 5,
+        };
+        let recovered_pool = infrastructure::PoolSnapshot {
+            connections: 2,
+            idle_connections: 2,
+            max_connections: 5,
+        };
+        let error = Err(application::UseCaseError::Repository(
+            "pool timed out".into(),
+        ));
+        let slow = std::time::Duration::from_millis(5000);
+        let fast = std::time::Duration::from_millis(3);
+        tracing::dispatcher::with_default(&dispatch, || {
+            let mut log = PublicationLog::default();
+            log.record(&Ok(0), fast, recovered_pool);
+            log.record(&error, slow, failed_pool);
+            log.record(&error, slow, failed_pool);
+            log.record(&Ok(0), fast, recovered_pool);
+            log.record(&Ok(0), fast, recovered_pool);
+            log.record(&error, slow, failed_pool);
+            log.record(&Ok(3), fast, recovered_pool);
+        });
+        let text = String::from_utf8(capture.0.lock().unwrap().clone()).unwrap();
+        let events: Vec<serde_json::Value> = text
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(events.len(), 5, "{text}");
+        for (index, count) in [(0, 1), (1, 2), (3, 1)] {
+            let event = &events[index];
+            assert_eq!(event["level"], "ERROR");
+            let fields = &event["fields"];
+            assert_eq!(fields["message"], "预约发布轮询失败，下次轮询重试");
+            assert!(fields["error"].as_str().unwrap().contains("pool timed out"));
+            assert_eq!(fields["consecutive_failures"], count);
+            assert_eq!(fields["elapsed_ms"], 5000);
+            assert_eq!(fields["pool_size"], 5);
+            assert_eq!(fields["pool_idle"], 0);
+            assert_eq!(fields["pool_max"], 5);
+        }
+        for (index, failures, published) in [(2, 2, 0), (4, 1, 3)] {
+            let event = &events[index];
+            assert_eq!(event["level"], "INFO");
+            let fields = &event["fields"];
+            assert_eq!(fields["message"], "预约发布轮询已恢复");
+            assert_eq!(fields["failed_polls"], failures);
+            assert_eq!(fields["published_count"], published);
+            assert_eq!(fields["elapsed_ms"], 3);
+            assert_eq!(fields["pool_size"], 2);
+            assert_eq!(fields["pool_idle"], 2);
+            assert_eq!(fields["pool_max"], 5);
         }
     }
 

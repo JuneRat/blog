@@ -309,7 +309,7 @@ async fn serve_http(
         tasks.spawn(async move {
             let work = async {
                 let pool = ready.wait_for(|pool| pool.is_some()).await.map_err(|e| e.to_string())?.clone().expect("checked pool");
-                publish_scheduler(assembly::publisher(&pool), telemetry).await;
+                publish_scheduler(pool, telemetry).await;
                 Ok(())
             };
             tokio::select! { result = work => result, _ = stopping.wait_for(|closed| *closed) => Ok(()) }
@@ -344,19 +344,20 @@ async fn serve_http(
 }
 
 async fn publish_scheduler(
-    publisher: application::publishing::PublishDueInteractor,
+    database: infrastructure::Database,
     telemetry: interfaces::observability::Telemetry,
 ) {
+    let publisher = assembly::publisher(&database);
+    let mut log = logging::PublicationLog::default();
     let mut ticks = tokio::time::interval(std::time::Duration::from_secs(30));
     ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         ticks.tick().await;
         let started = std::time::Instant::now();
         let result = publisher.run().await;
-        telemetry.publication_run(started.elapsed(), result.is_ok());
-        if let Err(error) = result {
-            tracing::error!(%error, "到期内容发布失败，下次轮询重试");
-        }
+        let elapsed = started.elapsed();
+        telemetry.publication_run(elapsed, result.is_ok());
+        log.record(&result, elapsed, database.pool_snapshot());
     }
 }
 
