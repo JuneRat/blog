@@ -206,6 +206,7 @@ function PageEditor({ id }: { id: string | null }) {
     ready: !loading && !formMismatch && (id !== null || pageId === null),
     disabled: busy,
     dirty, value: view, template: EMPTY_FORM, baselineVersion: version,
+    readValue: readForm, readDirty: hasUnsaved,
     onRestore: (value, savedVersion) => {
       writeForm(value);
       if (id !== null && savedVersion !== version) {

@@ -169,6 +169,8 @@ export function usePostEditor(id: string | null) {
     disabled: busy || commentBusy,
     dirty,
     value: view,
+    readValue: readForm,
+    readDirty: hasUnsaved,
     template: EMPTY_FORM,
     baselineVersion: version,
     onRestore: (value, savedVersion) => {

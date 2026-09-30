@@ -1,7 +1,8 @@
 import { formatDateTime, useTimeZone } from "./timeZone";
 import { Alert, Button, Select, Space, Typography } from "antd";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { candidateRevision, draftIdentity, draftKey, draftScope, handledKey, readCandidates, readHandled, snapshot, type DraftCandidate, type DraftIdentity } from "./draftStorage";
+import { createDraftWriteQueue, draftValueEquals } from "./draftPersistence";
 
 interface DraftState<T> {
   visit: number; key: string; candidates: DraftCandidate<T>[]; selected: string | null;
@@ -9,9 +10,11 @@ interface DraftState<T> {
 }
 const originLabel = { current: "当前窗口", tab: "本标签先前或复制窗口", other: "其它标签", legacy: "旧版恢复副本" };
 
-export function useLocalDraft<T>({ owner, kind, id, ready, disabled, dirty, value, template, baselineVersion, onRestore, identity = draftIdentity() }: {
+export function useLocalDraft<T>({ owner, kind, id, ready, disabled, dirty, value, template, baselineVersion, onRestore, readValue, readDirty, identity = draftIdentity() }: {
   owner: string | undefined; kind: "post" | "page"; id: string | null; ready: boolean; disabled: boolean; dirty: boolean;
   value: T; template: T; baselineVersion: number | null; onRestore: (value: T, version: number | null) => void;
+  /** Read the form store on departure, including input whose subscription has not rendered yet. */
+  readValue?: () => T; readDirty?: () => boolean;
   identity?: DraftIdentity;
 }) {
   const timeZone = useTimeZone();
@@ -19,18 +22,48 @@ export function useLocalDraft<T>({ owner, kind, id, ready, disabled, dirty, valu
   const key = owner ? draftKey(storageScope, identity) : "";
   const [state, setState] = useState<DraftState<T>>({ visit: -1, key: "", candidates: [], selected: null, reviewing: false, savedAt: null, error: null });
   const activeKey = useRef("");
-  const deletedValue = useRef<string | null>(null);
+  const deletedValue = useRef<{ value: T } | null>(null);
   const adoptedKey = useRef<string | null>(null);
   const handled = useRef<Record<string, string>>({});
   const restoredSource = useRef<DraftCandidate<T> | null>(null);
   const scope = useRef({ key, visit: 0 });
+  const [writes] = useState(createDraftWriteQueue);
+  const mounted = useRef(true);
+  const migratingFrom = useRef<string | null>(null);
+  const previousValue = useRef({ value, revision: 0 });
+  if (!draftValueEquals(previousValue.current.value, value)) {
+    previousValue.current = { value, revision: previousValue.current.revision + 1 };
+  }
   if (scope.current.key !== key) {
     scope.current = { key, visit: scope.current.visit + 1 };
     activeKey.current = "";
     restoredSource.current = null;
+    if (migratingFrom.current !== key) migratingFrom.current = null;
   }
   const visit = scope.current.visit;
-  const serialized = JSON.stringify(value);
+  const revision = previousValue.current.revision;
+  type Pending = { key: string; visit: number; value: T; dirty: boolean; baselineVersion: number | null; readValue?: () => T; readDirty?: () => boolean };
+  const latest = useRef<Pending | null>(null);
+  const lastWritten = useRef<Pending | null>(null);
+
+  function persist(input: Pending) {
+    const currentValue = input.readValue?.() ?? input.value;
+    const currentDirty = input.readDirty?.() ?? input.dirty;
+    if (deletedValue.current && draftValueEquals(deletedValue.current.value, currentValue)) return;
+    const previous = lastWritten.current;
+    if (previous?.key === input.key && previous.baselineVersion === input.baselineVersion &&
+      previous.dirty === currentDirty && draftValueEquals(previous.value, currentValue)) return;
+    const currentScope = () => mounted.current && scope.current.key === input.key && scope.current.visit === input.visit;
+    try {
+      const draft = currentDirty ? snapshot(currentValue, input.baselineVersion) : null;
+      if (draft) localStorage.setItem(input.key, JSON.stringify(draft));
+      else localStorage.removeItem(input.key);
+      lastWritten.current = { ...input, value: currentValue, dirty: currentDirty };
+      if (currentScope()) setState(current => ({ ...current, savedAt: draft?.savedAt ?? null }));
+    } catch {
+      if (currentScope()) setState(current => ({ ...current, error: "本机恢复副本保存失败，可能是浏览器存储已满或不可用。请手动保存或复制正文。" }));
+    }
+  }
 
   function discover() {
     const stored = readCandidates(storageScope, identity, template, id === null);
@@ -44,7 +77,7 @@ export function useLocalDraft<T>({ owner, kind, id, ready, disabled, dirty, valu
     try {
       let candidates = discover();
       const own = candidates.find(candidate => candidate.key === key);
-      if (adoptedKey.current === key && dirty && own && JSON.stringify(own.snapshot.value) === serialized) {
+      if (adoptedKey.current === key && dirty && own && draftValueEquals(own.snapshot.value, value)) {
         candidates = candidates.filter(candidate => candidate.key !== key);
       }
       adoptedKey.current = null;
@@ -52,25 +85,40 @@ export function useLocalDraft<T>({ owner, kind, id, ready, disabled, dirty, valu
     } catch {
       setState({ visit, key, candidates: [], selected: null, reviewing: false, savedAt: null, error: "无法读取本机恢复副本；当前输入尚未保存到本机，请手动保存或复制正文。" });
     }
-  }, [key, visit, ready, template, dirty, serialized]);
+  }, [key, visit, ready, template, dirty, revision]);
 
+  useLayoutEffect(() => {
+    const eligible = key && ready && state.key === key && state.visit === visit && migratingFrom.current !== key &&
+      !(state.reviewing && state.candidates.some(candidate => candidate.key === key)) && !state.error;
+    latest.current = eligible ? { key, visit, value, dirty, baselineVersion, readValue, readDirty } : null;
+  });
+  useLayoutEffect(() => {
+    mounted.current = true;
+    const flush = () => {
+      if (latest.current) writes.enqueue(() => { if (latest.current) persist(latest.current); });
+      writes.flush();
+    };
+    const onVisibility = () => { if (document.visibilityState === "hidden") flush(); };
+    window.addEventListener("pagehide", flush);
+    window.addEventListener("beforeunload", flush);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      mounted.current = false;
+      flush();
+      window.removeEventListener("pagehide", flush);
+      window.removeEventListener("beforeunload", flush);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [writes]);
+  // A scope change flushes the old queue before the next editor can replace its contents.
+  useLayoutEffect(() => () => writes.flush(), [key, visit, writes]);
   useEffect(() => {
-    if (!key || !ready || state.key !== key || state.visit !== visit || (state.reviewing && state.candidates.some(candidate => candidate.key === key)) || state.error) return;
-    if (deletedValue.current === serialized) return;
-    try {
-      if (!dirty) {
-        localStorage.removeItem(key);
-        if (state.savedAt !== null) setState(current => ({ ...current, savedAt: null }));
-      } else {
-        const draft = snapshot(value, baselineVersion);
-        localStorage.setItem(key, JSON.stringify(draft));
-        setState(current => ({ ...current, savedAt: draft.savedAt }));
-      }
-    } catch {
-      setState(current => ({ ...current, error: "本机恢复副本保存失败，可能是浏览器存储已满或不可用。请手动保存或复制正文。" }));
-    }
-    // Timestamps are feedback, not new input to persist.
-  }, [key, visit, ready, state.key, state.visit, state.reviewing, state.candidates, state.error, dirty, serialized, baselineVersion]);
+    const input = latest.current;
+    if (!input) { writes.cancel(); return; }
+    if (!dirty) { writes.cancel(); persist(input); }
+    else writes.enqueue(() => persist(input));
+    // savedAt is feedback, not a new input to persist.
+  }, [key, visit, ready, state.key, state.visit, state.reviewing, state.candidates, state.error, dirty, revision, baselineVersion, writes]);
 
   function markHandled(candidate: DraftCandidate<T>) {
     handled.current[candidate.key] = candidateRevision(candidate);
@@ -87,9 +135,11 @@ export function useLocalDraft<T>({ owner, kind, id, ready, disabled, dirty, valu
   function discardCurrent() {
     if (!key || disabled) return;
     try {
+      writes.cancel();
       // This document only owns this exact key; other windows and legacy slots are never removed.
       localStorage.removeItem(key);
-      deletedValue.current = serialized;
+      deletedValue.current = { value: readValue?.() ?? value };
+      lastWritten.current = null;
       setState(current => ({ ...current, savedAt: null, error: null }));
     } catch {
       setState(current => ({ ...current, error: "浏览器未允许删除本机副本，请在浏览器站点存储设置中清除。" }));
@@ -106,16 +156,21 @@ export function useLocalDraft<T>({ owner, kind, id, ready, disabled, dirty, valu
   function saved(nextId: string, nextVersion: number, merged: T, stillDirty: boolean) {
     if (!owner || !key) return;
     try {
+      writes.cancel();
+      latest.current = null;
       localStorage.removeItem(key);
       const nextKey = draftKey(draftScope(owner, kind, nextId), identity);
       adoptedKey.current = nextKey !== key ? nextKey : null;
-      deletedValue.current = null;
+      migratingFrom.current = nextKey !== key ? key : null;
+      // A delayed form subscription must not recreate the just-committed input.
+      deletedValue.current = stillDirty ? null : { value: merged };
       let savedAt: string | null = null;
       if (stillDirty) {
         const draft = snapshot(merged, nextVersion);
         localStorage.setItem(nextKey, JSON.stringify(draft));
         savedAt = draft.savedAt;
       } else localStorage.removeItem(nextKey);
+      lastWritten.current = { key: nextKey, visit, value: merged, dirty: stillDirty, baselineVersion: nextVersion };
       if (restoredSource.current) { markHandled(restoredSource.current); restoredSource.current = null; }
       setState(current => ({ ...current, candidates: current.candidates.filter(candidate => candidate.key !== key), reviewing: false, error: null, savedAt }));
     } catch {

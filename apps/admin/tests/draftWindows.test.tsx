@@ -4,6 +4,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { AdminProviders } from "../src/providers";
 import { useLocalDraft } from "../src/localDraft";
 import { draftIdentity, draftKey, draftScope, snapshot, type DraftIdentity } from "../src/draftStorage";
+import { DRAFT_WRITE_INTERVAL_MS } from "../src/draftPersistence";
 
 const a: DraftIdentity = { tabId: "tab-a", writerId: "document-a" };
 const b: DraftIdentity = { tabId: "tab-b", writerId: "document-b" };
@@ -28,7 +29,7 @@ function mount(identity: DraftIdentity, name: string) { return render(<AdminProv
 function section(name: string) { return within(screen.getByRole("region", { name })); }
 function change(name: string, content: string) { fireEvent.change(screen.getByLabelText(`${name} content`), { target: { value: content } }); }
 function read(identity: DraftIdentity) { return JSON.parse(localStorage.getItem(draftKey(scope, identity))!); }
-afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 it("两个窗口分别保留输入，A保存和删除都不移除B副本", async () => {
   mount(a, "A"); mount(b, "B");
@@ -146,4 +147,67 @@ it("恢复克隆写入失败不隐藏源修订，刷新后仍可再次恢复", a
   await screen.findByText("发现本机未保存的编辑");
   fireEvent.click(screen.getByRole("button", { name: "恢复本机编辑" }));
   expect((screen.getByLabelText("A content") as HTMLInputElement).value).toBe("不能丢失的源副本");
+});
+
+it("连续长文输入按有界窗口合并，离页补写最新内容且不重复写盘", () => {
+  vi.useFakeTimers();
+  const writes = vi.spyOn(Storage.prototype, "setItem");
+  mount(a, "A");
+  const body = "长文".repeat(100_000);
+  for (let index = 0; index < 8; index += 1) {
+    change("A", `${body}${index}`);
+    act(() => { vi.advanceTimersByTime(DRAFT_WRITE_INTERVAL_MS / 8); });
+  }
+  expect(read(a).value.content).toBe(`${body}7`);
+  const ownWrites = () => writes.mock.calls.filter(([key]) => key === draftKey(scope, a));
+  expect(ownWrites()).toHaveLength(1);
+  act(() => { vi.advanceTimersByTime(DRAFT_WRITE_INTERVAL_MS * 2); });
+  expect(ownWrites()).toHaveLength(1);
+  change("A", `${body}最后输入`);
+  act(() => { window.dispatchEvent(new Event("pagehide")); });
+  expect(read(a).value.content).toBe(`${body}最后输入`);
+  expect(ownWrites()).toHaveLength(2);
+  act(() => { vi.advanceTimersByTime(DRAFT_WRITE_INTERVAL_MS); });
+  expect(ownWrites()).toHaveLength(2);
+});
+
+it("离页直接读取表单store，保存和删除不会被待写任务复活", () => {
+  vi.useFakeTimers();
+  let store = template;
+  function StoreHarness() {
+    const draft = useLocalDraft({ owner: "owner", kind: "page", id: "page-id", identity: a, ready: true, disabled: false,
+      dirty: false, value: template, template, baselineVersion: 2, onRestore: () => {},
+      readValue: () => store, readDirty: () => store !== template,
+    });
+    return <>{draft.panel}<button onClick={() => draft.saved("page-id", 3, store, false)}>提交</button></>;
+  }
+  render(<AdminProviders><StoreHarness /></AdminProviders>);
+  store = { ...template, content: "订阅尚未渲染的输入" };
+  act(() => { window.dispatchEvent(new Event("beforeunload")); });
+  expect(read(a).value.content).toBe(store.content);
+  fireEvent.click(screen.getByRole("button", { name: "提交" }));
+  act(() => { vi.advanceTimersByTime(DRAFT_WRITE_INTERVAL_MS); });
+  expect(localStorage.getItem(draftKey(scope, a))).toBeNull();
+  store = template;
+});
+
+it("切换身份与实体时补写旧槽，创建ID迁移不会复活new槽", () => {
+  vi.useFakeTimers();
+  function ScopeHarness({ owner, id, content }: { owner: string; id: string | null; content: string }) {
+    const value = { ...template, content };
+    const draft = useLocalDraft({ owner, kind: "page", id, identity: a, ready: true, disabled: false,
+      dirty: true, value, template, baselineVersion: id === null ? null : 2, onRestore: () => {},
+    });
+    return <>{draft.panel}<button onClick={() => draft.saved("created", 3, value, true)}>获得ID</button></>;
+  }
+  const view = render(<AdminProviders><ScopeHarness owner="owner" id="page-id" content="原身份编辑" /></AdminProviders>);
+  view.rerender(<AdminProviders><ScopeHarness owner="another" id="another-id" content="新身份编辑" /></AdminProviders>);
+  expect(read(a).value.content).toBe("原身份编辑");
+  act(() => { vi.advanceTimersByTime(DRAFT_WRITE_INTERVAL_MS); });
+  expect(JSON.parse(localStorage.getItem(draftKey(draftScope("another", "page", "another-id"), a))!).value.content).toBe("新身份编辑");
+  view.rerender(<AdminProviders><ScopeHarness owner="owner" id={null} content="创建期间继续输入" /></AdminProviders>);
+  fireEvent.click(screen.getByRole("button", { name: "获得ID" }));
+  act(() => { window.dispatchEvent(new Event("pagehide")); vi.advanceTimersByTime(DRAFT_WRITE_INTERVAL_MS); });
+  expect(localStorage.getItem(draftKey(draftScope("owner", "page", null), a))).toBeNull();
+  expect(JSON.parse(localStorage.getItem(draftKey(draftScope("owner", "page", "created"), a))!).value.content).toBe("创建期间继续输入");
 });
