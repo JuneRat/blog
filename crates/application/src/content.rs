@@ -1,11 +1,11 @@
 //! 文章用例：创建、编辑、发布、撤回。
 //!
 //! 权限约定（M2 RBAC 已接入）：
-//! - 写通道仅限受控 CLI（`Actor::ensure_write_channel`），公开 HTTP 无写路由；
+//! - 写通道限受控 CLI 或管理 HTTP（`Actor::ensure_write_channel`）；
 //! - 各动作按 own/any 权限对检查（post.update/post.update_any 等），
 //!   any 覆盖 own；角色名称不替代动作检查。
 //!
-//! 所有写入携带 expected_version，冲突不自动覆盖。
+//! 创建以外的写入均校验版本前提，冲突不自动覆盖。
 
 use std::sync::Arc;
 
