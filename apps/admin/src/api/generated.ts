@@ -98,6 +98,20 @@ series?: Array<SeriesPlacement> | null,
  */
 cover_media_id?: string | null, expected_version?: number | null, };
 
+export type HtmlRebuildCounts = { posts: number, pages: number, comments: number, };
+
+export type HtmlRebuildFailure = { kind: HtmlRebuildKind | null, id: string | null, message: string, };
+
+export type HtmlRebuildJob = { id: string, status: HtmlRebuildJobStatus, report: HtmlRebuildReport, };
+
+export type HtmlRebuildJobStatus = "running" | "completed" | "failed" | "interrupted";
+
+export type HtmlRebuildKind = "post" | "page" | "comment";
+
+export type HtmlRebuildReport = { rebuilt: HtmlRebuildCounts, skipped: HtmlRebuildCounts, pending: HtmlRebuildCounts | null, batches: number, has_more: boolean, dry_run: boolean, failure: HtmlRebuildFailure | null, };
+
+export type HtmlRebuildView = { pending: HtmlRebuildCounts | null, job: HtmlRebuildJob | null, available: boolean, };
+
 export type Me = { time_zone: string, permissions: Array<string>, csrf_token: string, channel: SessionChannel, user_id: string, username: string, display_name: string | null, bio: string | null, version: number, avatar_media_id: string | null, avatar_url: string | null, };
 
 export type MediaAsset = { id: string, original_name: string, mime: string, byte_size: number, width: number, height: number, deleted_at: string | null, version: number, created_at: string, owner_id: string | null, owner_display: string, url: string,

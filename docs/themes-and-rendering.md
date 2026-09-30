@@ -121,7 +121,9 @@ sitemap 的 50,000 条限制是整个文件的预算：首页、文章、Page、
 
 [内容仓储](../crates/infrastructure/src/persistence/content.rs) 在事务外等待渲染，然后把源文、`content_html`、`content_render_version` 和媒体关系同事务提交。公开 Post/Page 详情直接读取保存的 HTML，不在每次访问时转换 Markdown。
 
-`CONTENT_RENDER_VERSION` 标记 Markdown 转换、清洗与媒体引用提取的整个派生流水线；任一步规则改变时都需要递增版本（评论使用 `COMMENT_RENDER_VERSION`），并显式运行 `blog rebuild-html`。当前正文版本 2 修复了带查询串、fragment、编码路径或浏览器路径规范化的图片引用。该命令分批重建不匹配的记录，即使 HTML 字节相同也重新同步引用；以业务版本和源文作条件，避免覆盖并发编辑，不增加编辑版本或改变业务更新时间。启动、结构迁移和普通业务命令不扫描或重建历史 HTML，公开读取仍使用已存储的清洗结果。涉及清洗安全规则的升级必须在恢复公开访问前完成重建；媒体物理清理要求所有 Post/Page 派生版本已匹配。步骤与失败重试见[运维](operations-and-recovery.md#html-显式重建)。
+`CONTENT_RENDER_VERSION` 标记 Markdown 转换、清洗与媒体引用提取的整个派生流水线；任一步规则改变时都需要递增版本（评论使用 `COMMENT_RENDER_VERSION`），并通过 CLI `blog rebuild-html` 或下述后台入口显式重建。当前正文版本 2 修复了带查询串、fragment、编码路径或浏览器路径规范化的图片引用。重建分批处理不匹配的记录，即使 HTML 字节相同也重新同步引用；以业务版本和源文作条件，避免覆盖并发编辑，不增加编辑版本或改变业务更新时间。启动、结构迁移和普通业务命令不扫描或重建历史 HTML，公开读取仍使用已存储的清洗结果。涉及清洗安全规则的升级必须在恢复公开访问前完成重建；媒体物理清理要求所有 Post/Page 派生版本已匹配。步骤与失败重试见[运维](operations-and-recovery.md#html-显式重建)。
+
+显式重建也可由具有 `settings.manage` 的用户在后台「站点设置 → 内容维护」启动，固定每批 100 条、最多 100 批；后台复用当前正文/评论渲染运行时与同一逐记录 CAS、引用和审计事务。HTTP 只启动任务或读取进度，服务端每进程只运行一个任务；浏览器关闭后继续执行，服务重启后须查看剩余量并手动再次执行。后台入口同样禁止在恢复隔离期间使用，不改变业务编辑版本或更新时间；生命周期与跨进程边界见[后台重建操作](operations-and-recovery.md#在管理后台执行)。
 
 ## 执行策略与实际预算
 

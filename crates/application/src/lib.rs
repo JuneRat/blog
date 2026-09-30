@@ -9,6 +9,7 @@ pub mod content_preview;
 pub mod content_queries;
 pub mod error;
 pub mod html_rebuild;
+pub mod html_rebuild_admin;
 pub mod identity;
 pub mod installation;
 pub mod media;

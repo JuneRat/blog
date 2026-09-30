@@ -5,10 +5,19 @@
 
 mod common;
 
-use std::sync::{Arc, Mutex};
+use std::{
+    future::Future,
+    path::PathBuf,
+    sync::{Arc, Mutex},
+};
 
 use application::auth::{AuthDeps, AuthInteractor};
 use application::content::PostInteractor;
+use application::html_rebuild::{RebuildCounts, RebuildReport};
+use application::html_rebuild_admin::{
+    HtmlRebuildAdminInteractor, HtmlRebuildJob, HtmlRebuildJobStatus, HtmlRebuildJobs,
+    HtmlRebuildView,
+};
 use application::identity::{Actor, CreateUserCmd, RoleInteractor, UserInteractor};
 use application::page::PageInteractor;
 use application::ports::{
@@ -91,6 +100,60 @@ impl SecureRandom for TestRandom {
     }
 }
 
+#[derive(Default)]
+struct FakeHtmlRebuildState {
+    views: usize,
+    starts: Vec<application::audit::AuditContext>,
+    job: Option<HtmlRebuildJob>,
+}
+
+#[derive(Default)]
+struct FakeHtmlRebuildJobs(Mutex<FakeHtmlRebuildState>);
+
+#[async_trait]
+impl HtmlRebuildJobs for FakeHtmlRebuildJobs {
+    async fn view(&self) -> Result<HtmlRebuildView, application::UseCaseError> {
+        let mut state = self.0.lock().unwrap();
+        state.views += 1;
+        Ok(HtmlRebuildView {
+            pending: state.job.is_none().then_some(RebuildCounts {
+                posts: 3,
+                pages: 2,
+                comments: 1,
+            }),
+            job: state.job.clone(),
+            available: true,
+        })
+    }
+
+    async fn start(
+        &self,
+        audit: application::audit::AuditContext,
+    ) -> Result<HtmlRebuildJob, application::UseCaseError> {
+        let mut state = self.0.lock().unwrap();
+        state.starts.push(audit);
+        let job = HtmlRebuildJob {
+            id: Uuid::from_u128(42),
+            status: HtmlRebuildJobStatus::Running,
+            report: RebuildReport {
+                rebuilt: RebuildCounts {
+                    posts: 2,
+                    ..Default::default()
+                },
+                skipped: RebuildCounts {
+                    pages: 1,
+                    ..Default::default()
+                },
+                batches: 1,
+                has_more: true,
+                ..Default::default()
+            },
+        };
+        state.job = Some(job.clone());
+        Ok(job)
+    }
+}
+
 fn site_fallback() -> SiteInfo {
     SiteInfo {
         home_page_size: application::site_info::DEFAULT_HOME_PAGE_SIZE,
@@ -112,6 +175,8 @@ struct Stack {
     router: axum::Router,
     idp: Arc<FakeIdpClient>,
     pool: PgPool,
+    media_dir: PathBuf,
+    html_rebuild: Arc<FakeHtmlRebuildJobs>,
 }
 
 async fn build(pool: PgPool) -> Stack {
@@ -345,6 +410,7 @@ async fn build(pool: PgPool) -> Stack {
         passwords: passwords.clone(),
         secure_cookies: false,
     };
+    let media_dir = common::media_dir("settings");
     let admin_state = AdminState {
         content_queries: common::content_queries(&pool),
         auth,
@@ -357,9 +423,10 @@ async fn build(pool: PgPool) -> Stack {
         series,
         settings,
         roles,
-        media: common::media_interactor(pool.clone(), common::media_dir("settings")),
+        media: common::media_interactor(pool.clone(), media_dir.clone()),
         secure_cookies: false,
     };
+    let html_rebuild = Arc::new(FakeHtmlRebuildJobs::default());
 
     let router = mount_theme_assets(
         public_router(PublicSiteState {
@@ -372,6 +439,12 @@ async fn build(pool: PgPool) -> Stack {
     .merge(admin_router(admin_state.clone()))
     .merge(pages_router(admin_state.clone()))
     .merge(settings_router(admin_state.clone()))
+    .merge(interfaces::http_html_rebuild::html_rebuild_router(
+        interfaces::http_html_rebuild::HtmlRebuildState {
+            rebuild: Arc::new(HtmlRebuildAdminInteractor::new(html_rebuild.clone())),
+            admin: admin_state.clone(),
+        },
+    ))
     .merge(interfaces::http_audit::audit_router(
         interfaces::http_audit::AuditState {
             audit: Arc::new(application::audit::AuditInteractor::new(Arc::new(
@@ -391,11 +464,243 @@ async fn build(pool: PgPool) -> Stack {
         },
     ))
     .layer(middleware::from_fn(request_context));
-    Stack { router, idp, pool }
+    Stack {
+        router,
+        idp,
+        pool,
+        media_dir,
+        html_rebuild,
+    }
 }
 
 async fn fresh_stack() -> Stack {
     build(common::fresh_database("blog_settings_test").await).await
+}
+
+// These new transport regressions reuse the normal authenticated fixture while
+// owning random databases, so an independent workspace run cannot reset them.
+async fn isolated_html_rebuild<F, R>(scenario: F)
+where
+    F: FnOnce(Stack) -> R + Send + 'static,
+    R: Future<Output = ()> + Send + 'static,
+{
+    let name = format!("blog_html_http_{}", Uuid::now_v7().simple());
+    let stack = build(common::fresh_database(&name).await).await;
+    let pool = stack.pool.clone();
+    let media_dir = stack.media_dir.clone();
+    let result = tokio::spawn(scenario(stack)).await;
+    pool.close().await;
+    let admin = common::connect(&common::admin_url()).await.unwrap();
+    sqlx::raw_sql(&format!("DROP DATABASE {name} WITH (FORCE)"))
+        .execute(&admin)
+        .await
+        .unwrap();
+    admin.close().await;
+    std::fs::remove_dir_all(media_dir).unwrap();
+    if let Err(error) = result {
+        std::panic::resume_unwind(error.into_panic());
+    }
+}
+
+const HTML_REBUILD_PATH: &str = "/api/admin/v1/maintenance/html-rebuild";
+
+async fn html_rebuild_exchange(
+    router: &axum::Router,
+    request: Request<Body>,
+) -> (StatusCode, serde_json::Value) {
+    let response = router.clone().oneshot(request).await.unwrap();
+    assert_eq!(
+        response
+            .headers()
+            .get(axum::http::header::CACHE_CONTROL)
+            .unwrap(),
+        "no-store",
+        "成功和提前拒绝的维护响应都不得缓存"
+    );
+    assert!(response.headers().contains_key("x-request-id"));
+    let status = response.status();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    (status, serde_json::from_slice(&body).unwrap())
+}
+
+#[tokio::test]
+async fn html_rebuild_auth_permission_origin_and_csrf_precede_job_admission() {
+    isolated_html_rebuild(|stack| async move {
+        let (editor, editor_csrf) = login_as(&stack, "editor").await;
+        let (admin, csrf) = login_as(&stack, "admin").await;
+        for (method, cookie, token, origin, expected, code) in [
+            (
+                "GET",
+                None,
+                None,
+                "https://blog.test",
+                StatusCode::UNAUTHORIZED,
+                "unauthenticated",
+            ),
+            (
+                "POST",
+                None,
+                None,
+                "https://blog.test",
+                StatusCode::UNAUTHORIZED,
+                "unauthenticated",
+            ),
+            (
+                "GET",
+                Some(editor.as_str()),
+                None,
+                "https://blog.test",
+                StatusCode::FORBIDDEN,
+                "forbidden",
+            ),
+            (
+                "POST",
+                Some(editor.as_str()),
+                Some(editor_csrf.as_str()),
+                "https://blog.test",
+                StatusCode::FORBIDDEN,
+                "forbidden",
+            ),
+            (
+                "POST",
+                Some(admin.as_str()),
+                None,
+                "https://blog.test",
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+            ),
+            (
+                "POST",
+                Some(admin.as_str()),
+                Some("wrong-csrf"),
+                "https://blog.test",
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+            ),
+            (
+                "POST",
+                Some(admin.as_str()),
+                Some(csrf.as_str()),
+                "https://evil.example",
+                StatusCode::FORBIDDEN,
+                "forbidden",
+            ),
+        ] {
+            let mut request = Request::builder()
+                .method(method)
+                .uri(HTML_REBUILD_PATH)
+                .header("host", "blog.test")
+                .header("origin", origin);
+            if let Some(cookie) = cookie {
+                request = request.header("cookie", format!("blog_session={cookie}"));
+            }
+            if let Some(token) = token {
+                request = request.header("x-csrf-token", token);
+            }
+            let (status, body) =
+                html_rebuild_exchange(&stack.router, request.body(Body::empty()).unwrap()).await;
+            assert_eq!(status, expected, "{method} {origin}: {body}");
+            assert_eq!(body["code"], code);
+            assert!(body["request_id"].is_string());
+        }
+        let state = stack.html_rebuild.0.lock().unwrap();
+        assert_eq!(state.views, 0, "拒绝读取不能调用维护 port");
+        assert!(state.starts.is_empty(), "拒绝写入不能启动任务");
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn html_rebuild_wire_view_and_admission_use_only_the_authenticated_actor_and_verified_ip() {
+    isolated_html_rebuild(|stack| async move {
+        // This delegated settings manager is not the protected Admin role holder.
+        let (admin, csrf) = login_as(&stack, "admin").await;
+        let actor_id: Uuid = sqlx::query_scalar("SELECT id FROM users WHERE username='admin'")
+            .fetch_one(&stack.pool)
+            .await
+            .unwrap();
+        let owner_id: Uuid = sqlx::query_scalar("SELECT id FROM users WHERE username='owner'")
+            .fetch_one(&stack.pool)
+            .await
+            .unwrap();
+        let router = stack.router.clone().layer(axum::Extension(
+            interfaces::http_client_ip::TrustedProxies(vec!["127.0.0.1".parse().unwrap()]),
+        ));
+        let read = || {
+            Request::builder()
+                .uri(HTML_REBUILD_PATH)
+                .header("cookie", format!("blog_session={admin}"))
+                .body(Body::empty())
+                .unwrap()
+        };
+        let (status, initial) = html_rebuild_exchange(&router, read()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            initial,
+            json!({"pending":{"posts":3,"pages":2,"comments":1},"job":null,"available":true})
+        );
+
+        for (peer, forwarded, expected_ip) in [
+            (
+                Some("127.0.0.1:42000"),
+                "203.0.113.99, 2001:db8::17, 127.0.0.1",
+                Some("2001:db8::17"),
+            ),
+            (
+                Some("198.51.100.8:42000"),
+                "203.0.113.99",
+                Some("198.51.100.8"),
+            ),
+            (None, "203.0.113.99", None),
+        ] {
+            let mut request = Request::builder()
+                .method("POST")
+                .uri(HTML_REBUILD_PATH)
+                .header("host", "blog.test")
+                .header("origin", "https://blog.test")
+                .header("cookie", format!("blog_session={admin}"))
+                .header("x-csrf-token", &csrf)
+                .header("x-forwarded-for", forwarded)
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"actor_id":owner_id,"ip_address":"203.0.113.99"}).to_string(),
+                ))
+                .unwrap();
+            if let Some(peer) = peer {
+                request.extensions_mut().insert(axum::extract::ConnectInfo(
+                    peer.parse::<std::net::SocketAddr>().unwrap(),
+                ));
+            }
+            let (status, admitted) = html_rebuild_exchange(&router, request).await;
+            assert_eq!(status, StatusCode::ACCEPTED);
+            assert_eq!(admitted["id"], Uuid::from_u128(42).to_string());
+            assert_eq!(admitted["status"], "running");
+            assert_eq!(
+                admitted["report"],
+                json!({
+                    "rebuilt":{"posts":2,"pages":0,"comments":0},
+                    "skipped":{"posts":0,"pages":1,"comments":0},
+                    "pending":null,"batches":1,"has_more":true,"dry_run":false,"failure":null,
+                })
+            );
+            let (status, view) = html_rebuild_exchange(&router, read()).await;
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(
+                view,
+                json!({"pending":null,"job":admitted,"available":true})
+            );
+            let audit = *stack.html_rebuild.0.lock().unwrap().starts.last().unwrap();
+            assert_eq!(audit.actor_id, Some(actor_id));
+            assert_eq!(
+                audit.ip_address.map(|ip| ip.to_string()).as_deref(),
+                expected_ip
+            );
+        }
+        let state = stack.html_rebuild.0.lock().unwrap();
+        assert_eq!(state.views, 4);
+        assert_eq!(state.starts.len(), 3);
+    })
+    .await;
 }
 
 #[tokio::test]

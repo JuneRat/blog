@@ -17,6 +17,7 @@ struct LiveSite {
     router: RwLock<Router>,
     pool: watch::Sender<Option<infrastructure::Database>>,
     telemetry: interfaces::observability::Telemetry,
+    html_rebuild: Arc<crate::html_rebuild::HtmlRebuildCoordinator>,
 }
 
 struct Setup {
@@ -153,6 +154,8 @@ impl Installer for Setup {
                     .with_observer(Arc::new(live.telemetry.clone())),
             ),
             &live.telemetry,
+            live.html_rebuild.clone(),
+            false,
         )
         .await
         .map_err(|_| {
@@ -211,6 +214,7 @@ pub async fn serve(
         router: RwLock::new(Router::new()),
         pool,
         telemetry: telemetry.clone(),
+        html_rebuild: Arc::new(crate::html_rebuild::HtmlRebuildCoordinator::default()),
     });
     let setup = Arc::new(Setup {
         saved: RwLock::new(saved),
@@ -220,6 +224,7 @@ pub async fn serve(
         live: Arc::downgrade(&live),
     });
     let metrics_pool = live.pool.subscribe();
+    let html_rebuild = live.html_rebuild.clone();
     *live.router.write().expect("live router lock") =
         interfaces::http_install::install_router(interfaces::http_install::InstallState {
             installer: setup,
@@ -247,7 +252,10 @@ pub async fn serve(
         telemetry.clone(),
         metrics_pool,
         site.http,
-        true,
+        crate::HttpBackground {
+            html_rebuild,
+            scheduler_enabled: true,
+        },
     );
     server.await
 }

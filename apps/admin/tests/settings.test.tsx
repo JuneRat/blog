@@ -7,6 +7,7 @@ import { identityApi } from "../src/api/identity";
 import { commentsApi } from "../src/api/comments";
 import { mediaApi } from "../src/api/media";
 import { settingsApi, themeSettingsApi, retentionApi } from "../src/api/settings";
+import { maintenanceApi } from "../src/api/maintenance";
 import { paths } from "../src/router";
 import type { SiteSettings } from "../src/types";
 
@@ -36,6 +37,7 @@ vi.mock("../src/api/media", async (load) => {
   const original = await load<typeof import("../src/api/media")>();
   return { ...original, mediaApi: { ...original.mediaApi, list: vi.fn(), upload: vi.fn() } };
 });
+vi.mock("../src/api/maintenance", () => ({ maintenanceApi: { get: vi.fn(), start: vi.fn() } }));
 
 const fallbackView: SiteSettings = {
   home_page_size: 12,
@@ -78,6 +80,16 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("站点设置屏", () => {
+  it("内容维护入口仅激活后查询，不自动创建任务", async () => {
+    vi.mocked(maintenanceApi.get).mockResolvedValue({ available: true, pending: { posts: 0, pages: 0, comments: 0 }, job: null });
+    render(<App />);
+    await screen.findByLabelText("站点时区");
+    expect(maintenanceApi.get).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("tab", { name: "内容维护" }));
+    await screen.findByText("没有待重建内容。");
+    expect(maintenanceApi.get).toHaveBeenCalledTimes(1);
+    expect(maintenanceApi.start).not.toHaveBeenCalled();
+  });
   it("评论审核策略和全站开关立即保存，并沿用最新设置版本", async () => {
     vi.mocked(commentsApi.savePolicy).mockImplementation(async policy => {
       const updated = { ...policy, moderation: policy.moderation ?? 'first_comment' as const, version: policy.version + 1 };

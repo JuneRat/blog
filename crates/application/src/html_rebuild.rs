@@ -113,7 +113,7 @@ pub trait HtmlRebuildStore: Send + Sync {
     ) -> Result<RebuildBatch, RebuildBatchError>;
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct RebuildFailure {
     pub kind: Option<HtmlKind>,
     pub id: Option<Uuid>,
@@ -132,11 +132,12 @@ impl fmt::Display for RebuildFailure {
     }
 }
 
-#[derive(Debug, Default, Serialize)]
+#[derive(Debug, Default, Clone, Serialize)]
 pub struct RebuildReport {
     pub rebuilt: RebuildCounts,
     pub skipped: RebuildCounts,
-    /// 成功结束时的剩余快照；失败时未知（null），不能用旧快照冒充当前数量。
+    /// 只读预检或成功结束时的剩余快照；运行中和失败时未知（null），
+    /// 不能用最初的读取结果冒充当前数量。
     pub pending: Option<RebuildCounts>,
     /// 实际尝试的批次数，三类来源共用额度，包含失败或空批次。
     pub batches: u32,
@@ -145,7 +146,7 @@ pub struct RebuildReport {
     pub failure: Option<RebuildFailure>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RebuildError(pub Box<RebuildReport>);
 
 impl fmt::Display for RebuildError {
@@ -186,26 +187,51 @@ pub struct HtmlRebuildInteractor {
     store: Arc<dyn HtmlRebuildStore>,
 }
 
+/// 同步接收已确认提交的进度。需要留存快照时由观察者 clone；
+/// 观察者不得阻塞批次调度，也不负责取消或调度后台任务。
+pub trait RebuildObserver: Send + Sync {
+    fn progress(&self, report: &RebuildReport);
+}
+
+struct IgnoreProgress;
+
+impl RebuildObserver for IgnoreProgress {
+    fn progress(&self, _: &RebuildReport) {}
+}
+
 impl HtmlRebuildInteractor {
     pub fn new(store: Arc<dyn HtmlRebuildStore>) -> Self {
         Self { store }
     }
 
     pub async fn run(&self, options: RebuildOptions) -> Result<RebuildReport, RebuildError> {
+        self.run_with_progress(options, &IgnoreProgress).await
+    }
+
+    pub async fn run_with_progress(
+        &self,
+        options: RebuildOptions,
+        observer: &dyn RebuildObserver,
+    ) -> Result<RebuildReport, RebuildError> {
         let mut report = RebuildReport {
             dry_run: options.dry_run,
+            has_more: true,
             ..Default::default()
         };
+        observer.progress(&report);
         if let Err(error) = options.validate() {
-            return Err(report.fail(None, None, error));
+            return Err(observed_failure(report, None, None, error, observer));
         }
         let pending = match self.store.pending().await {
             Ok(counts) => counts,
-            Err(error) => return Err(report.fail(None, None, error)),
+            Err(error) => {
+                return Err(observed_failure(report, None, None, error, observer));
+            }
         };
         if options.dry_run {
             report.pending = Some(pending);
             report.has_more = !pending.is_empty();
+            observer.progress(&report);
             return Ok(report);
         }
         for kind in [HtmlKind::Post, HtmlKind::Page, HtmlKind::Comment] {
@@ -223,10 +249,17 @@ impl HtmlRebuildInteractor {
                     Ok(batch) => batch,
                     Err(error) => {
                         report.record(kind, &error.progress);
-                        return Err(report.fail(Some(kind), error.id, error.source));
+                        return Err(observed_failure(
+                            report,
+                            Some(kind),
+                            error.id,
+                            error.source,
+                            observer,
+                        ));
                     }
                 };
                 report.record(kind, &batch);
+                observer.progress(&report);
                 if batch.rebuilt + batch.skipped < options.batch_size as u64
                     || batch.cursor <= after
                 {
@@ -239,9 +272,22 @@ impl HtmlRebuildInteractor {
             Ok(counts) => {
                 report.pending = Some(counts);
                 report.has_more = !counts.is_empty();
+                observer.progress(&report);
                 Ok(report)
             }
-            Err(error) => Err(report.fail(None, None, error)),
+            Err(error) => Err(observed_failure(report, None, None, error, observer)),
         }
     }
+}
+
+fn observed_failure(
+    report: RebuildReport,
+    kind: Option<HtmlKind>,
+    id: Option<Uuid>,
+    source: UseCaseError,
+    observer: &dyn RebuildObserver,
+) -> RebuildError {
+    let error = report.fail(kind, id, source);
+    observer.progress(&error.0);
+    error
 }

@@ -32,6 +32,8 @@ pub async fn build_router(
     roles: Arc<RoleInteractor>,
     runtime: Arc<RenderingRuntime>,
     telemetry: &interfaces::observability::Telemetry,
+    html_rebuild: Arc<crate::html_rebuild::HtmlRebuildCoordinator>,
+    recovery_mode: bool,
 ) -> Result<axum::Router, String> {
     let time_zones = Arc::new(infrastructure::IanaTimeZones);
     let public_posts = Arc::new(PostgresPublishedPostQuery::new(pool.clone()));
@@ -139,6 +141,16 @@ pub async fn build_router(
     let audit = Arc::new(application::audit::AuditInteractor::new(Arc::new(
         infrastructure::audit::PostgresAuditQuery::new(pool.clone()),
     )));
+    let html_rebuild = Arc::new(
+        application::html_rebuild_admin::HtmlRebuildAdminInteractor::new(Arc::new(
+            crate::html_rebuild::WebsiteHtmlRebuildJobs::new(
+                pool.clone(),
+                runtime.clone(),
+                html_rebuild,
+                recovery_mode,
+            ),
+        )),
+    );
     Ok(interfaces::http::app_router(
         AppState {
             public: PublicSiteState {
@@ -151,6 +163,7 @@ pub async fn build_router(
             content_preview: Arc::new(application::content_preview::ContentPreview::new(runtime)),
             retention,
             audit,
+            html_rebuild,
         },
         HttpAssets {
             themes: installed.assets,

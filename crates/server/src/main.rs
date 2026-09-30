@@ -3,6 +3,7 @@
 
 mod assembly;
 mod config;
+mod html_rebuild;
 mod installation;
 mod logging;
 mod observability;
@@ -231,12 +232,15 @@ async fn run(command: Command, mut config: config::DeploymentConfig) -> Result<(
             let site = site_config.expect("serve configuration was validated above");
             let telemetry = interfaces::observability::Telemetry::new(&observability::build_info());
             let metrics_listener = observability::bind(config.metrics_bind()?).await?;
+            let html_rebuild = Arc::new(html_rebuild::HtmlRebuildCoordinator::default());
             let app = website::build_router(
                 &pool,
                 &site,
                 roles,
                 Arc::new(RenderingRuntime::default().with_observer(Arc::new(telemetry.clone()))),
                 &telemetry,
+                html_rebuild.clone(),
+                recovery_mode,
             )
             .await?;
             serve(
@@ -245,12 +249,20 @@ async fn run(command: Command, mut config: config::DeploymentConfig) -> Result<(
                 pool,
                 telemetry,
                 metrics_listener,
-                recovery_mode,
+                HttpBackground {
+                    html_rebuild,
+                    scheduler_enabled: !recovery_mode,
+                },
                 site.http,
             )
             .await
         }
     }
+}
+
+struct HttpBackground {
+    html_rebuild: Arc<html_rebuild::HtmlRebuildCoordinator>,
+    scheduler_enabled: bool,
 }
 
 async fn serve(
@@ -259,7 +271,7 @@ async fn serve(
     pool: infrastructure::Database,
     telemetry: interfaces::observability::Telemetry,
     metrics_listener: Option<tokio::net::TcpListener>,
-    recovery_mode: bool,
+    background: HttpBackground,
     limits: transport::HttpLimits,
 ) -> Result<(), String> {
     let listener = tokio::net::TcpListener::bind(bind)
@@ -277,7 +289,7 @@ async fn serve(
         telemetry.clone(),
         pool_receiver,
         limits,
-        !recovery_mode,
+        background,
     );
     server.await
 }
@@ -289,7 +301,7 @@ async fn serve_http(
     telemetry: interfaces::observability::Telemetry,
     pool: tokio::sync::watch::Receiver<Option<infrastructure::Database>>,
     limits: transport::HttpLimits,
-    scheduler_enabled: bool,
+    background: HttpBackground,
 ) -> Result<(), String> {
     let (shutdown, receiver) = tokio::sync::watch::channel(false);
     let mut tasks = tokio::task::JoinSet::new();
@@ -303,7 +315,7 @@ async fn serve_http(
             limits,
         ));
     }
-    if scheduler_enabled {
+    if background.scheduler_enabled {
         let mut ready = pool.clone();
         let mut stopping = receiver;
         tasks.spawn(async move {
@@ -324,7 +336,9 @@ async fn serve_http(
         },
     };
     let deadline = tokio::time::Instant::now() + limits.shutdown;
+    background.html_rebuild.close();
     shutdown.send_replace(true);
+    background.html_rebuild.shutdown().await;
     let drain = async {
         while let Some(result) = tasks.join_next().await {
             if let Err(error) = result {

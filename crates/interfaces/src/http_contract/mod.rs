@@ -2,11 +2,13 @@
 mod audit;
 mod comments;
 mod common;
+mod html_rebuild;
 mod identity;
 mod settings;
 pub use audit::*;
 pub use comments::*;
 pub use common::*;
+pub use html_rebuild::*;
 pub use identity::*;
 pub use settings::*;
 
@@ -42,6 +44,13 @@ pub fn typescript() -> String {
     declare::<AuditField>(&mut out);
     declare::<AuditRecord>(&mut out);
     declare::<AuditPage>(&mut out);
+    declare::<HtmlRebuildCounts>(&mut out);
+    declare::<HtmlRebuildKind>(&mut out);
+    declare::<HtmlRebuildFailure>(&mut out);
+    declare::<HtmlRebuildReport>(&mut out);
+    declare::<HtmlRebuildJobStatus>(&mut out);
+    declare::<HtmlRebuildJob>(&mut out);
+    declare::<HtmlRebuildView>(&mut out);
     declare::<CommentPolicy>(&mut out);
     declare::<CommentModerationMode>(&mut out);
     declare::<CommentSubmissionResult>(&mut out);

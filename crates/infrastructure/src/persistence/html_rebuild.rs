@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use application::{
     UseCaseError,
+    audit::AuditContext,
     html_rebuild::{HtmlKind, HtmlRebuildStore, RebuildBatch, RebuildBatchError, RebuildCounts},
     ports::{CommentRenderer, ContentRenderer, MediaContentKind, RenderedContent},
 };
@@ -18,7 +19,9 @@ use super::{
 use crate::COMMENT_RENDER_VERSION;
 
 pub struct PostgresHtmlRebuildStore {
+    database: crate::Database,
     pool: PgPool,
+    audit: AuditContext,
     content_renderer: Arc<dyn ContentRenderer>,
     comment_renderer: Arc<dyn CommentRenderer>,
 }
@@ -29,12 +32,19 @@ impl PostgresHtmlRebuildStore {
         content_renderer: Arc<dyn ContentRenderer>,
         comment_renderer: Arc<dyn CommentRenderer>,
     ) -> Self {
-        let pool = database.pool;
+        let pool = database.pool.clone();
         Self {
+            database,
             pool,
+            audit: AuditContext::system(),
             content_renderer,
             comment_renderer,
         }
+    }
+
+    pub fn with_audit(mut self, audit: AuditContext) -> Self {
+        self.audit = audit;
+        self
     }
 }
 
@@ -65,6 +75,22 @@ impl HtmlRebuildStore for PostgresHtmlRebuildStore {
         after: Option<Uuid>,
         limit: i64,
     ) -> Result<RebuildBatch, RebuildBatchError> {
+        let isolated = self
+            .database
+            .is_recovery_isolated()
+            .await
+            .map_err(|source| RebuildBatchError {
+                progress: RebuildBatch::default(),
+                id: None,
+                source,
+            })?;
+        if isolated {
+            return Err(RebuildBatchError {
+                progress: RebuildBatch::default(),
+                id: None,
+                source: UseCaseError::Invalid("恢复隔离期间禁止 HTML 重建".into()),
+            });
+        }
         if !(1..=1000).contains(&limit) {
             return Err(RebuildBatchError {
                 progress: RebuildBatch::default(),
@@ -171,7 +197,7 @@ impl HtmlRebuildStore for PostgresHtmlRebuildStore {
                     }
                     crate::audit::record_change(
                         &mut tx,
-                        application::audit::AuditContext::system(),
+                        self.audit,
                         &format!("{kind}.html.rebuild"),
                         &kind.to_string(),
                         &id.to_string(),

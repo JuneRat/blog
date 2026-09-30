@@ -78,6 +78,166 @@ fn options(size: i64, max: u32) -> RebuildOptions {
     }
 }
 
+#[derive(Default)]
+struct Observer(Mutex<Vec<RebuildReport>>);
+
+impl RebuildObserver for Observer {
+    fn progress(&self, report: &RebuildReport) {
+        self.0.lock().unwrap().push(report.clone());
+    }
+}
+
+#[tokio::test]
+async fn progress_exposes_committed_batches_without_reusing_the_initial_remaining_count() {
+    let store = Store::new(
+        vec![Ok(counts(3, 1, 0)), Ok(counts(1, 0, 0))],
+        vec![
+            (HtmlKind::Post, None, 2, batch(1, 1, 2)),
+            (HtmlKind::Post, Some(Uuid::from_u128(2)), 2, batch(1, 0, 3)),
+            (HtmlKind::Page, None, 2, batch(1, 0, 4)),
+        ],
+    );
+    let observer = Observer::default();
+    let report = HtmlRebuildInteractor::new(store.clone())
+        .run_with_progress(options(2, 10), &observer)
+        .await
+        .unwrap();
+    let updates = observer.0.lock().unwrap();
+    assert_eq!(updates.len(), 5, "入口、三个提交批次与最终快照");
+    for (index, update) in updates[..4].iter().enumerate() {
+        assert_eq!(update.batches, index as u32);
+        assert_eq!(update.pending, None, "运行中剩余数量尚未知");
+        assert!(update.has_more);
+        assert!(update.failure.is_none());
+    }
+    assert_eq!(updates[0].rebuilt, counts(0, 0, 0));
+    assert_eq!(updates[1].rebuilt, counts(1, 0, 0));
+    assert_eq!(updates[1].skipped, counts(1, 0, 0));
+    assert_eq!(updates[2].rebuilt, counts(2, 0, 0));
+    assert_eq!(updates[3].rebuilt, counts(2, 1, 0));
+    let final_update = updates.last().unwrap();
+    assert_eq!(final_update.pending, Some(counts(1, 0, 0)));
+    assert_eq!(final_update.rebuilt, report.rebuilt);
+    assert_eq!(final_update.skipped, report.skipped);
+    store.drained();
+}
+
+#[tokio::test]
+async fn progress_failure_includes_only_confirmed_commits_and_a_cloneable_terminal_report() {
+    let id = Uuid::from_u128(3);
+    let store = Store::new(
+        vec![Ok(counts(3, 1, 0))],
+        vec![
+            (HtmlKind::Post, None, 2, batch(1, 1, 2)),
+            (
+                HtmlKind::Post,
+                Some(Uuid::from_u128(2)),
+                2,
+                Err(RebuildBatchError {
+                    progress: RebuildBatch {
+                        rebuilt: 1,
+                        cursor: Some(id),
+                        ..Default::default()
+                    },
+                    id: Some(id),
+                    source: UseCaseError::Render("renderer unavailable".into()),
+                }),
+            ),
+        ],
+    );
+    let observer = Observer::default();
+    let error = HtmlRebuildInteractor::new(store.clone())
+        .run_with_progress(options(2, 10), &observer)
+        .await
+        .unwrap_err();
+    let updates = observer.0.lock().unwrap();
+    assert_eq!(updates.len(), 3);
+    assert_eq!(updates[1].rebuilt, counts(1, 0, 0));
+    assert!(updates[1].failure.is_none());
+    assert_eq!(updates[2].batches, 2);
+    assert_eq!(updates[2].rebuilt, counts(2, 0, 0));
+    assert_eq!(updates[2].skipped, counts(1, 0, 0));
+    assert_eq!(updates[2].pending, None);
+    assert!(updates[2].has_more);
+    assert_eq!(updates[2].failure.as_ref().unwrap().id, Some(id));
+    let mut cloned = error.clone();
+    cloned.0.failure.as_mut().unwrap().message.clear();
+    assert!(!error.0.failure.as_ref().unwrap().message.is_empty());
+    store.drained();
+}
+
+#[tokio::test]
+async fn progress_reports_validation_count_failures_and_dry_run_without_writes() {
+    let invalid_store = Store::new(vec![], vec![]);
+    let observer = Observer::default();
+    HtmlRebuildInteractor::new(invalid_store.clone())
+        .run_with_progress(options(0, 1), &observer)
+        .await
+        .unwrap_err();
+    {
+        let updates = observer.0.lock().unwrap();
+        assert_eq!(updates.len(), 2);
+        assert!(updates[1].failure.is_some());
+        assert_eq!(updates[1].batches, 0);
+    }
+    invalid_store.drained();
+
+    for counts_result in [
+        Ok(counts(2, 0, 0)),
+        Err(UseCaseError::Repository("count unavailable".into())),
+    ] {
+        let store = Store::new(vec![counts_result], vec![]);
+        let observer = Observer::default();
+        let result = HtmlRebuildInteractor::new(store.clone())
+            .run_with_progress(
+                RebuildOptions {
+                    dry_run: true,
+                    ..options(1, 1)
+                },
+                &observer,
+            )
+            .await;
+        let updates = observer.0.lock().unwrap();
+        assert_eq!(updates.len(), 2);
+        assert_eq!(updates[0].pending, None);
+        assert_eq!(updates[1].batches, 0);
+        assert!(updates[1].dry_run);
+        assert!(updates[1].rebuilt.is_empty());
+        if result.is_ok() {
+            assert_eq!(updates[1].pending, Some(counts(2, 0, 0)));
+            assert!(updates[1].failure.is_none());
+        } else {
+            assert_eq!(updates[1].pending, None);
+            assert!(updates[1].failure.is_some());
+        }
+        store.drained();
+    }
+}
+
+#[tokio::test]
+async fn progress_preserves_commits_when_the_final_remaining_read_fails() {
+    let store = Store::new(
+        vec![
+            Ok(counts(1, 0, 0)),
+            Err(UseCaseError::Repository("final count unavailable".into())),
+        ],
+        vec![(HtmlKind::Post, None, 2, batch(1, 0, 1))],
+    );
+    let observer = Observer::default();
+    HtmlRebuildInteractor::new(store.clone())
+        .run_with_progress(options(2, 10), &observer)
+        .await
+        .unwrap_err();
+    let updates = observer.0.lock().unwrap();
+    assert_eq!(updates.len(), 3);
+    assert_eq!(updates[1].rebuilt, counts(1, 0, 0));
+    assert!(updates[1].failure.is_none());
+    assert_eq!(updates[2].rebuilt, counts(1, 0, 0));
+    assert_eq!(updates[2].pending, None);
+    assert_eq!(updates[2].failure.as_ref().unwrap().kind, None);
+    store.drained();
+}
+
 #[tokio::test]
 async fn invalid_limits_never_touch_storage() {
     let store = Store::new(vec![], vec![]);

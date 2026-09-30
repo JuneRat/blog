@@ -33,6 +33,7 @@ pub struct AppState {
     pub content_preview: Arc<application::content_preview::ContentPreview>,
     pub retention: Arc<application::retention::RetentionInteractor>,
     pub audit: Arc<application::audit::AuditInteractor>,
+    pub html_rebuild: Arc<application::html_rebuild_admin::HtmlRebuildAdminInteractor>,
 }
 
 pub struct HttpConfig {
@@ -70,6 +71,11 @@ pub fn app_router(state: AppState, assets: HttpAssets, config: HttpConfig) -> Ro
         audit: state.audit,
         admin: state.admin.clone(),
     });
+    let html_rebuild =
+        crate::http_html_rebuild::html_rebuild_router(crate::http_html_rebuild::HtmlRebuildState {
+            rebuild: state.html_rebuild,
+            admin: state.admin.clone(),
+        });
     let media_read = crate::http_media::MediaReadState {
         media: state.admin.media.clone(),
     };
@@ -93,6 +99,7 @@ pub fn app_router(state: AppState, assets: HttpAssets, config: HttpConfig) -> Ro
         .merge(content_preview)
         .merge(retention)
         .merge(audit)
+        .merge(html_rebuild)
         .merge(access);
     mount_admin_spa(app, Some(assets.admin_dist))
         .layer(middleware::from_fn(crate::http_support::request_context))

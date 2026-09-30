@@ -47,6 +47,7 @@ export const queryKeys = {
   siteSettings: () => ["settings", "site"] as const,
   themeSettings: () => ["settings", "theme"] as const,
   retentionSettings: () => ["settings", "retention"] as const,
+  htmlRebuild: () => ["maintenance", "html-rebuild"] as const,
 };
 
 /**
