@@ -433,17 +433,6 @@ impl TagRepository for FakeTagRepo {
         tags.retain(|t| t.id != id);
         Ok(TagDeleteOutcome::Deleted)
     }
-
-    async fn existing_ids(&self, ids: &[Uuid]) -> Result<Vec<Uuid>, UseCaseError> {
-        let tags = self.tags.lock().unwrap();
-        let mut found: Vec<Uuid> = tags
-            .iter()
-            .map(|t| t.id)
-            .filter(|id| ids.contains(id))
-            .collect();
-        found.sort();
-        Ok(found)
-    }
 }
 
 /// 文章关联查找恒报存在；系列更新可提供固定的已提交结果。
@@ -492,13 +481,7 @@ impl application::ports::SeriesRepository for FakeSeriesRepo {
     ) -> Result<application::ports::SeriesDeleteOutcome, UseCaseError> {
         Ok(application::ports::SeriesDeleteOutcome::Gone)
     }
-    async fn existing_ids(&self, ids: &[Uuid]) -> Result<Vec<Uuid>, UseCaseError> {
-        self.lookups.lock().unwrap().push(ids.to_vec());
-        let mut existing = ids.to_vec();
-        existing.sort();
-        existing.dedup();
-        Ok(existing)
-    }
+
     async fn members_of(
         &self,
         _series_id: uuid::Uuid,
@@ -560,9 +543,6 @@ impl application::ports::CategoryRepository for FakeCategoryRepo {
         _audit_actor: application::audit::AuditContext,
     ) -> Result<application::ports::CategoryDeleteOutcome, UseCaseError> {
         Ok(application::ports::CategoryDeleteOutcome::Gone)
-    }
-    async fn existing_id(&self, _id: uuid::Uuid) -> Result<bool, UseCaseError> {
-        Ok(true)
     }
 }
 
@@ -2011,4 +1991,102 @@ async fn post_cover_accepts_shared_images_and_preserves_trashed_existing_referen
         f.posts.create(&writer, unavailable).await,
         Err(UseCaseError::Invalid(_))
     ));
+}
+
+#[async_trait::async_trait]
+impl application::ports::TagLookup for FakeTagRepo {
+    async fn existing_ids(&self, ids: &[Uuid]) -> Result<Vec<Uuid>, UseCaseError> {
+        let tags = self.tags.lock().unwrap();
+        let mut found: Vec<Uuid> = tags
+            .iter()
+            .map(|t| t.id)
+            .filter(|id| ids.contains(id))
+            .collect();
+        found.sort();
+        Ok(found)
+    }
+}
+
+#[async_trait::async_trait]
+impl application::ports::CategoryLookup for FakeCategoryRepo {
+    async fn existing_id(&self, _id: uuid::Uuid) -> Result<bool, UseCaseError> {
+        Ok(true)
+    }
+}
+
+#[async_trait::async_trait]
+impl application::ports::SeriesLookup for FakeSeriesRepo {
+    async fn existing_ids(&self, ids: &[Uuid]) -> Result<Vec<Uuid>, UseCaseError> {
+        self.lookups.lock().unwrap().push(ids.to_vec());
+        let mut existing = ids.to_vec();
+        existing.sort();
+        existing.dedup();
+        Ok(existing)
+    }
+}
+
+// This fake intentionally has no catalog write/reorder capabilities.
+struct ReadOnlyTaxonomy {
+    tag: Uuid,
+    category: Uuid,
+    series: Uuid,
+}
+
+#[async_trait::async_trait]
+impl application::ports::TagLookup for ReadOnlyTaxonomy {
+    async fn existing_ids(&self, ids: &[Uuid]) -> Result<Vec<Uuid>, UseCaseError> {
+        Ok(ids
+            .contains(&self.tag)
+            .then_some(self.tag)
+            .into_iter()
+            .collect())
+    }
+}
+
+#[async_trait::async_trait]
+impl application::ports::CategoryLookup for ReadOnlyTaxonomy {
+    async fn existing_id(&self, id: Uuid) -> Result<bool, UseCaseError> {
+        Ok(id == self.category)
+    }
+}
+
+#[async_trait::async_trait]
+impl application::ports::SeriesLookup for ReadOnlyTaxonomy {
+    async fn existing_ids(&self, ids: &[Uuid]) -> Result<Vec<Uuid>, UseCaseError> {
+        Ok(ids
+            .contains(&self.series)
+            .then_some(self.series)
+            .into_iter()
+            .collect())
+    }
+}
+
+#[tokio::test]
+async fn post_creation_accepts_taxonomy_lookup_only_dependencies() {
+    let f = fixture().await;
+    let taxonomy = Arc::new(ReadOnlyTaxonomy {
+        tag: Uuid::now_v7(),
+        category: Uuid::now_v7(),
+        series: Uuid::now_v7(),
+    });
+    let posts = PostInteractor::new(
+        f.post_repo,
+        taxonomy.clone(),
+        taxonomy.clone(),
+        taxonomy.clone(),
+        Arc::new(FixedClock),
+        f.media_guard,
+    );
+    let mut cmd = draft_cmd("query-only-taxonomy");
+    cmd.tag_ids = vec![taxonomy.tag, taxonomy.tag];
+    cmd.category_id = Some(taxonomy.category);
+    cmd.series = vec![application::content::SeriesPlacement {
+        series_id: taxonomy.series,
+        position: 3,
+    }];
+    let created = posts.create(&f.author, cmd).await.unwrap();
+    assert_eq!(created.tag_ids, vec![taxonomy.tag]);
+    assert_eq!(created.category_id, Some(taxonomy.category));
+    assert_eq!(created.series[0].series_id, taxonomy.series);
+    assert_eq!(created.series[0].position, 3);
 }

@@ -128,17 +128,6 @@ impl TagRepository for FakeTagRepo {
         tags.remove(&tag.slug);
         Ok(TagDeleteOutcome::Deleted)
     }
-
-    async fn existing_ids(&self, ids: &[Uuid]) -> Result<Vec<Uuid>, UseCaseError> {
-        let tags = self.tags.lock().unwrap();
-        let mut found: Vec<Uuid> = tags
-            .values()
-            .map(|t| t.id)
-            .filter(|id| ids.contains(id))
-            .collect();
-        found.sort();
-        Ok(found)
-    }
 }
 
 /// 最小 RBAC fake：只按内置角色给权限并集（来自注册表）。
@@ -605,4 +594,18 @@ async fn idempotent_rename_keeps_version() {
         .await
         .unwrap();
     assert_eq!(dto.version, created.version);
+}
+
+#[async_trait::async_trait]
+impl application::ports::TagLookup for FakeTagRepo {
+    async fn existing_ids(&self, ids: &[Uuid]) -> Result<Vec<Uuid>, UseCaseError> {
+        let tags = self.tags.lock().unwrap();
+        let mut found: Vec<Uuid> = tags
+            .values()
+            .map(|t| t.id)
+            .filter(|id| ids.contains(id))
+            .collect();
+        found.sort();
+        Ok(found)
+    }
 }

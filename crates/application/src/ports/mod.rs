@@ -46,7 +46,7 @@ pub use site::{
     SettingsStore, SiteSettingsRecord, SiteSettingsValue, ThemeSettingsRecord, ThemeSettingsStore,
 };
 pub use taxonomy::{
-    CategoryDeleteOutcome, CategoryRepository, CategoryWithUsage, ReorderOutcome,
-    SeriesDeleteOutcome, SeriesMember, SeriesRepository, SeriesWithUsage, TagDeleteOutcome,
-    TagRepository, TagWithUsage,
+    CategoryDeleteOutcome, CategoryLookup, CategoryRepository, CategoryWithUsage, ReorderOutcome,
+    SeriesDeleteOutcome, SeriesLookup, SeriesMember, SeriesRepository, SeriesWithUsage,
+    TagDeleteOutcome, TagLookup, TagRepository, TagWithUsage,
 };

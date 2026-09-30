@@ -12,7 +12,7 @@ use application::ports::{
     PageCommitOutcome, PageDeleteOutcome, PageRepository, PasswordCredentialStore,
     PostCommitOutcome, PostRepository, PublishedCategoryQuery, PublishedPageQuery,
     PublishedPostQuery, PublishedSeriesQuery, PublishedTagQuery, RbacStore, SaveOutcome,
-    SeriesRepository, SettingsStore, TagRepository, UserQuery,
+    SeriesLookup, SeriesRepository, SettingsStore, TagLookup, TagRepository, UserQuery,
 };
 use common::connect;
 use domain::content::{Page, PagePatch};

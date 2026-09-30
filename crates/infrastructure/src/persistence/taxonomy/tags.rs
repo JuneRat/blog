@@ -202,19 +202,6 @@ impl TagRepository for PostgresTagRepository {
         tx.commit().await.map_err(map_sqlx_error)?;
         Ok(TagDeleteOutcome::Deleted)
     }
-
-    async fn existing_ids(&self, ids: &[Uuid]) -> Result<Vec<Uuid>, UseCaseError> {
-        if ids.is_empty() {
-            return Ok(Vec::new());
-        }
-        let rows: Vec<(Uuid,)> =
-            sqlx::query_as("SELECT id FROM tags WHERE id = ANY($1::uuid[]) ORDER BY id")
-                .bind(ids)
-                .fetch_all(&self.pool)
-                .await
-                .map_err(map_sqlx_error)?;
-        Ok(rows.into_iter().map(|(id,)| id).collect())
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -361,5 +348,21 @@ impl PublishedTagQuery for PostgresPublishedTagQuery {
                 })
             })
             .collect()
+    }
+}
+
+#[async_trait::async_trait]
+impl application::ports::TagLookup for PostgresTagRepository {
+    async fn existing_ids(&self, ids: &[Uuid]) -> Result<Vec<Uuid>, UseCaseError> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let rows: Vec<(Uuid,)> =
+            sqlx::query_as("SELECT id FROM tags WHERE id = ANY($1::uuid[]) ORDER BY id")
+                .bind(ids)
+                .fetch_all(&self.pool)
+                .await
+                .map_err(map_sqlx_error)?;
+        Ok(rows.into_iter().map(|(id,)| id).collect())
     }
 }

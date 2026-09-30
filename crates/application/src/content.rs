@@ -14,7 +14,8 @@ use uuid::Uuid;
 use crate::error::UseCaseError;
 use crate::identity::{Actor, authorize_own_or_any};
 use crate::ports::{
-    Clock, PostCommitOutcome, PostRecord, PostRepository, SaveOutcome, TagRepository,
+    CategoryLookup, Clock, PostCommitOutcome, PostRecord, PostRepository, SaveOutcome,
+    SeriesLookup, TagLookup,
 };
 use crate::version::checked_version;
 use domain::content::{Post, PostDraftMetadata, PostPatch, PostSnapshot, Slug, Visibility};
@@ -144,11 +145,11 @@ impl PostDto {
 pub struct PostInteractor {
     posts: Arc<dyn PostRepository>,
     /// 标签存在性校验（文章-标签关联的前置检查；写关系仍在 PostRepository 事务内）。
-    tags: Arc<dyn TagRepository>,
+    tags: Arc<dyn TagLookup>,
     /// 分类存在性校验（文章设置分类的前置检查；写关系仍在 PostRepository 事务内）。
-    categories: Arc<dyn crate::ports::CategoryRepository>,
+    categories: Arc<dyn CategoryLookup>,
     /// 系列存在性校验（文章设置系列的前置检查；写关系仍在 PostRepository 事务内）。
-    series: Arc<dyn crate::ports::SeriesRepository>,
+    series: Arc<dyn SeriesLookup>,
     clock: Arc<dyn Clock>,
     /// 封面附着的可用性校验（`ensure_attachable`）。
     media_guard: Arc<dyn crate::ports::MediaRefGuard>,
@@ -157,9 +158,9 @@ pub struct PostInteractor {
 impl PostInteractor {
     pub fn new(
         posts: Arc<dyn PostRepository>,
-        tags: Arc<dyn TagRepository>,
-        categories: Arc<dyn crate::ports::CategoryRepository>,
-        series: Arc<dyn crate::ports::SeriesRepository>,
+        tags: Arc<dyn TagLookup>,
+        categories: Arc<dyn CategoryLookup>,
+        series: Arc<dyn SeriesLookup>,
         clock: Arc<dyn Clock>,
         media_guard: Arc<dyn crate::ports::MediaRefGuard>,
     ) -> Self {

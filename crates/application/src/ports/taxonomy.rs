@@ -25,7 +25,14 @@ pub enum TagDeleteOutcome {
 }
 
 #[async_trait]
-pub trait TagRepository: Send + Sync {
+pub trait TagLookup: Send + Sync {
+    /// 返回 `ids` 中确实存在的标签 id（去重、按 id 排序）。
+    /// 只用于输入预检；提交事务仍须校验关联，不能把该结果当作写入凭据。
+    async fn existing_ids(&self, ids: &[Uuid]) -> Result<Vec<Uuid>, UseCaseError>;
+}
+
+#[async_trait]
+pub trait TagRepository: TagLookup {
     /// 创建接收已校验的聚合；快照仅用于读取、重建与返回结果。
     async fn insert(
         &self,
@@ -56,10 +63,6 @@ pub trait TagRepository: Send + Sync {
         expected_version: i64,
         actor_id: crate::audit::AuditContext,
     ) -> Result<TagDeleteOutcome, UseCaseError>;
-
-    /// 返回 `ids` 中确实存在的标签 id（去重、按 id 排序）。
-    /// 用例据此把「标签不存在」报为可定位的参数错误，而不是 FK 违规。
-    async fn existing_ids(&self, ids: &[Uuid]) -> Result<Vec<Uuid>, UseCaseError>;
 }
 
 /// 分类目录条目：含公开文章计数（直接归属；子树聚合计数需显式查询，首版不提供）。
@@ -83,12 +86,18 @@ pub enum CategoryDeleteOutcome {
     Gone,
 }
 
+#[async_trait]
+pub trait CategoryLookup: Send + Sync {
+    /// 文章设置分类前的存在性预检；提交事务负责保护最终关联。
+    async fn existing_id(&self, id: Uuid) -> Result<bool, UseCaseError>;
+}
+
 /// 分类目录写侧端口。
 ///
 /// 防环约定：自引用 CHECK 只排除直接自父；移动（改 parent）的祖先链校验
 /// 在 [`CategoryRepository::update`] 的分类树事务锁内完成（docs/content-lifecycle.md §3）。
 #[async_trait]
-pub trait CategoryRepository: Send + Sync {
+pub trait CategoryRepository: CategoryLookup {
     /// 创建接收已校验的聚合；快照仅用于读取、重建与返回结果。
     async fn insert(
         &self,
@@ -124,9 +133,6 @@ pub trait CategoryRepository: Send + Sync {
         expected_version: i64,
         audit_actor: crate::audit::AuditContext,
     ) -> Result<CategoryDeleteOutcome, UseCaseError>;
-
-    /// 文章设置分类前的存在性校验。
-    async fn existing_id(&self, id: Uuid) -> Result<bool, UseCaseError>;
 }
 
 /// 系列目录条目：含公开文章计数与总成员数。
@@ -175,7 +181,13 @@ pub struct SeriesMember {
 }
 
 #[async_trait]
-pub trait SeriesRepository: Send + Sync {
+pub trait SeriesLookup: Send + Sync {
+    /// 返回存在的系列 id（去重、按 id 排序）；提交事务仍须校验最终关联。
+    async fn existing_ids(&self, ids: &[Uuid]) -> Result<Vec<Uuid>, UseCaseError>;
+}
+
+#[async_trait]
+pub trait SeriesRepository: SeriesLookup {
     /// 创建接收已校验的聚合；快照仅用于读取、重建与返回结果。
     async fn insert(
         &self,
@@ -207,9 +219,6 @@ pub trait SeriesRepository: Send + Sync {
         expected_version: i64,
         actor_id: crate::audit::AuditContext,
     ) -> Result<SeriesDeleteOutcome, UseCaseError>;
-
-    /// 返回所给 id 中存在的系列，去重并按 id 排序；文章关联使用批量校验。
-    async fn existing_ids(&self, ids: &[Uuid]) -> Result<Vec<Uuid>, UseCaseError>;
 
     /// 系列当前成员（按 position、post_id 升序；重排授权与目录展示共用）。
     async fn members_of(&self, series_id: Uuid) -> Result<Vec<SeriesMember>, UseCaseError>;

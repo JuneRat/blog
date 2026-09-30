@@ -304,15 +304,6 @@ impl CategoryRepository for PostgresCategoryRepository {
         tx.commit().await.map_err(map_sqlx_error)?;
         Ok(CategoryDeleteOutcome::Deleted)
     }
-
-    async fn existing_id(&self, id: Uuid) -> Result<bool, UseCaseError> {
-        let hit: Option<(Uuid,)> = sqlx::query_as("SELECT id FROM categories WHERE id = $1")
-            .bind(id)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(map_sqlx_error)?;
-        Ok(hit.is_some())
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -460,5 +451,17 @@ impl PublishedCategoryQuery for PostgresPublishedCategoryQuery {
                 })
             })
             .collect()
+    }
+}
+
+#[async_trait::async_trait]
+impl application::ports::CategoryLookup for PostgresCategoryRepository {
+    async fn existing_id(&self, id: Uuid) -> Result<bool, UseCaseError> {
+        let hit: Option<(Uuid,)> = sqlx::query_as("SELECT id FROM categories WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(map_sqlx_error)?;
+        Ok(hit.is_some())
     }
 }

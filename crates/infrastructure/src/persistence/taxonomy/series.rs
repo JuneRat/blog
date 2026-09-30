@@ -248,14 +248,6 @@ impl SeriesRepository for PostgresSeriesRepository {
         Ok(SeriesDeleteOutcome::Deleted)
     }
 
-    async fn existing_ids(&self, ids: &[Uuid]) -> Result<Vec<Uuid>, UseCaseError> {
-        sqlx::query_scalar("SELECT id FROM series WHERE id = ANY($1::uuid[]) ORDER BY id")
-            .bind(ids)
-            .fetch_all(&self.pool)
-            .await
-            .map_err(map_sqlx_error)
-    }
-
     async fn members_of(&self, series_id: Uuid) -> Result<Vec<SeriesMember>, UseCaseError> {
         let rows = sqlx::query(
             "SELECT p.id, p.author_id, p.slug, p.title, p.status, p.visibility, ps.position, p.deleted_at FROM post_series ps JOIN posts p ON p.id=ps.post_id WHERE ps.series_id=$1 ORDER BY ps.position, p.id",
@@ -521,5 +513,16 @@ impl PublishedSeriesQuery for PostgresPublishedSeriesQuery {
                 })
             })
             .collect()
+    }
+}
+
+#[async_trait::async_trait]
+impl application::ports::SeriesLookup for PostgresSeriesRepository {
+    async fn existing_ids(&self, ids: &[Uuid]) -> Result<Vec<Uuid>, UseCaseError> {
+        sqlx::query_scalar("SELECT id FROM series WHERE id = ANY($1::uuid[]) ORDER BY id")
+            .bind(ids)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(map_sqlx_error)
     }
 }
