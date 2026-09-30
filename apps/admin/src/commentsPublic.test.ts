@@ -166,6 +166,36 @@ it('does not switch to a guest identity when rechecking the session fails', asyn
   expect(fetcher.mock.calls.filter(([,options])=>options?.method==='POST')).toHaveLength(1);
 });
 
+it('refreshes a changed login without losing the draft or automatically resubmitting', async () => {
+  fetcher.mockResolvedValueOnce(response({ display_name: 'Old reader', csrf_token: 'old-token' }))
+    .mockResolvedValueOnce(response({ enabled: true, guest_comments_enabled: true, total: 0, items: [] }));
+  window.eval(script);
+  await screen.findByRole('textbox', { name: '评论（最多 2,000 字）' });
+  const form = mainForm();
+  draftBody(form).value = '切换登录后仍保留的正文';
+  fetcher.mockResolvedValueOnce(response({ error: 'CSRF 校验失败' }, 400));
+  fireEvent.submit(form);
+  await screen.findByText('CSRF 校验失败');
+
+  fetcher.mockResolvedValueOnce(response({ display_name: 'New reader', csrf_token: 'new-token' }));
+  fireEvent.click(screen.getByRole('button', { name: '刷新登录状态' }));
+  await screen.findByText('登录状态已更新，请确认身份后再次提交。');
+  expect((within(form).getByRole('textbox', { name: '已登录身份' }) as HTMLInputElement).value).toBe('New reader');
+  expect(draftBody(form).value).toBe('切换登录后仍保留的正文');
+  expect(submitButton(form).disabled).toBe(false);
+  expect(fetcher.mock.calls.filter(([, options]) => options?.method === 'POST')).toHaveLength(1);
+
+  fetcher.mockResolvedValueOnce(response({ message: '已提交，等待审核' }, 202));
+  fireEvent.submit(form);
+  await screen.findByText('已提交，等待审核');
+  const attempts = fetcher.mock.calls.filter(([, options]) => options?.method === 'POST');
+  expect(attempts).toHaveLength(2);
+  expect(attempts[0][1].headers['X-CSRF-Token']).toBe('old-token');
+  expect(attempts[1][1].headers['X-CSRF-Token']).toBe('new-token');
+  expect(JSON.parse(attempts[1][1].body)).toMatchObject({ body: '切换登录后仍保留的正文', parent_id: null });
+  expect(draftBody(form).value).toBe('');
+});
+
 it.each([500, 'offline', 'pending'] as const)('loads public comments independently when identity is %s and allows retry', async failure => {
   if (failure === 'pending') fetcher.mockImplementationOnce(() => new Promise(() => {}));
   else if (failure === 'offline') fetcher.mockRejectedValueOnce(new Error('offline'));
@@ -187,7 +217,8 @@ it.each([500, 'offline', 'pending'] as const)('loads public comments independent
   fireEvent.click(retry);
   await waitFor(()=>expect(form.querySelector<HTMLButtonElement>('button[type=submit]')!.disabled).toBe(false));
   expect(form.querySelector('textarea')!.value).toBe('保留正文');
-  expect(retry.hidden).toBe(true);
+  expect(retry.hidden).toBe(false);
+  expect(retry.textContent).toBe('刷新登录状态');
 });
 
 it.each(['load', 'submit', 'page'])('isolates unavailable threads during %s and preserves every draft', async action => {
@@ -225,8 +256,8 @@ it.each(['load', 'submit', 'page'])('isolates unavailable threads during %s and 
   }
 });
 
-it.each(['replies', 'root list'])('restores an unavailable reply through %s without losing its draft', async recovery => {
-  const firstPage = {enabled:true,guest_comments_enabled:true,total:21,items:[
+it.each(['replies', 'root list'])('restores an unavailable root reply only after refreshing its visible node (%s)', async recovery => {
+  const firstPage = {enabled:true,guest_comments_enabled:true,total:1,items:[
     {id:'root',nickname:'Reader',content_html:'Root',created_at:'today'},
   ]};
   fetcher.mockResolvedValueOnce(response({},401)).mockResolvedValueOnce(response(firstPage));
@@ -238,22 +269,23 @@ it.each(['replies', 'root list'])('restores an unavailable reply through %s with
   form().querySelector('textarea')!.value = '恢复后继续提交的草稿';
 
   fetcher.mockResolvedValueOnce(response({error:'评论不存在'},404));
-  fireEvent.submit(form());
+  if (recovery === 'replies') fireEvent.click(screen.getByRole('button', { name: '查看回复' }));
+  else fireEvent.submit(form());
   await waitFor(()=>expect(form().textContent).toContain('该评论已不可用'));
   expect(form().querySelector<HTMLButtonElement>('button[type=submit]')!.disabled).toBe(true);
   fireEvent.submit(form());
-  expect(fetcher.mock.calls.filter(([,options])=>options?.method==='POST')).toHaveLength(1);
+  expect(fetcher.mock.calls.filter(([,options])=>options?.method==='POST')).toHaveLength(recovery === 'replies' ? 0 : 1);
 
   if (recovery === 'replies') {
-    fetcher.mockResolvedValueOnce(response({enabled:true,guest_comments_enabled:true,total:0,items:[]}));
+    fetcher.mockResolvedValueOnce(response({enabled:true,guest_comments_enabled:true,total:1,items:[
+      {id:'child',root_id:'root',parent_id:'root',nickname:'Reader',content_html:'Recovered child',created_at:'today'},
+    ]}));
     fireEvent.click([...document.querySelectorAll('button')].find(b=>b.textContent==='查看回复')!);
-  } else {
-    fetcher.mockResolvedValueOnce(response({enabled:true,guest_comments_enabled:true,total:21,items:[]}));
-    fireEvent.click([...document.querySelectorAll('button')].find(b=>b.textContent==='下一页')!);
-    await waitFor(()=>expect(document.body.textContent).toContain('第 2 页'));
-    fetcher.mockResolvedValueOnce(response(firstPage));
-    fireEvent.click([...document.querySelectorAll('button')].find(b=>b.textContent==='上一页')!);
+    await screen.findByText('Recovered child');
+    expect(submitButton(form()).disabled).toBe(true);
   }
+  fetcher.mockResolvedValueOnce(response(firstPage));
+  fireEvent.click(screen.getByRole('button', { name: '刷新评论' }));
   await waitFor(()=>expect(form().querySelector<HTMLButtonElement>('button[type=submit]')!.disabled).toBe(false));
   expect(form().querySelector('input')!.value).toBe('Guest');
   expect(form().querySelector('textarea')!.value).toBe('恢复后继续提交的草稿');
@@ -264,9 +296,55 @@ it.each(['replies', 'root list'])('restores an unavailable reply through %s with
   fireEvent.submit(form());
   await waitFor(()=>expect(form().textContent).toContain('已提交，等待审核'));
   const attempts = fetcher.mock.calls.filter(([,options])=>options?.method==='POST');
-  expect(attempts).toHaveLength(2);
-  expect(JSON.parse(attempts[0][1].body)).toEqual(JSON.parse(attempts[1][1].body));
+  expect(attempts).toHaveLength(recovery === 'replies' ? 1 : 2);
+  expect(JSON.parse(attempts.at(-1)![1].body)).toMatchObject({ parent_id: 'root', body: '恢复后继续提交的草稿' });
   expect(form().querySelector('textarea')!.value).toBe('');
+});
+
+it('restores an unavailable nested reply without unlocking its hidden root or losing drafts', async () => {
+  const replies = { enabled: true, guest_comments_enabled: true, total: 1, items: [
+    { id: 'child', root_id: 'root', parent_id: 'root', nickname: 'Child reader', content_html: 'Child', created_at: 'today' },
+  ] };
+  fetcher.mockResolvedValueOnce(response({}, 401)).mockResolvedValueOnce(response({
+    enabled: true, guest_comments_enabled: true, total: 1,
+    items: [{ id: 'root', nickname: 'Reader', content_html: 'Root', created_at: 'today' }],
+  }));
+  window.eval(script);
+  await screen.findByText('Root');
+  fireEvent.click(within(comment('Root')).getByRole('button', { name: '回复' }));
+  const rootForm = replyForm('Root');
+  nickname(rootForm).value = 'Guest';
+  draftBody(rootForm).value = '暂不可用根评论的草稿';
+  fetcher.mockResolvedValueOnce(response(replies));
+  fireEvent.click(within(comment('Root')).getByRole('button', { name: '查看回复' }));
+  await screen.findByText('Child');
+  fireEvent.click(within(comment('Child')).getByRole('button', { name: '回复' }));
+  const form = replyForm('Child');
+  nickname(form).value = 'Guest';
+  draftBody(form).value = '子评论恢复后继续提交的草稿';
+  fetcher.mockResolvedValueOnce(response({ error: '评论不存在' }, 404));
+  fireEvent.submit(rootForm);
+  await within(rootForm).findByText('该评论已不可用，回复草稿已保留。');
+  fetcher.mockResolvedValueOnce(response({ error: '评论不存在' }, 404));
+  fireEvent.submit(form);
+  await within(form).findByText('该评论已不可用，回复草稿已保留。');
+  expect(submitButton(form).disabled).toBe(true);
+
+  fetcher.mockResolvedValueOnce(response(replies));
+  fireEvent.click(within(comment('Root')).getByRole('button', { name: '查看回复' }));
+  await waitFor(() => expect(submitButton(replyForm('Child')).disabled).toBe(false));
+  expect(submitButton(rootForm).disabled).toBe(true);
+  expect(draftBody(rootForm).value).toBe('暂不可用根评论的草稿');
+  expect(nickname(replyForm('Child')).value).toBe('Guest');
+  expect(draftBody(replyForm('Child')).value).toBe('子评论恢复后继续提交的草稿');
+  fetcher.mockResolvedValueOnce(response({ message: '已提交，等待审核' }, 202));
+  fireEvent.submit(replyForm('Child'));
+  await screen.findByText('已提交，等待审核');
+  const attempts = fetcher.mock.calls.filter(([, options]) => options?.method === 'POST');
+  expect(attempts).toHaveLength(3);
+  expect(JSON.parse(attempts[2][1].body)).toEqual(JSON.parse(attempts[1][1].body));
+  expect(JSON.parse(attempts[2][1].body).parent_id).toBe('child');
+  expect(draftBody(replyForm('Child')).value).toBe('');
 });
 
 it('keeps a deleted root anonymous and replies to the selected nested comment', async()=>{

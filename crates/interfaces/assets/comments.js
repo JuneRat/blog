@@ -6,18 +6,21 @@
   const endpoint = `/api/v1/posts/${encodeURIComponent(root.dataset.commentsSlug)}/comments`;
   const node = (tag, text) => { const n = document.createElement(tag); if (text) n.textContent = text; return n; };
   const notice = node('p'); notice.setAttribute('role', 'status');
+  const refreshComments = node('button', '刷新评论'); refreshComments.type = 'button';
   const list = node('div');
   const formArea = node('div');
-  root.append(node('h2', '评论'), notice, list, formArea);
+  root.append(node('h2', '评论'), notice, refreshComments, list, formArea);
   let enabled = false;
   let guestEnabled = false;
   let me;
   let identityReady = false;
   const identityNotice = node('p');
   identityNotice.setAttribute('role', 'status');
-  const retryIdentity = node('button', '重试身份校验'); retryIdentity.type = 'button'; retryIdentity.hidden = true;
+  const retryIdentity = node('button', '刷新登录状态'); retryIdentity.type = 'button'; retryIdentity.hidden = true;
   root.insertBefore(identityNotice, list); root.insertBefore(retryIdentity, list);
+  // A readable thread can still have a hidden root that cannot be replied to directly.
   const unavailableThreads = new Set();
+  const unavailableComments = new Set();
   // Keep live form nodes (including drafts and guest contact details) across pagination.
   const forms = new Map();
   const views = new Map();
@@ -34,6 +37,7 @@
   function threadUnavailable(e, parent, container) {
     if (e.status === 404) {
       unavailableThreads.add(parent);
+      unavailableComments.add(parent);
       if (container) container.replaceChildren(node('p', '该评论已不可用，回复草稿已保留。'));
       for (const entry of forms.values()) entry.syncIdentity();
     }
@@ -46,6 +50,16 @@
     }
     return true;
   }
+  function commentUnavailable(e, parent) {
+    unavailableComments.add(parent);
+    forms.get(parent)?.syncIdentity();
+    notice.textContent = e.message;
+  }
+  function commentAvailable(parent) {
+    if (!unavailableComments.delete(parent)) return false;
+    forms.get(parent)?.restoreAvailability();
+    return true;
+  }
   async function refreshIdentity() {
     identityReady = false;
     retryIdentity.disabled = true;
@@ -55,15 +69,18 @@
     catch (e) {
       if (e.status !== 401) {
         identityNotice.textContent = '身份校验失败，暂时无法提交；评论正文已保留。';
+        retryIdentity.textContent = '重试身份校验';
         retryIdentity.hidden = false; retryIdentity.disabled = false;
         throw e;
       }
     }
     me = current; identityReady = true;
-    identityNotice.textContent = ''; retryIdentity.hidden = true; retryIdentity.disabled = false;
+    identityNotice.textContent = ''; retryIdentity.textContent = '刷新登录状态'; retryIdentity.hidden = false; retryIdentity.disabled = false;
     for (const entry of forms.values()) entry.syncIdentity();
   }
-  retryIdentity.onclick = () => { refreshIdentity().catch(() => {}); };
+  retryIdentity.onclick = () => {
+    refreshIdentity().then(() => { identityNotice.textContent = '登录状态已更新，请确认身份后再次提交。'; }).catch(() => {});
+  };
   function form(parentId, container, threadId = parentId) {
     const existing = forms.get(parentId);
     if (existing) { container.append(existing.element); return; }
@@ -124,8 +141,8 @@
       if (me) nickname.value = me.display_name || me.username || '作者';
       nickname.disabled = submitting || !!me || !identityReady;
       emailLabel.hidden = !!me; email.disabled = submitting || !!me || !identityReady;
-      send.disabled = submitting || !identityReady || !enabled || (!me && !guestEnabled) || unavailableThreads.has(parentId) || unavailableThreads.has(threadId);
-      if (unavailableThreads.has(parentId) || unavailableThreads.has(threadId)) message.textContent = '该评论已不可用，回复草稿已保留。';
+      send.disabled = submitting || !identityReady || !enabled || (!me && !guestEnabled) || unavailableComments.has(parentId) || unavailableThreads.has(threadId);
+      if (unavailableComments.has(parentId) || unavailableThreads.has(threadId)) message.textContent = '该评论已不可用，回复草稿已保留。';
     }
     syncIdentity();
     forms.set(parentId, {
@@ -136,7 +153,7 @@
     });
     f.addEventListener('submit', async event => {
       event.preventDefault();
-      if (submitting || !identityReady || !enabled || (!me && !guestEnabled) || unavailableThreads.has(parentId) || unavailableThreads.has(threadId)) return;
+      if (submitting || !identityReady || !enabled || (!me && !guestEnabled) || unavailableComments.has(parentId) || unavailableThreads.has(threadId)) return;
       submitting = true; revision++; preview.hidden = true; body.disabled = true; syncIdentity();
       const payload = { nickname: nickname.value || '作者', email: me ? null : email.value.trim() || null, body: body.value, parent_id: parentId };
       try {
@@ -151,7 +168,7 @@
       } catch (e) {
         message.textContent = e.status ? e.message : `${e.message}；提交结果未确认，重试可能产生重复评论。`;
         if (e.status === 404) {
-          if (parentId) threadUnavailable(e, parentId);
+          if (parentId) commentUnavailable(e, parentId);
           else notice.textContent = e.message;
         }
         if (e.status === 401) {
@@ -188,6 +205,7 @@
     }
     views.set(parent, { container, page });
     for (const item of data.items) {
+      if (!item.placeholder && commentAvailable(item.id)) notice.textContent = '该评论已恢复。';
       const article = node('article'); article.className = 'comment-item';
       const identity = node('div'); identity.className = 'comment-identity';
       if (!item.placeholder) identity.append(node('strong', item.nickname));
@@ -234,6 +252,12 @@
     }
     nav.append(node('span', `第 ${page} 页`)); container.append(nav);
   }
+  refreshComments.onclick = async () => {
+    refreshComments.disabled = true;
+    try { await load(list, null, views.get(null)?.page || 1); }
+    catch (e) { clearUnavailable(e); }
+    finally { refreshComments.disabled = false; }
+  };
   refreshIdentity().catch(() => {});
   load(list).catch(clearUnavailable);
 })();
