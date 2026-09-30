@@ -32,6 +32,7 @@ export const queryKeys = {
   comments: (page: number, status: string, post?: string) => ["comments", page, status, post] as const,
   commentPolicy: (post?: string) => ["comment-policy", post ?? "global"] as const,
   users: () => ["users"] as const,
+  userList: (page: number) => ["users", page] as const,
   roles: () => ["roles"] as const,
   media: (page: number, trash = false, q = "") => ["media", page, trash, q] as const,
   /**

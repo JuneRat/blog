@@ -207,24 +207,43 @@ describe("用户与角色管理", () => {
     expect(screen.getByText(/最后 Admin/)).toBeTruthy();
   });
 
-  it("另一个可登录 Admin 在后续页时不禁用移除（后端全局判定，不按页推断）", async () => {
-    // 当前页只有一个 Admin，但后端计数表明还有别的可登录 Admin：
-    // 分页列表不能据此把它误判成最后 Admin。
-    vi.mocked(api.listUsers).mockResolvedValue([
-      user({ id: "u-owner", username: "owner", roles: ["admin"], is_last_loginable_admin: false }),
-    ]);
-    vi.mocked(api.removeRole).mockResolvedValue(null);
+  it("分页可达后续账号，移除另一页 Admin 后刷新全部分页的最后 Admin 状态", async () => {
+    auth.me = me(["role.manage", "admin.manage"]);
+    const rows = [
+      user({ id: "u-owner", username: "owner-a", roles: ["admin"] }),
+      ...Array.from({ length: 49 }, (_, index) => user({
+        id: `u-${index}`, username: `user-${String(index).padStart(2, "0")}`, roles: [],
+      })),
+      user({ id: "u-other", username: "zz-owner", roles: ["admin"] }),
+    ];
+    vi.mocked(api.listUsers).mockImplementation(async (limit = 50, offset = 0) => rows.slice(offset, offset + limit));
+    vi.mocked(api.removeRole).mockImplementation(async () => {
+      rows[0] = { ...rows[0], is_last_loginable_admin: true };
+      rows[50] = { ...rows[50], roles: [] };
+      return null;
+    });
     render(<App />);
 
-    const remove = await screen.findByRole("button", { name: "移除 owner 的角色 admin" });
-    expect((remove as HTMLButtonElement).disabled).toBe(false);
-    await act(async () => {
-      fireEvent.click(remove);
-    });
-    expect(vi.mocked(api.removeRole)).toHaveBeenCalledWith("owner", "admin");
+    const firstAdmin = await screen.findByRole("button", { name: "移除 owner-a 的角色 admin" });
+    expect((firstAdmin as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.queryByText("zz-owner")).toBeNull();
+    expect(api.listUsers).toHaveBeenLastCalledWith(51, 0);
+    fireEvent.click(screen.getByRole("button", { name: "下一页" }));
+    const remove = await screen.findByRole("button", { name: "移除 zz-owner 的角色 admin" });
+    expect(api.listUsers).toHaveBeenLastCalledWith(51, 50);
+    expect(screen.getByText("第 2 页")).toBeTruthy();
+    expect((screen.getByRole("button", { name: "下一页" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(remove);
+    await waitFor(() => expect(screen.queryByRole("button", { name: "移除 zz-owner 的角色 admin" })).toBeNull());
+    expect(api.removeRole).toHaveBeenCalledWith("zz-owner", "admin");
+    await waitFor(() => expect((screen.getByRole("button", { name: "上一页" }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: "上一页" }));
+    await screen.findByText("（最后 Admin）");
+    expect(api.listUsers).toHaveBeenLastCalledWith(51, 0);
+    expect((screen.getByRole("button", { name: "移除 owner-a 的角色 admin" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
-  it("后端 last_admin 竞态仍有专属文案", async () => {
+  it("后端 last_admin 竞态显示专属文案并刷新权威状态", async () => {
     vi.mocked(api.listUsers).mockResolvedValue([
       user({ id: "u-owner", username: "owner", roles: ["admin"] }),
     ]);
@@ -234,10 +253,24 @@ describe("用户与角色管理", () => {
     vi.mocked(api.removeRole).mockRejectedValue(
       new ApiError(403, "不能移除最后一个可登录的 Admin", "last_admin", "req-3"),
     );
+    vi.mocked(api.listUsers).mockResolvedValue([
+      user({ id: "u-owner", username: "owner", roles: ["admin"], is_last_loginable_admin: true }),
+    ]);
     fireEvent.click(remove);
     await waitFor(() =>
       expect(screen.getByText(/这是最后一个可登录的 Admin/)).toBeTruthy(),
     );
+    await screen.findByText("（最后 Admin）");
+    expect((screen.getByRole("button", { name: "移除 owner 的角色 admin" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("账号列表加载失败后可原地重试", async () => {
+    vi.mocked(api.listUsers).mockRejectedValueOnce(new Error("连接中断"));
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "重试账号列表" }));
+    await waitFor(() => expect(screen.queryByText("连接中断")).toBeNull());
+    expect(screen.getByText("还没有账号。")).toBeTruthy();
+    expect(api.listUsers).toHaveBeenLastCalledWith(51, 0);
   });
 
   it("角色目录加载失败时显示错误并可重试，而不是伪装成空列表", async () => {

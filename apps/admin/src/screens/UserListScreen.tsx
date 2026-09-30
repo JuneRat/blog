@@ -1,6 +1,7 @@
 import {
   Alert,
   Button,
+  Flex,
   Form,
   Input,
   Popconfirm,
@@ -19,8 +20,8 @@ import { useAuth } from "../auth";
 import { queryKeys } from "../queryClient";
 import type { AdminUser, RoleSummary } from "../types";
 
-/// 账号列表一次读取的上限（与后端 `ADMIN_USER_PAGE_MAX` 对齐）。
-const USER_PAGE_LIMIT = 200;
+// 接口返回数组、不含总数；多读取一条判断是否还有下一页。
+const USER_PAGE_SIZE = 50;
 
 /**
  * 账号管理界面：列出账号、创建账号、分配/移除角色。
@@ -79,6 +80,7 @@ function loginLabel(user: AdminUser): string {
 export function UserListScreen() {
   const { me, refresh } = useAuth();
   const queryClient = useQueryClient();
+  const [page, setPage] = useState(1);
   const [actionError, setActionError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -107,8 +109,8 @@ export function UserListScreen() {
    *   否则一次网络故障会被误读成「没有可分配的角色」，静默阻断分配。
    */
   const users = useQuery({
-    queryKey: queryKeys.users(),
-    queryFn: () => api.listUsers(USER_PAGE_LIMIT),
+    queryKey: queryKeys.userList(page),
+    queryFn: () => api.listUsers(USER_PAGE_SIZE + 1, (page - 1) * USER_PAGE_SIZE),
     enabled: canAdminister,
   });
   const roles = useQuery({
@@ -174,6 +176,7 @@ export function UserListScreen() {
       await load();
     } catch (e) {
       setError(messageOf(e));
+      if (e instanceof ApiError && e.code === "last_admin") await load();
     } finally {
       setBusy(false);
     }
@@ -378,7 +381,8 @@ export function UserListScreen() {
       <Typography.Title level={3}>用户与角色</Typography.Title>
 
       {errorText !== null && (
-        <Alert type="error" showIcon title={errorText} style={{ marginBottom: 16 }} />
+        <Alert type="error" showIcon title={errorText} style={{ marginBottom: 16 }}
+          action={users.isError && <Button size="small" disabled={users.isFetching} onClick={() => void users.refetch()}>重试账号列表</Button>} />
       )}
       {notice !== null && (
         <Alert type="success" showIcon title={notice} style={{ marginBottom: 16 }} />
@@ -432,24 +436,23 @@ export function UserListScreen() {
         </>
       )}
 
-      {users.data !== undefined && users.data.length >= USER_PAGE_LIMIT && (
-        <Typography.Paragraph type="secondary">
-          仅显示前 {USER_PAGE_LIMIT} 个账号；更多账号请用受控 CLI 管理。
-        </Typography.Paragraph>
-      )}
-
       <Table<AdminUser>
         rowKey="id"
         size="middle"
-        loading={users.isPending}
-        dataSource={users.data ?? []}
+        loading={users.isFetching}
+        dataSource={users.isError ? [] : (users.data ?? []).slice(0, USER_PAGE_SIZE)}
         columns={columns}
         pagination={false}
         scroll={{ x: 1000 }}
         locale={{
-          emptyText: errorText !== null ? "账号列表加载失败。" : "还没有账号。",
+          emptyText: users.isError ? "账号列表加载失败。" : page === 1 ? "还没有账号。" : "本页没有账号。",
         }}
       />
+      <Flex gap={12} justify="flex-end" align="center" style={{ marginTop: 16 }}>
+        <Typography.Text type="secondary">第 {page} 页</Typography.Text>
+        <Button disabled={page === 1 || busy || users.isFetching} onClick={() => setPage(current => current - 1)}>上一页</Button>
+        <Button disabled={busy || users.isFetching || users.isError || (users.data?.length ?? 0) <= USER_PAGE_SIZE} onClick={() => setPage(current => current + 1)}>下一页</Button>
+      </Flex>
     </>
   );
 }
