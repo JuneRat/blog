@@ -185,7 +185,10 @@ pub struct PublicPostDetail {
 
 #[async_trait]
 pub trait PublishedPostQuery: Send + Sync {
-    /// 只返回 status=published AND visibility=public AND deleted_at IS NULL 的文章。
+    /// 只返回 status=published AND visibility=public AND deleted_at IS NULL
+    /// 且发布时间已到的文章，按 published_at、id 倒序。
+    /// limit 钳制在 1..=MAX_HOME_PAGE_SIZE+1；多取一条供首页判断下一页，
+    /// offset 规范化为非负数。
     async fn list_public(
         &self,
         limit: i64,

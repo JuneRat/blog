@@ -77,6 +77,10 @@ name = "html_rebuild"
 required-features = ["sqlx-test-support"]
 
 [[test]]
+name = "home_pagination"
+required-features = ["sqlx-test-support"]
+
+[[test]]
 name = "identity_baseline"
 required-features = ["sqlx-test-support"]
 

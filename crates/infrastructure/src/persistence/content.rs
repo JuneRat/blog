@@ -12,6 +12,7 @@ use application::ports::{
     PublicPostDetail, PublicPostSummary, PublicUrlEntry, PublishedPageQuery, PublishedPostQuery,
     SaveOutcome,
 };
+use application::site_info::MAX_HOME_PAGE_SIZE;
 use domain::content::{Page, PageSnapshot, PageStatus};
 use domain::content::{Post, PostSnapshot, PostStatus, Visibility};
 
@@ -496,7 +497,7 @@ impl PublishedPostQuery for PostgresPublishedPostQuery {
         offset: i64,
     ) -> Result<Vec<PublicPostSummary>, UseCaseError> {
         // 端口约束：无论调用方传什么，limit/offset 都被钳制在安全范围。
-        let limit = limit.clamp(1, 100);
+        let limit = limit.clamp(1, MAX_HOME_PAGE_SIZE + 1);
         let offset = offset.max(0);
         let rows = sqlx::query(&format!(
             r#"
