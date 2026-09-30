@@ -107,6 +107,8 @@ Compose 默认 owner 支持后台清理；现有 `.env` 的 `BLOG_MAINTENANCE_DA
 
 恢复配置或数据库隔离期间，任务页面和预检可读，所有任务变更与执行禁止；读取不会初始化默认计划、续租、修剪历史或把过期租约落成终态。恢复库包含备份时的计划与 queued 请求，重新开放前须核对这些状态；只有正常服务解除隔离后才恢复领取。安装前不初始化计划，安装事务完成和 Router 激活后才启用统一监督器。此协调范围不表示整站认证已支持多实例，具体规则见 [ADR-0020](adr/0020-persistent-admin-tasks.md)。
 
+2026-10-01，代码提交 `49a8adc` 通过独立本地 PostgreSQL、生产构建的 Edge 页面和 Linux arm64 Docker runtime/ops 验证。覆盖三类实际任务、跨重启 queued 计划、跨进程单次领取、失败及中断后新 ID 重试、受限维护角色、历史上限和恢复模式零任务写入；浏览器刷新和关闭后服务端继续执行。完整 Compose 安装、升级、备份和隔离恢复也通过，未变更现有开发数据库。前端 383 项测试及构建通过，工作区依赖边界、Clippy、格式、结构与生成契约校验通过；[执行器回归](../crates/server/src/tasks_tests.rs) 固化了 12 秒合法慢事务与关闭后延迟回滚的场景。这些结果记录本地实现验证，生产验收仍按路线图执行。
+
 ## 正式媒体物理清理
 
 `blog media purge` 只接受明确选中的媒体 UUID，每份计划最多 1,000 个。所选媒体必须已进回收站、没有已知引用，文件路径、大小及 SHA-256 与登记一致。不会按软删除时间、零引用或未登记文件自动清扫，也不扫描全站正文。草稿、私密、归档和回收站内容仍计入 media_refs；封面、头像外键及站点 logo 另行复核，缺少引用记账也不会绕过它们。
@@ -273,4 +275,4 @@ cargo test -p infrastructure --features sqlx-test-support --test media_cleanup
 
 密码泄露时通过 blog user passwd 的隐藏输入或 --password-stdin 轮换；改密递增认证版本并撤销会话。核对角色、外部绑定与有效 Admin，OAuth 秘密独立轮换。不能靠恢复旧备份撤销泄露，恢复后必须保留必要轮换并清空会话。密码不放进参数、日志或脚本回显。
 
-目前没有外部搜索、Webhook、任务队列或跨请求整页缓存。以后引入时同步交付恢复隔离：搜索重建新索引/水位，事件建立新 stream_epoch 并显式核对/重放；数据库回退不能撤销外部副作用。详见[扩展候选](extensions-and-data.md)与 [ADR-0005](adr/0005-consistent-backup-and-recovery.md)。
+目前没有外部搜索、Webhook、通用任务队列或跨请求整页缓存。以后引入时同步交付恢复隔离：搜索重建新索引/水位，事件建立新 stream_epoch 并显式核对/重放；数据库回退不能撤销外部副作用。详见[扩展候选](extensions-and-data.md)与 [ADR-0005](adr/0005-consistent-backup-and-recovery.md)。

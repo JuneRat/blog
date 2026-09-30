@@ -31,7 +31,7 @@
 | 用户与角色管理 | 已实现账号列表/创建、个人资料、账号启停、角色目录、角色分配/移除及 Admin 保护。公开注册可由后台开放，默认 reader；用户名/邮箱登录与游客评论开关已实现。角色目录只读，自定义角色创建/权限编辑未实现 | [身份与后台](identity-and-admin.md) |
 | 后台与 CLI | 已实现 Ant Design 后台、关联写入后统一刷新与浏览器前进/后退未保存提醒；Post/Page 提供本机草稿恢复、非持久化正文预览和版本冲突对比，保存期间的新输入继续保留，撤回/归档不先保存本地修改。Post 有受控 CLI；Page 管理目前通过后台 API，没有 CLI 子命令 | [后台开发约定](admin-development.md)、[开发与 CLI](development.md)、[管理 API](admin-api.md) |
 | 站点设置 | 已实现 site/theme（含有序页头/页脚独立页面导航）、评论开关与评论 IP/审计保留期，包含分组版本冲突处理；固定维护任务在独立任务页面管理，CLI/外部调度仍可使用 | [配置](configuration.md) |
-| 后台任务 | 已采纳三种固定任务的持久运行/计划、跨进程租约、取消 queued 请求与新 ID 重试；HTML 手动或未来一次性计划、retention 默认关闭的每日周期、publish_due 固定 30 秒启用；每类历史最多 500 条。实现与实际验收进行中，不提供通用 cron 或命令执行器 | [ADR-0020](adr/0020-persistent-admin-tasks.md)、[任务操作](operations-and-recovery.md#后台任务管理) |
+| 后台任务 | 已实现三种固定任务的持久运行/计划、跨进程租约、取消 queued 请求与新 ID 重试；HTML 手动或未来一次性计划、retention 默认关闭的每日周期、publish_due 固定 30 秒启用；每类历史最多 500 条。应用、数据库、HTTP、真实浏览器与本地 Docker 验证通过，不提供通用 cron 或命令执行器 | [ADR-0020](adr/0020-persistent-admin-tasks.md)、[任务操作](operations-and-recovery.md#后台任务管理) |
 | 公开发现 | 已实现可配置每页数量的首页分页、RSS、sitemap、robots 与基础 SEO；使用统一公开条件，不收录草稿、私密或回收站内容 | [内容生命周期](content-lifecycle.md)、[主题与渲染](themes-and-rendering.md) |
 | 主题 | 已实现受控只读函数、请求级预算、第二主题 `paper` 与后台切换；桥接原型验证完成。已实现 `site.navigation` 上下文及两套主题导航；cursor 与公开作者函数未实现 | [主题与渲染](themes-and-rendering.md)、[原型报告](template-bridge-experiment.md) |
 | 原生评论 | 已适配游客/账号提交、受限 Markdown/预览、HTML 持久化、多级两级展示、删除占位、审核恢复、设置中的全站开关和四种审核策略（含待审原因）；IP 保留期已接入独立维护任务 | [评论](comments.md) |
