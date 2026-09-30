@@ -55,7 +55,7 @@ def exercise(image, root, ops_image):
     owner_password = re.search(r"^BLOG_OWNER_PASSWORD=([a-f0-9]{64})$", env_file.read_text(), re.M).group(1)
     with env_file.open("a") as stream:
         stream.write(f"\nBLOG_IMAGE={image}\nBLOG_OPS_IMAGE={ops_image}\nCOMPOSE_PROJECT_NAME={project}\nBLOG_HTTP_HOST=127.0.0.1\nBLOG_HTTP_PORT=0\nBLOG_METRICS_PORT=0\nRUST_LOG=info,sqlx=warn\n")
-        stream.write(dotenv({"GH_SECRET": special_secret, "BLOG_DB_MAX_CONNECTIONS": "9", "BLOG_DB_STATEMENT_TIMEOUT_MS": "30000"}))
+        stream.write(dotenv({"GH_SECRET": special_secret, "BLOG_DB_MAX_CONNECTIONS": "9", "BLOG_DB_STATEMENT_TIMEOUT_MS": "20000"}))
     shutil.copyfile(PROJECT / "compose.yaml", root / "compose.yaml")
     (root / "ops").mkdir()
     shutil.copyfile(PROJECT / "ops/postgres-init.sh", root / "ops/postgres-init.sh")
@@ -380,7 +380,7 @@ with unpack(sys.argv[1]) as (_, _, deployment, _):
         operation("restore", str(archive), str(restored), str(identity_file))
         restored_model = json.loads(restored_compose("config", "--format", "json"))
         restored_database = urlsplit(restored_model["services"]["blog"]["environment"]["DATABASE_URL"]).path.lstrip("/")
-        for key, value in (("BLOG_DB_MAX_CONNECTIONS", "9"), ("BLOG_DB_STATEMENT_TIMEOUT_MS", "30000")):
+        for key, value in (("BLOG_DB_MAX_CONNECTIONS", "9"), ("BLOG_DB_STATEMENT_TIMEOUT_MS", "20000")):
             require(restored_model["services"]["blog"]["environment"].get(key) == value,
                     "restored deployment lost database policy: " + key)
         require(restored_model["services"]["blog"]["environment"].get("GH_SECRET", "").replace("$$", "$") == special_secret,

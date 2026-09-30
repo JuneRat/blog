@@ -35,7 +35,7 @@ class CapacitySite(Acceptance):
         env = super().env(*args, **kwargs)
         env.update(BLOG_DB_MAX_CONNECTIONS=str(self.pool_size),
                    BLOG_DB_MIN_CONNECTIONS=str(self.pool_size),
-                   BLOG_DB_STATEMENT_TIMEOUT_MS="30000", BLOG_DB_LOCK_TIMEOUT_MS="5000")
+                   BLOG_DB_STATEMENT_TIMEOUT_MS="20000", BLOG_DB_LOCK_TIMEOUT_MS="3000")
         return env
 
 
