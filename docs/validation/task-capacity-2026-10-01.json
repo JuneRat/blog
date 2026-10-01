@@ -1,0 +1,5119 @@
+{
+  "format": 1,
+  "status": "passed",
+  "started_at": "2026-10-01T01:54:01.154104+00:00",
+  "cpu_count": 10,
+  "image": "codex-blog-task-health:9057c1c",
+  "workload": {
+    "expected_revision": "9057c1c485556e3d98592875a81cf79c3f58dc86",
+    "pool_sizes": [
+      5,
+      10
+    ],
+    "concurrency": 16,
+    "posts": 2000,
+    "writers": 4,
+    "duration": 300.0,
+    "write_interval_ms": 250,
+    "connection_lifetime_seconds": 60.0,
+    "task_interval": 15,
+    "scheduled_per_cycle": 16,
+    "read_p95_ms": 500,
+    "write_p95_ms": 2000,
+    "publication_delay_seconds": 45
+  },
+  "measurements": [
+    {
+      "pool_size": 5,
+      "background_tasks": false,
+      "build": {
+        "version": "0.1.0",
+        "revision": "9057c1c485556e3d98592875a81cf79c3f58dc86"
+      },
+      "concurrency": 16,
+      "requests": 1675488,
+      "errors": 0,
+      "failed_operations": 0,
+      "conflicts": 0,
+      "error_types": {},
+      "status_counts": {
+        "200": 1675488
+      },
+      "p50_ms": 2.736,
+      "p95_ms": 4.23,
+      "p99_ms": 5.472,
+      "requests_per_second": 5584.88,
+      "seconds": 300.004,
+      "readyz": {
+        "requests": 5606,
+        "errors": 0,
+        "failed_operations": 0,
+        "conflicts": 0,
+        "error_types": {},
+        "status_counts": {
+          "200": 5606
+        },
+        "p50_ms": 1.239,
+        "p95_ms": 2.115,
+        "p99_ms": 3.081
+      },
+      "connection_lifetime_seconds": 60.0,
+      "connection_rotations": {
+        "reads": 64,
+        "readyz": 4
+      },
+      "writers": 4,
+      "writes": {
+        "save": {
+          "requests": 4435,
+          "errors": 0,
+          "failed_operations": 0,
+          "conflicts": 0,
+          "error_types": {},
+          "status_counts": {
+            "200": 4435
+          },
+          "p50_ms": 17.602,
+          "p95_ms": 24.164,
+          "p99_ms": 39.644
+        },
+        "series_reorder": {
+          "requests": 0,
+          "errors": 0,
+          "failed_operations": 0,
+          "conflicts": 0,
+          "error_types": {},
+          "status_counts": {},
+          "p50_ms": null,
+          "p95_ms": null,
+          "p99_ms": null
+        }
+      },
+      "foreground_window": [
+        "2026-10-01T01:54:08.475105+00:00",
+        "2026-10-01T01:59:08.586862+00:00"
+      ],
+      "monitor": {
+        "metrics": {
+          "blog_database_pool_connections{state=\"idle\"}": {
+            "first": 5.0,
+            "min": 0.0,
+            "max": 5.0,
+            "last": 5.0
+          },
+          "blog_database_pool_connections{state=\"in_use\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 5.0,
+            "last": 0.0
+          },
+          "blog_database_pool_connections{state=\"max\"}": {
+            "first": 5.0,
+            "min": 5.0,
+            "max": 5.0,
+            "last": 5.0
+          },
+          "blog_database_pool_connections{state=\"size\"}": {
+            "first": 5.0,
+            "min": 5.0,
+            "max": 5.0,
+            "last": 5.0
+          },
+          "blog_render_active{kind=\"comment\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_active{kind=\"content\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_active{kind=\"theme\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 1.0,
+            "last": 0.0
+          },
+          "blog_render_completed_total{kind=\"comment\",result=\"success\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "last": 1.0
+          },
+          "blog_render_completed_total{kind=\"content\",result=\"success\"}": {
+            "first": 2.0,
+            "min": 2.0,
+            "max": 1145.0,
+            "last": 1145.0
+          },
+          "blog_render_completed_total{kind=\"theme\",result=\"success\"}": {
+            "first": 102.0,
+            "min": 102.0,
+            "max": 1675590.0,
+            "last": 1675590.0
+          },
+          "blog_render_execution_duration_seconds_sum{kind=\"comment\"}": {
+            "first": 3.4792e-05,
+            "min": 3.4792e-05,
+            "max": 3.4792e-05,
+            "last": 3.4792e-05
+          },
+          "blog_render_execution_duration_seconds_count{kind=\"comment\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "last": 1.0
+          },
+          "blog_render_execution_duration_seconds_sum{kind=\"content\"}": {
+            "first": 0.000338297,
+            "min": 0.000338297,
+            "max": 0.46127718799999995,
+            "last": 0.46127718799999995
+          },
+          "blog_render_execution_duration_seconds_count{kind=\"content\"}": {
+            "first": 2.0,
+            "min": 2.0,
+            "max": 1145.0,
+            "last": 1145.0
+          },
+          "blog_render_execution_duration_seconds_sum{kind=\"theme\"}": {
+            "first": 0.0038461320000000017,
+            "min": 0.0038461320000000017,
+            "max": 51.87747430601428,
+            "last": 51.87747430601428
+          },
+          "blog_render_execution_duration_seconds_count{kind=\"theme\"}": {
+            "first": 102.0,
+            "min": 102.0,
+            "max": 1675590.0,
+            "last": 1675590.0
+          },
+          "blog_render_execution_timeouts_total{kind=\"comment\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_execution_timeouts_total{kind=\"content\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_execution_timeouts_total{kind=\"theme\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_queue_duration_seconds_sum{kind=\"comment\"}": {
+            "first": 1.5e-06,
+            "min": 1.5e-06,
+            "max": 1.5e-06,
+            "last": 1.5e-06
+          },
+          "blog_render_queue_duration_seconds_count{kind=\"comment\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "last": 1.0
+          },
+          "blog_render_queue_duration_seconds_sum{kind=\"content\"}": {
+            "first": 3.375e-06,
+            "min": 3.375e-06,
+            "max": 0.0010041579999999957,
+            "last": 0.0010041579999999957
+          },
+          "blog_render_queue_duration_seconds_count{kind=\"content\"}": {
+            "first": 2.0,
+            "min": 2.0,
+            "max": 1145.0,
+            "last": 1145.0
+          },
+          "blog_render_queue_duration_seconds_sum{kind=\"theme\"}": {
+            "first": 3.7374999999999994e-05,
+            "min": 3.7374999999999994e-05,
+            "max": 0.622752008000891,
+            "last": 0.622752008000891
+          },
+          "blog_render_queue_duration_seconds_count{kind=\"theme\"}": {
+            "first": 102.0,
+            "min": 102.0,
+            "max": 1675590.0,
+            "last": 1675590.0
+          },
+          "blog_render_queue_total{kind=\"comment\",result=\"admitted\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "last": 1.0
+          },
+          "blog_render_queue_total{kind=\"content\",result=\"admitted\"}": {
+            "first": 2.0,
+            "min": 2.0,
+            "max": 1145.0,
+            "last": 1145.0
+          },
+          "blog_render_queue_total{kind=\"theme\",result=\"admitted\"}": {
+            "first": 102.0,
+            "min": 102.0,
+            "max": 1675590.0,
+            "last": 1675590.0
+          },
+          "blog_render_waiting{kind=\"comment\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_waiting{kind=\"content\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_waiting{kind=\"theme\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_consecutive_failures{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_consecutive_failures{kind=\"publish_due\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_consecutive_failures{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_due_wait_seconds{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_due_wait_seconds{kind=\"publish_due\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_due_wait_seconds{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"html_rebuild\",status=\"completed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"html_rebuild\",status=\"completed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"html_rebuild\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"html_rebuild\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"html_rebuild\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"html_rebuild\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"publish_due\",status=\"completed\"}": {
+            "first": 0.007027339,
+            "min": 0.007027339,
+            "max": 0.075252014,
+            "last": 0.075252014
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"publish_due\",status=\"completed\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 10.0,
+            "last": 10.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"publish_due\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"publish_due\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"publish_due\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"publish_due\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"retention\",status=\"completed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"retention\",status=\"completed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"retention\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"retention\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"retention\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"retention\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"html_rebuild\",status=\"cancelled\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"html_rebuild\",status=\"completed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"html_rebuild\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"html_rebuild\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"publish_due\",status=\"cancelled\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"publish_due\",status=\"completed\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 10.0,
+            "last": 10.0
+          },
+          "blog_task_finished_total{kind=\"publish_due\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"publish_due\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"retention\",status=\"cancelled\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"retention\",status=\"completed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"retention\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"retention\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_health_snapshot_last_success_timestamp_seconds": {
+            "first": 1790819648.0,
+            "min": 1790819648.0,
+            "max": 1790819943.0,
+            "last": 1790819943.0
+          },
+          "blog_task_last_success_timestamp_seconds{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_last_success_timestamp_seconds{kind=\"publish_due\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 1790819926.0,
+            "last": 1790819926.0
+          },
+          "blog_task_last_success_timestamp_seconds{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_lease_expirations_total{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_lease_expirations_total{kind=\"publish_due\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_lease_expirations_total{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_queue_duration_seconds_sum{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_queue_duration_seconds_count{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_queue_duration_seconds_sum{kind=\"publish_due\"}": {
+            "first": 0.005115,
+            "min": 0.005115,
+            "max": 0.046822,
+            "last": 0.046822
+          },
+          "blog_task_queue_duration_seconds_count{kind=\"publish_due\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 10.0,
+            "last": 10.0
+          },
+          "blog_task_queue_duration_seconds_sum{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_queue_duration_seconds_count{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"html_rebuild\",status=\"expired\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"html_rebuild\",status=\"queued\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"html_rebuild\",status=\"running\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"publish_due\",status=\"expired\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"publish_due\",status=\"queued\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"publish_due\",status=\"running\"}": {
+            "first": 1.0,
+            "min": 0.0,
+            "max": 1.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"retention\",status=\"expired\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"retention\",status=\"queued\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"retention\",status=\"running\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_schedule_enabled{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_schedule_enabled{kind=\"publish_due\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "last": 1.0
+          },
+          "blog_task_schedule_enabled{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_schedule_interval_seconds{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_schedule_interval_seconds{kind=\"publish_due\"}": {
+            "first": 30.0,
+            "min": 30.0,
+            "max": 30.0,
+            "last": 30.0
+          },
+          "blog_task_schedule_interval_seconds{kind=\"retention\"}": {
+            "first": 86400.0,
+            "min": 86400.0,
+            "max": 86400.0,
+            "last": 86400.0
+          },
+          "blog_task_schedule_next_run_timestamp_seconds{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_schedule_next_run_timestamp_seconds{kind=\"publish_due\"}": {
+            "first": 1790819678.0,
+            "min": 1790819678.0,
+            "max": 1790819956.0,
+            "last": 1790819956.0
+          },
+          "blog_task_schedule_next_run_timestamp_seconds{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_scheduler_available": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "last": 1.0
+          },
+          "blog_task_scheduler_checks_total{result=\"error\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_scheduler_checks_total{result=\"success\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 301.0,
+            "last": 301.0
+          },
+          "blog_task_scheduler_checks_total{result=\"unavailable\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_scheduler_last_success_timestamp_seconds": {
+            "first": 1790819648.0,
+            "min": 1790819648.0,
+            "max": 1790819948.0,
+            "last": 1790819948.0
+          },
+          "blog_task_started_total{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_started_total{kind=\"publish_due\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 10.0,
+            "last": 10.0
+          },
+          "blog_task_started_total{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          }
+        },
+        "resources": {
+          "blog": {
+            "peak_memory_bytes": 83047219,
+            "peak_cpu_percent": 127.15
+          },
+          "db": {
+            "peak_memory_bytes": 92169830,
+            "peak_cpu_percent": 174.61
+          }
+        },
+        "errors": 0
+      },
+      "passed": true,
+      "failed_checks": []
+    },
+    {
+      "pool_size": 5,
+      "background_tasks": true,
+      "build": {
+        "version": "0.1.0",
+        "revision": "9057c1c485556e3d98592875a81cf79c3f58dc86"
+      },
+      "concurrency": 16,
+      "requests": 1373834,
+      "errors": 0,
+      "failed_operations": 0,
+      "conflicts": 0,
+      "error_types": {},
+      "status_counts": {
+        "200": 1373834
+      },
+      "p50_ms": 3.335,
+      "p95_ms": 5.365,
+      "p99_ms": 7.079,
+      "requests_per_second": 4579.39,
+      "seconds": 300.004,
+      "readyz": {
+        "requests": 5570,
+        "errors": 0,
+        "failed_operations": 0,
+        "conflicts": 0,
+        "error_types": {},
+        "status_counts": {
+          "200": 5570
+        },
+        "p50_ms": 1.481,
+        "p95_ms": 2.528,
+        "p99_ms": 4.147
+      },
+      "connection_lifetime_seconds": 60.0,
+      "connection_rotations": {
+        "reads": 64,
+        "readyz": 4
+      },
+      "writers": 4,
+      "writes": {
+        "save": {
+          "requests": 4392,
+          "errors": 0,
+          "failed_operations": 0,
+          "conflicts": 0,
+          "error_types": {},
+          "status_counts": {
+            "200": 4392
+          },
+          "p50_ms": 19.434,
+          "p95_ms": 29.456,
+          "p99_ms": 77.728
+        },
+        "series_reorder": {
+          "requests": 0,
+          "errors": 0,
+          "failed_operations": 0,
+          "conflicts": 0,
+          "error_types": {},
+          "status_counts": {},
+          "p50_ms": null,
+          "p95_ms": null,
+          "p99_ms": null
+        }
+      },
+      "foreground_window": [
+        "2026-10-01T01:59:19.166084+00:00",
+        "2026-10-01T02:04:19.264608+00:00"
+      ],
+      "background": {
+        "cycles": 20,
+        "submissions": {
+          "requests": 40,
+          "errors": 0,
+          "failed_operations": 0,
+          "conflicts": 0,
+          "error_types": {},
+          "status_counts": {
+            "200": 40
+          },
+          "p50_ms": 10.312,
+          "p95_ms": 13.879,
+          "p99_ms": 15.63
+        },
+        "runs": [
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.211306,
+            "execution_seconds": 0.010858,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.342037,
+            "execution_seconds": 0.016774,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "html_rebuild",
+            "report": {
+              "html": {
+                "batches": 20,
+                "dry_run": false,
+                "failure": null,
+                "pending": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "rebuilt": {
+                  "pages": 0,
+                  "posts": 1996,
+                  "comments": 0
+                },
+                "skipped": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "has_more": false
+              },
+              "error": null,
+              "retention": null,
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.364781,
+            "execution_seconds": 8.661441,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "html_rebuild",
+            "report": {
+              "html": {
+                "batches": 20,
+                "dry_run": false,
+                "failure": null,
+                "pending": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "rebuilt": {
+                  "pages": 0,
+                  "posts": 1996,
+                  "comments": 0
+                },
+                "skipped": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "has_more": false
+              },
+              "error": null,
+              "retention": null,
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.2304,
+            "execution_seconds": 10.948034,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.482285,
+            "execution_seconds": 0.011702,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.856547,
+            "execution_seconds": 0.011773,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.698436,
+            "execution_seconds": 0.010891,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "html_rebuild",
+            "report": {
+              "html": {
+                "batches": 20,
+                "dry_run": false,
+                "failure": null,
+                "pending": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "rebuilt": {
+                  "pages": 0,
+                  "posts": 1996,
+                  "comments": 0
+                },
+                "skipped": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "has_more": false
+              },
+              "error": null,
+              "retention": null,
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.715911,
+            "execution_seconds": 8.675865,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "html_rebuild",
+            "report": {
+              "html": {
+                "batches": 20,
+                "dry_run": false,
+                "failure": null,
+                "pending": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "rebuilt": {
+                  "pages": 0,
+                  "posts": 1996,
+                  "comments": 0
+                },
+                "skipped": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "has_more": false
+              },
+              "error": null,
+              "retention": null,
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.493043,
+            "execution_seconds": 8.443118,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "html_rebuild",
+            "report": {
+              "html": {
+                "batches": 20,
+                "dry_run": false,
+                "failure": null,
+                "pending": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "rebuilt": {
+                  "pages": 0,
+                  "posts": 1996,
+                  "comments": 0
+                },
+                "skipped": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "has_more": false
+              },
+              "error": null,
+              "retention": null,
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.872357,
+            "execution_seconds": 9.123716,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.060441,
+            "execution_seconds": 0.014275,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "html_rebuild",
+            "report": {
+              "html": {
+                "batches": 20,
+                "dry_run": false,
+                "failure": null,
+                "pending": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "rebuilt": {
+                  "pages": 0,
+                  "posts": 1996,
+                  "comments": 0
+                },
+                "skipped": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "has_more": false
+              },
+              "error": null,
+              "retention": null,
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.075364,
+            "execution_seconds": 9.39401,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.253719,
+            "execution_seconds": 0.01119,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "html_rebuild",
+            "report": {
+              "html": {
+                "batches": 20,
+                "dry_run": false,
+                "failure": null,
+                "pending": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "rebuilt": {
+                  "pages": 0,
+                  "posts": 1996,
+                  "comments": 0
+                },
+                "skipped": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "has_more": false
+              },
+              "error": null,
+              "retention": null,
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.269929,
+            "execution_seconds": 8.877521,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.646312,
+            "execution_seconds": 0.013833,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.493832,
+            "execution_seconds": 0.011562,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.854768,
+            "execution_seconds": 0.014049,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.02072,
+            "execution_seconds": 0.014123,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "html_rebuild",
+            "report": {
+              "html": {
+                "batches": 20,
+                "dry_run": false,
+                "failure": null,
+                "pending": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "rebuilt": {
+                  "pages": 0,
+                  "posts": 1996,
+                  "comments": 0
+                },
+                "skipped": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "has_more": false
+              },
+              "error": null,
+              "retention": null,
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.666469,
+            "execution_seconds": 9.217591,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "html_rebuild",
+            "report": {
+              "html": {
+                "batches": 20,
+                "dry_run": false,
+                "failure": null,
+                "pending": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "rebuilt": {
+                  "pages": 0,
+                  "posts": 1996,
+                  "comments": 0
+                },
+                "skipped": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "has_more": false
+              },
+              "error": null,
+              "retention": null,
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.433716,
+            "execution_seconds": 9.48316,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "html_rebuild",
+            "report": {
+              "html": {
+                "batches": 20,
+                "dry_run": false,
+                "failure": null,
+                "pending": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "rebuilt": {
+                  "pages": 0,
+                  "posts": 1996,
+                  "comments": 0
+                },
+                "skipped": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "has_more": false
+              },
+              "error": null,
+              "retention": null,
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.039525,
+            "execution_seconds": 9.780301,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.121961,
+            "execution_seconds": 0.01264,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.892875,
+            "execution_seconds": 0.015164,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "html_rebuild",
+            "report": {
+              "html": {
+                "batches": 20,
+                "dry_run": false,
+                "failure": null,
+                "pending": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "rebuilt": {
+                  "pages": 0,
+                  "posts": 1996,
+                  "comments": 0
+                },
+                "skipped": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "has_more": false
+              },
+              "error": null,
+              "retention": null,
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.826506,
+            "execution_seconds": 9.866076,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "html_rebuild",
+            "report": {
+              "html": {
+                "batches": 20,
+                "dry_run": false,
+                "failure": null,
+                "pending": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "rebuilt": {
+                  "pages": 0,
+                  "posts": 1996,
+                  "comments": 0
+                },
+                "skipped": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "has_more": false
+              },
+              "error": null,
+              "retention": null,
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.134503,
+            "execution_seconds": 9.271351,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "html_rebuild",
+            "report": {
+              "html": {
+                "batches": 20,
+                "dry_run": false,
+                "failure": null,
+                "pending": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "rebuilt": {
+                  "pages": 0,
+                  "posts": 1996,
+                  "comments": 0
+                },
+                "skipped": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "has_more": false
+              },
+              "error": null,
+              "retention": null,
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.744331,
+            "execution_seconds": 3.646685,
+            "finished_during_foreground": false
+          },
+          {
+            "kind": "html_rebuild",
+            "report": {
+              "html": {
+                "batches": 20,
+                "dry_run": false,
+                "failure": null,
+                "pending": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "rebuilt": {
+                  "pages": 0,
+                  "posts": 1996,
+                  "comments": 0
+                },
+                "skipped": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "has_more": false
+              },
+              "error": null,
+              "retention": null,
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.513154,
+            "execution_seconds": 9.963229,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.562778,
+            "execution_seconds": 0.01444,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "html_rebuild",
+            "report": {
+              "html": {
+                "batches": 20,
+                "dry_run": false,
+                "failure": null,
+                "pending": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "rebuilt": {
+                  "pages": 0,
+                  "posts": 1996,
+                  "comments": 0
+                },
+                "skipped": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "has_more": false
+              },
+              "error": null,
+              "retention": null,
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.87146,
+            "execution_seconds": 9.158743,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.273541,
+            "execution_seconds": 0.010701,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "html_rebuild",
+            "report": {
+              "html": {
+                "batches": 20,
+                "dry_run": false,
+                "failure": null,
+                "pending": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "rebuilt": {
+                  "pages": 0,
+                  "posts": 1996,
+                  "comments": 0
+                },
+                "skipped": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "has_more": false
+              },
+              "error": null,
+              "retention": null,
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.159434,
+            "execution_seconds": 9.029608,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "html_rebuild",
+            "report": {
+              "html": {
+                "batches": 20,
+                "dry_run": false,
+                "failure": null,
+                "pending": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "rebuilt": {
+                  "pages": 0,
+                  "posts": 1996,
+                  "comments": 0
+                },
+                "skipped": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "has_more": false
+              },
+              "error": null,
+              "retention": null,
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.906112,
+            "execution_seconds": 8.975173,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "html_rebuild",
+            "report": {
+              "html": {
+                "batches": 20,
+                "dry_run": false,
+                "failure": null,
+                "pending": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "rebuilt": {
+                  "pages": 0,
+                  "posts": 1996,
+                  "comments": 0
+                },
+                "skipped": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "has_more": false
+              },
+              "error": null,
+              "retention": null,
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.297622,
+            "execution_seconds": 10.09034,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "html_rebuild",
+            "report": {
+              "html": {
+                "batches": 20,
+                "dry_run": false,
+                "failure": null,
+                "pending": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "rebuilt": {
+                  "pages": 0,
+                  "posts": 1996,
+                  "comments": 0
+                },
+                "skipped": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "has_more": false
+              },
+              "error": null,
+              "retention": null,
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.578529,
+            "execution_seconds": 9.129969,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.140822,
+            "execution_seconds": 0.011248,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.477624,
+            "execution_seconds": 0.013459,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.808238,
+            "execution_seconds": 0.011432,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "html_rebuild",
+            "report": {
+              "html": {
+                "batches": 20,
+                "dry_run": false,
+                "failure": null,
+                "pending": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "rebuilt": {
+                  "pages": 0,
+                  "posts": 1996,
+                  "comments": 0
+                },
+                "skipped": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "has_more": false
+              },
+              "error": null,
+              "retention": null,
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.486366,
+            "execution_seconds": 10.519153,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.414238,
+            "execution_seconds": 0.012328,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.741693,
+            "execution_seconds": 0.018722,
+            "finished_during_foreground": false
+          }
+        ],
+        "publication": {
+          "expected": 320,
+          "observed": 320,
+          "published": 320,
+          "max_delay_seconds": 26.025564,
+          "p95_delay_seconds": 26.0066961,
+          "business_max_delay_seconds": 25.238837
+        },
+        "cleanup": {
+          "seed_ip_preserved": true,
+          "remaining_audit_rows": 0,
+          "remaining_comment_ips": 0,
+          "expired_comments_preserved": 2000
+        },
+        "pending_html": {
+          "posts": 0,
+          "pages": 0,
+          "comments": 0
+        },
+        "skipped_rebuild_fixture_cycles": 0,
+        "fixture_sql": {
+          "requests": 20,
+          "errors": 0,
+          "failed_operations": 0,
+          "conflicts": 0,
+          "error_types": {},
+          "status_counts": {
+            "200": 20
+          },
+          "p50_ms": 597.579,
+          "p95_ms": 714.163,
+          "p99_ms": 728.446
+        },
+        "publication_observations": 58,
+        "publication_observation_interval_seconds": 5
+      },
+      "monitor": {
+        "metrics": {
+          "blog_database_pool_connections{state=\"idle\"}": {
+            "first": 5.0,
+            "min": -1.0,
+            "max": 5.0,
+            "last": 5.0
+          },
+          "blog_database_pool_connections{state=\"in_use\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 5.0,
+            "last": 0.0
+          },
+          "blog_database_pool_connections{state=\"max\"}": {
+            "first": 5.0,
+            "min": 5.0,
+            "max": 5.0,
+            "last": 5.0
+          },
+          "blog_database_pool_connections{state=\"size\"}": {
+            "first": 5.0,
+            "min": 5.0,
+            "max": 5.0,
+            "last": 5.0
+          },
+          "blog_render_active{kind=\"comment\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_active{kind=\"content\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_active{kind=\"theme\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 1.0,
+            "last": 0.0
+          },
+          "blog_render_completed_total{kind=\"comment\",result=\"success\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "last": 1.0
+          },
+          "blog_render_completed_total{kind=\"content\",result=\"success\"}": {
+            "first": 2.0,
+            "min": 2.0,
+            "max": 1115.0,
+            "last": 1115.0
+          },
+          "blog_render_completed_total{kind=\"theme\",result=\"success\"}": {
+            "first": 102.0,
+            "min": 102.0,
+            "max": 1373936.0,
+            "last": 1373936.0
+          },
+          "blog_render_execution_duration_seconds_sum{kind=\"comment\"}": {
+            "first": 4.55e-05,
+            "min": 4.55e-05,
+            "max": 4.55e-05,
+            "last": 4.55e-05
+          },
+          "blog_render_execution_duration_seconds_count{kind=\"comment\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "last": 1.0
+          },
+          "blog_render_execution_duration_seconds_sum{kind=\"content\"}": {
+            "first": 0.000388251,
+            "min": 0.000388251,
+            "max": 0.5020779130000007,
+            "last": 0.5020779130000007
+          },
+          "blog_render_execution_duration_seconds_count{kind=\"content\"}": {
+            "first": 2.0,
+            "min": 2.0,
+            "max": 1115.0,
+            "last": 1115.0
+          },
+          "blog_render_execution_duration_seconds_sum{kind=\"theme\"}": {
+            "first": 0.004930795000000001,
+            "min": 0.004930795000000001,
+            "max": 50.471245813011855,
+            "last": 50.471245813011855
+          },
+          "blog_render_execution_duration_seconds_count{kind=\"theme\"}": {
+            "first": 102.0,
+            "min": 102.0,
+            "max": 1373936.0,
+            "last": 1373936.0
+          },
+          "blog_render_execution_timeouts_total{kind=\"comment\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_execution_timeouts_total{kind=\"content\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_execution_timeouts_total{kind=\"theme\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_queue_duration_seconds_sum{kind=\"comment\"}": {
+            "first": 2.041e-06,
+            "min": 2.041e-06,
+            "max": 2.041e-06,
+            "last": 2.041e-06
+          },
+          "blog_render_queue_duration_seconds_count{kind=\"comment\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "last": 1.0
+          },
+          "blog_render_queue_duration_seconds_sum{kind=\"content\"}": {
+            "first": 5.125e-06,
+            "min": 5.125e-06,
+            "max": 0.0011532359999999963,
+            "last": 0.0011532359999999963
+          },
+          "blog_render_queue_duration_seconds_count{kind=\"content\"}": {
+            "first": 2.0,
+            "min": 2.0,
+            "max": 1115.0,
+            "last": 1115.0
+          },
+          "blog_render_queue_duration_seconds_sum{kind=\"theme\"}": {
+            "first": 4.075e-05,
+            "min": 4.075e-05,
+            "max": 0.666045272001067,
+            "last": 0.666045272001067
+          },
+          "blog_render_queue_duration_seconds_count{kind=\"theme\"}": {
+            "first": 102.0,
+            "min": 102.0,
+            "max": 1373936.0,
+            "last": 1373936.0
+          },
+          "blog_render_queue_total{kind=\"comment\",result=\"admitted\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "last": 1.0
+          },
+          "blog_render_queue_total{kind=\"content\",result=\"admitted\"}": {
+            "first": 2.0,
+            "min": 2.0,
+            "max": 1115.0,
+            "last": 1115.0
+          },
+          "blog_render_queue_total{kind=\"theme\",result=\"admitted\"}": {
+            "first": 102.0,
+            "min": 102.0,
+            "max": 1373936.0,
+            "last": 1373936.0
+          },
+          "blog_render_waiting{kind=\"comment\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_waiting{kind=\"content\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_waiting{kind=\"theme\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_consecutive_failures{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_consecutive_failures{kind=\"publish_due\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_consecutive_failures{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_due_wait_seconds{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_due_wait_seconds{kind=\"publish_due\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_due_wait_seconds{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"html_rebuild\",status=\"completed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 182.234913665,
+            "last": 182.234913665
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"html_rebuild\",status=\"completed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 20.0,
+            "last": 20.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"html_rebuild\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"html_rebuild\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"html_rebuild\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"html_rebuild\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"publish_due\",status=\"completed\"}": {
+            "first": 0.007599834,
+            "min": 0.007599834,
+            "max": 0.180847325,
+            "last": 0.180847325
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"publish_due\",status=\"completed\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 11.0,
+            "last": 11.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"publish_due\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"publish_due\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"publish_due\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"publish_due\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"retention\",status=\"completed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.26518894099999996,
+            "last": 0.26518894099999996
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"retention\",status=\"completed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 20.0,
+            "last": 20.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"retention\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"retention\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"retention\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"retention\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"html_rebuild\",status=\"cancelled\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"html_rebuild\",status=\"completed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 20.0,
+            "last": 20.0
+          },
+          "blog_task_finished_total{kind=\"html_rebuild\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"html_rebuild\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"publish_due\",status=\"cancelled\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"publish_due\",status=\"completed\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 11.0,
+            "last": 11.0
+          },
+          "blog_task_finished_total{kind=\"publish_due\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"publish_due\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"retention\",status=\"cancelled\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"retention\",status=\"completed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 20.0,
+            "last": 20.0
+          },
+          "blog_task_finished_total{kind=\"retention\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"retention\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_health_snapshot_last_success_timestamp_seconds": {
+            "first": 1790819958.0,
+            "min": 1790819958.0,
+            "max": 1790820264.0,
+            "last": 1790820264.0
+          },
+          "blog_task_last_success_timestamp_seconds{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 1790820256.0,
+            "last": 1790820256.0
+          },
+          "blog_task_last_success_timestamp_seconds{kind=\"publish_due\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 1790820236.0,
+            "last": 1790820236.0
+          },
+          "blog_task_last_success_timestamp_seconds{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 1790820259.0,
+            "last": 1790820259.0
+          },
+          "blog_task_lease_expirations_total{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_lease_expirations_total{kind=\"publish_due\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_lease_expirations_total{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_queue_duration_seconds_sum{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 9.679512,
+            "last": 9.679512
+          },
+          "blog_task_queue_duration_seconds_count{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 20.0,
+            "last": 20.0
+          },
+          "blog_task_queue_duration_seconds_sum{kind=\"publish_due\"}": {
+            "first": 0.004488,
+            "min": 0.004488,
+            "max": 0.083334,
+            "last": 0.083334
+          },
+          "blog_task_queue_duration_seconds_count{kind=\"publish_due\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 11.0,
+            "last": 11.0
+          },
+          "blog_task_queue_duration_seconds_sum{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 9.333145,
+            "last": 9.333145
+          },
+          "blog_task_queue_duration_seconds_count{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 20.0,
+            "last": 20.0
+          },
+          "blog_task_runs{kind=\"html_rebuild\",status=\"expired\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"html_rebuild\",status=\"queued\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 1.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"html_rebuild\",status=\"running\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 1.0,
+            "last": 1.0
+          },
+          "blog_task_runs{kind=\"publish_due\",status=\"expired\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"publish_due\",status=\"queued\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"publish_due\",status=\"running\"}": {
+            "first": 1.0,
+            "min": 0.0,
+            "max": 1.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"retention\",status=\"expired\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"retention\",status=\"queued\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"retention\",status=\"running\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 1.0,
+            "last": 0.0
+          },
+          "blog_task_schedule_enabled{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_schedule_enabled{kind=\"publish_due\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "last": 1.0
+          },
+          "blog_task_schedule_enabled{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_schedule_interval_seconds{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_schedule_interval_seconds{kind=\"publish_due\"}": {
+            "first": 30.0,
+            "min": 30.0,
+            "max": 30.0,
+            "last": 30.0
+          },
+          "blog_task_schedule_interval_seconds{kind=\"retention\"}": {
+            "first": 86400.0,
+            "min": 86400.0,
+            "max": 86400.0,
+            "last": 86400.0
+          },
+          "blog_task_schedule_next_run_timestamp_seconds{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_schedule_next_run_timestamp_seconds{kind=\"publish_due\"}": {
+            "first": 1790819988.0,
+            "min": 1790819988.0,
+            "max": 1790820266.0,
+            "last": 1790820266.0
+          },
+          "blog_task_schedule_next_run_timestamp_seconds{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_scheduler_available": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "last": 1.0
+          },
+          "blog_task_scheduler_checks_total{result=\"error\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_scheduler_checks_total{result=\"success\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 310.0,
+            "last": 310.0
+          },
+          "blog_task_scheduler_checks_total{result=\"unavailable\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_scheduler_last_success_timestamp_seconds": {
+            "first": 1790819958.0,
+            "min": 1790819958.0,
+            "max": 1790820267.0,
+            "last": 1790820267.0
+          },
+          "blog_task_started_total{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 20.0,
+            "last": 20.0
+          },
+          "blog_task_started_total{kind=\"publish_due\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 11.0,
+            "last": 11.0
+          },
+          "blog_task_started_total{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 20.0,
+            "last": 20.0
+          }
+        },
+        "resources": {
+          "blog": {
+            "peak_memory_bytes": 77405880,
+            "peak_cpu_percent": 129.44
+          },
+          "db": {
+            "peak_memory_bytes": 102991135,
+            "peak_cpu_percent": 193.17
+          }
+        },
+        "errors": 0
+      },
+      "passed": true,
+      "failed_checks": []
+    },
+    {
+      "pool_size": 10,
+      "background_tasks": false,
+      "build": {
+        "version": "0.1.0",
+        "revision": "9057c1c485556e3d98592875a81cf79c3f58dc86"
+      },
+      "concurrency": 16,
+      "requests": 1345894,
+      "errors": 0,
+      "failed_operations": 0,
+      "conflicts": 0,
+      "error_types": {},
+      "status_counts": {
+        "200": 1345894
+      },
+      "p50_ms": 3.402,
+      "p95_ms": 5.472,
+      "p99_ms": 7.079,
+      "requests_per_second": 4486.27,
+      "seconds": 300.003,
+      "readyz": {
+        "requests": 5318,
+        "errors": 0,
+        "failed_operations": 0,
+        "conflicts": 0,
+        "error_types": {},
+        "status_counts": {
+          "200": 5318
+        },
+        "p50_ms": 1.603,
+        "p95_ms": 3.081,
+        "p99_ms": 4.956
+      },
+      "connection_lifetime_seconds": 60.0,
+      "connection_rotations": {
+        "reads": 64,
+        "readyz": 4
+      },
+      "writers": 4,
+      "writes": {
+        "save": {
+          "requests": 4276,
+          "errors": 0,
+          "failed_operations": 0,
+          "conflicts": 0,
+          "error_types": {},
+          "status_counts": {
+            "200": 4276
+          },
+          "p50_ms": 24.647,
+          "p95_ms": 35.202,
+          "p99_ms": 57.753
+        },
+        "series_reorder": {
+          "requests": 0,
+          "errors": 0,
+          "failed_operations": 0,
+          "conflicts": 0,
+          "error_types": {},
+          "status_counts": {},
+          "p50_ms": null,
+          "p95_ms": null,
+          "p99_ms": null
+        }
+      },
+      "foreground_window": [
+        "2026-10-01T02:04:38.569754+00:00",
+        "2026-10-01T02:09:38.69278+00:00"
+      ],
+      "monitor": {
+        "metrics": {
+          "blog_database_pool_connections{state=\"idle\"}": {
+            "first": 10.0,
+            "min": 0.0,
+            "max": 10.0,
+            "last": 10.0
+          },
+          "blog_database_pool_connections{state=\"in_use\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 10.0,
+            "last": 0.0
+          },
+          "blog_database_pool_connections{state=\"max\"}": {
+            "first": 10.0,
+            "min": 10.0,
+            "max": 10.0,
+            "last": 10.0
+          },
+          "blog_database_pool_connections{state=\"size\"}": {
+            "first": 10.0,
+            "min": 10.0,
+            "max": 10.0,
+            "last": 10.0
+          },
+          "blog_render_active{kind=\"comment\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_active{kind=\"content\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_active{kind=\"theme\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 1.0,
+            "last": 0.0
+          },
+          "blog_render_completed_total{kind=\"comment\",result=\"success\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "last": 1.0
+          },
+          "blog_render_completed_total{kind=\"content\",result=\"success\"}": {
+            "first": 2.0,
+            "min": 2.0,
+            "max": 1093.0,
+            "last": 1093.0
+          },
+          "blog_render_completed_total{kind=\"theme\",result=\"success\"}": {
+            "first": 102.0,
+            "min": 102.0,
+            "max": 1345996.0,
+            "last": 1345996.0
+          },
+          "blog_render_execution_duration_seconds_sum{kind=\"comment\"}": {
+            "first": 3.5833e-05,
+            "min": 3.5833e-05,
+            "max": 3.5833e-05,
+            "last": 3.5833e-05
+          },
+          "blog_render_execution_duration_seconds_count{kind=\"comment\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "last": 1.0
+          },
+          "blog_render_execution_duration_seconds_sum{kind=\"content\"}": {
+            "first": 0.00030412500000000003,
+            "min": 0.00030412500000000003,
+            "max": 0.6231242100000002,
+            "last": 0.6231242100000002
+          },
+          "blog_render_execution_duration_seconds_count{kind=\"content\"}": {
+            "first": 2.0,
+            "min": 2.0,
+            "max": 1093.0,
+            "last": 1093.0
+          },
+          "blog_render_execution_duration_seconds_sum{kind=\"theme\"}": {
+            "first": 0.0038377050000000003,
+            "min": 0.0038377050000000003,
+            "max": 62.37611813700962,
+            "last": 62.37611813700962
+          },
+          "blog_render_execution_duration_seconds_count{kind=\"theme\"}": {
+            "first": 102.0,
+            "min": 102.0,
+            "max": 1345996.0,
+            "last": 1345996.0
+          },
+          "blog_render_execution_timeouts_total{kind=\"comment\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_execution_timeouts_total{kind=\"content\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_execution_timeouts_total{kind=\"theme\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_queue_duration_seconds_sum{kind=\"comment\"}": {
+            "first": 1.666e-06,
+            "min": 1.666e-06,
+            "max": 1.666e-06,
+            "last": 1.666e-06
+          },
+          "blog_render_queue_duration_seconds_count{kind=\"comment\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "last": 1.0
+          },
+          "blog_render_queue_duration_seconds_sum{kind=\"content\"}": {
+            "first": 3.417e-06,
+            "min": 3.417e-06,
+            "max": 0.0013261300000000009,
+            "last": 0.0013261300000000009
+          },
+          "blog_render_queue_duration_seconds_count{kind=\"content\"}": {
+            "first": 2.0,
+            "min": 2.0,
+            "max": 1093.0,
+            "last": 1093.0
+          },
+          "blog_render_queue_duration_seconds_sum{kind=\"theme\"}": {
+            "first": 3.854e-05,
+            "min": 3.854e-05,
+            "max": 1.0835284600020252,
+            "last": 1.0835284600020252
+          },
+          "blog_render_queue_duration_seconds_count{kind=\"theme\"}": {
+            "first": 102.0,
+            "min": 102.0,
+            "max": 1345996.0,
+            "last": 1345996.0
+          },
+          "blog_render_queue_total{kind=\"comment\",result=\"admitted\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "last": 1.0
+          },
+          "blog_render_queue_total{kind=\"content\",result=\"admitted\"}": {
+            "first": 2.0,
+            "min": 2.0,
+            "max": 1093.0,
+            "last": 1093.0
+          },
+          "blog_render_queue_total{kind=\"theme\",result=\"admitted\"}": {
+            "first": 102.0,
+            "min": 102.0,
+            "max": 1345996.0,
+            "last": 1345996.0
+          },
+          "blog_render_waiting{kind=\"comment\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_waiting{kind=\"content\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_waiting{kind=\"theme\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_consecutive_failures{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_consecutive_failures{kind=\"publish_due\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_consecutive_failures{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_due_wait_seconds{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_due_wait_seconds{kind=\"publish_due\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_due_wait_seconds{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"html_rebuild\",status=\"completed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"html_rebuild\",status=\"completed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"html_rebuild\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"html_rebuild\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"html_rebuild\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"html_rebuild\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"publish_due\",status=\"completed\"}": {
+            "first": 0.007237668,
+            "min": 0.007237668,
+            "max": 0.136645588,
+            "last": 0.136645588
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"publish_due\",status=\"completed\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 10.0,
+            "last": 10.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"publish_due\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"publish_due\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"publish_due\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"publish_due\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"retention\",status=\"completed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"retention\",status=\"completed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"retention\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"retention\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"retention\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"retention\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"html_rebuild\",status=\"cancelled\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"html_rebuild\",status=\"completed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"html_rebuild\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"html_rebuild\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"publish_due\",status=\"cancelled\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"publish_due\",status=\"completed\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 10.0,
+            "last": 10.0
+          },
+          "blog_task_finished_total{kind=\"publish_due\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"publish_due\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"retention\",status=\"cancelled\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"retention\",status=\"completed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"retention\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"retention\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_health_snapshot_last_success_timestamp_seconds": {
+            "first": 1790820278.0,
+            "min": 1790820278.0,
+            "max": 1790820578.0,
+            "last": 1790820578.0
+          },
+          "blog_task_last_success_timestamp_seconds{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_last_success_timestamp_seconds{kind=\"publish_due\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 1790820557.0,
+            "last": 1790820557.0
+          },
+          "blog_task_last_success_timestamp_seconds{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_lease_expirations_total{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_lease_expirations_total{kind=\"publish_due\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_lease_expirations_total{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_queue_duration_seconds_sum{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_queue_duration_seconds_count{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_queue_duration_seconds_sum{kind=\"publish_due\"}": {
+            "first": 0.004119,
+            "min": 0.004119,
+            "max": 0.07466700000000001,
+            "last": 0.07466700000000001
+          },
+          "blog_task_queue_duration_seconds_count{kind=\"publish_due\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 10.0,
+            "last": 10.0
+          },
+          "blog_task_queue_duration_seconds_sum{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_queue_duration_seconds_count{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"html_rebuild\",status=\"expired\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"html_rebuild\",status=\"queued\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"html_rebuild\",status=\"running\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"publish_due\",status=\"expired\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"publish_due\",status=\"queued\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"publish_due\",status=\"running\"}": {
+            "first": 1.0,
+            "min": 0.0,
+            "max": 1.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"retention\",status=\"expired\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"retention\",status=\"queued\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"retention\",status=\"running\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_schedule_enabled{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_schedule_enabled{kind=\"publish_due\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "last": 1.0
+          },
+          "blog_task_schedule_enabled{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_schedule_interval_seconds{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_schedule_interval_seconds{kind=\"publish_due\"}": {
+            "first": 30.0,
+            "min": 30.0,
+            "max": 30.0,
+            "last": 30.0
+          },
+          "blog_task_schedule_interval_seconds{kind=\"retention\"}": {
+            "first": 86400.0,
+            "min": 86400.0,
+            "max": 86400.0,
+            "last": 86400.0
+          },
+          "blog_task_schedule_next_run_timestamp_seconds{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_schedule_next_run_timestamp_seconds{kind=\"publish_due\"}": {
+            "first": 1790820308.0,
+            "min": 1790820308.0,
+            "max": 1790820587.0,
+            "last": 1790820587.0
+          },
+          "blog_task_schedule_next_run_timestamp_seconds{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_scheduler_available": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "last": 1.0
+          },
+          "blog_task_scheduler_checks_total{result=\"error\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_scheduler_checks_total{result=\"success\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 301.0,
+            "last": 301.0
+          },
+          "blog_task_scheduler_checks_total{result=\"unavailable\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_scheduler_last_success_timestamp_seconds": {
+            "first": 1790820278.0,
+            "min": 1790820278.0,
+            "max": 1790820578.0,
+            "last": 1790820578.0
+          },
+          "blog_task_started_total{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_started_total{kind=\"publish_due\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 10.0,
+            "last": 10.0
+          },
+          "blog_task_started_total{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          }
+        },
+        "resources": {
+          "blog": {
+            "peak_memory_bytes": 74669097,
+            "peak_cpu_percent": 178.44
+          },
+          "db": {
+            "peak_memory_bytes": 104836628,
+            "peak_cpu_percent": 296.64
+          }
+        },
+        "errors": 0
+      },
+      "passed": true,
+      "failed_checks": []
+    },
+    {
+      "pool_size": 10,
+      "background_tasks": true,
+      "build": {
+        "version": "0.1.0",
+        "revision": "9057c1c485556e3d98592875a81cf79c3f58dc86"
+      },
+      "concurrency": 16,
+      "requests": 1732915,
+      "errors": 0,
+      "failed_operations": 0,
+      "conflicts": 0,
+      "error_types": {},
+      "status_counts": {
+        "200": 1732915
+      },
+      "p50_ms": 2.683,
+      "p95_ms": 4.066,
+      "p99_ms": 5.055,
+      "requests_per_second": 5776.27,
+      "seconds": 300.006,
+      "readyz": {
+        "requests": 5510,
+        "errors": 0,
+        "failed_operations": 0,
+        "conflicts": 0,
+        "error_types": {},
+        "status_counts": {
+          "200": 5510
+        },
+        "p50_ms": 1.289,
+        "p95_ms": 2.157,
+        "p99_ms": 2.904
+      },
+      "connection_lifetime_seconds": 60.0,
+      "connection_rotations": {
+        "reads": 64,
+        "readyz": 4
+      },
+      "writers": 4,
+      "writes": {
+        "save": {
+          "requests": 4400,
+          "errors": 0,
+          "failed_operations": 0,
+          "conflicts": 0,
+          "error_types": {},
+          "status_counts": {
+            "200": 4400
+          },
+          "p50_ms": 18.68,
+          "p95_ms": 25.14,
+          "p99_ms": 38.104
+        },
+        "series_reorder": {
+          "requests": 0,
+          "errors": 0,
+          "failed_operations": 0,
+          "conflicts": 0,
+          "error_types": {},
+          "status_counts": {},
+          "p50_ms": null,
+          "p95_ms": null,
+          "p99_ms": null
+        }
+      },
+      "foreground_window": [
+        "2026-10-01T02:09:48.936457+00:00",
+        "2026-10-01T02:14:49.039628+00:00"
+      ],
+      "background": {
+        "cycles": 20,
+        "submissions": {
+          "requests": 40,
+          "errors": 0,
+          "failed_operations": 0,
+          "conflicts": 0,
+          "error_types": {},
+          "status_counts": {
+            "200": 40
+          },
+          "p50_ms": 10.11,
+          "p95_ms": 15.324,
+          "p99_ms": 16.587
+        },
+        "runs": [
+          {
+            "kind": "html_rebuild",
+            "report": {
+              "html": {
+                "batches": 20,
+                "dry_run": false,
+                "failure": null,
+                "pending": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "rebuilt": {
+                  "pages": 0,
+                  "posts": 1996,
+                  "comments": 0
+                },
+                "skipped": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "has_more": false
+              },
+              "error": null,
+              "retention": null,
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.320584,
+            "execution_seconds": 11.595613,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.301296,
+            "execution_seconds": 0.023611,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.440182,
+            "execution_seconds": 0.013539,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "html_rebuild",
+            "report": {
+              "html": {
+                "batches": 20,
+                "dry_run": false,
+                "failure": null,
+                "pending": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "rebuilt": {
+                  "pages": 0,
+                  "posts": 1996,
+                  "comments": 0
+                },
+                "skipped": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "has_more": false
+              },
+              "error": null,
+              "retention": null,
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.557516,
+            "execution_seconds": 9.895817,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "html_rebuild",
+            "report": {
+              "html": {
+                "batches": 20,
+                "dry_run": false,
+                "failure": null,
+                "pending": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "rebuilt": {
+                  "pages": 0,
+                  "posts": 1996,
+                  "comments": 0
+                },
+                "skipped": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "has_more": false
+              },
+              "error": null,
+              "retention": null,
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.453918,
+            "execution_seconds": 10.11805,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.539762,
+            "execution_seconds": 0.015133,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.73639,
+            "execution_seconds": 0.011948,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.856151,
+            "execution_seconds": 0.019467,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "html_rebuild",
+            "report": {
+              "html": {
+                "batches": 20,
+                "dry_run": false,
+                "failure": null,
+                "pending": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "rebuilt": {
+                  "pages": 0,
+                  "posts": 1996,
+                  "comments": 0
+                },
+                "skipped": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "has_more": false
+              },
+              "error": null,
+              "retention": null,
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.7536,
+            "execution_seconds": 10.226689,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "html_rebuild",
+            "report": {
+              "html": {
+                "batches": 20,
+                "dry_run": false,
+                "failure": null,
+                "pending": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "rebuilt": {
+                  "pages": 0,
+                  "posts": 1996,
+                  "comments": 0
+                },
+                "skipped": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "has_more": false
+              },
+              "error": null,
+              "retention": null,
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.871287,
+            "execution_seconds": 10.059162,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.037812,
+            "execution_seconds": 0.014131,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "html_rebuild",
+            "report": {
+              "html": {
+                "batches": 20,
+                "dry_run": false,
+                "failure": null,
+                "pending": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "rebuilt": {
+                  "pages": 0,
+                  "posts": 1996,
+                  "comments": 0
+                },
+                "skipped": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "has_more": false
+              },
+              "error": null,
+              "retention": null,
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.05235,
+            "execution_seconds": 10.21509,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.210968,
+            "execution_seconds": 0.013096,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "html_rebuild",
+            "report": {
+              "html": {
+                "batches": 20,
+                "dry_run": false,
+                "failure": null,
+                "pending": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "rebuilt": {
+                  "pages": 0,
+                  "posts": 1996,
+                  "comments": 0
+                },
+                "skipped": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "has_more": false
+              },
+              "error": null,
+              "retention": null,
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.230356,
+            "execution_seconds": 10.006468,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.405727,
+            "execution_seconds": 0.01598,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.881572,
+            "execution_seconds": 0.016408,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.351512,
+            "execution_seconds": 0.015662,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "html_rebuild",
+            "report": {
+              "html": {
+                "batches": 20,
+                "dry_run": false,
+                "failure": null,
+                "pending": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "rebuilt": {
+                  "pages": 0,
+                  "posts": 1996,
+                  "comments": 0
+                },
+                "skipped": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "has_more": false
+              },
+              "error": null,
+              "retention": null,
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.638408,
+            "execution_seconds": 9.843331,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.185687,
+            "execution_seconds": 0.019465,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "html_rebuild",
+            "report": {
+              "html": {
+                "batches": 20,
+                "dry_run": false,
+                "failure": null,
+                "pending": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "rebuilt": {
+                  "pages": 0,
+                  "posts": 1996,
+                  "comments": 0
+                },
+                "skipped": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "has_more": false
+              },
+              "error": null,
+              "retention": null,
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.200713,
+            "execution_seconds": 10.001409,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "html_rebuild",
+            "report": {
+              "html": {
+                "batches": 20,
+                "dry_run": false,
+                "failure": null,
+                "pending": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "rebuilt": {
+                  "pages": 0,
+                  "posts": 1996,
+                  "comments": 0
+                },
+                "skipped": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "has_more": false
+              },
+              "error": null,
+              "retention": null,
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.145983,
+            "execution_seconds": 9.730756,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "html_rebuild",
+            "report": {
+              "html": {
+                "batches": 20,
+                "dry_run": false,
+                "failure": null,
+                "pending": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "rebuilt": {
+                  "pages": 0,
+                  "posts": 1996,
+                  "comments": 0
+                },
+                "skipped": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "has_more": false
+              },
+              "error": null,
+              "retention": null,
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.604588,
+            "execution_seconds": 9.661361,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.859692,
+            "execution_seconds": 0.015009,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "html_rebuild",
+            "report": {
+              "html": {
+                "batches": 20,
+                "dry_run": false,
+                "failure": null,
+                "pending": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "rebuilt": {
+                  "pages": 0,
+                  "posts": 1996,
+                  "comments": 0
+                },
+                "skipped": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "has_more": false
+              },
+              "error": null,
+              "retention": null,
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.462982,
+            "execution_seconds": 9.616604,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.376954,
+            "execution_seconds": 0.016745,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.780214,
+            "execution_seconds": 0.018686,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.076797,
+            "execution_seconds": 0.013021,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.740421,
+            "execution_seconds": 0.016197,
+            "finished_during_foreground": false
+          },
+          {
+            "kind": "html_rebuild",
+            "report": {
+              "html": {
+                "batches": 20,
+                "dry_run": false,
+                "failure": null,
+                "pending": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "rebuilt": {
+                  "pages": 0,
+                  "posts": 1996,
+                  "comments": 0
+                },
+                "skipped": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "has_more": false
+              },
+              "error": null,
+              "retention": null,
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.367375,
+            "execution_seconds": 9.675419,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.589938,
+            "execution_seconds": 0.013412,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "html_rebuild",
+            "report": {
+              "html": {
+                "batches": 20,
+                "dry_run": false,
+                "failure": null,
+                "pending": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "rebuilt": {
+                  "pages": 0,
+                  "posts": 1996,
+                  "comments": 0
+                },
+                "skipped": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "has_more": false
+              },
+              "error": null,
+              "retention": null,
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.4211,
+            "execution_seconds": 10.128356,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "html_rebuild",
+            "report": {
+              "html": {
+                "batches": 20,
+                "dry_run": false,
+                "failure": null,
+                "pending": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "rebuilt": {
+                  "pages": 0,
+                  "posts": 1996,
+                  "comments": 0
+                },
+                "skipped": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "has_more": false
+              },
+              "error": null,
+              "retention": null,
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.876908,
+            "execution_seconds": 9.733496,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "html_rebuild",
+            "report": {
+              "html": {
+                "batches": 20,
+                "dry_run": false,
+                "failure": null,
+                "pending": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "rebuilt": {
+                  "pages": 0,
+                  "posts": 1996,
+                  "comments": 0
+                },
+                "skipped": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "has_more": false
+              },
+              "error": null,
+              "retention": null,
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.896532,
+            "execution_seconds": 9.901488,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.618094,
+            "execution_seconds": 0.014813,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.130325,
+            "execution_seconds": 0.014541,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.440258,
+            "execution_seconds": 0.013643,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "html_rebuild",
+            "report": {
+              "html": {
+                "batches": 20,
+                "dry_run": false,
+                "failure": null,
+                "pending": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "rebuilt": {
+                  "pages": 0,
+                  "posts": 1996,
+                  "comments": 0
+                },
+                "skipped": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "has_more": false
+              },
+              "error": null,
+              "retention": null,
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.795198,
+            "execution_seconds": 8.678996,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "html_rebuild",
+            "report": {
+              "html": {
+                "batches": 20,
+                "dry_run": false,
+                "failure": null,
+                "pending": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "rebuilt": {
+                  "pages": 0,
+                  "posts": 1996,
+                  "comments": 0
+                },
+                "skipped": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "has_more": false
+              },
+              "error": null,
+              "retention": null,
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.093052,
+            "execution_seconds": 9.758849,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "html_rebuild",
+            "report": {
+              "html": {
+                "batches": 20,
+                "dry_run": false,
+                "failure": null,
+                "pending": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "rebuilt": {
+                  "pages": 0,
+                  "posts": 1996,
+                  "comments": 0
+                },
+                "skipped": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "has_more": false
+              },
+              "error": null,
+              "retention": null,
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.397158,
+            "execution_seconds": 9.922966,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "html_rebuild",
+            "report": {
+              "html": {
+                "batches": 20,
+                "dry_run": false,
+                "failure": null,
+                "pending": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "rebuilt": {
+                  "pages": 0,
+                  "posts": 1996,
+                  "comments": 0
+                },
+                "skipped": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "has_more": false
+              },
+              "error": null,
+              "retention": null,
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.748798,
+            "execution_seconds": 3.473903,
+            "finished_during_foreground": false
+          }
+        ],
+        "publication": {
+          "expected": 320,
+          "observed": 320,
+          "published": 320,
+          "max_delay_seconds": 26.064149,
+          "p95_delay_seconds": 26.0432327,
+          "business_max_delay_seconds": 25.327962
+        },
+        "cleanup": {
+          "seed_ip_preserved": true,
+          "remaining_audit_rows": 0,
+          "remaining_comment_ips": 0,
+          "expired_comments_preserved": 2000
+        },
+        "pending_html": {
+          "posts": 0,
+          "pages": 0,
+          "comments": 0
+        },
+        "skipped_rebuild_fixture_cycles": 0,
+        "fixture_sql": {
+          "requests": 20,
+          "errors": 0,
+          "failed_operations": 0,
+          "conflicts": 0,
+          "error_types": {},
+          "status_counts": {
+            "200": 20
+          },
+          "p50_ms": 585.862,
+          "p95_ms": 700.159,
+          "p99_ms": 714.163
+        },
+        "publication_observations": 58,
+        "publication_observation_interval_seconds": 5
+      },
+      "monitor": {
+        "metrics": {
+          "blog_database_pool_connections{state=\"idle\"}": {
+            "first": 10.0,
+            "min": 0.0,
+            "max": 10.0,
+            "last": 10.0
+          },
+          "blog_database_pool_connections{state=\"in_use\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 10.0,
+            "last": 0.0
+          },
+          "blog_database_pool_connections{state=\"max\"}": {
+            "first": 10.0,
+            "min": 10.0,
+            "max": 10.0,
+            "last": 10.0
+          },
+          "blog_database_pool_connections{state=\"size\"}": {
+            "first": 10.0,
+            "min": 10.0,
+            "max": 10.0,
+            "last": 10.0
+          },
+          "blog_render_active{kind=\"comment\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_active{kind=\"content\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_active{kind=\"theme\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 2.0,
+            "last": 0.0
+          },
+          "blog_render_completed_total{kind=\"comment\",result=\"success\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "last": 1.0
+          },
+          "blog_render_completed_total{kind=\"content\",result=\"success\"}": {
+            "first": 2.0,
+            "min": 2.0,
+            "max": 1113.0,
+            "last": 1113.0
+          },
+          "blog_render_completed_total{kind=\"theme\",result=\"success\"}": {
+            "first": 102.0,
+            "min": 102.0,
+            "max": 1733017.0,
+            "last": 1733017.0
+          },
+          "blog_render_execution_duration_seconds_sum{kind=\"comment\"}": {
+            "first": 3.9e-05,
+            "min": 3.9e-05,
+            "max": 3.9e-05,
+            "last": 3.9e-05
+          },
+          "blog_render_execution_duration_seconds_count{kind=\"comment\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "last": 1.0
+          },
+          "blog_render_execution_duration_seconds_sum{kind=\"content\"}": {
+            "first": 0.00028116599999999996,
+            "min": 0.00028116599999999996,
+            "max": 0.5472793900000006,
+            "last": 0.5472793900000006
+          },
+          "blog_render_execution_duration_seconds_count{kind=\"content\"}": {
+            "first": 2.0,
+            "min": 2.0,
+            "max": 1113.0,
+            "last": 1113.0
+          },
+          "blog_render_execution_duration_seconds_sum{kind=\"theme\"}": {
+            "first": 0.004057379,
+            "min": 0.004057379,
+            "max": 66.74539918601634,
+            "last": 66.74539918601634
+          },
+          "blog_render_execution_duration_seconds_count{kind=\"theme\"}": {
+            "first": 102.0,
+            "min": 102.0,
+            "max": 1733017.0,
+            "last": 1733017.0
+          },
+          "blog_render_execution_timeouts_total{kind=\"comment\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_execution_timeouts_total{kind=\"content\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_execution_timeouts_total{kind=\"theme\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_queue_duration_seconds_sum{kind=\"comment\"}": {
+            "first": 1.292e-06,
+            "min": 1.292e-06,
+            "max": 1.292e-06,
+            "last": 1.292e-06
+          },
+          "blog_render_queue_duration_seconds_count{kind=\"comment\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "last": 1.0
+          },
+          "blog_render_queue_duration_seconds_sum{kind=\"content\"}": {
+            "first": 2.6250000000000003e-06,
+            "min": 2.6250000000000003e-06,
+            "max": 0.0010050969999999954,
+            "last": 0.0010050969999999954
+          },
+          "blog_render_queue_duration_seconds_count{kind=\"content\"}": {
+            "first": 2.0,
+            "min": 2.0,
+            "max": 1113.0,
+            "last": 1113.0
+          },
+          "blog_render_queue_duration_seconds_sum{kind=\"theme\"}": {
+            "first": 2.9999999999999984e-05,
+            "min": 2.9999999999999984e-05,
+            "max": 0.9423149180038091,
+            "last": 0.9423149180038091
+          },
+          "blog_render_queue_duration_seconds_count{kind=\"theme\"}": {
+            "first": 102.0,
+            "min": 102.0,
+            "max": 1733017.0,
+            "last": 1733017.0
+          },
+          "blog_render_queue_total{kind=\"comment\",result=\"admitted\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "last": 1.0
+          },
+          "blog_render_queue_total{kind=\"content\",result=\"admitted\"}": {
+            "first": 2.0,
+            "min": 2.0,
+            "max": 1113.0,
+            "last": 1113.0
+          },
+          "blog_render_queue_total{kind=\"theme\",result=\"admitted\"}": {
+            "first": 102.0,
+            "min": 102.0,
+            "max": 1733017.0,
+            "last": 1733017.0
+          },
+          "blog_render_waiting{kind=\"comment\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_waiting{kind=\"content\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_waiting{kind=\"theme\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_consecutive_failures{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_consecutive_failures{kind=\"publish_due\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_consecutive_failures{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_due_wait_seconds{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_due_wait_seconds{kind=\"publish_due\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_due_wait_seconds{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"html_rebuild\",status=\"completed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 192.22300753699997,
+            "last": 192.22300753699997
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"html_rebuild\",status=\"completed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 20.0,
+            "last": 20.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"html_rebuild\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"html_rebuild\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"html_rebuild\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"html_rebuild\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"publish_due\",status=\"completed\"}": {
+            "first": 0.013226879,
+            "min": 0.013226879,
+            "max": 0.18794321500000002,
+            "last": 0.18794321500000002
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"publish_due\",status=\"completed\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 11.0,
+            "last": 11.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"publish_due\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"publish_due\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"publish_due\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"publish_due\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"retention\",status=\"completed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.3003004879999999,
+            "last": 0.3003004879999999
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"retention\",status=\"completed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 20.0,
+            "last": 20.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"retention\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"retention\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"retention\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"retention\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"html_rebuild\",status=\"cancelled\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"html_rebuild\",status=\"completed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 20.0,
+            "last": 20.0
+          },
+          "blog_task_finished_total{kind=\"html_rebuild\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"html_rebuild\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"publish_due\",status=\"cancelled\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"publish_due\",status=\"completed\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 11.0,
+            "last": 11.0
+          },
+          "blog_task_finished_total{kind=\"publish_due\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"publish_due\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"retention\",status=\"cancelled\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"retention\",status=\"completed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 20.0,
+            "last": 20.0
+          },
+          "blog_task_finished_total{kind=\"retention\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"retention\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_health_snapshot_last_success_timestamp_seconds": {
+            "first": 1790820588.0,
+            "min": 1790820588.0,
+            "max": 1790820895.0,
+            "last": 1790820895.0
+          },
+          "blog_task_last_success_timestamp_seconds{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 1790820886.0,
+            "last": 1790820886.0
+          },
+          "blog_task_last_success_timestamp_seconds{kind=\"publish_due\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 1790820866.0,
+            "last": 1790820866.0
+          },
+          "blog_task_last_success_timestamp_seconds{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 1790820889.0,
+            "last": 1790820889.0
+          },
+          "blog_task_lease_expirations_total{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_lease_expirations_total{kind=\"publish_due\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_lease_expirations_total{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_queue_duration_seconds_sum{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 9.888406,
+            "last": 9.888406
+          },
+          "blog_task_queue_duration_seconds_count{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 20.0,
+            "last": 20.0
+          },
+          "blog_task_queue_duration_seconds_sum{kind=\"publish_due\"}": {
+            "first": 0.003579,
+            "min": 0.003579,
+            "max": 0.055569999999999994,
+            "last": 0.055569999999999994
+          },
+          "blog_task_queue_duration_seconds_count{kind=\"publish_due\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 11.0,
+            "last": 11.0
+          },
+          "blog_task_queue_duration_seconds_sum{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 9.53678,
+            "last": 9.53678
+          },
+          "blog_task_queue_duration_seconds_count{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 20.0,
+            "last": 20.0
+          },
+          "blog_task_runs{kind=\"html_rebuild\",status=\"expired\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"html_rebuild\",status=\"queued\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 1.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"html_rebuild\",status=\"running\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 1.0,
+            "last": 1.0
+          },
+          "blog_task_runs{kind=\"publish_due\",status=\"expired\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"publish_due\",status=\"queued\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"publish_due\",status=\"running\"}": {
+            "first": 1.0,
+            "min": 0.0,
+            "max": 1.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"retention\",status=\"expired\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"retention\",status=\"queued\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"retention\",status=\"running\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 1.0,
+            "last": 0.0
+          },
+          "blog_task_schedule_enabled{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_schedule_enabled{kind=\"publish_due\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "last": 1.0
+          },
+          "blog_task_schedule_enabled{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_schedule_interval_seconds{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_schedule_interval_seconds{kind=\"publish_due\"}": {
+            "first": 30.0,
+            "min": 30.0,
+            "max": 30.0,
+            "last": 30.0
+          },
+          "blog_task_schedule_interval_seconds{kind=\"retention\"}": {
+            "first": 86400.0,
+            "min": 86400.0,
+            "max": 86400.0,
+            "last": 86400.0
+          },
+          "blog_task_schedule_next_run_timestamp_seconds{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_schedule_next_run_timestamp_seconds{kind=\"publish_due\"}": {
+            "first": 1790820618.0,
+            "min": 1790820618.0,
+            "max": 1790820896.0,
+            "last": 1790820896.0
+          },
+          "blog_task_schedule_next_run_timestamp_seconds{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_scheduler_available": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "last": 1.0
+          },
+          "blog_task_scheduler_checks_total{result=\"error\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_scheduler_checks_total{result=\"success\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 310.0,
+            "last": 310.0
+          },
+          "blog_task_scheduler_checks_total{result=\"unavailable\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_scheduler_last_success_timestamp_seconds": {
+            "first": 1790820588.0,
+            "min": 1790820588.0,
+            "max": 1790820897.0,
+            "last": 1790820897.0
+          },
+          "blog_task_started_total{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 20.0,
+            "last": 20.0
+          },
+          "blog_task_started_total{kind=\"publish_due\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 11.0,
+            "last": 11.0
+          },
+          "blog_task_started_total{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 20.0,
+            "last": 20.0
+          }
+        },
+        "resources": {
+          "blog": {
+            "peak_memory_bytes": 72236401,
+            "peak_cpu_percent": 175.69
+          },
+          "db": {
+            "peak_memory_bytes": 130967142,
+            "peak_cpu_percent": 329.42
+          }
+        },
+        "errors": 0
+      },
+      "passed": true,
+      "failed_checks": []
+    }
+  ],
+  "runner_sha256": "2b9b04fb2397f50edade4f857580e1c2e560611654284cf031b43e71414ff6d7",
+  "load_runner_sha256": "149fd24c4ebdb79c0616a519a983a228adf14a7c23007e7fcaa9e17110e2daa3",
+  "threshold_scope": "local regression gates, not production SLA; CAS conflicts counted separately",
+  "platform": "macOS-27.0-arm64-arm-64bit",
+  "image_metadata": {
+    "id": "sha256:439e5af6f07a45b11c91c7db56a298de245b49f557f811bc63786470c5d7b94e",
+    "os": "linux",
+    "architecture": "arm64",
+    "revision": "9057c1c485556e3d98592875a81cf79c3f58dc86"
+  }
+}

@@ -20,7 +20,7 @@ class BenchmarkTests(unittest.TestCase):
     def args(self, **changes):
         values = dict(pool_sizes=[5], concurrency=[2], requests=100, posts=200,
                       duration=None, mixed=False, series_reorder=False, write_interval_ms=250,
-                      writers=1, series_members=2)
+                      writers=1, series_members=2, connection_lifetime_seconds=60)
         values.update(changes)
         return argparse.Namespace(**values)
 
@@ -29,7 +29,9 @@ class BenchmarkTests(unittest.TestCase):
                         {"duration": float("inf")}, {"duration": 0}, {"duration": 3601},
                         {"write_interval_ms": 0}, {"series_reorder": True},
                         {"mixed": True, "series_reorder": True, "posts": 1}, {"writers": 33},
-                        {"writers": 3, "posts": 2}, {"mixed": True, "series_reorder": True, "series_members": 201}):
+                        {"writers": 3, "posts": 2}, {"mixed": True, "series_reorder": True, "series_members": 201},
+                        {"connection_lifetime_seconds": 0}, {"connection_lifetime_seconds": -1},
+                        {"connection_lifetime_seconds": float("nan")}, {"connection_lifetime_seconds": float("inf")}):
             with self.subTest(changes=changes), self.assertRaises(AcceptanceError):
                 benchmark.validate(self.args(**changes))
         benchmark.validate(self.args(mixed=True, series_reorder=True, posts=2, duration=1))
@@ -104,7 +106,44 @@ class BenchmarkTests(unittest.TestCase):
         row["writes"]["save"] = benchmark.summarize([(409, .001)])
         self.assertTrue(benchmark.measurement_passed(row))
 
-    def fake_load(self, *, duration=None, mixed=False):
+    def test_planned_rotation_is_before_request_and_transport_failure_is_not_retried(self):
+        old, new, after_failure = Mock(), Mock(), Mock()
+        old.getresponse.return_value = new.getresponse.return_value = after_failure.getresponse.return_value = Mock(status=200)
+        now = [0.0]
+        connection = benchmark.ReadConnection("127.0.0.1", 1234, 60)
+        with patch.object(benchmark.time, "perf_counter", side_effect=lambda: now[0]), \
+                patch.object(benchmark.http.client, "HTTPConnection", side_effect=[old,new,after_failure]) as factory:
+            self.assertEqual(connection.fetch("/"), (200,0.0))
+            now[0] = 59
+            self.assertEqual(connection.fetch("/readyz"), (200,0.0))
+            factory.assert_called_once()
+            now[0] = 60
+            self.assertEqual(connection.fetch("/"), (200,0.0))
+            old.close.assert_called_once()
+            self.assertEqual(connection.rotations,1)
+            new.request.side_effect = OSError("private transport detail")
+            now[0] = 61
+            samples = benchmark.Samples()
+            samples.add(*connection.fetch("/readyz"))
+            self.assertEqual(factory.call_count,2, "failed request is not automatically retried")
+            self.assertEqual(samples.summary()["failed_operations"],1)
+            self.assertEqual(samples.summary()["status_counts"], {"client_or_transport_error":1})
+            self.assertNotIn("private",json.dumps(samples.summary()))
+            self.assertEqual(connection.rotations,1, "transport failures are not planned rotations")
+            now[0] = 62
+            self.assertEqual(connection.fetch("/readyz"), (200,0.0))
+            self.assertEqual(factory.call_count,3)
+            self.assertEqual(connection.rotations,1)
+            connection.close()
+
+    def test_direct_load_rejects_invalid_connection_lifetime_before_starting_threads(self):
+        with patch.object(benchmark.http.client, "HTTPConnection") as factory:
+            for lifetime in (0,-1,float("nan"),float("inf")):
+                with self.subTest(lifetime=lifetime), self.assertRaises(AcceptanceError):
+                    benchmark.load("http://127.0.0.1:1234",1,1,connection_lifetime=lifetime)
+            factory.assert_not_called()
+
+    def fake_load(self, *, duration=None, mixed=False, connection_lifetime=60):
         paths, connections = [], []
         lock = threading.Lock()
 
@@ -127,7 +166,8 @@ class BenchmarkTests(unittest.TestCase):
         writers = [Mock(series_slug="capacity-series") for _ in range(3)] if mixed else []
         with patch.object(benchmark.http.client, "HTTPConnection", Connection):
             result = benchmark.load("http://127.0.0.1:1234", 3, 3000 if duration else 30, duration=duration,
-                                    posts=5, writers=writers, write_interval=.001)
+                                    posts=5, writers=writers, write_interval=.001,
+                                    connection_lifetime=connection_lifetime)
         self.assertTrue(all(connection.closed for connection in connections))
         self.assertTrue(benchmark.measurement_passed(result))
         if duration is None:
@@ -148,6 +188,42 @@ class BenchmarkTests(unittest.TestCase):
         self.assertTrue(all(writer.save.call_count > 0 for writer in writers))
         self.assertEqual(result["writes"]["save"]["requests"], sum(writer.save.call_count for writer in writers))
         self.assertEqual(result["writes"]["series_reorder"]["requests"], sum(writer.reorder.call_count for writer in writers))
+
+    def test_read_and_readiness_workers_rotate_connections_and_keep_exact_operation_count(self):
+        result, _ = self.fake_load(duration=.16, connection_lifetime=.03)
+        self.assertEqual(result["connection_lifetime_seconds"],.03)
+        self.assertGreater(result["connection_rotations"]["reads"],0)
+        self.assertGreater(result["connection_rotations"]["readyz"],0)
+        self.assertEqual(result["failed_operations"],0)
+        self.assertEqual(result["readyz"]["failed_operations"],0)
+
+    def test_load_keeps_read_and_readiness_transport_failures_without_retrying_operations(self):
+        paths, failed, lock = [], set(), threading.Lock()
+        class Connection:
+            def __init__(self,*_args,**_kwargs):
+                pass
+            def request(self,method,path):
+                with lock:
+                    paths.append(path)
+                    kind = "readyz" if path == "/readyz" else "read"
+                    if kind not in failed:
+                        failed.add(kind)
+                        raise OSError("private transport detail")
+                time.sleep(.001)
+            def getresponse(self):
+                return Mock(status=200,read=lambda: b"ok")
+            def close(self):
+                pass
+        with patch.object(benchmark.http.client,"HTTPConnection",Connection):
+            result = benchmark.load("http://127.0.0.1:1234",1,30,connection_lifetime=.005)
+        self.assertEqual(result["requests"],30)
+        self.assertEqual(sum(path != "/readyz" for path in paths),30, "each measured read has exactly one request attempt")
+        self.assertEqual(result["failed_operations"],1)
+        self.assertEqual(result["readyz"]["failed_operations"],1)
+        self.assertEqual(result["status_counts"]["client_or_transport_error"],1)
+        self.assertEqual(result["readyz"]["status_counts"]["client_or_transport_error"],1)
+        self.assertFalse(benchmark.measurement_passed(result))
+        self.assertNotIn("private",json.dumps(result))
 
     def test_existing_report_is_untouched_and_no_site_is_started(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -139,7 +139,42 @@ def measure_write(operation, samples):
     samples.add(status, time.perf_counter() - started, error_type)
 
 
-def load(origin, concurrency, requests, *, duration=None, posts=200, writers=(), write_interval=.25):
+class ReadConnection:
+    """Rotate idle connections before sending the next request; never retry errors."""
+
+    def __init__(self, hostname, port, lifetime):
+        self.hostname, self.port, self.lifetime = hostname, port, lifetime
+        self.connection, self.opened_at, self.rotations = None, None, 0
+
+    def fetch(self, path):
+        started = time.perf_counter()
+        if self.connection is not None and started - self.opened_at >= self.lifetime:
+            self.close()
+            self.rotations += 1
+        if self.connection is None:
+            self.connection = http.client.HTTPConnection(self.hostname, self.port, timeout=10)
+            self.opened_at = started
+        try:
+            self.connection.request("GET", path)
+            response = self.connection.getresponse()
+            response.read()
+            status = response.status
+        except (OSError, http.client.HTTPException):
+            self.close()
+            status = 0
+        return status, time.perf_counter() - started
+
+    def close(self):
+        if self.connection is not None:
+            self.connection.close()
+            self.connection = None
+        self.opened_at = None
+
+
+def load(origin, concurrency, requests, *, duration=None, posts=200, writers=(), write_interval=.25,
+         connection_lifetime=60.0):
+    require(math.isfinite(connection_lifetime) and connection_lifetime > 0,
+            "connection lifetime must be finite and positive")
     address = urlsplit(origin)
     timing = {}
     barrier = threading.Barrier(concurrency + 1 + len(writers),
@@ -158,40 +193,28 @@ def load(origin, concurrency, requests, *, duration=None, posts=200, writers=(),
         post = (index // 3) % posts
         return "/posts/" + (f"capacity-{post}" if post else "capacity-post")
 
-    def fetch(connection, path):
-        started = time.perf_counter()
-        try:
-            connection.request("GET", path)
-            response = connection.getresponse()
-            response.read()
-            status = response.status
-        except (OSError, http.client.HTTPException):
-            connection.close()
-            status = 0
-        return status, time.perf_counter() - started
-
     def worker(index):
-        connection = http.client.HTTPConnection(address.hostname, address.port, timeout=10)
+        connection = ReadConnection(address.hostname, address.port, connection_lifetime)
         samples = Samples()
         try:
             barrier.wait(timeout=30)
             n = index
             while not stop.is_set() and not expired() and (duration is not None or n < requests):
-                samples.add(*fetch(connection, path_for(n)))
+                samples.add(*connection.fetch(path_for(n)))
                 n += concurrency
         finally:
             connection.close()
-        return samples
+        return samples, connection.rotations
 
     def probe():
-        connection = http.client.HTTPConnection(address.hostname, address.port, timeout=10)
+        connection = ReadConnection(address.hostname, address.port, connection_lifetime)
         samples = Samples()
         try:
             barrier.wait(timeout=30)
             while True:
-                samples.add(*fetch(connection, "/readyz"))
+                samples.add(*connection.fetch("/readyz"))
                 if stop.wait(.05):
-                    return samples
+                    return samples, connection.rotations
         finally:
             connection.close()
 
@@ -211,13 +234,16 @@ def load(origin, concurrency, requests, *, duration=None, posts=200, writers=(),
         writes = [executor.submit(author, writer) for writer in writers]
         jobs = [executor.submit(worker, i) for i in range(concurrency)]
         samples = Samples()
+        read_rotations = 0
         try:
             for job in jobs:
-                samples.merge(job.result())
+                read_samples, rotations = job.result()
+                samples.merge(read_samples)
+                read_rotations += rotations
         finally:
             stop.set()
         elapsed = time.perf_counter() - timing["started"]
-        checks = readiness.result()
+        checks, probe_rotations = readiness.result()
         saves, reorders = Samples(), Samples()
         for future in writes:
             saved, reordered = future.result()
@@ -225,7 +251,9 @@ def load(origin, concurrency, requests, *, duration=None, posts=200, writers=(),
             reorders.merge(reordered)
     result = {"concurrency": concurrency, **samples.summary(),
               "requests_per_second": round(sum(samples.statuses.values()) / elapsed, 2),
-              "seconds": round(elapsed, 3), "readyz": checks.summary()}
+              "seconds": round(elapsed, 3), "readyz": checks.summary(),
+              "connection_lifetime_seconds": connection_lifetime,
+              "connection_rotations": {"reads": read_rotations, "readyz": probe_rotations}}
     if writers:
         result["writers"] = len(writers)
         result["writes"] = {"save": saves.summary(), "series_reorder": reorders.summary()}
@@ -244,6 +272,8 @@ def validate(args):
     require(10 <= args.write_interval_ms <= 60000, "write interval must be 10..60000 ms")
     require(not args.series_reorder or args.mixed and 2 <= args.series_members <= args.posts,
             "series reorder requires --mixed and 2..posts series members")
+    require(math.isfinite(args.connection_lifetime_seconds) and args.connection_lifetime_seconds > 0,
+            "connection lifetime must be finite and positive")
 
 
 def measurement_passed(row):
@@ -266,6 +296,8 @@ def main():
     parser.add_argument("--series-reorder", action="store_true", help="also reorder the shared series; requires --mixed")
     parser.add_argument("--series-members", type=int, default=2, help="number of shared series members")
     parser.add_argument("--write-interval-ms", type=int, default=250, help="pause after each author cycle")
+    parser.add_argument("--connection-lifetime-seconds", type=float, default=60.0,
+                        help="proactively rotate read/readiness HTTP connections before their maximum age")
     parser.add_argument("--report", type=Path, required=True)
     args = parser.parse_args()
     args.binary, args.admin_dist = args.binary.resolve(), args.admin_dist.resolve()
@@ -277,6 +309,7 @@ def main():
                            "requests": None if args.duration is not None else args.requests,
                            "writers": args.writers if args.mixed else 0,
                            "write_interval_ms": args.write_interval_ms if args.mixed else None,
+                           "connection_lifetime_seconds": args.connection_lifetime_seconds if math.isfinite(args.connection_lifetime_seconds) else None,
                            "series_reorder": args.series_reorder,
                            "series_members": args.series_members if args.series_reorder else 0},
               "pass_rule": "no read/readiness failures or non-409 write errors; assess write conflicts against deployment thresholds",
@@ -319,12 +352,13 @@ def main():
                 for size in args.pool_sizes:
                     site.pool_size = size
                     site.start()
-                    load(site.origin, 1, 30, posts=args.posts)
+                    load(site.origin, 1, 30, posts=args.posts, connection_lifetime=args.connection_lifetime_seconds)
                     for concurrency in args.concurrency:
                         measurement = {"pool_size": size, "min_connections": size,
                                        **load(site.origin, concurrency, args.requests, duration=args.duration,
                                               posts=args.posts, writers=writers,
-                                              write_interval=args.write_interval_ms / 1000)}
+                                              write_interval=args.write_interval_ms / 1000,
+                                              connection_lifetime=args.connection_lifetime_seconds)}
                         report["measurements"].append(measurement)
                         print(json.dumps(measurement), flush=True)
                     site.stop()
