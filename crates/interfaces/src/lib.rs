@@ -28,3 +28,5 @@ pub mod observability;
 pub mod http_contract;
 
 pub mod http_registration;
+
+mod http_theme_config;

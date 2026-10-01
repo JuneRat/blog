@@ -95,5 +95,34 @@ class MediaUrlTests(unittest.TestCase):
                 self.assertEqual(parser.ids, set())
 
 
+    def test_theme_references_use_persisted_declared_media_fields(self):
+        mid = "12345678-1234-5678-9abc-123456789abc"
+        tid = "12345678-1234-5678-9abc-123456789abe"
+        class Pg:
+            actual = [[mid, "theme", tid]]
+            config = {"image": mid, "text": mid}
+            fields = ["image"]
+            def query(self, sql, database):
+                if "FROM themes" in sql:
+                    return json.dumps([{"id": tid, "config": self.config, "media_fields": self.fields}])
+                if "FROM media_refs" in sql:
+                    return json.dumps(self.actual)
+                if "WITH RECURSIVE" in sql:
+                    return "0"
+                return "[]"
+        pg = Pg()
+        self.assertEqual(inventory.validate_relations(pg), 1)
+        pg.actual = []
+        with self.assertRaisesRegex(inventory.RecoveryError, "1 missing"):
+            inventory.validate_relations(pg)
+        pg.actual = [[mid, "theme", tid]]
+        pg.config = {"image": "invalid"}
+        with self.assertRaisesRegex(inventory.RecoveryError, "invalid theme media ID"):
+            inventory.validate_relations(pg)
+        pg.fields = ["image", "image"]
+        with self.assertRaisesRegex(inventory.RecoveryError, "invalid theme media field inventory"):
+            inventory.validate_relations(pg)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -68,6 +68,12 @@ pub trait CommentRenderer: Send + Sync {
 /// 按可信站点地址计算，模板只负责输出，避免同一规则在多个模板里各写一遍。
 #[async_trait]
 pub trait ThemeRenderer: Send + Sync {
+    fn with_config(
+        &self,
+        _config: crate::theme_config::ThemeConfig,
+    ) -> Option<std::sync::Arc<dyn ThemeRenderer>> {
+        None
+    }
     async fn render_index(
         &self,
         site: &SiteInfo,

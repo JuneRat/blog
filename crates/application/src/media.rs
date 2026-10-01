@@ -411,7 +411,9 @@ fn can_see_reference(actor: &Actor, row: &MediaUsageRow) -> bool {
             row.content_id == actor.user_id.0 || actor.has_permission("user.manage")
         }
         // 站点 logo 只有 settings.manage 能改；公开分支已放行，这里处理异常情况。
-        crate::ports::MediaContentKind::Site => actor.has_permission("settings.manage"),
+        crate::ports::MediaContentKind::Site | crate::ports::MediaContentKind::Theme => {
+            actor.has_permission("settings.manage")
+        }
     }
 }
 

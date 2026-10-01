@@ -51,6 +51,8 @@ function referenceTarget(
       return { label: "系列", to: paths.series };
     case "user":
       return { label: "用户", to: paths.users };
+    case "theme":
+      return { label: "主题配置", to: paths.themes };
     case "site":
       return { label: "站点设置", to: paths.settings };
   }

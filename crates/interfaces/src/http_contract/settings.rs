@@ -3,6 +3,15 @@ pub struct ThemeOption {
     pub slug: String,
     pub name: String,
     pub release: String,
+    #[ts(optional)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<uuid::Uuid>,
+    #[ts(optional, type = "number")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config_version: Option<i64>,
+    #[ts(optional)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config_schema_version: Option<u32>,
 }
 impl From<application::themes::ThemeOption> for ThemeOption {
     fn from(value: application::themes::ThemeOption) -> Self {
@@ -10,11 +19,17 @@ impl From<application::themes::ThemeOption> for ThemeOption {
             slug,
             name,
             release,
+            id,
+            config_version,
+            config_schema_version,
         } = value;
         Self {
             slug,
             name,
             release,
+            id,
+            config_version,
+            config_schema_version,
         }
     }
 }

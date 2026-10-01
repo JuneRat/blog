@@ -88,13 +88,14 @@ impl From<&MediaUsageDto> for MediaUsageJson {
             content_id: dto.content_id,
             slug: dto.slug.clone(),
             title: dto.title.clone(),
-            // Series/Site have no lifecycle status; retain their existing API display values.
+            // Series/Site/Theme have no publication lifecycle; theme configuration may be inactive.
             status: match dto.source {
                 application::ports::MediaUsageSource::Post(status) => status.as_str(),
                 application::ports::MediaUsageSource::Page(status) => status.as_str(),
                 application::ports::MediaUsageSource::User(status) => status.as_str(),
                 application::ports::MediaUsageSource::Series => "published",
                 application::ports::MediaUsageSource::Site => "active",
+                application::ports::MediaUsageSource::Theme => "configured",
             }
             .to_owned(),
             visibility: dto.visibility.as_str().to_owned(),

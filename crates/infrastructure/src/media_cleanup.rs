@@ -71,7 +71,7 @@ impl PostgresMediaPurgeStore {
 
 const COLUMNS: &str = "id,path,size,checksum_sha256,version,to_char(deleted_at AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS deleted_at";
 // Explicit foreign keys protect references even if their bookkeeping entry was lost.
-const REFERENCED: &str = "SELECT EXISTS(SELECT 1 FROM media_refs WHERE media_id=$1) OR EXISTS(SELECT 1 FROM users WHERE avatar_media_id=$1) OR EXISTS(SELECT 1 FROM posts WHERE cover_media_id=$1) OR EXISTS(SELECT 1 FROM series WHERE cover_media_id=$1) OR EXISTS(SELECT 1 FROM settings WHERE key='site' AND (value->>'logo_media_id')::uuid=$1)";
+const REFERENCED: &str = "SELECT EXISTS(SELECT 1 FROM media_refs WHERE media_id=$1) OR EXISTS(SELECT 1 FROM users WHERE avatar_media_id=$1) OR EXISTS(SELECT 1 FROM posts WHERE cover_media_id=$1) OR EXISTS(SELECT 1 FROM series WHERE cover_media_id=$1) OR EXISTS(SELECT 1 FROM settings WHERE key='site' AND (value->>'logo_media_id')::uuid=$1) OR EXISTS(SELECT 1 FROM themes t CROSS JOIN LATERAL unnest(t.media_fields) AS f(key) WHERE (t.config->>f.key)::uuid=$1)";
 const RECEIPT: &str = "EXISTS(SELECT 1 FROM audit_logs WHERE action='media.purge' AND target_type='media' AND target_id=$1 AND metadata @> $2::jsonb)";
 
 fn item(row: PgRow) -> PurgeItem {

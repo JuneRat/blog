@@ -86,6 +86,7 @@ dependencies = [
  "async-trait",
  "domain",
  "serde",
+ "serde_json",
  "thiserror",
  "time",
  "tokio",

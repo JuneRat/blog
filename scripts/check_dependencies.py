@@ -32,7 +32,9 @@ TEST_INTERNAL = {
 # support. New libraries require a deliberate policy change alongside their use.
 PRODUCTION_EXTERNAL = {
     "domain": frozenset({"uuid", "time", "thiserror"}),
-    "application": frozenset({"uuid", "time", "serde", "thiserror", "async-trait", "url"}),
+    # Controlled theme declarations and their exact serialized size limits are
+    # pure configuration contracts; JSON parsing adds no persistence/runtime adapter.
+    "application": frozenset({"uuid", "time", "serde", "serde_json", "thiserror", "async-trait", "url"}),
 }
 TEST_EXTERNAL = {
     **PRODUCTION_EXTERNAL,

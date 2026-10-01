@@ -188,6 +188,8 @@ pub struct MiniJinjaThemeRenderer {
     slug: String,
     name: String,
     plugin_head: String,
+    schema: Arc<application::theme_config::ThemeSchema>,
+    config: application::theme_config::ThemeConfig,
 }
 
 impl MiniJinjaThemeRenderer {
@@ -201,6 +203,25 @@ impl MiniJinjaThemeRenderer {
         env.set_fuel(Some(200_000));
         env.set_recursion_limit(100);
         env.add_filter("url", url_attr);
+        let schema_path = theme_dir.join("settings.schema.json");
+        let schema = match std::fs::symlink_metadata(&schema_path) {
+            Ok(meta)
+                if !meta.is_file()
+                    || meta.file_type().is_symlink()
+                    || meta.len() > application::theme_config::MAX_SCHEMA_BYTES as u64 =>
+            {
+                return Err(UseCaseError::Render(
+                    "主题配置声明必须为不超过 64 KiB 的普通文件".into(),
+                ));
+            }
+            Ok(_) => application::theme_config::ThemeSchema::parse(
+                &std::fs::read(&schema_path).map_err(|e| UseCaseError::Render(e.to_string()))?,
+            )?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                application::theme_config::ThemeSchema::default()
+            }
+            Err(e) => return Err(UseCaseError::Render(e.to_string())),
+        };
         let templates = read_theme_files(&theme_dir.join("templates"))?;
         let asset_files = read_theme_files(&theme_dir.join("assets"))?;
         // Length-prefix each name/body so distinct file trees cannot hash identically
@@ -208,6 +229,10 @@ impl MiniJinjaThemeRenderer {
         let mut digest = Sha256::new();
         digest.update(THEME_API_VERSION.to_be_bytes());
         digest.update(manifest.slug.as_bytes());
+        let schema_bytes =
+            serde_json::to_vec(&schema).map_err(|e| UseCaseError::Render(e.to_string()))?;
+        digest.update((schema_bytes.len() as u64).to_be_bytes());
+        digest.update(schema_bytes);
         for (kind, files) in [("templates", &templates), ("assets", &asset_files)] {
             digest.update(kind.as_bytes());
             for (name, bytes) in files {
@@ -252,6 +277,8 @@ impl MiniJinjaThemeRenderer {
             slug: manifest.slug,
             name: manifest.name,
             plugin_head: String::new(),
+            config: schema.defaults(),
+            schema: Arc::new(schema),
         })
     }
 
@@ -272,6 +299,14 @@ impl MiniJinjaThemeRenderer {
 
     pub fn assets(&self) -> ThemeAssets {
         self.release_assets.clone()
+    }
+
+    pub fn schema(&self) -> Arc<application::theme_config::ThemeSchema> {
+        self.schema.clone()
+    }
+    pub(crate) fn with_config(mut self, config: application::theme_config::ThemeConfig) -> Self {
+        self.config = config;
+        self
     }
 
     pub fn slug(&self) -> &str {
@@ -319,7 +354,10 @@ impl MiniJinjaThemeRenderer {
         crate::theme_functions::register(&mut env, scope);
         let html = env
             .get_template(template)
-            .and_then(|t| t.render(context))
+            .and_then(|t| t.render(minijinja::context! {
+                theme => serde_json::json!({"slug":self.slug,"release":self.release_assets.version,"config":self.config}),
+                ..Value::from_serialize(context)
+            }))
             .map_err(|e| UseCaseError::Render(e.to_string()))?;
         if html.len() > application::rendering_budget::MAX_PAGE_HTML_BYTES {
             return Err(UseCaseError::Render("主题输出超过 1 MiB".into()));
@@ -478,6 +516,11 @@ mod tests {
             std::fs::create_dir_all(dir.join("templates")).unwrap();
             std::fs::create_dir_all(dir.join("assets")).unwrap();
             std::fs::copy("../../themes/default/theme.json", dir.join("theme.json")).unwrap();
+            std::fs::copy(
+                "../../themes/default/settings.schema.json",
+                dir.join("settings.schema.json"),
+            )
+            .unwrap();
             for kind in ["templates", "assets"] {
                 for entry in std::fs::read_dir(format!("../../themes/default/{kind}")).unwrap() {
                     let entry = entry.unwrap();

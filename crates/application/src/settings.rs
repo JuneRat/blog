@@ -73,6 +73,7 @@ pub struct SettingsInteractor {
     /// 装配回退值：内置默认值（server 装配层构造，进程内不变）。
     fallback: SiteInfo,
     themes: Option<(Arc<dyn ThemeSettingsStore>, Arc<ThemeRegistry>)>,
+    theme_configs: Option<Arc<dyn crate::theme_config::ThemeConfigStore>>,
     theme_packages: Option<Arc<dyn crate::themes::ThemePackages>>,
     /// 站点 logo 附着的可用性校验（`ensure_attachable`）。
     media_guard: Arc<dyn crate::ports::MediaRefGuard>,
@@ -107,6 +108,7 @@ impl SettingsInteractor {
             fallback,
             themes: None,
             theme_packages: None,
+            theme_configs: None,
             media_guard,
         }
     }
@@ -131,6 +133,110 @@ impl SettingsInteractor {
     ) -> Self {
         self.themes = Some((store, registry));
         self
+    }
+
+    pub fn with_theme_configs(
+        mut self,
+        store: Arc<dyn crate::theme_config::ThemeConfigStore>,
+    ) -> Self {
+        self.theme_configs = Some(store);
+        self
+    }
+
+    async fn config_view(
+        &self,
+        slug: &str,
+    ) -> Result<crate::theme_config::ThemeConfigView, UseCaseError> {
+        let (_, registry) = self
+            .themes
+            .as_ref()
+            .ok_or_else(|| UseCaseError::Invalid("主题设置未装配".into()))?;
+        let option = registry
+            .options()
+            .into_iter()
+            .find(|t| t.slug == slug)
+            .ok_or_else(|| UseCaseError::NotFound("主题未安装或不可用".into()))?;
+        let schema = registry.schema(slug);
+        let record = self
+            .theme_configs
+            .as_ref()
+            .ok_or_else(|| UseCaseError::Invalid("主题配置存储未装配".into()))?
+            .find(slug)
+            .await?
+            .ok_or_else(|| UseCaseError::NotFound("主题配置记录未初始化".into()))?;
+        let config = record.effective(&option.release, &schema)?;
+        Ok(crate::theme_config::ThemeConfigView {
+            id: record.id,
+            slug: record.slug,
+            release: option.release,
+            fields: schema.fields.clone(),
+            config,
+            overrides: record.config,
+            config_schema_version: record.config_schema_version,
+            version: record.version,
+        })
+    }
+    pub async fn theme_config(
+        &self,
+        actor: &Actor,
+        slug: &str,
+    ) -> Result<crate::theme_config::ThemeConfigView, UseCaseError> {
+        if !actor.has_permission("settings.manage") {
+            return Err(UseCaseError::Forbidden);
+        }
+        let _guard = match &self.theme_packages {
+            Some(p) => Some(p.lock().await),
+            None => None,
+        };
+        self.config_view(slug).await
+    }
+    pub async fn save_theme_config(
+        &self,
+        actor: &Actor,
+        slug: &str,
+        cmd: crate::theme_config::SaveThemeConfigCmd,
+    ) -> Result<crate::theme_config::ThemeConfigView, UseCaseError> {
+        actor.ensure_write_channel()?;
+        if !actor.has_permission("settings.manage") {
+            return Err(UseCaseError::Forbidden);
+        }
+        let _guard = match &self.theme_packages {
+            Some(p) => Some(p.lock().await),
+            None => None,
+        };
+        let view = self.config_view(slug).await?;
+        if view.id != cmd.id
+            || view.release != cmd.expected_release
+            || view.config_schema_version != cmd.config_schema_version
+        {
+            return Err(UseCaseError::VersionConflict);
+        }
+        checked_version(view.version, Some(cmd.expected_version))?;
+        let schema = self.themes.as_ref().unwrap().1.schema(slug);
+        schema.validate_config(&cmd.config)?;
+        let store = self.theme_configs.as_ref().unwrap();
+        let current = store
+            .find(slug)
+            .await?
+            .ok_or(UseCaseError::VersionConflict)?;
+        if current.id != view.id || current.version != view.version {
+            return Err(UseCaseError::VersionConflict);
+        }
+        let prior_media = schema.media_ids(&current.config);
+        for id in schema.media_ids(&cmd.config) {
+            if !prior_media.contains(&id) {
+                crate::media::ensure_attachable(&*self.media_guard, id).await?;
+            }
+        }
+        let record = store
+            .save(&current, &cmd.config, &schema, actor.audit_context())
+            .await?;
+        Ok(crate::theme_config::ThemeConfigView {
+            config: record.effective(&view.release, &schema)?,
+            overrides: record.config,
+            version: record.version,
+            ..view
+        })
     }
 
     pub async fn theme_view(&self, actor: &Actor) -> Result<ThemeSettingsView, UseCaseError> {
@@ -160,27 +266,35 @@ impl SettingsInteractor {
         if !registry.contains(&cmd.slug) {
             return Err(UseCaseError::Invalid("主题未安装或清单无效".into()));
         }
+        if self.theme_configs.is_some() {
+            self.config_view(&cmd.slug).await?;
+        }
         let current = store.find_theme().await?;
         let version = current.as_ref().map_or(0, |v| v.version);
         let expected = checked_version(version, cmd.expected_version)?;
         if current.as_ref().is_some_and(|v| v.slug == cmd.slug) {
-            return Ok(self.theme_view_of(
-                cmd.slug,
-                SiteSettingsSource::Database,
-                version,
-                registry,
-            ));
+            return self
+                .enrich_theme_view(self.theme_view_of(
+                    cmd.slug,
+                    SiteSettingsSource::Database,
+                    version,
+                    registry,
+                ))
+                .await;
         }
         match store
             .save_theme(&cmd.slug, expected, self.clock.now(), actor.audit_context())
             .await?
         {
-            SaveOutcome::Saved { new_version } => Ok(self.theme_view_of(
-                cmd.slug,
-                SiteSettingsSource::Database,
-                new_version,
-                registry,
-            )),
+            SaveOutcome::Saved { new_version } => {
+                self.enrich_theme_view(self.theme_view_of(
+                    cmd.slug,
+                    SiteSettingsSource::Database,
+                    new_version,
+                    registry,
+                ))
+                .await
+            }
             SaveOutcome::StaleConflict | SaveOutcome::Gone => Err(UseCaseError::VersionConflict),
         }
     }
@@ -190,20 +304,36 @@ impl SettingsInteractor {
             .themes
             .as_ref()
             .ok_or_else(|| UseCaseError::Render("主题设置未装配".into()))?;
-        match store.find_theme().await? {
-            Some(record) => Ok(self.theme_view_of(
+        let view = match store.find_theme().await? {
+            Some(record) => self.theme_view_of(
                 record.slug,
                 SiteSettingsSource::Database,
                 record.version,
                 registry,
-            )),
-            None => Ok(self.theme_view_of(
+            ),
+            None => self.theme_view_of(
                 registry.fallback().to_string(),
                 SiteSettingsSource::Fallback,
                 0,
                 registry,
-            )),
+            ),
+        };
+        self.enrich_theme_view(view).await
+    }
+    async fn enrich_theme_view(
+        &self,
+        mut view: ThemeSettingsView,
+    ) -> Result<ThemeSettingsView, UseCaseError> {
+        if let Some(store) = &self.theme_configs {
+            for option in &mut view.available {
+                if let Some(record) = store.find(&option.slug).await? {
+                    option.id = Some(record.id);
+                    option.config_version = Some(record.version);
+                    option.config_schema_version = Some(record.config_schema_version);
+                }
+            }
         }
+        Ok(view)
     }
 
     fn theme_view_of(
@@ -259,8 +389,8 @@ impl SettingsInteractor {
         bytes: Vec<u8>,
     ) -> Result<crate::themes::ThemePackageReport, UseCaseError> {
         let packages = self.theme_packages(actor)?;
-        let _guard = packages.lock().await;
-        packages.install(bytes, actor.audit_context()).await
+        let guard = packages.lock().await;
+        packages.install(bytes, actor.audit_context(), guard).await
     }
 
     pub async fn validate_installed_theme(
@@ -278,7 +408,7 @@ impl SettingsInteractor {
         actor: &Actor,
         slug: &str,
         expected_version: Option<i64>,
-        expected_release: &str,
+        identity: crate::themes::ThemeUninstallIdentity,
     ) -> Result<ThemeSettingsView, UseCaseError> {
         let packages = self.theme_packages(actor)?;
         let _guard = packages.lock().await;
@@ -296,12 +426,28 @@ impl SettingsInteractor {
         if !registry.contains(slug) {
             return Err(UseCaseError::NotFound("主题未安装".into()));
         }
-        if registry.assets(slug, expected_release).is_none() {
+        if registry.assets(slug, &identity.release).is_none() {
             return Err(UseCaseError::VersionConflict);
         }
-        packages.uninstall(slug, actor.audit_context()).await?;
+        let record = self
+            .theme_configs
+            .as_ref()
+            .ok_or_else(|| UseCaseError::Invalid("主题配置存储未装配".into()))?
+            .find(slug)
+            .await?
+            .ok_or(UseCaseError::VersionConflict)?;
+        if record.id != identity.id
+            || record.version != identity.version
+            || record.config_schema_version != identity.config_schema_version
+            || record.release != identity.release
+        {
+            return Err(UseCaseError::VersionConflict);
+        }
+        packages
+            .uninstall(slug, actor.audit_context(), identity, _guard)
+            .await?;
         view.available = registry.options();
-        Ok(view)
+        self.enrich_theme_view(view).await
     }
 
     /// site 分组管理视图（读取也要求 `settings.manage`，见模块说明）。

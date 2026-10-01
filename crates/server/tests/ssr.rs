@@ -1147,6 +1147,11 @@ async fn site_zone_formats_both_themes_and_theme_functions_without_changing_feed
         function_theme.join("theme.json"),
     )
     .unwrap();
+    std::fs::copy(
+        "../../themes/default/settings.schema.json",
+        function_theme.join("settings.schema.json"),
+    )
+    .unwrap();
     std::fs::write(function_theme.join("templates/index.html"),
         "{{ posts[0].published_at }}|{{ get_posts(limit=1).items[0].published_at }}|{{ get_post(slug='zoned-post').published_at }}").unwrap();
     for theme in [
@@ -1181,7 +1186,7 @@ async fn site_zone_formats_both_themes_and_theme_functions_without_changing_feed
             .unwrap();
         for path in ["/", "/posts/zoned-post", "/zoned-page"] {
             let (status, body) = get(&s.router, path).await;
-            assert_eq!(status, StatusCode::OK, "{path}");
+            assert_eq!(status, StatusCode::OK, "{theme} {path}: {body}");
             assert!(
                 body.contains(&display.replace('/', "&#x2f;")),
                 "{theme} {path}: {body}"

@@ -28,10 +28,12 @@ pub struct TaskEnvironment {
     pub supervisor: Arc<crate::tasks::TaskSupervisor>,
     pub maintenance: Option<Database>,
     pub recovery_mode: bool,
+    pub installation_preflight: bool,
 }
 pub struct WebsiteSetup {
     pub router: axum::Router,
     pub tasks: Arc<crate::tasks::TaskRuntime>,
+    pub theme_packages: Arc<infrastructure::theme_packages::LocalThemePackages>,
 }
 pub async fn build_router(
     pool: &Database,
@@ -54,15 +56,31 @@ pub async fn build_router(
         public_tags.clone(),
         public_categories.clone(),
     ));
-    let theme_packages = Arc::new(
-        infrastructure::theme_packages::LocalThemePackages::load(
+    let theme_configs = Arc::new(infrastructure::themes::PostgresThemesStore::new(
+        pool.clone(),
+    ));
+    let packages = if environment.installation_preflight {
+        infrastructure::theme_packages::LocalThemePackages::load_for_installation(
             &config.theme_dir,
             theme_data,
             runtime.clone(),
+            theme_configs.as_ref().clone(),
         )
         .await
-        .map_err(|error| format!("加载默认主题模板失败：{error}"))?
-        .with_mutations_enabled(!environment.recovery_mode),
+    } else {
+        infrastructure::theme_packages::LocalThemePackages::load_persistent(
+            &config.theme_dir,
+            theme_data,
+            runtime.clone(),
+            theme_configs.as_ref().clone(),
+            !environment.recovery_mode,
+        )
+        .await
+    };
+    let theme_packages = Arc::new(
+        packages
+            .map_err(|error| format!("加载默认主题模板失败：{error}"))?
+            .with_mutations_enabled(!environment.recovery_mode),
     );
     let theme_registry = theme_packages.registry();
     let fallback = theme_registry
@@ -83,7 +101,8 @@ pub async fn build_router(
             media_guard.clone(),
         )
         .with_themes(settings_store.clone(), theme_registry.clone())
-        .with_theme_packages(theme_packages)
+        .with_theme_packages(theme_packages.clone())
+        .with_theme_configs(theme_configs.clone())
         .with_time_zones(time_zones.clone()),
     );
     let public_site = Arc::new(
@@ -99,6 +118,7 @@ pub async fn build_router(
             config.public_base_url.clone(),
         )
         .with_themes(settings_store, theme_registry.clone())
+        .with_theme_configs(theme_configs)
         .with_time_zones(time_zones),
     );
 
@@ -180,6 +200,7 @@ pub async fn build_router(
         )),
     );
     Ok(WebsiteSetup {
+        theme_packages,
         tasks: task_runtime,
         router: interfaces::http::app_router(
             AppState {

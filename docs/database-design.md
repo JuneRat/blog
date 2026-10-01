@@ -1,6 +1,6 @@
 # 数据库设计
 
-本文记录已确认的 PostgreSQL 18 设计：原 **19 表基线**包含 18 张业务表和 `sessions`，固定后台任务追加两张运行表后共 **21 张应用表**。字段、外键、CHECK 与索引以 [migrations/postgres](../migrations/postgres) 的迁移链为准，[汇总 DDL](sql/postgres-core.sql) 是自动生成的 DDL 参考，选择理由见 [ADR-0016](adr/0016-confirmed-blog-schema.md) 与 [ADR-0020](adr/0020-persistent-admin-tasks.md)。
+本文记录已确认的 PostgreSQL 18 设计：原 **19 表基线**包含 18 张业务表和 `sessions`，固定后台任务追加两张运行表、主题配置追加 `themes` 后共 **22 张应用表**。字段、外键、CHECK 与索引以 [migrations/postgres](../migrations/postgres) 的迁移链为准，[汇总 DDL](sql/postgres-core.sql) 是自动生成的 DDL 参考，选择理由见 [ADR-0016](adr/0016-confirmed-blog-schema.md) 与 [ADR-0020](adr/0020-persistent-admin-tasks.md)。
 
 **新建库基线、身份会话、媒体、内容、目录与评论已接入。** `migrate` 现在执行新的 [0001_initial_schema.sql](../migrations/postgres/0001_initial_schema.sql)，原九个迁移已替换，仅支持空库或已应用新基线的库；检测到旧结构时退出，不自动清库。保留期任务、独立授权、新库恢复、正式媒体显式清理和已有业务写入口的事务审计已接入，生产上线验收仍待完成。实际适配边界见[当前数据库实现](database-current.md)，后续验收见[路线图](product-roadmap.md#已采纳数据库设计的实施)。
 
@@ -13,6 +13,7 @@
 | 内容 | `posts`、`pages` | 各自保存一份当前正文；页面为全站资源 |
 | 目录 | `categories`、`tags`、`series` | 分类树、标签、系列 |
 | 内容关联 | `post_tags`、`post_series` | 文章与标签、系列均为多对多 |
+| 主题 | `themes` | 独立配置覆盖、发布/结构版本、媒体字段与并发身份 |
 | 媒体 | `media`、`media_refs` | 媒体元数据、使用位置与删除保护 |
 | 评论 | `comments` | 多级回复、根评论、审核与回收站 |
 | 系统 | `settings`、`audit_logs` | 分组配置与成功业务变更审计 |
@@ -113,7 +114,7 @@ Post/Page 统一使用 draft、scheduled、published、archived 四种状态，�
 
 **所有媒体链接独立公开。** 文章变私密、撤回、进入回收站，或用户停用，都不使图片链接失效。媒体软删除只改变管理记录，保留对象与 URL。需要保密的材料不能依靠私密文章隐藏其媒体链接。
 
-`media_refs` 保留，负责使用位置查询和删除保护，不参与媒体读取鉴权：
+`media_refs` 支持 post/page/series/user/site/theme；主题来源以 `themes.id` 为 source_id，配置与引用同事务更新，卸载清除引用但保留媒体文件。`media_refs` 保留，负责使用位置查询和删除保护，不参与媒体读取鉴权：
 
 | 字段 | 约束 |
 |---|---|
@@ -160,7 +161,7 @@ Post/Page 统一使用 draft、scheduled、published、archived 四种状态，�
 | 组 | 内容 |
 |---|---|
 | site | 站点资料与 logo_media_id；logo 引用同事务维护 |
-| theme | 已安装主题选择 |
+| theme | 已安装主题选择；各主题独立配置保存于 `themes` |
 | oauth | 非敏感提供商配置及秘密引用；秘密本身留在部署秘密存储 |
 | comments | enabled 默认 true、ip_retention_days 默认 180 |
 | audit | retention_days 默认 180 |

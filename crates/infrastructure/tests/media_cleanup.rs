@@ -314,3 +314,19 @@ async fn private_exclusive_plans_detect_tampering_and_refuse_symbolic_links() {
     assert!(f.root.join("objects/object.png").exists());
     f.pool.close().await;
 }
+
+#[tokio::test]
+async fn theme_config_protects_media_even_if_reference_bookkeeping_is_missing() {
+    let f = Fixture::new("blog_test_purge_theme").await;
+    let mid = f.media("objects/theme.png", true).await;
+    let tid = Uuid::now_v7();
+    sqlx::query("INSERT INTO themes(id,slug,config,config_schema_version,release,media_fields,created_at,updated_at) VALUES($1,'custom',$2,1,$3,ARRAY['image'],now(),now())")
+        .bind(tid).bind(serde_json::json!({"image":mid})).bind("a".repeat(64)).execute(&f.pool).await.unwrap();
+    assert!(
+        f.service
+            .plan(vec![mid], &f.root.join("theme.json"))
+            .await
+            .is_err()
+    );
+    assert!(f.root.join("objects/theme.png").exists());
+}

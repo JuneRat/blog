@@ -1,4 +1,4 @@
-import { Alert, Button, Card, Empty, Form, Input, InputNumber, Modal, Space, Switch, Tag, Typography } from "antd";
+import { Alert, Button, Card, Empty, Form, Modal, Space, Switch, Tag, Typography } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
 import { ApiError } from "../api/client";
@@ -9,6 +9,7 @@ import { useAuth } from "../auth";
 import { queryKeys } from "../queryClient";
 import { invalidateAfterWrite } from "../queryEffects";
 import { useEditorRequestGuard } from "../useEditorRequestGuard";
+import { ConfigFieldInput } from "../components/ConfigFieldInput";
 import { useUnsavedGuard } from "../unsaved";
 
 type Draft = { plugin: PluginView; config: Record<string, PluginConfigValue>; version: number };
@@ -92,10 +93,8 @@ export function PluginManagementScreen() {
       {errorNotice && <Alert type="error" showIcon title={errorNotice} style={{ marginBottom: 16 }} />}
       <Form layout="vertical" disabled={busy}>
         {draft?.plugin.config_fields.map(field => <Form.Item key={field.key} label={field.label} help={field.description || undefined}>
-          {typeof field.default === "boolean" ? <Switch aria-label={field.label} checked={draft.config[field.key] === true} onChange={value => change(field.key, value)} />
-            : typeof field.default === "number" ? <InputNumber aria-label={field.label} min={-2147483648} max={2147483647} precision={0}
-              value={draft.config[field.key] as number} onChange={value => { if (value !== null) change(field.key, value); }} />
-              : <Input aria-label={field.label} maxLength={2048} value={draft.config[field.key] as string} onChange={event => change(field.key, event.target.value)} />}
+          <ConfigFieldInput enforceMaxLength field={{ type: typeof field.default === "boolean" ? "boolean" : typeof field.default === "number" ? "integer" : "text", label: field.label, min: -2147483648, max: 2147483647, max_length: 2048, options: [] }}
+            value={draft.config[field.key]} onChange={value => { if (value !== null) change(field.key, value); }} />
         </Form.Item>)}
       </Form>
     </Modal>

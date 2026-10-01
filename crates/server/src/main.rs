@@ -249,6 +249,7 @@ async fn run(command: Command, mut config: config::DeploymentConfig) -> Result<(
                     supervisor: tasks.clone(),
                     maintenance,
                     recovery_mode,
+                    installation_preflight: false,
                 },
             )
             .await?;

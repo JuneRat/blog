@@ -39,6 +39,7 @@ pub use tasks::PostgresTaskStore;
 mod theme_functions;
 pub mod theme_packages;
 mod theme_validation;
+pub mod themes;
 mod time_zone;
 pub use time_zone::{IanaTimeZones, SiteTimeZone};
 pub mod throttle;

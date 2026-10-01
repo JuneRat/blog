@@ -311,6 +311,11 @@ async fn fresh_stack_with_themes(with_themes: bool) -> Stack {
             root.0.join("default/theme.json"),
         )
         .unwrap();
+        std::fs::copy(
+            "../../themes/default/settings.schema.json",
+            root.0.join("default/settings.schema.json"),
+        )
+        .unwrap();
         let runtime = Arc::new(infrastructure::RenderingRuntime::default());
         let database = common::database(pool.clone());
         let posts = Arc::new(infrastructure::PostgresPublishedPostQuery::new(
@@ -333,11 +338,16 @@ async fn fresh_stack_with_themes(with_themes: bool) -> Stack {
             tags.clone(),
             categories.clone(),
         ));
+        let theme_configs = Arc::new(infrastructure::themes::PostgresThemesStore::new(
+            database.clone(),
+        ));
         let packages = Arc::new(
-            infrastructure::theme_packages::LocalThemePackages::load(
+            infrastructure::theme_packages::LocalThemePackages::load_persistent(
                 &root.0.join("default"),
                 data,
                 runtime,
+                theme_configs.as_ref().clone(),
+                true,
             )
             .await
             .unwrap(),
@@ -346,7 +356,8 @@ async fn fresh_stack_with_themes(with_themes: bool) -> Stack {
         let store = Arc::new(infrastructure::PostgresSettingsStore::new(database));
         settings = settings
             .with_themes(store.clone(), registry.clone())
-            .with_theme_packages(packages);
+            .with_theme_packages(packages)
+            .with_theme_configs(theme_configs.clone());
         let site = application::public_site::PublicSiteInteractor::new(
             posts,
             pages,
@@ -365,7 +376,8 @@ async fn fresh_stack_with_themes(with_themes: bool) -> Stack {
             },
             application::seo::PublicBaseUrl::parse("http://127.0.0.1:18099").unwrap(),
         )
-        .with_themes(store, registry.clone());
+        .with_themes(store, registry.clone())
+        .with_theme_configs(theme_configs);
         public = interfaces::http::mount_live_theme_assets(
             interfaces::http::public_router(interfaces::http::PublicSiteState {
                 site: Arc::new(site),
@@ -446,6 +458,9 @@ async fn fresh_stack_with_themes(with_themes: bool) -> Stack {
         .merge(interfaces::http_admin::series_router(admin_state.clone()))
         .merge(interfaces::http_admin::settings_router(admin_state.clone()))
         .merge(interfaces::http_themes::themes_router(admin_state.clone()))
+        .merge(interfaces::http_media::media_admin_router(
+            admin_state.clone(),
+        ))
         .merge(interfaces::http_comments::comments_router(
             interfaces::http_comments::CommentState {
                 admission: Arc::new(infrastructure::InMemoryRequestAdmission::default()),

@@ -43,3 +43,5 @@ pub mod retention;
 pub mod navigation;
 
 pub mod registration;
+
+pub mod theme_config;

@@ -458,6 +458,15 @@ impl ThemeExecutor {
 
 #[async_trait]
 impl ThemeRenderer for ThemeExecutor {
+    fn with_config(
+        &self,
+        config: application::theme_config::ThemeConfig,
+    ) -> Option<Arc<dyn ThemeRenderer>> {
+        Some(Arc::new(Self {
+            runtime: self.runtime.clone(),
+            renderer: Arc::new(self.renderer.as_ref().clone().with_config(config)),
+        }))
+    }
     async fn render_index(
         &self,
         site: &SiteInfo,

@@ -222,6 +222,7 @@ pub struct PublicSiteInteractor {
     categories: Arc<dyn PublishedCategoryQuery>,
     series: Arc<dyn PublishedSeriesQuery>,
     theme: Arc<dyn ThemeRenderer>,
+    theme_configs: Option<Arc<dyn crate::theme_config::ThemeConfigStore>>,
     themes: Option<(Arc<dyn ThemeSettingsStore>, Arc<ThemeRegistry>)>,
     /// settings 的 site 分组（数据库未配置时整体回退）。
     settings: Arc<dyn SettingsStore>,
@@ -253,6 +254,7 @@ impl PublicSiteInteractor {
             series,
             theme,
             themes: None,
+            theme_configs: None,
             settings,
             fallback,
             base_url,
@@ -273,6 +275,14 @@ impl PublicSiteInteractor {
         self
     }
 
+    pub fn with_theme_configs(
+        mut self,
+        store: Arc<dyn crate::theme_config::ThemeConfigStore>,
+    ) -> Self {
+        self.theme_configs = Some(store);
+        self
+    }
+
     async fn active_theme(&self) -> Result<Arc<dyn ThemeRenderer>, UseCaseError> {
         if let Some((store, registry)) = &self.themes {
             let slug = store
@@ -280,9 +290,17 @@ impl PublicSiteInteractor {
                 .await?
                 .map(|record| record.slug)
                 .unwrap_or_else(|| registry.fallback().to_string());
-            registry
-                .renderer(&slug)
-                .or_else(|_| registry.renderer(registry.fallback()))
+            let snapshot = registry.snapshot(&slug)?;
+            let renderer = snapshot.renderer;
+            if let Some(configs) = &self.theme_configs {
+                let config = match configs.find(&snapshot.slug).await? {
+                    Some(record) => record.effective(&snapshot.release, &snapshot.schema)?,
+                    None => snapshot.schema.defaults(),
+                };
+                Ok(renderer.with_config(config).unwrap_or(renderer))
+            } else {
+                Ok(renderer)
+            }
         } else {
             Ok(self.theme.clone())
         }

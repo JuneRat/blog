@@ -171,6 +171,23 @@ def validate_relations(pg, database=None):
                 expected.add((mid,kind,row["id"]))
     rows = query_json(pg, "SELECT COALESCE(jsonb_agg(jsonb_build_array(mid,kind,sid)),'[]') FROM (SELECT avatar_media_id AS mid,'user' AS kind,id AS sid FROM users WHERE avatar_media_id IS NOT NULL UNION ALL SELECT cover_media_id,'series',id FROM series WHERE cover_media_id IS NOT NULL UNION ALL SELECT (value->>'logo_media_id')::uuid,'site','00000000-0000-0000-0000-000000000000'::uuid FROM settings WHERE key='site' AND value->>'logo_media_id' IS NOT NULL) refs", database)
     expected.update(tuple(row) for row in rows)
+    theme_rows = query_json(pg, "SELECT COALESCE(jsonb_agg(jsonb_build_object('id',id,'config',config,'media_fields',media_fields)),'[]') FROM themes", database)
+    for row in theme_rows:
+        fields = row["media_fields"]
+        config = row["config"]
+        if not isinstance(config, dict) or len(fields) > 64 or len(set(fields)) != len(fields) or any(not isinstance(key, str) or not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", key) for key in fields):
+            raise RecoveryError("invalid theme media field inventory")
+        for key in fields:
+            value = config.get(key)
+            if value is None:
+                continue
+            try:
+                mid = str(uuid.UUID(value))
+                if mid != value or uuid.UUID(value).int == 0:
+                    raise ValueError()
+            except (ValueError, TypeError, AttributeError):
+                raise RecoveryError("invalid theme media ID") from None
+            expected.add((mid, "theme", row["id"]))
     actual = {tuple(row) for row in query_json(pg, "SELECT COALESCE(jsonb_agg(jsonb_build_array(media_id,source_type,source_id)),'[]') FROM media_refs", database)}
     if actual != expected:
         raise RecoveryError(f"media references disagree with stored HTML/covers: {len(expected-actual)} missing, {len(actual-expected)} unexpected")

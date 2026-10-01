@@ -13,6 +13,11 @@ async fn release_assets_survive_disk_replacement_and_reject_other_versions() {
     std::fs::create_dir_all(dir.join("templates")).unwrap();
     std::fs::create_dir_all(dir.join("assets/nested")).unwrap();
     std::fs::copy("../../themes/default/theme.json", dir.join("theme.json")).unwrap();
+    std::fs::copy(
+        "../../themes/default/settings.schema.json",
+        dir.join("settings.schema.json"),
+    )
+    .unwrap();
     for entry in ["index", "post", "page", "tag", "category", "series"] {
         std::fs::write(dir.join(format!("templates/{entry}.html")), "old template").unwrap();
     }

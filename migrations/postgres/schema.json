@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "id": "blog-20-v1",
+  "id": "blog-21-v1",
   "migrations": [
     {
       "version": 1,
@@ -31,6 +31,11 @@
       "version": 6,
       "file": "0006_tasks.sql",
       "checksum": "5384fab741cc094bb987fd73d40bb488bcf23819082769cdfd9a73ac88cbf93fc68500b013b71c1baded0fab8a332fc5"
+    },
+    {
+      "version": 7,
+      "file": "0007_themes.sql",
+      "checksum": "7c65349eb430e7f1dd6a7f18c90364b77585778c4fcc81776ebfc2aa199a2a766b58a062598b269e3386f6b18d99d927"
     }
   ],
   "tables": {
@@ -215,6 +220,15 @@
       "maintenance": [
         "SELECT"
       ]
+    },
+    "themes": {
+      "app": [
+        "SELECT",
+        "INSERT",
+        "UPDATE",
+        "DELETE"
+      ],
+      "maintenance": []
     },
     "user_roles": {
       "app": [

@@ -5,9 +5,11 @@ import { ApiError } from "../api/client";
 import { themeSettingsApi } from "../api/settings";
 import { permissionMessageOf } from "../apiError";
 import { useAuth } from "../auth";
+import { invalidateAfterWrite } from "../queryEffects";
 import { queryKeys } from "../queryClient";
 import type { ThemeSettings } from "../types";
-import type { ThemePackageReport } from "../api/generated";
+import { ThemeConfigDialog } from "../components/ThemeConfigDialog";
+import type { ThemeConfigSettings, ThemePackageReport } from "../api/generated";
 import { useUnsavedGuard } from "../unsaved";
 
 export function ThemeManagementScreen() {
@@ -23,6 +25,8 @@ export function ThemeManagementScreen() {
   const [conflict, setConflict] = useState<ThemeSettings | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [configTarget, setConfigTarget] = useState<{ slug: string; name: string } | null>(null);
+  const [configDirty, setConfigDirty] = useState(false);
   const [busy, setBusy] = useState(false);
   const [packageFile, setPackageFile] = useState<File | null>(null);
   const [packageReport, setPackageReport] = useState<ThemePackageReport | null>(null);
@@ -39,7 +43,8 @@ export function ThemeManagementScreen() {
     actionError ?? (themeQuery.error === null ? null : permissionMessageOf(themeQuery.error));
   const setError = setActionError;
 
-  const dirty = packageFile !== null || (view !== null && slug !== view.effective_slug);
+  const controlsBusy = busy || configTarget !== null;
+  const dirty = configDirty || packageFile !== null || (view !== null && slug !== view.effective_slug);
   useUnsavedGuard(dirty, "主题管理有未保存的选择或待安装的主题包，离开会丢失。");
 
   /** 读 store 里当前选中的主题（响应回来时用它判断等待期间是否换了选择）。 */
@@ -74,7 +79,7 @@ export function ThemeManagementScreen() {
       if (readSlug() === submitted) writeSlug(saved.effective_slug);
       setConflict(null);
       // 切换已落库：后台失效重取（不 await，保存响应已是权威值；见站点设置同处说明）。
-      void queryClient.invalidateQueries({ queryKey: queryKeys.themeSettings() });
+      void invalidateAfterWrite(queryClient, "theme");
       setNotice(
         `主题已切换为「${saved.available.find((item) => item.slug === saved.slug)?.name ?? saved.slug}」（v${saved.version}），公开页面即刻生效。`,
       );
@@ -116,6 +121,7 @@ export function ThemeManagementScreen() {
     try {
       const report = await (install ? themeSettingsApi.install(packageFile) : themeSettingsApi.validatePackage(packageFile));
       if (install) {
+        void invalidateAfterWrite(queryClient, "theme");
         clearPackage();
         setNotice(`主题「${report.name}」已安装，选择后激活即可生效。`);
         try {
@@ -143,13 +149,14 @@ export function ThemeManagementScreen() {
     finally { setBusy(false); }
   }
 
-  async function remove(selected: string, expectedVersion: number, expectedRelease: string) {
+  async function remove(selected: string, expectedVersion: number, expectedRelease: string, config: Pick<ThemeConfigSettings, "id" | "version" | "config_schema_version">) {
     setBusy(true);
     setError(null);
     setNotice(null);
     try {
-      applyView(await themeSettingsApi.uninstall(selected, expectedVersion, expectedRelease));
+      applyView(await themeSettingsApi.uninstall(selected, expectedVersion, expectedRelease, config));
       setConflict(null);
+      void invalidateAfterWrite(queryClient, "theme");
       setNotice(`主题「${selected}」已卸载。`);
     } catch (cause) {
       setError(permissionMessageOf(cause));
@@ -158,6 +165,12 @@ export function ThemeManagementScreen() {
         catch (reloadError) { setError(permissionMessageOf(reloadError)); }
       }
     } finally { setBusy(false); }
+  }
+
+  function confirmRemoval(item: ThemeSettings["available"][number], expectedVersion: number) {
+    if (item.id === undefined || item.config_version === undefined || item.config_schema_version === undefined) { setError("主题身份未初始化，请刷新主题列表后重试。"); return; }
+    const identity = { id: item.id, version: item.config_version, config_schema_version: item.config_schema_version };
+    modal.confirm({ title: `卸载主题「${item.name}」？`, content: "卸载会删除该主题的配置、媒体引用、主题文件和已安装快照。媒体文件会保留。重新安装将使用默认配置。", okText: "卸载", okButtonProps: { danger: true }, onOk: () => remove(item.slug, expectedVersion, item.release, identity) });
   }
 
   async function refresh() {
@@ -207,10 +220,10 @@ export function ThemeManagementScreen() {
             </Typography.Paragraph>
             <Space direction="vertical" style={{ width: "100%" }}>
               <Space wrap>
-                <Button disabled={busy} onClick={() => fileInput.current?.click()}>选择主题包</Button>
+                <Button disabled={controlsBusy} onClick={() => fileInput.current?.click()}>选择主题包</Button>
                 <Typography.Text type="secondary">{packageFile?.name ?? "未选择主题包"}</Typography.Text>
               </Space>
-              <input ref={fileInput} type="file" accept=".zip,application/zip" aria-label="主题 ZIP 包" disabled={busy} style={{ display: "none" }}
+              <input ref={fileInput} type="file" accept=".zip,application/zip" aria-label="主题 ZIP 包" disabled={controlsBusy} style={{ display: "none" }}
                 onChange={event => {
                   const file = event.target.files?.[0] ?? null;
                   setPackageReport(null);
@@ -224,10 +237,10 @@ export function ThemeManagementScreen() {
                   setPackageFile(file);
                 }} />
               <Space wrap>
-                <Button disabled={busy || packageFile === null} onClick={() => void processPackage(false)}>验证主题包</Button>
-                <Button type="primary" disabled={busy || packageFile === null} onClick={() => void processPackage(true)}>安装主题</Button>
-                {packageFile !== null && <Button disabled={busy} onClick={clearPackage}>取消选择</Button>}
-                <Button disabled={busy} onClick={() => void refresh()}>刷新主题列表</Button>
+                <Button disabled={controlsBusy || packageFile === null} onClick={() => void processPackage(false)}>验证主题包</Button>
+                <Button type="primary" disabled={controlsBusy || packageFile === null} onClick={() => void processPackage(true)}>安装主题</Button>
+                {packageFile !== null && <Button disabled={controlsBusy} onClick={clearPackage}>取消选择</Button>}
+                <Button disabled={controlsBusy} onClick={() => void refresh()}>刷新主题列表</Button>
               </Space>
               {packageReport !== null && <Typography.Text type="secondary">
                 {packageReport.slug} · {packageReport.template_count} 个模板 · {packageReport.asset_count} 个资源 · 版本 {packageReport.release.slice(0, 12)}
@@ -259,21 +272,21 @@ export function ThemeManagementScreen() {
                       role="button"
                       aria-label={`选择主题 ${item.name}`}
                       aria-pressed={isSelected}
-                      aria-disabled={busy}
-                      tabIndex={busy ? -1 : 0}
+                      aria-disabled={controlsBusy}
+                      tabIndex={controlsBusy ? -1 : 0}
                       onKeyDown={event => {
-                        if (!busy && (event.key === "Enter" || event.key === " ")) {
+                        if (!controlsBusy && (event.key === "Enter" || event.key === " ")) {
                           event.preventDefault();
                           writeSlug(item.slug);
                         }
                       }}
                       onClick={() => {
-                        if (!busy) {
+                        if (!controlsBusy) {
                           writeSlug(item.slug);
                         }
                       }}
                       style={{
-                        cursor: busy ? "not-allowed" : "pointer",
+                        cursor: controlsBusy ? "not-allowed" : "pointer",
                       }}
                     >
                       <Flex justify="space-between" align="center" style={{ marginBottom: 8 }}>
@@ -308,16 +321,12 @@ export function ThemeManagementScreen() {
                       </Flex>
                     </div>
                     <Space style={{ marginTop: 12 }}>
-                      <Button size="small" aria-label={`验证主题 ${item.name}`} disabled={busy}
+                      <Button size="small" aria-label={`配置主题 ${item.name}`} disabled={controlsBusy} onClick={() => { setConfigTarget({ slug: item.slug, name: item.name }); setError(null); }}>配置</Button>
+                      <Button size="small" aria-label={`验证主题 ${item.name}`} disabled={controlsBusy}
                         onClick={() => void validateInstalled(item.slug)}>验证</Button>
                       <Button size="small" danger aria-label={`卸载主题 ${item.name}`}
-                        disabled={busy || isCurrentActive || item.slug === view.fallback_slug || item.slug === view.slug}
-                        onClick={() => modal.confirm({
-                          title: `卸载主题「${item.name}」？`,
-                          content: "将删除主题文件和已安装快照。如需恢复，请重新安装主题包。",
-                          okText: "卸载", okButtonProps: { danger: true },
-                          onOk: () => remove(item.slug, view.version, item.release),
-                        })}>卸载</Button>
+                        disabled={controlsBusy || isCurrentActive || item.slug === view.fallback_slug || item.slug === view.slug}
+                        onClick={() => void confirmRemoval(item, view.version)}>卸载</Button>
                     </Space>
                   </Card>
                 </Col>
@@ -337,7 +346,7 @@ export function ThemeManagementScreen() {
         <Form.Item label="选择主题" name="slug">
           <Select
             loading={view === null}
-            disabled={busy}
+            disabled={controlsBusy}
             options={(view?.available ?? []).map((item) => ({
               value: item.slug,
               label: item.name,
@@ -364,7 +373,7 @@ export function ThemeManagementScreen() {
           {conflict === null ? (
             <Button
               type="primary"
-              disabled={busy || slug === view.slug}
+              disabled={controlsBusy || slug === view.slug}
               onClick={() => void save(view.version)}
             >
               激活主题
@@ -378,7 +387,7 @@ export function ThemeManagementScreen() {
               action={
                 <Space>
                   <Button
-                    disabled={busy}
+                    disabled={controlsBusy}
                     onClick={() => {
                       // 重新加载：丢弃本地选择，采用服务器值（并同步缓存）。
                       setView(conflict);
@@ -389,7 +398,7 @@ export function ThemeManagementScreen() {
                   >
                     重新加载
                   </Button>
-                  <Button danger disabled={busy} onClick={() => overwrite(conflict.version)}>
+                  <Button danger disabled={controlsBusy} onClick={() => overwrite(conflict.version)}>
                     仍然覆盖
                   </Button>
                 </Space>
@@ -398,6 +407,12 @@ export function ThemeManagementScreen() {
           )}
         </>
       )}
+      {configTarget && <ThemeConfigDialog key={configTarget.slug} {...configTarget} onDirty={setConfigDirty}
+        onClose={() => { if (configDirty) modal.confirm({ title: "放弃未保存的主题配置？", onOk: () => { setConfigTarget(null); setConfigDirty(false); } }); else setConfigTarget(null); }}
+        onSaved={saved => {
+          setView(current => current ? { ...current, available: current.available.map(item => item.slug === saved.slug ? { ...item, id: saved.id, config_version: saved.version, config_schema_version: saved.config_schema_version } : item) } : null);
+          setNotice(`主题「${configTarget.name}」配置已保存，后续请求生效。`);
+        }} />}
     </section>
   );
 }

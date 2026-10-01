@@ -128,7 +128,7 @@ Post/Page 管理 API 及 Post CLI 通过稳定 UUID 定位资源，公开 URL �
 [依赖检查脚本](../scripts/check_dependencies.py) 读取未按当前平台过滤的 Cargo metadata，检查 normal/build/dev 依赖、可选依赖、target 条件及重命名依赖：
 
 - 项目内依赖使用上表白名单；`server` 集成测试可额外依赖 `domain`，不放宽生产边界。
-- `domain` 和 `application` 的第三方依赖使用明确白名单；应用测试允许 Tokio。
+- `domain` 和 `application` 的第三方依赖使用明确白名单；应用测试允许 Tokio。主题受控声明、覆盖值及精确 JSON 字节上限在应用层共用纯 `serde_json` 契约，不引入数据库、模板引擎或执行运行时。
 - `interfaces` 禁止直接引入 SQLx、MiniJinja 及其子包。
 - 新 workspace 成员或第三方内层依赖需要同步审查规则。
 

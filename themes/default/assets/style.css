@@ -200,3 +200,5 @@ a {
 
 .page-navigation, .pagination { display: flex; flex-wrap: wrap; gap: 1rem; align-items: center; margin-block: 1rem; }
 .page-navigation:empty { display: none; }
+
+.theme-header-image { display: block; max-width: 100%; height: auto; }

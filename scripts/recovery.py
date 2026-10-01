@@ -207,6 +207,8 @@ def backup(args):
     stage = output.with_name(output.name + ".partial-" + uuid.uuid4().hex[:8])
     stage.mkdir(mode=0o700, parents=True)
     try:
+        if any(Path(args.theme_dir).parent.glob(".theme-op-*")):
+            raise RecoveryError("unfinished theme operation; run normal startup recovery before taking a backup")
         schema = schema_snapshot(pg)
         media = media_inventory(pg)
         validate_relations(pg)

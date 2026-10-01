@@ -188,6 +188,7 @@ impl ThemeSettingsStore for PostgresSettingsStore {
     ) -> Result<SaveOutcome, UseCaseError> {
         let value = serde_json::json!({ "schema_version": 1, "slug": slug });
         let mut tx = self.pool.begin().await.map_err(map_repo_error)?;
+        crate::themes::lock(&mut tx).await?;
         let new_version: Option<i64> = sqlx::query_scalar(
             r#"
             INSERT INTO settings (key, value, version, updated_at)

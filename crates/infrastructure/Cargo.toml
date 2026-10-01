@@ -141,3 +141,7 @@ required-features = ["sqlx-test-support"]
 [[test]]
 name = "write_invariants"
 required-features = ["sqlx-test-support"]
+
+[[test]]
+name = "themes"
+required-features = ["sqlx-test-support"]

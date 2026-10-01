@@ -7,6 +7,7 @@ are in Docker instead of PATH. No existing application database is touched.
 import argparse
 import base64
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -29,6 +30,29 @@ from test_schema_contract import release_fixture
 
 PROJECT = Path(__file__).resolve().parent.parent
 PNG = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=")
+
+
+def theme_release(path):
+    """Mirror the documented release framing for a real restore configuration fixture."""
+    manifest = json.loads((path / "theme.json").read_text())
+    declaration = json.loads((path / "settings.schema.json").read_text()) if (path / "settings.schema.json").exists() else {"config_schema_version": 1, "fields": []}
+    fields = []
+    for raw in declaration["fields"]:
+        field = {"key": raw["key"], "type": raw["type"], "label": raw["label"], "description": raw.get("description", ""), "group": raw.get("group", ""), "default": raw["default"], "min_length": raw.get("min_length"), "max_length": raw.get("max_length"), "min": raw.get("min"), "max": raw.get("max"), "options": raw.get("options", [])}
+        fields.append(field)
+    schema = json.dumps({"config_schema_version": declaration["config_schema_version"], "fields": fields}, ensure_ascii=False, separators=(",", ":")).encode()
+    digest = hashlib.sha256()
+    digest.update(manifest["theme_api_version"].to_bytes(4, "big"))
+    digest.update(manifest["slug"].encode())
+    digest.update(len(schema).to_bytes(8, "big")); digest.update(schema)
+    for kind in ("templates", "assets"):
+        digest.update(kind.encode())
+        for item in sorted((path / kind).rglob("*")):
+            if item.is_file():
+                name = item.relative_to(path / kind).as_posix().encode(); body = item.read_bytes()
+                digest.update(len(name).to_bytes(8, "big")); digest.update(name)
+                digest.update(len(body).to_bytes(8, "big")); digest.update(body)
+    return digest.hexdigest()
 
 
 @unittest.skipUnless(os.environ.get("BLOG_RECOVERY_TEST") == "1", "opt-in isolated PostgreSQL drill")
@@ -112,6 +136,9 @@ class PostgresRecoveryTests(unittest.TestCase):
         mid = self.ids["media"]
         self.query(f"UPDATE users SET avatar_media_id='{mid}' WHERE id='{owner}'; INSERT INTO media_refs VALUES('{mid}','user','{owner}')")
         self.query(f"INSERT INTO settings(key,value) VALUES('site','{{\"logo_media_id\":\"{mid}\"}}'),('theme','{{\"slug\":\"paper\"}}'); INSERT INTO media_refs VALUES('{mid}','site','00000000-0000-0000-0000-000000000000')")
+        theme_id = str(uuid.uuid4())
+        release = theme_release(self.theme_dir / "default")
+        self.query(f"INSERT INTO themes(id,slug,config,config_schema_version,release,media_fields,created_at,updated_at) VALUES('{theme_id}','default','{{\"header_image\":\"{mid}\",\"footer_note\":\"restore theme fixture\"}}',1,'{release}',ARRAY['header_image'],now(),now()); INSERT INTO media_refs VALUES('{mid}','theme','{theme_id}')")
         self.query(f"INSERT INTO pages(id,title,slug,content,content_html,content_render_version,status,published_at) VALUES(gen_random_uuid(),'Page','drill-page','![image](/media/{mid})','<p><img src=\"/media/{mid}\"></p>',1,'scheduled',now()-interval '1 day'); INSERT INTO media_refs SELECT '{mid}','page',id FROM pages")
         for key in ("series1", "series2"):
             sid = self.ids[key]
@@ -152,6 +179,12 @@ class PostgresRecoveryTests(unittest.TestCase):
         args = argparse.Namespace(output=backup, theme_dir=self.theme_dir / "default", media_dir=self.media_dir,
                                   resource=[], maintenance_confirmed=True, docker_container=self.container)
         with patch.dict(os.environ, {"DATABASE_URL":self.url(self.source)}), contextlib.redirect_stdout(io.StringIO()):
+            pending = self.theme_dir / (".theme-op-" + str(uuid.uuid4()))
+            pending.mkdir()
+            with self.assertRaisesRegex(recovery.RecoveryError, "unfinished theme operation"):
+                recovery.backup(args)
+            self.assertFalse(backup.exists())
+            pending.rmdir()
             # A missing formal object prevents completion, including a soft-deleted one.
             missing=self.media_dir / ("objects/"+self.ids["deleted"]+".png")
             missing.unlink()
@@ -165,6 +198,7 @@ class PostgresRecoveryTests(unittest.TestCase):
             output=self.root / "restore"
             recovery.restore(argparse.Namespace(backup=backup,target_db=self.target,output=output,isolation_confirmed=True,docker_container=self.container))
         self.assertEqual(self.query("SELECT count(*) FROM sessions",self.target),"0")
+        self.assertEqual(self.query("SELECT config->>'footer_note' FROM themes WHERE slug='default'",self.target), "restore theme fixture")
         self.assertTrue((output / "resources/media/objects/unregistered.png").is_file())
         self.cli(["serve","--addr","127.0.0.1:0"],database=self.target,success=False)
         self.cli(["publish-due"],database=self.target,success=False)
@@ -174,14 +208,19 @@ class PostgresRecoveryTests(unittest.TestCase):
         self.check_isolated_server(output)
         self.assertEqual(self.query("SELECT status FROM posts WHERE slug='drill-scheduled'",self.target),"scheduled")
         # A lost reference prevents release; session revocation is done only at successful release.
-        self.query("DELETE FROM media_refs WHERE source_type='site'",self.target)
+        self.query("DELETE FROM media_refs WHERE source_type IN ('site','theme')",self.target)
         release_args=argparse.Namespace(output=output,verification_confirmed=True,docker_container=self.container)
         with patch.dict(os.environ, {"DATABASE_URL":self.admin_url}), contextlib.redirect_stdout(io.StringIO()):
             with self.assertRaises(recovery.RecoveryError): recovery.release(release_args)
             self.assertTrue((output / "ISOLATED").exists())
             self.query(f"INSERT INTO media_refs VALUES('{self.ids['media']}','site','00000000-0000-0000-0000-000000000000')",self.target)
+            with self.assertRaisesRegex(recovery.RecoveryError, "1 missing"):
+                recovery.release(release_args)
+            self.assertTrue((output / "ISOLATED").exists())
+            self.query(f"INSERT INTO media_refs SELECT '{self.ids['media']}','theme',id FROM themes WHERE slug='default'",self.target)
             recovery.release(release_args)
         self.assertEqual(self.query("SELECT count(*) FROM sessions",self.target),"0")
+        self.assertEqual(self.query("SELECT config->>'footer_note' FROM themes WHERE slug='default'",self.target), "restore theme fixture")
         self.assertTrue((output / "RELEASED").is_file())
         self.cli(["publish-due"],database=self.target)
         self.assertEqual(self.query("SELECT status FROM posts WHERE slug='drill-scheduled'",self.target),"published")

@@ -40,7 +40,7 @@ fn command(dir: &Path) -> Command {
         .env("BLOG_LOG_FORMAT", "text")
         .env("BLOG_CONFIG_FILE", dir.join("config.toml"))
         .env("BLOG_MIGRATIONS_DIR", project.join("migrations/postgres"))
-        .env("BLOG_THEME_DIR", project.join("themes/default"))
+        .env("BLOG_THEME_DIR", common::copy_default_theme(dir))
         .env("BLOG_ADMIN_DIST", dir.join("admin"))
         .env("BLOG_MEDIA_DIR", dir.join("media"))
         .env("RUST_LOG", "warn");
@@ -219,6 +219,7 @@ async fn empty_database_installs_once_logs_in_and_restarts_from_saved_config() {
         "/api/admin/v1/comments",
         "/api/admin/v1/settings/retention",
         "/api/admin/v1/audit-logs",
+        "/api/admin/v1/themes/default/settings",
     ] {
         let anonymous = client()
             .get(format!("{}{path}", server.url))
@@ -471,8 +472,8 @@ async fn interrupted_install_resumes_without_overwriting_saved_database_and_roll
     let response = submit(&server, retry.clone()).await;
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     assert_eq!(std::fs::read_to_string(&journal_path).unwrap(), journal);
-    let counts: (i64,i64,i64) = sqlx::query_as("SELECT (SELECT count(*) FROM users),(SELECT count(*) FROM roles),(SELECT count(*) FROM settings)").fetch_one(&pool).await.unwrap();
-    assert_eq!(counts, (0, 0, 0));
+    let counts: (i64,i64,i64,i64) = sqlx::query_as("SELECT (SELECT count(*) FROM users),(SELECT count(*) FROM roles),(SELECT count(*) FROM settings),(SELECT count(*) FROM themes)").fetch_one(&pool).await.unwrap();
+    assert_eq!(counts, (0, 0, 0, 0));
     sqlx::raw_sql(
         "DROP TRIGGER reject_install ON audit_logs; DROP FUNCTION reject_install_audit()",
     )
@@ -488,6 +489,42 @@ async fn interrupted_install_resumes_without_overwriting_saved_database_and_roll
     );
     login(&server).await;
     assert!(!journal_path.exists());
+    drop(server);
+    pool.close().await;
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn theme_initialization_failure_after_bootstrap_is_resumed_without_duplicate_accounts() {
+    let (pool, url) = empty_database("blog_install_theme_failure_test").await;
+    let dir = common::media_dir("installation-theme-failure");
+    let server = start(&dir, true).await;
+    assert_eq!(
+        submit(&server, input(&url)).await.status(),
+        StatusCode::BAD_REQUEST
+    );
+    drop(server);
+    sqlx::raw_sql("CREATE FUNCTION reject_theme_init() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'theme initialization unavailable'; END $$; CREATE TRIGGER reject_theme_init BEFORE INSERT ON themes FOR EACH ROW EXECUTE FUNCTION reject_theme_init();")
+        .execute(&pool).await.unwrap();
+    let server = start(&dir, false).await;
+    assert_eq!(
+        submit(&server, input(&url)).await.status(),
+        StatusCode::INTERNAL_SERVER_ERROR
+    );
+    let counts: (i64,i64,i64) = sqlx::query_as("SELECT (SELECT count(*) FROM users),(SELECT count(*) FROM audit_logs WHERE action='installation.complete'),(SELECT count(*) FROM themes)").fetch_one(&pool).await.unwrap();
+    assert_eq!(counts, (1, 1, 0));
+    assert!(dir.join("config.install-state.json").exists());
+    drop(server);
+    sqlx::raw_sql("DROP TRIGGER reject_theme_init ON themes; DROP FUNCTION reject_theme_init()")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let server = start(&dir, false).await;
+    assert!(server.token.is_empty());
+    login(&server).await;
+    assert!(!dir.join("config.install-state.json").exists());
+    let counts: (i64,i64,i64) = sqlx::query_as("SELECT (SELECT count(*) FROM users),(SELECT count(*) FROM audit_logs WHERE action='installation.complete'),(SELECT count(*) FROM themes)").fetch_one(&pool).await.unwrap();
+    assert_eq!(counts, (1, 1, 1));
     drop(server);
     pool.close().await;
     std::fs::remove_dir_all(dir).unwrap();

@@ -1,0 +1,84 @@
+{
+  "date": "2026-10-01",
+  "environment": {
+    "postgresql": "18.6",
+    "postgres_endpoint": "loopback, blog-postgres Docker container",
+    "rust": "1.98.1",
+    "baseline_commit": "9962589d62937d431ced390eaad356ed7cf5148d",
+    "schema_contract": "blog-21-v1",
+    "application_tables": 22
+  },
+  "checks": [
+    {
+      "command": "BLOG_RECOVERY_TEST=1 BLOG_TEST_PG_CONTAINER=blog-postgres bash scripts/check.sh",
+      "database": "BLOG_TEST_ADMIN_URL supplied for loopback PostgreSQL test databases",
+      "exit_code": 0,
+      "rust_workspace": {
+        "passed": 779,
+        "failed": 0,
+        "ignored": 0,
+        "suites": 75
+      },
+      "admin_vitest": {
+        "files_passed": 40,
+        "tests_passed": 401
+      },
+      "python_discovery": {
+        "total": 123,
+        "passed": 120,
+        "skipped": 3,
+        "note": "Opt-in database/acceptance tests skipped in discovery; recovery tests run separately below."
+      },
+      "real_postgres_recovery": {
+        "passed": 2,
+        "seconds": 21.021
+      }
+    },
+    {
+      "command": "cargo test -p infrastructure --features sqlx-test-support --test themes",
+      "exit_code": 0,
+      "passed": 7,
+      "note": "Final journal transaction fence and staging cleanup verified after the workspace test binary was built."
+    },
+    {
+      "command": "cargo clippy --workspace --all-targets -- -D warnings",
+      "exit_code": 0,
+      "note": "Repeated on the final source, including the pending-transaction recovery test."
+    },
+    {
+      "command": "pnpm --dir apps/admin build",
+      "exit_code": 0
+    },
+    {
+      "command": "git diff --check",
+      "exit_code": 0
+    }
+  ],
+  "coverage": [
+    "Legacy theme without settings.schema.json and field default merging; explicit empty string, false, and media null stay distinct from omitted overrides.",
+    "Inactive theme settings; theme switching and fallback use independent saved configurations; actual Default template output.",
+    "Schema/default/constraint rejection, unknown fields, release/schema/edit version conflict, same-version no-op saves, restart persistence and compatible reconciliation.",
+    "Same-slug same-release uninstall/reinstall changes UUID; old pages cannot save or uninstall the new record.",
+    "Media attachment/replacement/removal, private usage disclosure, reference audit rollback, and purge protection even if bookkeeping is missing.",
+    "Install audit failure and deferred uninstall commit failure compensate the directory and registry without losing saved configuration or references.",
+    "Actual child process exit 86 at install.prepared, install.published, install.committed, uninstall.prepared, uninstall.quarantined and uninstall.committed; normal startup resolves journals and orphan staging directories.",
+    "A still-pending original uninstall transaction is fenced by the PostgreSQL THEMES lock before filesystem compensation.",
+    "Request cancellation retains the package mutation guard; recovery mode does not initialize records or mutate theme files.",
+    "First installation remains empty through theme preflight; post-bootstrap theme initialization failure resumes without duplicate accounts.",
+    "Forward migration 0006 to 0007 preserves theme selection and plugin settings; generated schema, runtime/maintenance grants and API contract checked.",
+    "Real backup/restore retains theme overrides and media refs; unfinished package journal refuses backup, missing theme ref refuses release, isolated serve does not initialize missing theme records."
+  ],
+  "limitations": [
+    "Flat scalar fields only: text, textarea, integer, boolean, select, color and media; no nested/list configuration or arbitrary upgrade scripts.",
+    "One normal serve process per theme root. Filesystem lease prevents stale registries across processes; no multi-instance theme propagation.",
+    "Incompatible saved data is preserved. Default incompatibility blocks startup; another incompatible theme becomes unavailable until a compatible package or explicit data repair is supplied.",
+    "Process exits and pending database decisions were tested; physical power loss and an actual network proxy dropping a commit acknowledgement were not injected."
+  ],
+  "source_sha256": {
+    "crates/infrastructure/src/theme_packages.rs": "484fcc8e5fd436d79dc7eb101f5d372305e82d3d4bc4b9665e4bd6ba2ae1ad23",
+    "crates/infrastructure/tests/themes.rs": "fde8057b0a181c0645852ab66d5f3415a75d4ddb5fb91211b02e4cdf3d80d442",
+    "crates/application/src/theme_config.rs": "b53303446e209744d730be7c17532c16d9256440d61f33960863a52a139925bb",
+    "migrations/postgres/0007_themes.sql": "410910edc945f151d2e5871d22858727b21dfd114f582b2ae0375cbf58242d0c",
+    "themes/default/settings.schema.json": "4a704395d8863c3f7b20fbb56181a1ab59a525872c97e839e2a2d97091b867f6"
+  }
+}

@@ -8,6 +8,7 @@ import { queryKeys as keys } from "./queryClient";
  */
 const effects = {
   plugin: [keys.tasksAll(), keys.htmlRebuild()],
+  theme: [keys.themeSettings(), keys.mediaAll()],
   post: [keys.posts(), keys.trashAll(), keys.tags(), keys.categories(), keys.series(), keys.mediaAll(), keys.commentsAll()],
   page: [keys.pages(), keys.pageTrashAll(), keys.mediaAll()],
   tag: [keys.tags(), keys.posts(), keys.trashAll()],

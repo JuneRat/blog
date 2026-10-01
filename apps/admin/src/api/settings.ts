@@ -38,9 +38,13 @@ export const themeSettingsApi = {
     }),
   validateInstalled: (slug: string): Promise<Wire.ThemePackageReport> =>
     request(s.themePackageReport, `/api/admin/v1/themes/${encodeURIComponent(slug)}/validate`, { method: "POST" }),
-  uninstall: (slug: string, expectedVersion: number, expectedRelease: string): Promise<ThemeSettings> =>
+  getConfig: (slug: string): Promise<Wire.ThemeConfigSettings> =>
+    request(s.themeConfigSettings, `/api/admin/v1/themes/${encodeURIComponent(slug)}/settings`),
+  saveConfig: (slug: string, input: Wire.SaveThemeConfigInput): Promise<Wire.ThemeConfigSettings> =>
+    request(s.themeConfigSettings, `/api/admin/v1/themes/${encodeURIComponent(slug)}/settings`, { method: "PUT", body: json<Wire.SaveThemeConfigInput>(input) }),
+  uninstall: (slug: string, expectedVersion: number, expectedRelease: string, config: Pick<Wire.ThemeConfigSettings, "id" | "version" | "config_schema_version">): Promise<ThemeSettings> =>
     request(s.themeSettings, `/api/admin/v1/themes/${encodeURIComponent(slug)}`, {
-      method: "DELETE", body: json<Wire.UninstallThemeInput>({ expected_version: expectedVersion, expected_release: expectedRelease }),
+      method: "DELETE", body: json<Wire.UninstallThemeInput>({ expected_version: expectedVersion, expected_release: expectedRelease, id: config.id, expected_config_version: config.version, config_schema_version: config.config_schema_version }),
     }),
 };
 

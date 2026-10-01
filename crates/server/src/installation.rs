@@ -163,6 +163,7 @@ impl Installer for Setup {
                 )
                 .await,
                 recovery_mode: false,
+                installation_preflight: !complete,
             },
         )
         .await
@@ -179,6 +180,9 @@ impl Installer for Setup {
                 audit,
             )
             .await?;
+            // Theme records must not precede the empty-database bootstrap. A
+            // failure here retains the committed marker and journal for retry.
+            app.theme_packages.initialize_records().await?;
         }
         // Cleanup must not turn a committed installation into an HTTP failure.
         // A crash or failed unlink leaves the journal for startup to retry.

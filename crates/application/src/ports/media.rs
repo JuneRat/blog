@@ -15,6 +15,7 @@ pub enum MediaContentKind {
     Series,
     User,
     Site,
+    Theme,
 }
 
 /// 站点配置单例使用 nil UUID，其他来源使用实体 UUID。
@@ -28,6 +29,7 @@ impl MediaContentKind {
             Self::Series => "series",
             Self::User => "user",
             Self::Site => "site",
+            Self::Theme => "theme",
         }
     }
     pub fn parse(value: &str) -> Option<Self> {
@@ -37,6 +39,7 @@ impl MediaContentKind {
             "series" => Some(Self::Series),
             "user" => Some(Self::User),
             "site" => Some(Self::Site),
+            "theme" => Some(Self::Theme),
             _ => None,
         }
     }
@@ -51,7 +54,7 @@ pub struct MediaWithUsage {
 }
 
 /// 引用来源与其状态一起表达，避免把账号状态当作发布状态。
-/// Series/Site 没有发布状态；其传输展示值由接口层决定。
+/// Series/Site/Theme 没有发布状态；其传输展示值由接口层决定。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MediaUsageSource {
     Post(PostStatus),
@@ -59,6 +62,7 @@ pub enum MediaUsageSource {
     User(UserStatus),
     Series,
     Site,
+    Theme,
 }
 
 impl MediaUsageSource {
@@ -69,6 +73,7 @@ impl MediaUsageSource {
             Self::User(_) => MediaContentKind::User,
             Self::Series => MediaContentKind::Series,
             Self::Site => MediaContentKind::Site,
+            Self::Theme => MediaContentKind::Theme,
         }
     }
 }

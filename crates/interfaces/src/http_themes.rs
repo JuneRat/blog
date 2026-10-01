@@ -38,6 +38,10 @@ impl From<application::themes::ThemePackageReport> for ThemePackageReport {
 pub struct UninstallThemeInput {
     pub expected_version: i64,
     pub expected_release: String,
+    pub id: uuid::Uuid,
+    pub config_schema_version: u32,
+    #[ts(type = "number")]
+    pub expected_config_version: i64,
 }
 
 pub fn themes_router(state: AdminState) -> Router {
@@ -55,7 +59,11 @@ pub fn themes_router(state: AdminState) -> Router {
             "/api/admin/v1/themes/{slug}",
             axum::routing::delete(uninstall),
         )
-        .layer(axum::extract::DefaultBodyLimit::max(1024))
+        .route(
+            "/api/admin/v1/themes/{slug}/settings",
+            axum::routing::get(crate::http_theme_config::get).put(crate::http_theme_config::put),
+        )
+        .layer(axum::extract::DefaultBodyLimit::max(80 * 1024))
         .layer(middleware::from_fn(no_store))
         .with_state(state)
 }
@@ -148,7 +156,13 @@ async fn uninstall(
             &auth.actor,
             &slug,
             Some(body.expected_version),
-            &body.expected_release,
+            application::themes::ThemeUninstallIdentity {
+                id: body.id,
+                version: body.expected_config_version,
+                release: body.expected_release,
+                config_schema_version: body.config_schema_version,
+                selection_version: body.expected_version,
+            },
         )
         .await
     {
@@ -157,6 +171,7 @@ async fn uninstall(
     }
 }
 pub(crate) fn export_contract(out: &mut Vec<String>) {
+    crate::http_theme_config::export_contract(out);
     crate::http_contract::declare::<ThemePackageReport>(out);
     crate::http_contract::declare::<UninstallThemeInput>(out);
 }

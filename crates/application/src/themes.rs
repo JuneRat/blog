@@ -31,6 +31,9 @@ pub struct ThemeOption {
     pub slug: String,
     pub name: String,
     pub release: String,
+    pub id: Option<uuid::Uuid>,
+    pub config_version: Option<i64>,
+    pub config_schema_version: Option<u32>,
 }
 
 type ThemeRenderers = BTreeMap<String, (String, Arc<dyn ThemeRenderer>)>;
@@ -39,6 +42,7 @@ pub struct ThemeRegistry {
     themes: RwLock<ThemeRenderers>,
     assets: RwLock<BTreeMap<String, ThemeAssets>>,
     fallback: String,
+    schemas: RwLock<BTreeMap<String, Arc<crate::theme_config::ThemeSchema>>>,
 }
 
 impl ThemeRegistry {
@@ -47,6 +51,7 @@ impl ThemeRegistry {
             themes: RwLock::default(),
             assets: RwLock::default(),
             fallback,
+            schemas: RwLock::default(),
         }
     }
 
@@ -97,18 +102,89 @@ impl ThemeRegistry {
         Ok(())
     }
 
+    pub fn add_configured_release(
+        &self,
+        name: String,
+        renderer: Arc<dyn ThemeRenderer>,
+        assets: ThemeAssets,
+        schema: Arc<crate::theme_config::ThemeSchema>,
+    ) -> Result<(), UseCaseError> {
+        let slug = assets.slug.clone();
+        let mut themes = self
+            .themes
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if themes.contains_key(&slug) {
+            return Err(UseCaseError::Invalid("主题已安装，请先卸载同名主题".into()));
+        }
+        self.assets
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(slug.clone(), assets);
+        self.schemas
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(slug.clone(), schema);
+        themes.insert(slug, (name, renderer));
+        Ok(())
+    }
+
+    pub fn schema(&self, slug: &str) -> Arc<crate::theme_config::ThemeSchema> {
+        self.schemas
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(slug)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Select renderer, release and contract under one registry read lock.
+    pub fn snapshot(&self, requested: &str) -> Result<ThemeSnapshot, UseCaseError> {
+        let themes = self
+            .themes
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let slug = if themes.contains_key(requested) {
+            requested
+        } else {
+            &self.fallback
+        };
+        let renderer = themes
+            .get(slug)
+            .ok_or_else(|| UseCaseError::Render("默认主题不可用".into()))?
+            .1
+            .clone();
+        let assets = self
+            .assets
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Ok(ThemeSnapshot {
+            slug: slug.into(),
+            renderer,
+            release: assets
+                .get(slug)
+                .map_or_else(String::new, |a| a.version.clone()),
+            schema: self.schema(slug),
+        })
+    }
+
     pub fn remove(&self, slug: &str) -> Result<(), UseCaseError> {
         if slug == self.fallback {
             return Err(UseCaseError::Invalid("启动默认主题不能卸载".into()));
         }
-        self.themes
+        let mut themes = self
+            .themes
             .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(slug);
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         self.assets
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(slug);
+        self.schemas
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(slug);
+        themes.remove(slug);
         Ok(())
     }
 
@@ -159,6 +235,9 @@ impl ThemeRegistry {
             .map(|(slug, (name, _))| ThemeOption {
                 slug: slug.clone(),
                 name: name.clone(),
+                id: None,
+                config_version: None,
+                config_schema_version: None,
                 release: assets
                     .get(slug)
                     .map_or_else(String::new, |assets| assets.version.clone()),
@@ -180,7 +259,7 @@ pub struct ThemePackageReport {
 pub const MAX_THEME_PACKAGE_BYTES: usize = 10 * 1024 * 1024;
 
 /// Infrastructure holds an asynchronous lock without exposing runtime types here.
-pub trait ThemeOperationGuard: Send {}
+pub trait ThemeOperationGuard: Send + 'static {}
 
 #[async_trait::async_trait]
 pub trait ThemePackages: Send + Sync {
@@ -190,11 +269,30 @@ pub trait ThemePackages: Send + Sync {
         &self,
         bytes: Vec<u8>,
         actor: crate::audit::AuditContext,
+        guard: Box<dyn ThemeOperationGuard>,
     ) -> Result<ThemePackageReport, UseCaseError>;
     async fn validate_installed(&self, slug: &str) -> Result<ThemePackageReport, UseCaseError>;
     async fn uninstall(
         &self,
         slug: &str,
         actor: crate::audit::AuditContext,
+        identity: ThemeUninstallIdentity,
+        guard: Box<dyn ThemeOperationGuard>,
     ) -> Result<(), UseCaseError>;
+}
+
+#[derive(Debug, Clone)]
+pub struct ThemeUninstallIdentity {
+    pub id: uuid::Uuid,
+    pub version: i64,
+    pub config_schema_version: u32,
+    pub release: String,
+    pub selection_version: i64,
+}
+
+pub struct ThemeSnapshot {
+    pub slug: String,
+    pub release: String,
+    pub schema: Arc<crate::theme_config::ThemeSchema>,
+    pub renderer: Arc<dyn ThemeRenderer>,
 }

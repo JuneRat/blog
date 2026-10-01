@@ -120,6 +120,7 @@ impl FakeMediaRepo {
                     }
                     MediaContentKind::Series => MediaUsageSource::Series,
                     MediaContentKind::Site => MediaUsageSource::Site,
+                    MediaContentKind::Theme => MediaUsageSource::Theme,
                 },
                 content_id: Uuid::now_v7(),
                 author_id: None,

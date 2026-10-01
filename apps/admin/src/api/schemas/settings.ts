@@ -22,6 +22,7 @@ export const themeOption = object<Wire.ThemeOption>()({
   slug: string,
   name: string,
   release: string,
+  id: string.optional(), config_version: count.optional(), config_schema_version: count.optional(),
 });
 export const themeSettings = object<Wire.ThemeSettings>()({
   slug: string,
@@ -43,4 +44,17 @@ export const retentionSettings = object<Wire.RetentionSettings>()({
   comment_version: count,
   audit_days: count,
   audit_version: count,
+});
+
+export const themeConfigValue = z.union([z.boolean(), z.number().int().safe(), z.string(), z.null()]);
+export const themeConfigChoice = object<Wire.ThemeConfigChoice>()({ value: string, label: string });
+export const themeConfigField = object<Wire.ThemeConfigField>()({
+  key: string, type: z.enum(["text", "textarea", "integer", "boolean", "select", "color", "media"]),
+  label: string, description: string, group: string, default: themeConfigValue,
+  min_length: count.nullable(), max_length: count.nullable(), min: z.number().int().safe().nullable(), max: z.number().int().safe().nullable(),
+  options: z.array(themeConfigChoice),
+});
+export const themeConfigSettings = object<Wire.ThemeConfigSettings>()({
+  id: string, slug: string, release: string, fields: z.array(themeConfigField),
+  config: z.record(string, themeConfigValue), overrides: z.record(string, themeConfigValue), config_schema_version: count, version: count,
 });

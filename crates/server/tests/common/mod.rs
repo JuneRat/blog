@@ -21,6 +21,30 @@ pub fn media_dir(name: &str) -> std::path::PathBuf {
     dir
 }
 
+/// Each live process owns its theme root, including the filesystem lease.
+pub fn copy_default_theme(root: &std::path::Path) -> std::path::PathBuf {
+    fn copy_tree(source: &std::path::Path, target: &std::path::Path) {
+        std::fs::create_dir_all(target).unwrap();
+        for entry in std::fs::read_dir(source).unwrap() {
+            let entry = entry.unwrap();
+            let destination = target.join(entry.file_name());
+            if entry.file_type().unwrap().is_dir() {
+                copy_tree(&entry.path(), &destination);
+            } else {
+                std::fs::copy(entry.path(), destination).unwrap();
+            }
+        }
+    }
+    let target = root.join("themes/default");
+    if !target.exists() {
+        copy_tree(
+            &std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../themes/default"),
+            &target,
+        );
+    }
+    target
+}
+
 /// 测试装配的媒体用例：真实 PostgreSQL 仓储 + 本地文件存储。
 pub fn media_interactor(
     pool: sqlx::PgPool,

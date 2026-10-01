@@ -242,8 +242,8 @@ impl MediaRepository for PostgresMediaRepository {
     }
     async fn usage_of(&self, id: Uuid) -> Result<Vec<MediaUsageRow>, UseCaseError> {
         let rows = sqlx::query(&format!("SELECT refs.source_type, refs.source_id, mp.author_id, \
-            COALESCE(mp.slug,gp.slug,sp.slug,au.username,'') AS slug, \
-            COALESCE(mp.title,gp.title,sp.name,NULLIF(au.display_name,''),au.username,CASE WHEN refs.source_type='site' THEN '站点设置' END,'') AS title, \
+            COALESCE(mp.slug,gp.slug,sp.slug,au.username,th.slug,'') AS slug, \
+            COALESCE(mp.title,gp.title,sp.name,NULLIF(au.display_name,''),au.username,CASE WHEN refs.source_type='theme' THEN '主题配置：' || th.slug END,CASE WHEN refs.source_type='site' THEN '站点设置' END,'') AS title, \
             COALESCE(mp.status,gp.status,au.status) AS content_status, \
             COALESCE(mp.visibility,gp.visibility,'public') AS content_visibility, \
             CASE refs.source_type WHEN 'post' THEN mp.deleted_at IS NOT NULL WHEN 'page' THEN gp.deleted_at IS NOT NULL WHEN 'user' THEN au.deleted_at IS NOT NULL ELSE false END AS content_deleted, \
@@ -253,6 +253,7 @@ impl MediaRepository for PostgresMediaRepository {
             LEFT JOIN pages gp ON refs.source_type='page' AND gp.id=refs.source_id \
             LEFT JOIN series sp ON refs.source_type='series' AND sp.id=refs.source_id \
             LEFT JOIN users au ON refs.source_type='user' AND au.id=refs.source_id \
+            LEFT JOIN themes th ON refs.source_type='theme' AND th.id=refs.source_id \
             WHERE refs.media_id=$1 ORDER BY refs.source_type,slug,refs.source_id"))
             .bind(id).fetch_all(&self.pool).await.map_err(map_sqlx_error)?;
         rows.iter()
@@ -357,6 +358,7 @@ fn usage_source(kind: &str, status: Option<&str>) -> Result<MediaUsageSource, Us
             .map(MediaUsageSource::User),
         Some(MediaContentKind::Series) => Some(MediaUsageSource::Series),
         Some(MediaContentKind::Site) => Some(MediaUsageSource::Site),
+        Some(MediaContentKind::Theme) => Some(MediaUsageSource::Theme),
         None => None,
     };
     source.ok_or_else(|| UseCaseError::Repository("无效引用来源或状态".into()))

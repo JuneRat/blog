@@ -241,6 +241,8 @@ export type SaveSiteSettingsInput = { home_page_size?: number | null, navigation
  */
 logo_media_id?: string | null, expected_version?: number | null, };
 
+export type SaveThemeConfigInput = { id: string, expected_release: string, config_schema_version: number, expected_version: number, config: { [key in string]: ThemeConfigValue }, };
+
 export type SaveThemeSettingsInput = { slug: string, expected_version?: number | null, };
 
 export type ScheduleInput = { published_at: string, expected_version?: number | null, };
@@ -319,13 +321,23 @@ export type TaskTrigger = "manual" | "once" | "periodic" | "retry";
 
 export type TaskView = { available: boolean, retention_available: boolean, pending_html: HtmlRebuildCounts | null, schedules: Array<TaskSchedule>, latest: Array<TaskRun>, runs: TaskRunPage, };
 
-export type ThemeOption = { slug: string, name: string, release: string, };
+export type ThemeConfigChoice = { value: string, label: string, };
+
+export type ThemeConfigField = { key: string, type: ThemeConfigType, label: string, description: string, group: string, default: ThemeConfigValue, min_length: number | null, max_length: number | null, min: number | null, max: number | null, options: Array<ThemeConfigChoice>, };
+
+export type ThemeConfigSettings = { id: string, slug: string, release: string, fields: Array<ThemeConfigField>, config: { [key in string]: ThemeConfigValue }, overrides: { [key in string]: ThemeConfigValue }, config_schema_version: number, version: number, };
+
+export type ThemeConfigType = "text" | "textarea" | "integer" | "boolean" | "select" | "color" | "media";
+
+export type ThemeConfigValue = boolean | number | string | null;
+
+export type ThemeOption = { slug: string, name: string, release: string, id?: string, config_version?: number, config_schema_version?: number, };
 
 export type ThemePackageReport = { slug: string, name: string, release: string, template_count: number, asset_count: number, };
 
 export type ThemeSettings = { slug: string, effective_slug: string, fallback_slug: string, source: SiteSettingsSource, version: number, available: Array<ThemeOption>, };
 
-export type UninstallThemeInput = { expected_version: number, expected_release: string, };
+export type UninstallThemeInput = { expected_version: number, expected_release: string, id: string, config_schema_version: number, expected_config_version: number, };
 
 export type UpdateCategoryInput = { name: string, description?: string | null,
 /**

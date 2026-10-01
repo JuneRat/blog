@@ -284,7 +284,6 @@ async fn maintenance_does_not_require_a_working_website() {
     assert!(String::from_utf8_lossy(&failed.stderr).contains("HTML 重建失败：post"));
 
     // 真正启动监听并访问公开页：坏掉的历史源文不会阻止启动或触发即时重建。
-    let project = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let logs = common::media_dir("serve-with-stale-html");
     let stdout = logs.join("stdout");
     let stderr = logs.join("stderr");
@@ -294,7 +293,7 @@ async fn maintenance_does_not_require_a_working_website() {
             &["serve", "--addr", "127.0.0.1:0"],
             "https://blog.test",
         )
-        .env("BLOG_THEME_DIR", project.join("themes/default"))
+        .env("BLOG_THEME_DIR", common::copy_default_theme(&logs))
         .stdout(std::fs::File::create(&stdout).unwrap())
         .stderr(std::fs::File::create(&stderr).unwrap())
         .spawn()
