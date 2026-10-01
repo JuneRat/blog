@@ -41,7 +41,7 @@ zip = { version = "8.6", default-features = false, features = ["deflate-flate2-z
 
 [dev-dependencies]
 # 测试用 `tokio::time` 断言「操作确实阻塞在身份锁上」。
-tokio = { workspace = true, features = ["time"] }
+tokio = { workspace = true, features = ["time", "test-util"] }
 
 # Standalone database tests: cargo test -p infrastructure --features sqlx-test-support.
 # Workspace tests also enable this feature through server dev-dependencies.

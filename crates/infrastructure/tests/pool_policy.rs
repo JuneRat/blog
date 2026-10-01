@@ -98,10 +98,26 @@ async fn pool_capacity_and_server_limits_apply_to_all_connections() {
 }
 
 #[tokio::test]
+#[ignore = "requires a TLS PostgreSQL fixture and BLOG_TEST_TLS_URL; CI runs it explicitly"]
 async fn database_tls_verifies_the_server_when_requested() {
-    let Ok(url) = std::env::var("BLOG_TEST_TLS_URL") else {
-        return;
-    };
+    let url = std::env::var("BLOG_TEST_TLS_URL")
+        .expect("TLS test requires BLOG_TEST_TLS_URL with sslmode=verify-full and a private CA");
+    let mut untrusted = url::Url::parse(&url).expect("valid TLS fixture URL");
+    let options: Vec<(String, String)> = untrusted.query_pairs().into_owned().collect();
+    assert!(
+        options
+            .iter()
+            .any(|(key, value)| key == "sslmode" && value == "verify-full"),
+        "TLS fixture must verify the server identity"
+    );
+    assert!(
+        options.iter().any(|(key, _)| key == "sslrootcert"),
+        "TLS fixture must use a private CA"
+    );
+    untrusted
+        .query_pairs_mut()
+        .clear()
+        .extend_pairs(options.iter().filter(|(key, _)| key != "sslrootcert"));
     let policy = DatabasePoolConfig {
         connect_retries: 0,
         ..Default::default()
@@ -115,6 +131,11 @@ async fn database_tls_verifies_the_server_when_requested() {
     assert!(encrypted);
     pool.close().await;
     // Dropping the private CA must fail certificate validation, never fall back.
-    let untrusted = url.split("&sslrootcert=").next().unwrap();
-    assert!(connect_with_config(untrusted, &policy).await.is_err());
+    let error = connect_with_config(untrusted.as_str(), &policy)
+        .await
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("invalid peer certificate"),
+        "expected certificate validation failure: {error}"
+    );
 }

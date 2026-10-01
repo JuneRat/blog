@@ -101,11 +101,9 @@ pub fn admin_url() -> String {
 
 /// 从管理 DSN 推导同一主机上的测试库 DSN（替换最后一段路径）。
 pub fn test_db_url(admin: &str, db_name: &str) -> String {
-    let base = admin.trim_end_matches('/');
-    let idx = base
-        .rfind('/')
-        .expect("管理 DSN 缺少路径段，形如 postgres://user:pass@host:port/postgres");
-    format!("{}/{db_name}", &base[..idx])
+    let mut url = url::Url::parse(admin).expect("管理 DSN 必须是有效的 PostgreSQL URL");
+    url.set_path(&format!("/{db_name}"));
+    url.into()
 }
 
 /// 破坏性测试守卫：只允许 loopback 主机，防止误删远端同名库。
@@ -125,10 +123,14 @@ pub fn assert_loopback(admin: &str) {
 /// 删除并重建指定测试库（同文件内测试串行使用），返回迁移后的连接池。
 pub async fn fresh_database(db_name: &str) -> sqlx::PgPool {
     let admin_dsn = admin_url();
-    assert_loopback(&admin_dsn);
-    let test_dsn = test_db_url(&admin_dsn, db_name);
+    fresh_database_with_url(db_name, &admin_dsn).await
+}
 
-    let admin = connect(&admin_dsn).await.expect("连接管理库失败");
+pub async fn fresh_database_with_url(db_name: &str, admin_dsn: &str) -> sqlx::PgPool {
+    assert_loopback(admin_dsn);
+    let test_dsn = test_db_url(admin_dsn, db_name);
+
+    let admin = connect(admin_dsn).await.expect("连接管理库失败");
     // raw_sql 走简单协议且不包事务；CREATE/DROP DATABASE 不能在事务块内执行。
     sqlx::raw_sql(&format!("DROP DATABASE IF EXISTS {db_name} WITH (FORCE)"))
         .execute(&admin)

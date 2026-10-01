@@ -649,12 +649,16 @@ mod tests {
     }
 
     fn limited() -> RenderingRuntime {
+        limited_with_timeout(Duration::from_millis(100))
+    }
+
+    fn limited_with_timeout(execution_timeout: Duration) -> RenderingRuntime {
         RenderingRuntime::with_limits(RenderingLimits {
             concurrency: 1,
             content_concurrency: 1,
             comment_concurrency: 1,
             queue_timeout: Duration::from_millis(25),
-            execution_timeout: Duration::from_millis(100),
+            execution_timeout,
             markdown_cache_entries: 2,
             markdown_cache_bytes: 40,
         })
@@ -733,14 +737,29 @@ mod tests {
 
     #[tokio::test]
     async fn execution_timeout_does_not_release_a_running_worker_permit() {
-        let runtime = limited();
+        let budget = Duration::from_secs(30);
+        let runtime = limited_with_timeout(budget);
+        let (started, ready) = tokio::sync::oneshot::channel();
         let (release, blocked) = std::sync::mpsc::channel();
-        let result = runtime
-            .execute(RenderPool::Content, "slow", move || {
-                let _ = blocked.recv();
-                Ok("late".to_string())
-            })
-            .await;
+        let worker_runtime = runtime.clone();
+        let caller = tokio::spawn(async move {
+            worker_runtime
+                .execute(RenderPool::Content, "slow", move || {
+                    let _ = started.send(());
+                    let _ = blocked.recv();
+                    Ok("late".to_string())
+                })
+                .await
+        });
+        tokio::time::timeout(Duration::from_secs(5), ready)
+            .await
+            .expect("blocking worker never started")
+            .unwrap();
+        // Advance the deadline only after the worker is known to be running.
+        tokio::time::pause();
+        tokio::time::advance(budget + Duration::from_secs(1)).await;
+        let result = caller.await.unwrap();
+        tokio::time::resume();
         assert!(matches!(result, Err(UseCaseError::Render(message)) if message == "渲染执行超时"));
         assert_eq!(runtime.state.content_slots.available_permits(), 0);
         let queued = runtime
@@ -750,6 +769,15 @@ mod tests {
             .await;
         assert!(matches!(queued, Err(UseCaseError::Render(message)) if message == "渲染排队超时"));
         release.send(()).unwrap();
+        // Wait for the worker to release its permit before checking reuse.
+        let permit = tokio::time::timeout(
+            Duration::from_secs(5),
+            runtime.state.content_slots.acquire(),
+        )
+        .await
+        .expect("finished worker retained its permit")
+        .unwrap();
+        drop(permit);
         assert!(
             runtime
                 .execute(RenderPool::Content, "after", || Ok(String::new()))

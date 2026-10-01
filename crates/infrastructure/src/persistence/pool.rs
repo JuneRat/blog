@@ -3,7 +3,7 @@
 use std::{future::Future, time::Duration};
 
 use sqlx::{
-    PgPool,
+    Connection, PgPool,
     postgres::{PgConnectOptions, PgPoolOptions},
 };
 
@@ -120,7 +120,29 @@ async fn connect_pool(url: &str, config: &DatabasePoolConfig) -> Result<PgPool, 
         .min_connections(config.min_connections)
         .acquire_timeout(Duration::from_millis(config.acquire_timeout_ms))
         .idle_timeout(seconds(config.idle_timeout_secs))
-        .max_lifetime(seconds(config.max_lifetime_secs));
+        .max_lifetime(seconds(config.max_lifetime_secs))
+        .after_release(|connection, _| {
+            Box::pin(async move {
+                // A dropped query leaves its ErrorResponse and ReadyForQuery unread.
+                // SQLx's release ping treats the timeout as a broken connection;
+                // its Rustls hard-close can then wait indefinitely. Drain the
+                // server-side cancellation and any queued transaction rollback
+                // before letting SQLx check and reuse the connection.
+                if let Err(error) = connection.flush().await {
+                    match &error {
+                        sqlx::Error::Database(error)
+                            if error
+                                .code()
+                                .is_some_and(|code| matches!(code.as_ref(), "57014" | "55P03")) =>
+                        {
+                            connection.flush().await?
+                        }
+                        _ => return Err(error),
+                    }
+                }
+                Ok(true)
+            })
+        });
     retry_connect(config, || pool.clone().connect_with(options.clone())).await
 }
 

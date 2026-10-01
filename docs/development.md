@@ -52,6 +52,16 @@ cargo test -p server --test command_assembly owner_bootstrap_uses_new_identity_b
 
 `sqlx-test-support` 仅为数据库集成测试提供原始连接池访问，不进入默认生产构建；单独运行 infrastructure 的数据库测试时须显式启用，`cargo test --workspace` 由 server 测试依赖启用。
 
+数据库 TLS 测试默认显式标为 ignored，CI 会为独立 PostgreSQL 服务生成临时私有 CA 并单独执行。已有同类测试环境时，设置 `BLOG_TEST_TLS_URL`（须带 `sslmode=verify-full` 和 `sslrootcert`），然后运行：
+
+```bash
+cargo test -p infrastructure --features sqlx-test-support --test pool_policy \
+  database_tls_verifies_the_server_when_requested -- --ignored --exact
+cargo test -p server --test request_deadlines cancelled_tls -- --ignored
+```
+
+这些测试验证受信任证书能连接、移除私有 CA 后证书验证失败，以及 TLS 查询/锁等待取消后的连接回收和事务回滚；显式执行时缺少环境变量会报错。
+
 验收链路为：空库迁移、权限初始化、CLI 创建 Admin、密码登录、资料更新保持登录、改密撤销旧会话。`PUT /api/admin/v1/me/profile` 提交展示名、纯文本简介和必填 `expected_version`，详见[管理 API](admin-api.md)。资料表单与账号启停已接入后台。`cargo test -p server --test installation_http` 另验证真实进程的首次安装、登录、重启续装、配置文件与原子 Admin 保护。新库恢复会撤销全部会话；各批次定向测试不能替代 `check.sh` 的全量检查。
 
 媒体批次在同一独立实例验证：

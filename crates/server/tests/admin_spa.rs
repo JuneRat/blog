@@ -103,7 +103,9 @@ async fn admin_spa_serves_index_deep_links_and_immutable_assets() {
 #[tokio::test]
 async fn admin_route_is_absent_when_dist_missing() {
     // None 与不存在的目录都不注册 /admin。
-    let missing = std::env::temp_dir().join("blog-admin-spa-does-not-exist");
+    let root = fixture_dist();
+    let missing = root.join("missing-dist");
+    assert!(!missing.exists(), "fixture must provide an absent dist");
     let app = app_with(Some(missing));
     let (status, _, _) = fetch(&app, "/admin").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
@@ -113,4 +115,5 @@ async fn admin_route_is_absent_when_dist_missing() {
     let app = app_with(None);
     let (status, _, _) = fetch(&app, "/admin").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+    std::fs::remove_dir_all(root).unwrap();
 }

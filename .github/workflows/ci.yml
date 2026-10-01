@@ -33,6 +33,20 @@ jobs:
           --health-timeout 5s
           --health-retries 10
 
+      postgres_tls:
+        image: postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873
+        env:
+          POSTGRES_USER: blog
+          POSTGRES_PASSWORD: blog
+          POSTGRES_DB: postgres
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U blog -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
     env:
       DATABASE_URL: postgres://blog:blog@127.0.0.1:5432/blog
       BLOG_TEST_ADMIN_URL: postgres://blog:blog@127.0.0.1:5432/postgres
@@ -68,8 +82,43 @@ jobs:
       - name: Generated admin HTTP contract
         run: cargo run -p interfaces --example export_admin_contract -- --check
 
+      - name: Configure the disposable PostgreSQL service for TLS verification
+        env:
+          PG_CONTAINER: ${{ job.services.postgres_tls.id }}
+        run: |
+          set -euo pipefail
+          umask 077
+          tls_dir="$RUNNER_TEMP/postgres-tls"
+          mkdir "$tls_dir"
+          openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 1 \
+            -subj '/CN=blog-test-ca' -keyout "$tls_dir/ca.key" -out "$tls_dir/ca.crt"
+          openssl req -newkey rsa:2048 -nodes -sha256 -subj '/CN=localhost' \
+            -keyout "$tls_dir/server.key" -out "$tls_dir/server.csr"
+          printf '%s\n' 'subjectAltName=DNS:localhost,IP:127.0.0.1' \
+            'basicConstraints=CA:FALSE' 'extendedKeyUsage=serverAuth' > "$tls_dir/server.ext"
+          openssl x509 -req -sha256 -days 1 -in "$tls_dir/server.csr" \
+            -CA "$tls_dir/ca.crt" -CAkey "$tls_dir/ca.key" -CAcreateserial \
+            -extfile "$tls_dir/server.ext" -out "$tls_dir/server.crt"
+          docker cp "$tls_dir/server.key" "$PG_CONTAINER:/tmp/blog-test-server.key"
+          docker cp "$tls_dir/server.crt" "$PG_CONTAINER:/tmp/blog-test-server.crt"
+          docker exec --user root "$PG_CONTAINER" \
+            chown postgres /tmp/blog-test-server.key /tmp/blog-test-server.crt
+          docker exec --user root "$PG_CONTAINER" chmod 600 /tmp/blog-test-server.key
+          docker exec "$PG_CONTAINER" psql -U blog -d postgres -v ON_ERROR_STOP=1 \
+            -c "ALTER SYSTEM SET ssl_cert_file='/tmp/blog-test-server.crt'" \
+            -c "ALTER SYSTEM SET ssl_key_file='/tmp/blog-test-server.key'" \
+            -c "ALTER SYSTEM SET ssl=on" -c 'SELECT pg_reload_conf()'
+          printf 'BLOG_TEST_TLS_URL=postgres://blog:blog@127.0.0.1:5433/postgres?sslmode=verify-full&sslrootcert=%s/ca.crt\n' \
+            "$tls_dir" >> "$GITHUB_ENV"
+
       - name: Tests
         run: cargo test --workspace
+
+      - name: Verify PostgreSQL TLS, certificate rejection and cancellation recovery
+        run: |
+          cargo test -p infrastructure --features sqlx-test-support --test pool_policy \
+            database_tls_verifies_the_server_when_requested -- --ignored --exact
+          cargo test -p server --test request_deadlines cancelled_tls -- --ignored
 
       - name: Script unit tests
         run: |

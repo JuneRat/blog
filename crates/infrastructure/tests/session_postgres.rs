@@ -482,6 +482,10 @@ async fn revoke_all_waits_for_in_flight_create_then_invalidates_it() {
 
     // 模拟「已拿到会话锁、尚未提交」的创建：此刻表里还没有它的会话行。
     let mut in_flight = pool.begin().await.unwrap();
+    let blocker: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *in_flight)
+        .await
+        .unwrap();
     sqlx::query("SELECT pg_advisory_xact_lock($1::int, $2::int)")
         .bind(SESSION_LOCK.0)
         .bind(SESSION_LOCK.1)
@@ -493,8 +497,29 @@ async fn revoke_all_waits_for_in_flight_create_then_invalidates_it() {
         let store = Arc::clone(&store);
         async move { store.revoke_all_for_user(user).await }
     });
-    // 不共用锁的撤销此刻无事可等，会立刻返回；共用则必须等 in_flight 释放。
-    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    // PostgreSQL 必须确认撤销已开始等待这次创建，不能把尚未调度当成锁等待。
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            assert!(
+                !revoke.is_finished(),
+                "revoke_all returned before the in-flight create committed"
+            );
+            let waiting: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM pg_stat_activity \
+                 WHERE datname=current_database() AND $1=ANY(pg_blocking_pids(pid)))",
+            )
+            .bind(blocker)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            if waiting {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("revoke_all never reached the session lock");
     assert!(
         !revoke.is_finished(),
         "revoke_all 必须等待持有会话锁的创建，不能绕过锁提前返回"

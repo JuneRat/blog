@@ -32,5 +32,6 @@ infrastructure = { path = "../infrastructure", features = ["sqlx-test-support"] 
 sqlx.workspace = true
 http-body-util = "0.1"
 reqwest.workspace = true
+url.workspace = true
 domain = { path = "../domain" }
 zip = { version = "8.6", default-features = false }
