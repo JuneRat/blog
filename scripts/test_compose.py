@@ -218,6 +218,17 @@ def exercise(image, root, ops_image):
         require(not any(secret in logs for secret in (password, owner_password, "not-a-log-field")),
                 "request logs leaked credentials or query parameters")
 
+        print("==> Compose: persistent task queue, retry, periodic retention and publication", flush=True)
+        def restart_tasks(before_start):
+            compose("stop", "blog")
+            before_start()
+            compose("up", "-d", "--no-build", "--pull", "never", "--wait", "--wait-timeout", "90", "blog")
+            nonlocal guest, metrics
+            guest, metrics = client(), client("9090")
+            guest.login(password)
+            scenario.admin, scenario.guest = guest, Client(guest.origin)
+        scenario.tasks(restart_tasks)
+
         print("==> Compose: default and optional dedicated retention connections", flush=True)
         # No extra role or environment variable is needed after installation.
         retention = json.loads(operation("maintenance"))

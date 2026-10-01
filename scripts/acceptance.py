@@ -237,12 +237,22 @@ class Acceptance(SiteScenario):
 
     def browser(self):
         env = clean_env()
-        env.update(BLOG_BROWSER_URL=self.origin, BLOG_BROWSER_PASSWORD=self.password)
+        env.update(BLOG_BROWSER_URL=self.origin, BLOG_BROWSER_PASSWORD=self.password,
+                   BLOG_BROWSER_TASK_POST_ID=self.browser_task_fixture())
         result = subprocess.run(
             ["pnpm", "--dir", str(PROJECT / "apps/admin"), "exec", "playwright", "test"],
             cwd=PROJECT, env=env, timeout=180, check=False,
         )
         require(result.returncode == 0, "production browser acceptance failed; inspect Playwright results")
+
+    def task_lifecycle(self):
+        def restart(before_start):
+            self.stop()
+            before_start()
+            self.start()
+            self.admin = Client(self.origin)
+            self.admin.login(self.password)
+        self.evidence["task_lifecycle"] = self.tasks(restart)
 
 
     def schedule_and_stop(self):
@@ -327,7 +337,9 @@ class Acceptance(SiteScenario):
         self.admin.login(self.password)
         self.assert_public_content()
         self.assert_comments()
-        deadline = time.monotonic() + 10
+        # The restored persistent publisher keeps its next 30s check time.
+        # A short recovery can finish before that time; allow one full cadence.
+        deadline = time.monotonic() + 45
         for kind, prefix in (("posts", "/posts/"), ("pages", "/")):
             while self.query(f"SELECT status FROM {kind} WHERE slug='acceptance-scheduled-{kind}'", True) != "published":
                 require(time.monotonic() < deadline, "normal startup must resume due publication")
@@ -374,12 +386,13 @@ class Acceptance(SiteScenario):
             ("fresh database", self.prepare), ("first-run installation", self.install),
             ("identity and persistent sessions", self.identity), ("media, taxonomy and writing", self.media_and_content),
             ("content and media trash", self.lifecycles), ("nested comments and moderation", self.comments),
+            ("persistent tasks, retry, periodic retention and publication", self.task_lifecycle),
             ("scheduled publication and writer shutdown", self.schedule_and_stop), ("backup and isolated restore", self.backup_restore),
             ("isolated HTTP verification", self.isolated_verification), ("release and recovered site", self.release_and_reopen),
         ):
             self.stage(name, action)
             if name == "identity and persistent sessions" and self.args.browser:
-                self.stage("production browser writing", self.browser)
+                self.stage("production browser writing and tasks", self.browser)
 
 
 def main():

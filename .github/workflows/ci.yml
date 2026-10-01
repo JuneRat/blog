@@ -180,7 +180,7 @@ jobs:
           pnpm --dir apps/admin install --frozen-lockfile
           pnpm --dir apps/admin exec playwright install --with-deps chromium
 
-      - name: First install, authoring, comments and isolated recovery
+      - name: First install, browser writing/tasks, durable scheduling and isolated recovery
         env:
           BLOG_TEST_PG_CONTAINER: ${{ job.services.postgres.id }}
         run: python3 -B scripts/acceptance.py --browser --report acceptance-report.json

@@ -140,6 +140,31 @@ class AcceptanceSafetyTests(unittest.TestCase):
                                     r"^POST /auth/login/password: HTTP 401 \(invalid_credentials\), expected 200$"):
             client.json("POST", "/auth/login/password", {"password": "private-password"})
 
+    def test_task_polling_does_not_hide_failure_as_a_timeout_or_accept_a_missing_record(self):
+        self.suite.task_view = Mock(return_value={"runs": {"items": [{"id": "accepted", "status": "failed"}]}})
+        with self.assertRaisesRegex(acceptance.AcceptanceError, "unexpected task result: failed"), \
+                patch("acceptance_support.time.sleep") as sleep:
+            self.suite.wait_task("accepted", "html_rebuild")
+        sleep.assert_not_called()
+        self.suite.task_view.return_value = {"runs": {"items": []}}
+        with self.assertRaisesRegex(acceptance.AcceptanceError, "disappeared"):
+            self.suite.wait_task("accepted", "html_rebuild")
+
+    def test_task_restart_hook_runs_after_writer_stop_and_before_activation(self):
+        order = []
+        self.suite.stop = lambda: order.append("stopped")
+        self.suite.start = lambda: order.append("started")
+        self.suite.origin = "http://127.0.0.1:8080"
+        def tasks(restart):
+            restart(lambda: order.append("due fixture"))
+            return {"restarted_queue_id": "accepted"}
+        self.suite.tasks = tasks
+        with patch("acceptance.Client") as client:
+            self.suite.task_lifecycle()
+        self.assertEqual(order, ["stopped", "due fixture", "started"])
+        client.return_value.login.assert_called_once_with(self.suite.password)
+        self.assertEqual(self.suite.evidence["task_lifecycle"]["restarted_queue_id"], "accepted")
+
     def test_failure_report_is_sanitized_and_cleanup_runs(self):
         report = self.root / "report.json"
         with patch("sys.argv", ["acceptance.py", "--report", str(report)]), \

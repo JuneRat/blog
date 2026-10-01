@@ -1,10 +1,13 @@
 """Shared HTTP client and business scenarios for native and Compose acceptance."""
 import base64
 import copy
+import datetime as dt
 from http.cookiejar import CookieJar
 from html.parser import HTMLParser
 import json
 import re
+import time
+import uuid
 from urllib.error import HTTPError, URLError
 from urllib.request import HTTPRedirectHandler, HTTPCookieProcessor, ProxyHandler, Request, build_opener
 
@@ -127,6 +130,144 @@ class SiteScenario:
     def action(self, kind, item, action, **fields):
         return self.admin.json("POST", f"{API}/{kind}/{item['id']}/{action}",
                                {"expected_version": item["version"], **fields})
+
+    def task_view(self, kind=None):
+        raw, headers = self.admin.request("GET", API + "/tasks" + ("?kind=" + kind if kind else ""))
+        require(headers.get("Cache-Control") == "no-store", "task state must not be cached")
+        return json.loads(raw)
+
+    def wait_task(self, task_id, kind, expected="completed", timeout=45):
+        """Fail immediately on the wrong terminal result, rather than hiding it as a timeout."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            row = next((item for item in self.task_view(kind)["runs"]["items"] if item["id"] == task_id), None)
+            require(row is not None, "accepted task disappeared from its recent history")
+            if row["status"] not in ("queued", "running"):
+                require(row["status"] == expected, "unexpected task result: " + row["status"])
+                return row
+            time.sleep(.1)
+        raise AcceptanceError("task execution timed out")
+
+    def browser_task_fixture(self):
+        """Only the runner's random database gets an intentionally invalid old derived row."""
+        post = self.create("posts", "browser-task-failure", content="Browser task fixture")
+        self.query(f"UPDATE posts SET content='![missing](/media/{uuid.uuid4()})',content_render_version=1 WHERE id='{post['id']}'")
+        return post["id"]
+
+    def tasks(self, restart):
+        """Shared native/container lifecycle drill. restart calls its hook with the writer stopped.
+
+        HTTP creates requests and content; SQL only ages private fixtures or advances
+        their due time, so CI need not wait an hour for the minimum retention interval.
+        """
+        endpoint = API + "/tasks"
+        view = self.task_view()
+        require(view["available"] and view["retention_available"], "installed owner-backed tasks must be available")
+        schedules = {row["kind"]: row for row in view["schedules"]}
+        require(not schedules["retention"]["enabled"] and schedules["publish_due"]["interval_seconds"] == 30,
+                "task defaults changed")
+        post = self.create("posts", "task-queue-acceptance", content="**Queued task body**")
+        self.query(f"UPDATE posts SET content_render_version=1 WHERE id='{post['id']}'")
+        before = self.query(f"SELECT version||'|'||updated_at FROM posts WHERE id='{post['id']}'")
+        future = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=1)).isoformat()
+        cancelled = self.admin.json("POST", endpoint, {"kind": "html_rebuild", "run_at": future}, status=202)
+        require(cancelled["status"] == "queued" and cancelled["can_cancel"], "future HTML request must wait")
+        result = self.admin.json("POST", endpoint + "/" + cancelled["id"] + "/cancel")
+        require(result["status"] == "cancelled", "future plan was not cancelled")
+        require(self.query(f"SELECT count(*) FROM audit_logs WHERE action='post.html.rebuild' AND target_id='{post['id']}'") == "0",
+                "cancelled future request executed business writes")
+        planned = self.admin.json("POST", endpoint, {"kind": "html_rebuild", "run_at": future}, status=202)
+
+        def due_while_stopped():
+            require(self.query(f"SELECT status FROM task_runs WHERE id='{planned['id']}'") == "queued",
+                    "future request must still be queued before restart")
+            self.query(f"UPDATE task_runs SET run_at=clock_timestamp()-interval '1 second' WHERE id='{planned['id']}'")
+
+        restart(due_while_stopped)
+        done = self.wait_task(planned["id"], "html_rebuild")
+        require(done["trigger"] == "once" and done["report"]["html"]["rebuilt"]["posts"] == 1,
+                "restart did not execute the same durable request exactly once")
+        require(self.query(f"SELECT version||'|'||updated_at FROM posts WHERE id='{post['id']}'") == before,
+                "HTML task changed content editing fields")
+        require("<strong>Queued task body</strong>" in self.query(f"SELECT content_html FROM posts WHERE id='{post['id']}'"),
+                "queued task did not persist rebuilt HTML")
+        require(self.query(f"SELECT count(*) FROM audit_logs WHERE action='post.html.rebuild' AND target_id='{post['id']}'") == "1",
+                "restarting the queued request duplicated or skipped its business audit")
+
+        bad = self.create("posts", "task-retry-acceptance", content="Retry fixture")
+        self.query(f"UPDATE posts SET content='![missing](/media/{uuid.uuid4()})',content_render_version=1 WHERE id='{bad['id']}'")
+        failed = self.admin.json("POST", endpoint, {"kind": "html_rebuild", "run_at": None}, status=202)
+        failed = self.wait_task(failed["id"], "html_rebuild", "failed")
+        require(failed["can_retry"] and failed["report"]["html"]["failure"]["id"] == bad["id"],
+                "failure must identify the stale fixture and permit retry")
+        self.query(f"UPDATE posts SET content='**Repaired task body**' WHERE id='{bad['id']}'")
+        retry = self.admin.json("POST", endpoint + "/" + failed["id"] + "/retry", status=202)
+        require(retry["id"] != failed["id"] and retry["retry_of"] == failed["id"], "retry must create a new task identity")
+        retried = self.wait_task(retry["id"], "html_rebuild")
+        require(retried["report"]["html"]["rebuilt"]["posts"] == 1, "retry did not rebuild remaining content")
+        original = next(row for row in self.task_view("html_rebuild")["runs"]["items"] if row["id"] == failed["id"])
+        require(original["report"] == failed["report"] and original["status"] == "failed", "retry overwrote the failed record")
+
+        old, recent, audit = (str(uuid.uuid4()) for _ in range(3))
+        self.query(f"INSERT INTO comments(id,post_id,author_name,content,content_html,content_render_version,ip_address,created_at) "
+                   f"VALUES('{old}','{post['id']}','Expired fixture','preserve body','<p>preserve body</p>',1,'192.0.2.10',clock_timestamp()-interval '400 days'),"
+                   f"('{recent}','{post['id']}','Recent fixture','preserve recent','<p>preserve recent</p>',1,'192.0.2.11',clock_timestamp()); "
+                   f"INSERT INTO audit_logs(id,action,target_type,target_id,created_at) VALUES('{audit}','acceptance.expired','system','fixture',clock_timestamp()-interval '400 days')")
+        schedule = next(row for row in self.task_view()["schedules"] if row["kind"] == "retention")
+        enabled = self.admin.json("PUT", endpoint + "/retention-schedule", {
+            "enabled": True, "interval_seconds": 3600, "next_run_at": future, "version": schedule["version"],
+        })
+        self.query("UPDATE task_schedules SET next_run_at=clock_timestamp()-interval '1 second' WHERE kind='retention'")
+        deadline = time.monotonic() + 15
+        cleanup = None
+        while time.monotonic() < deadline:
+            cleanup = next((row for row in self.task_view()["latest"] if row["kind"] == "retention"), None)
+            if cleanup:
+                break
+            time.sleep(.1)
+        require(cleanup is not None, "enabled retention schedule never queued a task")
+        cleaned = self.wait_task(cleanup["id"], "retention")
+        self.admin.json("PUT", endpoint + "/retention-schedule", {
+            "enabled": False, "interval_seconds": 3600, "next_run_at": None, "version": enabled["version"],
+        })
+        require(cleaned["trigger"] == "periodic" and cleaned["report"]["retention"]["comment_ips"] == 1
+                and cleaned["report"]["retention"]["audit_logs"] == 1, "periodic retention did not report actual cleanup")
+        require(self.query(f"SELECT (ip_address IS NULL)||'|'||content FROM comments WHERE id='{old}'") == "true|preserve body"
+                and self.query(f"SELECT host(ip_address) FROM comments WHERE id='{recent}'") == "192.0.2.11"
+                and self.query(f"SELECT count(*) FROM audit_logs WHERE id='{audit}'") == "0", "retention deleted live data or failed to clear expired data")
+
+        appointments = []
+        due = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=1)).isoformat()
+        for kind in ("posts", "pages"):
+            item = self.create(kind, "task-periodic-" + kind)
+            self.action(kind, item, "schedule", published_at=due)
+            appointments.append((kind, item))
+        # Persisted schedules still use their normal 30s cadence; only this
+        # disposable fixture advances its next check so the test stays bounded.
+        time.sleep(1.1)
+        self.query("UPDATE task_schedules SET next_run_at=clock_timestamp()-interval '1 second' WHERE kind='publish_due'")
+        deadline = time.monotonic() + 45
+        while time.monotonic() < deadline:
+            if all(self.query(f"SELECT status FROM {kind} WHERE id='{item['id']}'") == "published" for kind, item in appointments):
+                break
+            time.sleep(.1)
+        require(all(self.query(f"SELECT status FROM {kind} WHERE id='{item['id']}'") == "published" for kind, item in appointments),
+                "automatic publisher did not process due Post and Page")
+        publication = None
+        while time.monotonic() < deadline:
+            completed = [row for row in self.task_view("publish_due")["runs"]["items"]
+                         if row["status"] == "completed" and row["trigger"] == "periodic"
+                         and (row["report"].get("publication") or {}).get("published", 0)]
+            if sum(row["report"]["publication"]["published"] for row in completed) >= 2:
+                publication = completed[0]
+                break
+            time.sleep(.1)
+        require(publication is not None, "actual publication has no completed periodic execution report")
+        for kind, _ in appointments:
+            self.guest.request("GET", ("/posts/" if kind == "posts" else "/") + "task-periodic-" + kind)
+        return {"cancelled_id": cancelled["id"], "restarted_queue_id": planned["id"],
+                "failed_id": failed["id"], "retry_id": retry["id"], "retention_id": cleanup["id"],
+                "publication_id": publication["id"], "test_clock_advanced": True}
 
     def media_and_content(self):
         self.media = self.admin.json("POST", API + "/media?filename=acceptance.png", PNG, status=201,

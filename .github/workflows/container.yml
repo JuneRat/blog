@@ -36,7 +36,7 @@ jobs:
           test -n "$db_image"
           docker pull "$db_image"
 
-      - name: Verify installation, backup and isolated restore with Compose
+      - name: Verify installation, persistent task lifecycle, backup and isolated restore with Compose
         env:
           BLOG_EXPECT_REVISION: ${{ github.sha }}
         run: python3 -B scripts/test_compose.py --image blog:ci --ops-image blog-ops:ci
