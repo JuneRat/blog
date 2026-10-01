@@ -209,9 +209,90 @@ fn ttl(ttl_secs: i64) -> Result<(), UseCaseError> {
 pub struct PostgresTaskStore {
     database: crate::Database,
 }
+
+/// Read-only state from one database statement. No report, user or run ID leaves
+/// this snapshot; callers cache it outside the Prometheus scrape path.
+pub struct TaskHealthSnapshot {
+    pub observed_at: i64,
+    pub kinds: Vec<TaskKindHealth>,
+}
+
+pub struct TaskKindHealth {
+    pub kind: TaskKind,
+    pub queued: i64,
+    pub running: i64,
+    pub expired: i64,
+    pub due_wait_seconds: f64,
+    pub last_success_timestamp: i64,
+    pub consecutive_failures: i64,
+    pub schedule_enabled: bool,
+    pub schedule_interval_seconds: i64,
+    pub schedule_next_run_timestamp: i64,
+}
 impl PostgresTaskStore {
     pub fn new(database: crate::Database) -> Self {
         Self { database }
+    }
+
+    pub async fn health_snapshot(&self) -> Result<TaskHealthSnapshot, UseCaseError> {
+        let rows = sqlx::query(r#"
+            WITH kinds(kind) AS (VALUES ('html_rebuild'),('retention'),('publish_due')),
+            observed AS MATERIALIZED (SELECT clock_timestamp() AS now),
+            terminal AS (
+                SELECT kind,status,finished_at,
+                    sum((status='completed')::integer) OVER (
+                        PARTITION BY kind ORDER BY finished_at DESC,id DESC
+                        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+                    ) AS successes_after
+                FROM task_runs WHERE status IN ('completed','failed','interrupted')
+            ),
+            results AS (
+                SELECT kind,max(finished_at) FILTER (WHERE status='completed') AS last_success,
+                    count(*) FILTER (WHERE status IN ('failed','interrupted') AND successes_after=0) AS failures
+                FROM terminal GROUP BY kind
+            ),
+            active AS (
+                SELECT kind,count(*) FILTER (WHERE status='queued') AS queued,
+                    count(*) FILTER (WHERE status='running') AS running,
+                    count(*) FILTER (WHERE status='running' AND lease_expires_at<=observed.now) AS expired,
+                    min(GREATEST(run_at,created_at)) FILTER (WHERE status='queued' AND run_at<=observed.now) AS due_since
+                FROM task_runs CROSS JOIN observed WHERE status IN ('queued','running') GROUP BY kind
+            )
+            SELECT kinds.kind,floor(extract(epoch FROM observed.now))::bigint AS observed_at,
+                COALESCE(active.queued,0) AS queued,COALESCE(active.running,0) AS running,
+                COALESCE(active.expired,0) AS expired,
+                COALESCE(GREATEST(extract(epoch FROM observed.now-active.due_since),0)::double precision,0) AS due_wait,
+                COALESCE(floor(extract(epoch FROM results.last_success))::bigint,0) AS last_success,
+                COALESCE(results.failures,0) AS failures,
+                COALESCE(s.enabled,false) AS enabled,COALESCE(s.interval_seconds,0) AS interval_seconds,
+                CASE WHEN s.enabled THEN COALESCE(floor(extract(epoch FROM s.next_run_at))::bigint,0) ELSE 0 END AS next_run
+            FROM kinds CROSS JOIN observed
+            LEFT JOIN active USING(kind) LEFT JOIN results USING(kind)
+            LEFT JOIN task_schedules s USING(kind) ORDER BY kinds.kind
+        "#).fetch_all(&self.database.pool).await.map_err(db)?;
+        let observed_at = rows
+            .first()
+            .ok_or_else(|| UseCaseError::DataCorrupt("任务健康快照缺失".into()))?
+            .try_get("observed_at")
+            .map_err(db)?;
+        let kinds = rows
+            .iter()
+            .map(|row| {
+                Ok(TaskKindHealth {
+                    kind: TaskKind::from_stored(row.try_get("kind").map_err(db)?)?,
+                    queued: row.try_get("queued").map_err(db)?,
+                    running: row.try_get("running").map_err(db)?,
+                    expired: row.try_get("expired").map_err(db)?,
+                    due_wait_seconds: row.try_get("due_wait").map_err(db)?,
+                    last_success_timestamp: row.try_get("last_success").map_err(db)?,
+                    consecutive_failures: row.try_get("failures").map_err(db)?,
+                    schedule_enabled: row.try_get("enabled").map_err(db)?,
+                    schedule_interval_seconds: row.try_get("interval_seconds").map_err(db)?,
+                    schedule_next_run_timestamp: row.try_get("next_run").map_err(db)?,
+                })
+            })
+            .collect::<Result<Vec<_>, UseCaseError>>()?;
+        Ok(TaskHealthSnapshot { observed_at, kinds })
     }
 }
 
@@ -550,10 +631,22 @@ impl TaskExecutionStore for PostgresTaskStore {
         Ok(changed)
     }
     async fn recover_expired(&self) -> Result<u64, UseCaseError> {
+        Ok(self
+            .recover_expired_by_kind()
+            .await?
+            .iter()
+            .map(|(_, count)| count)
+            .sum())
+    }
+}
+
+impl PostgresTaskStore {
+    pub async fn recover_expired_by_kind(&self) -> Result<Vec<(TaskKind, u64)>, UseCaseError> {
         let mut tx = self.database.pool.begin().await.map_err(db)?;
         guard_writes(&mut tx).await?;
         let rows=sqlx::query("SELECT id,kind,report FROM task_runs WHERE status='running' AND lease_expires_at<=clock_timestamp() ORDER BY kind FOR UPDATE SKIP LOCKED")
             .fetch_all(&mut *tx).await.map_err(db)?;
+        let mut recovered = Vec::new();
         for row in &rows {
             let id: Uuid = row.try_get("id").map_err(db)?;
             let kind = TaskKind::from_stored(row.try_get("kind").map_err(db)?)?;
@@ -571,8 +664,9 @@ impl TaskExecutionStore for PostgresTaskStore {
             )
             .await?;
             prune(&mut tx, kind).await?;
+            recovered.push((kind, 1));
         }
         tx.commit().await.map_err(db)?;
-        Ok(rows.len() as u64)
+        Ok(recovered)
     }
 }

@@ -78,6 +78,19 @@ async fn slow_cleanup(
     (runtime, lease, old)
 }
 
+fn metric(runtime: &TaskRuntime, name: &str) -> f64 {
+    runtime
+        .telemetry
+        .encode()
+        .unwrap()
+        .lines()
+        .find_map(|line| {
+            let (key, value) = line.rsplit_once(' ')?;
+            (key == name).then(|| value.parse().unwrap())
+        })
+        .unwrap_or_else(|| panic!("missing {name}"))
+}
+
 #[tokio::test]
 async fn slow_valid_business_survives_its_own_progress_and_heartbeat_lock_timeouts() {
     isolated(|database, pool, _| async move {
@@ -99,6 +112,9 @@ async fn slow_valid_business_survives_its_own_progress_and_heartbeat_lock_timeou
             .await
             .unwrap();
         assert_eq!(remaining, 0);
+        assert_eq!(metric(&runtime, "blog_task_finished_total{kind=\"retention\",status=\"completed\"}"), 1.0);
+        assert_eq!(metric(&runtime, "blog_task_execution_duration_seconds_count{kind=\"retention\",status=\"completed\"}"), 1.0);
+        assert_eq!(metric(&runtime, "blog_task_finished_total{kind=\"retention\",status=\"interrupted\"}"), 0.0);
     })
     .await;
 }
@@ -127,5 +143,74 @@ async fn shutdown_retries_terminal_write_until_cancelled_sql_releases_its_lock()
         assert!(report.has_more);
         let remaining: i64 = sqlx::query_scalar("SELECT count(*) FROM audit_logs WHERE id=$1").bind(old).fetch_one(&pool).await.unwrap();
         assert_eq!(remaining, 1, "cancelled cleanup rolls back before the task finishes");
+        assert_eq!(metric(&runtime, "blog_task_finished_total{kind=\"retention\",status=\"interrupted\"}"), 1.0, "terminal write retries do not duplicate metrics");
+        assert_eq!(metric(&runtime, "blog_task_execution_duration_seconds_count{kind=\"retention\",status=\"interrupted\"}"), 1.0);
+        runtime.recover_expired().await.unwrap();
+        assert_eq!(metric(&runtime, "blog_task_lease_expirations_total{kind=\"retention\"}"), 0.0);
     }).await;
+}
+
+#[tokio::test]
+async fn lost_lease_is_counted_only_by_committed_recovery_and_health_survives_restart() {
+    isolated(|database, pool, _| async move {
+        let runtime = Arc::new(TaskRuntime::new(database.clone(), Some(database.clone()), Arc::new(RenderingRuntime::default()), interfaces::observability::Telemetry::new(&crate::observability::build_info()), false));
+        runtime.store.enqueue(TaskKind::HtmlRebuild, time::OffsetDateTime::now_utc(), TaskTrigger::Manual, None, AuditContext::system()).await.unwrap();
+        let lease = runtime.store.claim(&[TaskKind::HtmlRebuild],Uuid::now_v7(),LEASE_SECONDS).await.unwrap().unwrap();
+        sqlx::query("UPDATE task_runs SET lease_expires_at=clock_timestamp()-interval '1 second' WHERE id=$1").bind(lease.run.id).execute(&pool).await.unwrap();
+        let (updates, _) = watch::channel(lease.run.report.clone());
+        let (_stop, stopping) = watch::channel(false);
+        tokio::time::timeout(Duration::from_secs(5),execute_lease(runtime.clone(),lease,updates,stopping)).await.unwrap();
+        assert_eq!(metric(&runtime, "blog_task_finished_total{kind=\"html_rebuild\",status=\"completed\"}"), 0.0, "false terminal acknowledgement is not a completion");
+        runtime.recover_expired().await.unwrap();
+        runtime.recover_expired().await.unwrap();
+        assert_eq!(metric(&runtime, "blog_task_finished_total{kind=\"html_rebuild\",status=\"interrupted\"}"), 1.0);
+        assert_eq!(metric(&runtime, "blog_task_lease_expirations_total{kind=\"html_rebuild\"}"), 1.0);
+        assert_eq!(metric(&runtime, "blog_task_execution_duration_seconds_count{kind=\"html_rebuild\",status=\"interrupted\"}"), 0.0, "lease recovery has no local completed duration");
+        let restarted = TaskRuntime::new(database.clone(), None, Arc::new(RenderingRuntime::default()), interfaces::observability::Telemetry::new(&crate::observability::build_info()), false);
+        restarted.sample_health().await.unwrap();
+        assert_eq!(metric(&restarted, "blog_task_finished_total{kind=\"html_rebuild\",status=\"interrupted\"}"), 0.0);
+        assert_eq!(metric(&restarted, "blog_task_consecutive_failures{kind=\"html_rebuild\"}"), 1.0, "new process restores durable history without counter backfill");
+        assert!(metric(&restarted, "blog_task_health_snapshot_last_success_timestamp_seconds") > 0.0);
+        database.close().await;
+        assert_eq!(metric(&restarted, "blog_task_consecutive_failures{kind=\"html_rebuild\"}"), 1.0, "scrape reads cached health after the database closes");
+    }).await;
+}
+
+#[tokio::test]
+async fn repeated_cancel_does_not_duplicate_confirmed_terminal_count() {
+    isolated(|database, _, _| async move {
+        let runtime = Arc::new(TaskRuntime::new(
+            database.clone(),
+            None,
+            Arc::new(RenderingRuntime::default()),
+            interfaces::observability::Telemetry::new(&crate::observability::build_info()),
+            false,
+        ));
+        let admin = WebsiteTasks::new(runtime.clone(), Arc::new(TaskSupervisor::default()));
+        let run = runtime
+            .store
+            .enqueue(
+                TaskKind::HtmlRebuild,
+                time::OffsetDateTime::now_utc() + time::Duration::hours(1),
+                TaskTrigger::Once,
+                None,
+                AuditContext::system(),
+            )
+            .await
+            .unwrap();
+        admin.cancel(run.id, AuditContext::system()).await.unwrap();
+        assert!(admin.cancel(run.id, AuditContext::system()).await.is_err());
+        assert_eq!(
+            metric(
+                &runtime,
+                "blog_task_finished_total{kind=\"html_rebuild\",status=\"cancelled\"}"
+            ),
+            1.0
+        );
+        assert_eq!(
+            metric(&runtime, "blog_task_started_total{kind=\"html_rebuild\"}"),
+            0.0
+        );
+    })
+    .await;
 }

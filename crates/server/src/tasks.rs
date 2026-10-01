@@ -22,6 +22,7 @@ use application::{
 use infrastructure::{
     Database, PostgresHtmlRebuildStore, RenderingRuntime, tasks::PostgresTaskStore,
 };
+use interfaces::observability::{TaskHealth, TaskSchedulerCheck};
 use tokio::{sync::watch, task::JoinHandle, time::Instant};
 use uuid::Uuid;
 
@@ -75,6 +76,34 @@ impl TaskRuntime {
                 false
             }
         }
+    }
+
+    async fn sample_health(&self) -> Result<(), UseCaseError> {
+        let snapshot = self.store.health_snapshot().await?;
+        for kind in snapshot.kinds {
+            self.telemetry.task_health(TaskHealth {
+                kind: kind.kind,
+                queued: kind.queued,
+                running: kind.running,
+                expired: kind.expired,
+                due_wait_seconds: kind.due_wait_seconds,
+                last_success_timestamp: kind.last_success_timestamp,
+                consecutive_failures: kind.consecutive_failures,
+                schedule_enabled: kind.schedule_enabled,
+                schedule_interval_seconds: kind.schedule_interval_seconds,
+                schedule_next_run_timestamp: kind.schedule_next_run_timestamp,
+            });
+        }
+        self.telemetry
+            .task_health_snapshot_success(snapshot.observed_at);
+        Ok(())
+    }
+
+    async fn recover_expired(&self) -> Result<(), UseCaseError> {
+        for (kind, count) in self.store.recover_expired_by_kind().await? {
+            self.telemetry.task_lease_expirations(kind, count);
+        }
+        Ok(())
     }
 }
 
@@ -165,7 +194,11 @@ impl TaskAdmin for WebsiteTasks {
     }
     async fn cancel(&self, id: Uuid, audit: AuditContext) -> Result<TaskRun, UseCaseError> {
         self.require_available(None).await?;
-        self.runtime.store.cancel(id, audit).await
+        let run = self.runtime.store.cancel(id, audit).await?;
+        self.runtime
+            .telemetry
+            .task_finished(run.kind, TaskStatus::Cancelled, None);
+        Ok(run)
     }
     async fn save_retention_schedule(
         &self,
@@ -223,6 +256,9 @@ impl TaskSupervisor {
     pub fn close(&self) {
         self.lifecycle.lock().expect("task lifecycle lock").closed = true;
         self.stopping.send_replace(true);
+        if let Some(runtime) = self.runtime.borrow().as_ref() {
+            runtime.telemetry.task_scheduler_stopped();
+        }
     }
     pub async fn shutdown(&self, deadline: Instant) {
         self.close();
@@ -256,6 +292,7 @@ struct ManagedWorker {
     runtime: Arc<TaskRuntime>,
     progress: watch::Receiver<TaskReport>,
     handle: JoinHandle<()>,
+    started: std::time::Instant,
 }
 impl Drop for ManagedWorker {
     fn drop(&mut self) {
@@ -279,6 +316,7 @@ async fn supervise(
     let mut workers = HashMap::<&'static str, ManagedWorker>::new();
     let worker_id = Uuid::now_v7();
     let mut seeded = false;
+    let mut health_sample_due = Instant::now();
     let mut ticks = tokio::time::interval(Duration::from_secs(1));
     ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
@@ -289,7 +327,7 @@ async fn supervise(
         let worker_stopping = stopping.clone();
         let step = async {
             if !runtime.writable().await? {
-                return Ok::<_, UseCaseError>(());
+                return Ok::<_, UseCaseError>(false);
             }
             if !seeded {
                 runtime.store.seed_schedules().await?;
@@ -306,14 +344,21 @@ async fn supervise(
                     tracing::error!(%error, task_id = %worker.lease.run.id, "后台任务意外退出");
                     let mut report = worker.progress.borrow().clone();
                     report.error = Some(FAILURE_MESSAGE.into());
-                    worker
+                    let changed = worker
                         .runtime
                         .store
                         .finish(&worker.lease, TaskStatus::Failed, &report)
                         .await?;
+                    if changed {
+                        worker.runtime.telemetry.task_finished(
+                            worker.lease.run.kind,
+                            TaskStatus::Failed,
+                            Some(worker.started.elapsed()),
+                        );
+                    }
                 }
             }
-            runtime.store.recover_expired().await?;
+            runtime.recover_expired().await?;
             runtime.store.tick_schedules().await?;
             let mut allowed = vec![TaskKind::HtmlRebuild, TaskKind::PublishDue];
             if runtime.retention_available().await {
@@ -343,12 +388,33 @@ async fn supervise(
                         runtime: runtime.clone(),
                         progress,
                         handle,
+                        started: std::time::Instant::now(),
                     },
                 );
             }
-            Ok(())
+            Ok(true)
         };
-        tokio::select! { biased; _ = stopped(&mut stopping) => break, result = step => { if let Err(error) = result { tracing::warn!(%error, "后台任务调度失败，下次检查重试"); } } }
+        let checked =
+            tokio::select! { biased; _ = stopped(&mut stopping) => break, result = step => result };
+        let successful_check = checked.is_ok();
+        let result = match checked {
+            Ok(true) => TaskSchedulerCheck::Success,
+            Ok(false) => TaskSchedulerCheck::Unavailable,
+            Err(error) => {
+                tracing::warn!(%error, "后台任务调度失败，下次检查重试");
+                TaskSchedulerCheck::Error
+            }
+        };
+        runtime
+            .telemetry
+            .task_scheduler_check(result, time::OffsetDateTime::now_utc().unix_timestamp());
+        if successful_check && Instant::now() >= health_sample_due {
+            let sampled = tokio::select! { biased; _ = stopped(&mut stopping) => break, result = runtime.sample_health() => result };
+            if let Err(error) = sampled {
+                tracing::warn!(%error, "后台任务健康快照暂不可用");
+            }
+            health_sample_due = Instant::now() + Duration::from_secs(5);
+        }
     }
     // The owner enforces the HTTP shutdown deadline; Drop aborts any remaining
     // worker if this supervisor is cancelled while waiting for a database write.
@@ -363,6 +429,16 @@ async fn execute_lease(
     updates: watch::Sender<TaskReport>,
     mut stopping: watch::Receiver<bool>,
 ) {
+    let started = std::time::Instant::now();
+    let due_since = lease.run.created_at.max(lease.run.run_at);
+    let wait = lease
+        .run
+        .started_at
+        .map(|claimed| (claimed - due_since).as_seconds_f64().max(0.0))
+        .unwrap_or(0.0);
+    runtime
+        .telemetry
+        .task_started(lease.run.kind, Duration::from_secs_f64(wait));
     let mut progress = updates.subscribe();
     let business_runtime = runtime.clone();
     let business_lease = lease.clone();
@@ -448,7 +524,16 @@ async fn execute_lease(
             result = runtime.store.finish(&lease, status, &report) => result,
         };
         match result {
-            Ok(_) => return,
+            Ok(changed) => {
+                if changed {
+                    runtime.telemetry.task_finished(
+                        lease.run.kind,
+                        status,
+                        Some(started.elapsed()),
+                    );
+                }
+                return;
+            }
             Err(error @ UseCaseError::Repository(_)) => {
                 tracing::warn!(%error, task_id = %lease.run.id, "任务结束记录暂不能保存，在剩余期限内重试");
                 tokio::select! { _ = &mut lease_deadline => return, _ = tokio::time::sleep(Duration::from_millis(250)) => {} }

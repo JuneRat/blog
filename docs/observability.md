@@ -127,3 +127,81 @@ CI 的 Compose 演练覆盖安装前后的探针、版本身份、JSON 请求关
 | `blog_site_settings_read_recoveries_total` | 连续失败后首次成功的次数 |
 
 告警结合 `increase(blog_site_settings_reads_total{result="error"}[5m])` 与最近读取状态；设置行不存在是合法初始状态，计入 `missing`，不会标为降级。
+
+## 持久后台任务
+
+HTML 重建、保留期清理、预约发布统一使用 `kind=html_rebuild/retention/publish_due`。任务编号、执行人、来源 IP、报告正文和错误信息不进入指标。已有预约发布轮询指标继续保留；下表同时覆盖其他两类任务以及调度、队列和租约恢复。
+
+| 指标 | 含义 |
+|---|---|
+| `blog_task_started_total{kind}` | 本进程开始执行的已提交 claim 次数 |
+| `blog_task_finished_total{kind,status}` | 本进程确认提交的终态次数；`completed/failed/interrupted/cancelled` |
+| `blog_task_queue_duration_seconds{kind}` | 从任务实际到期到 claim 的等待时间；未来计划的主动等待不计入 |
+| `blog_task_execution_duration_seconds{kind,status}` | 从本进程开始执行到确认写入终态的耗时，含进度写入、续租和结束写入等待；取消待执行任务及恢复别的执行器租约不计入 |
+| `blog_task_lease_expirations_total{kind}` | 本进程确认提交的过期租约恢复次数，同时增加对应 `interrupted` 终态计数 |
+| `blog_task_runs{kind,status}` | 数据库快照的 `queued/running/expired` 数量；`expired` 是 `running` 的子集，不能相加 |
+| `blog_task_due_wait_seconds{kind}` | 已到期但仍排队的最老任务延误秒数；没有此类任务为 0，未来计划不增加此值 |
+| `blog_task_last_success_timestamp_seconds{kind}` | 保留历史中最近一次已提交成功的 Unix 时间；无保留成功记录为 0 |
+| `blog_task_consecutive_failures{kind}` | 按完成顺序累计最近连续 `failed/interrupted` 次数；成功清零，取消不改变失败链，受每类最多 500 条历史限制 |
+| `blog_task_schedule_enabled{kind}` | 周期计划启用为 1；HTML 只有立即／一次性执行，为 0 |
+| `blog_task_schedule_interval_seconds{kind}` | 周期秒数；没有周期计划为 0 |
+| `blog_task_schedule_next_run_timestamp_seconds{kind}` | 下次周期到期的 Unix 时间；停用或没有周期计划为 0 |
+| `blog_task_scheduler_available` | 最近调度检查成功且可写为 1，失败、恢复隔离或关闭为 0，安装激活前为 -1 |
+| `blog_task_scheduler_checks_total{result}` | 本进程调度检查次数；`success/error/unavailable` |
+| `blog_task_scheduler_last_success_timestamp_seconds` | 本进程最近成功且可写的调度检查时间；首次成功前为 0 |
+| `blog_task_health_snapshot_last_success_timestamp_seconds` | 本进程最近成功取得持久状态快照的数据库时间；首次采样前为 0 |
+
+调度器在正常检查后每 5 秒尝试只读采样，故障时保留之前的快照；指标抓取不查询数据库。队列数量和延误是采样值，不会在抓取时自行增长，必须结合快照时间识别陈旧数据。完整快照成功后才更新采样时间；数据库不可用或调度器卡住时，独立指标端口仍可返回原有计数及时间。
+
+计数和直方图随进程重启归零，不扫描历史回填；未知提交结果不会被算作已确认完成，因而它们不是数据库历史的精确总计。终态写入返回失去租约、重复结束或未提交时不会增加次数；成功的结束写入重试和后续过期恢复不会把同一个终态重复计数。持久状态在首次成功快照后恢复；连续失败已超过保留窗口时可能找不到以前的成功时间，仍可通过失败链告警。
+
+多个 HTTP 实例使用同一数据库时，快照反映同一份队列与历史，应按 `instance` 查看或用 `max` 汇总，不能相加；本进程确认的计数可按实例查看，也可汇总。每个实例拥有独立调度健康时间。下面阈值是本地验收的初始告警例子，发布前按任务预算、计划周期和[验收记录](release-acceptance-template.md)调整；建议持续 2 分钟再通知，恢复隔离和计划维护期间按部署状态静默。
+
+```promql
+# 已安装但调度器持续失败或 30 秒没有成功检查。
+(blog_installation_complete == 1)
+  and on (job, instance)
+  ((blog_task_scheduler_available != 1)
+    or (time() - blog_task_scheduler_last_success_timestamp_seconds > 30))
+
+# 持久状态尚未取得，或超过 30 秒未更新，先解决此告警再解释下面的快照。
+(blog_installation_complete == 1)
+  and on (job, instance)
+  ((blog_task_health_snapshot_last_success_timestamp_seconds == 0)
+    or (time() - blog_task_health_snapshot_last_success_timestamp_seconds > 30))
+
+# 已到期队列等待超过 2 分钟；排除陈旧样本。
+(blog_task_due_wait_seconds > 120)
+  and on (job, instance)
+  (time() - blog_task_health_snapshot_last_success_timestamp_seconds < 30)
+
+# 同类任务连续失败或中断至少 3 次，重启后也可由持久历史恢复。
+(blog_task_consecutive_failures >= 3)
+  and on (job, instance)
+  (time() - blog_task_health_snapshot_last_success_timestamp_seconds < 30)
+
+# 已启用的周期计划超过下次到期时间 2 分钟仍未推进。
+(blog_task_schedule_enabled == 1)
+  and (blog_task_schedule_next_run_timestamp_seconds > 0)
+  and (time() - blog_task_schedule_next_run_timestamp_seconds > 120)
+  and on (job, instance)
+  (time() - blog_task_health_snapshot_last_success_timestamp_seconds < 30)
+
+# 已成功过的周期任务超过两个周期加 1 分钟没有再次成功。
+(blog_task_schedule_enabled == 1)
+  and (blog_task_last_success_timestamp_seconds > 0)
+  and (time() - blog_task_last_success_timestamp_seconds
+    > 2 * blog_task_schedule_interval_seconds + 60)
+  and on (job, instance)
+  (time() - blog_task_health_snapshot_last_success_timestamp_seconds < 30)
+
+# 各实例、各类任务最近 10 分钟确认的失败、中断与租约恢复。
+sum by (instance, kind) (increase(blog_task_finished_total{status=~"failed|interrupted"}[10m]))
+increase(blog_task_lease_expirations_total[10m])
+
+# 同类任务 p95 到期等待与实际执行时间。
+histogram_quantile(0.95, sum by (le, kind) (rate(blog_task_queue_duration_seconds_bucket[10m])))
+histogram_quantile(0.95, sum by (le, kind) (rate(blog_task_execution_duration_seconds_bucket[10m])))
+```
+
+立即执行的 HTML 重建和默认关闭的清理计划不适用“周期内必须成功”告警；它们仍适用连续失败和到期队列延误。计划刚启用、从未成功过时，使用队列延误、计划推进和失败链判断。执行中的长任务应按实际预算设置耗时告警，不从队列指标推断仍在运行的业务已经卡住。

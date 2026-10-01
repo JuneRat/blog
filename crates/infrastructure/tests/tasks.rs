@@ -88,6 +88,53 @@ fn schedule(enabled: bool, version: i64) -> TaskScheduleInput {
 }
 
 #[tokio::test]
+async fn health_snapshot_is_read_only_and_uses_completion_order_for_failure_streaks() {
+    isolated(|pool| async move {
+        let store = store(&pool);
+        let empty = store.health_snapshot().await.unwrap();
+        assert_eq!(empty.kinds.len(), 3);
+        assert!(empty.kinds.iter().all(|kind| kind.queued == 0 && kind.running == 0 && !kind.schedule_enabled));
+        assert_eq!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM task_schedules").fetch_one(&pool).await.unwrap(), 0, "sampling never seeds schedules");
+        store.seed_schedules().await.unwrap();
+        let reference = now(&pool).await;
+        // Creation order deliberately differs from completion order, as with a
+        // future plan that executes after tasks created more recently.
+        for (status, created, finished) in [("failed", 1, 50), ("completed", 70, 40), ("failed", 60, 30), ("cancelled", 20, 20), ("interrupted", 80, 10)] {
+            sqlx::query("INSERT INTO task_runs(id,kind,status,trigger,run_at,created_at,finished_at) VALUES($1,'html_rebuild',$2,'manual',$3,$4,$5)")
+                .bind(Uuid::now_v7()).bind(status).bind(reference-Duration::seconds(created))
+                .bind(reference-Duration::seconds(created)).bind(reference-Duration::seconds(finished))
+                .execute(&pool).await.unwrap();
+        }
+        let queued = enqueue(&pool, TaskKind::HtmlRebuild, AuditContext::system()).await;
+        sqlx::query("UPDATE task_runs SET created_at=$2,run_at=$3 WHERE id=$1").bind(queued.id)
+            .bind(reference-Duration::seconds(300)).bind(reference-Duration::seconds(15)).execute(&pool).await.unwrap();
+        let running = lease(&pool, TaskKind::Retention, AuditContext::system()).await;
+        expire(&pool, running.run.id).await;
+        let snapshot = store.health_snapshot().await.unwrap();
+        assert!(snapshot.observed_at >= reference.unix_timestamp());
+        let html = snapshot.kinds.iter().find(|kind| kind.kind == TaskKind::HtmlRebuild).unwrap();
+        assert_eq!(html.queued, 1);
+        assert_eq!(html.consecutive_failures, 2, "cancel does not hide the latest failed and interrupted tasks");
+        assert_eq!(html.last_success_timestamp, (reference-Duration::seconds(40)).unix_timestamp());
+        assert!((15.0..25.0).contains(&html.due_wait_seconds), "intentional wait before due time must be excluded");
+        let retention = snapshot.kinds.iter().find(|kind| kind.kind == TaskKind::Retention).unwrap();
+        assert_eq!((retention.running,retention.expired), (1,1));
+        assert!(!retention.schedule_enabled);
+        assert_eq!(retention.schedule_next_run_timestamp, 0);
+        let publishing = snapshot.kinds.iter().find(|kind| kind.kind == TaskKind::PublishDue).unwrap();
+        assert!(publishing.schedule_enabled);
+        assert_eq!(publishing.schedule_interval_seconds, 30);
+        assert!(publishing.schedule_next_run_timestamp > 0);
+        assert_eq!(sqlx::query_scalar::<_,String>("SELECT status FROM task_runs WHERE id=$1").bind(running.run.id).fetch_one(&pool).await.unwrap(), "running", "sampling never recovers leases");
+        assert_eq!(store.recover_expired_by_kind().await.unwrap(), vec![(TaskKind::Retention,1)]);
+        assert!(store.recover_expired_by_kind().await.unwrap().is_empty());
+        let snapshot = store.health_snapshot().await.unwrap();
+        let retention = snapshot.kinds.iter().find(|kind| kind.kind == TaskKind::Retention).unwrap();
+        assert_eq!((retention.running,retention.expired,retention.consecutive_failures), (0,0,1));
+    }).await;
+}
+
+#[tokio::test]
 async fn concurrent_enqueue_and_claim_are_atomic_with_single_source_audit() {
     isolated(|pool| async move {
         let actor = common::seed_user(&pool, "tasks-actor").await;

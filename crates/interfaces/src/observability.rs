@@ -1,5 +1,6 @@
 //! HTTP/runtime telemetry. Labels contain only bounded methods, route templates
 //! and status codes; never request IDs, users, URLs, queries or credentials.
+mod tasks;
 mod workloads;
 use axum::{
     Extension, Json,
@@ -46,6 +47,7 @@ pub struct Telemetry {
     settings_reads: IntCounterVec,
     settings_available: IntGauge,
     settings_recoveries: IntCounter,
+    tasks: tasks::TaskMetrics,
 }
 
 impl Telemetry {
@@ -136,6 +138,7 @@ impl Telemetry {
                 .expect("unique static metric names");
         }
         Self {
+            tasks: tasks::TaskMetrics::new(&registry),
             workloads: workloads::WorkloadMetrics::new(&registry),
             registry,
             requests,
@@ -189,7 +192,45 @@ impl Telemetry {
     pub fn publication_run(&self, elapsed: std::time::Duration, success: bool) {
         self.workloads.publication_run(elapsed, success);
     }
+
+    pub fn task_started(&self, kind: application::tasks::TaskKind, wait: std::time::Duration) {
+        self.tasks.started(kind, wait);
+    }
+
+    /// Observe only a terminal transition acknowledged by the durable store.
+    /// Cancelled and recovered leases have no execution duration in this process.
+    pub fn task_finished(
+        &self,
+        kind: application::tasks::TaskKind,
+        status: application::tasks::TaskStatus,
+        elapsed: Option<std::time::Duration>,
+    ) {
+        self.tasks.finished(kind, status, elapsed);
+    }
+
+    pub fn task_lease_expirations(&self, kind: application::tasks::TaskKind, count: u64) {
+        self.tasks.lease_expirations(kind, count);
+    }
+
+    /// Called by the supervisor, never by the metrics HTTP handler.
+    pub fn task_health(&self, health: TaskHealth) {
+        self.tasks.health(health);
+    }
+
+    pub fn task_health_snapshot_success(&self, timestamp: i64) {
+        self.tasks.snapshot_success(timestamp);
+    }
+
+    pub fn task_scheduler_check(&self, result: TaskSchedulerCheck, timestamp: i64) {
+        self.tasks.scheduler_check(result, timestamp);
+    }
+
+    pub fn task_scheduler_stopped(&self) {
+        self.tasks.scheduler_stopped();
+    }
 }
+
+pub use tasks::{TaskHealth, TaskSchedulerCheck};
 
 impl application::rendering_observer::RenderingObserver for Telemetry {
     fn observe(
