@@ -310,7 +310,7 @@ async fn theme_preflight_is_database_free_even_when_live_plugins_are_unavailable
         Arc::new(SystemClock),
     ));
     let runtime = RenderingRuntime::default().with_plugins(plugins);
-    for theme in ["../../themes/default", "../../themes/paper"] {
+    for theme in ["../../themes/default", "../../theme-packages/paper"] {
         infrastructure::MiniJinjaThemeRenderer::load_checked(Path::new(theme), &runtime)
             .await
             .unwrap();

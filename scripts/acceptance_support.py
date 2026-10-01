@@ -4,10 +4,13 @@ import copy
 import datetime as dt
 from http.cookiejar import CookieJar
 from html.parser import HTMLParser
+import io
 import json
+from pathlib import Path
 import re
 import time
 import uuid
+import zipfile
 from urllib.error import HTTPError, URLError
 from urllib.request import HTTPRedirectHandler, HTTPCookieProcessor, ProxyHandler, Request, build_opener
 
@@ -315,6 +318,21 @@ class SiteScenario:
         require("<strong>HTTP acceptance</strong>" in self.query(
             "SELECT content_html FROM posts WHERE slug='acceptance-post'"), "post HTML must be persisted")
         theme = self.admin.json("GET", API + "/settings/theme")
+        require(all(item["slug"] != "paper" for item in theme["available"]),
+                "Paper must be installed as a third-party theme")
+        source = Path(__file__).resolve().parent.parent / "theme-packages/paper"
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as package:
+            for item in sorted(source.rglob("*")):
+                if item.is_file():
+                    package.write(item, "paper/" + item.relative_to(source).as_posix())
+        package = archive.getvalue()
+        checked = self.admin.json("POST", API + "/themes/validate-package", package,
+                                  headers={"Content-Type": "application/zip"})
+        installed = self.admin.json("POST", API + "/themes", package, status=201,
+                                    headers={"Content-Type": "application/zip"})
+        require(installed["slug"] == "paper" and installed["release"] == checked["release"],
+                "Paper installation must publish the validated release")
         self.admin.json("PUT", API + "/settings/theme", {"slug": "paper", "expected_version": theme["version"]})
         self.assert_public_content()
 

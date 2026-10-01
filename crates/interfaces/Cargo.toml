@@ -17,5 +17,6 @@ futures-util = { version = "0.3", default-features = false, features = ["std"] }
 prometheus = { version = "0.14", default-features = false }
 tower-http = { version = "0.6", features = ["fs"] }
 mime_guess = "2"
+http-body-util = "0.1"
 rpassword.workspace = true
 ts-rs = { version = "12", features = ["uuid-impl"] }

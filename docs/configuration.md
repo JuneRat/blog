@@ -36,7 +36,7 @@ TOML 可以先只配置路径、代理或 `[bootstrap]`：没有数据库连接�
 | `server.public_base_url` | `BLOG_PUBLIC_BASE_URL` | `http://127.0.0.1:8080`；公开链接、OAuth 回调与来源校验 |
 | `server.trusted_proxies` | `BLOG_TRUSTED_PROXIES` | 空数组；登录/改密限流、评论与业务审计可信代理 |
 | `server.secure_cookies` | `BLOG_SECURE_COOKIES` | 缺省时按公开 URL 是否为 HTTPS 推导；HTTPS 地址禁止设为 false |
-| `paths.theme_dir` | `BLOG_THEME_DIR` | `themes/default`；扫描同级目录建立主题注册表 |
+| `paths.theme_dir` | `BLOG_THEME_DIR` | `themes/default`；扫描同级目录建立主题注册表，后台安装/卸载需父目录可写 |
 | `paths.admin_dist` | `BLOG_ADMIN_DIST` | `apps/admin/dist`；安装要求存在 index.html |
 | `paths.media_dir` | `BLOG_MEDIA_DIR` | `data/media` |
 | 无（环境变量） | `TZ` | `UTC`；服务与 CLI 日志时区，与后台站点时区独立 |
@@ -97,7 +97,7 @@ SQLx 已启用 Rustls。连接公网/远程数据库时可在 `DATABASE_URL` 使
 | 设置 | 权威来源 | 生效时机 |
 |---|---|---|
 | 标题、描述、Logo | `settings.site` | 后续请求 |
-| 当前主题 | `settings.theme` | 后续请求；仅限启动时已加载的主题 |
+| 当前主题 | `settings.theme` | 后续请求；已验证的启动主题或后台新安装主题 |
 | 评论开关 | `settings.comments` | 后续请求 |
 | 评论 IP / 审计保留期 | `settings.comments.ip_retention_days` / `settings.audit.retention_days` | 下次维护任务，默认各 180 天 |
 | 固定后台任务计划 | `task_schedules` | 后续领取；retention 默认每天且禁用，publish_due 固定 30 秒启用；HTML 可提交未来一次性请求 |
@@ -157,7 +157,7 @@ Secure 模式使用 `__Host-blog_session`（`Secure; HttpOnly; SameSite=Lax; Pat
 | TOML 字段 | 环境变量 | 默认值 |
 |---|---|---|
 | `request_timeout_secs` | `BLOG_REQUEST_TIMEOUT_SECS` | 30 秒 |
-| `upload_timeout_secs` | `BLOG_UPLOAD_TIMEOUT_SECS` | 120 秒，仅 POST `/api/admin/v1/media` |
+| `upload_timeout_secs` | `BLOG_UPLOAD_TIMEOUT_SECS` | 120 秒，媒体上传及主题 ZIP 上传/验证 |
 | `header_timeout_secs` | `BLOG_HEADER_TIMEOUT_SECS` | 10 秒 |
 | `io_idle_timeout_secs` | `BLOG_IO_IDLE_TIMEOUT_SECS` | 30 秒，socket 读写停滞期限 |
 | `connection_max_age_secs` | `BLOG_CONNECTION_MAX_AGE_SECS` | 300 秒，含持续缓慢传输和 keep-alive |

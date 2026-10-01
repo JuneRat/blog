@@ -25,12 +25,13 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 10001 blog \
     && useradd --uid 10001 --gid blog --no-create-home --home-dir /nonexistent blog \
-    && install -d -o blog -g blog -m 0700 /var/lib/blog/config /var/lib/blog/media
+    && install -d -o blog -g blog -m 0700 /var/lib/blog/config /var/lib/blog/media \
+    && install -d -o blog -g blog /opt/blog/themes
 WORKDIR /opt/blog
 COPY --from=server /out/blog /usr/local/bin/blog
 COPY --from=admin /build/apps/admin/dist/ ./admin/
 COPY migrations/ ./migrations/
-COPY themes/ ./themes/
+COPY --chown=10001:10001 themes/default/ ./themes/default/
 # Local editor-created files may be 0600; public assets must be readable by USER.
 RUN chmod -R a+rX /opt/blog
 ARG VCS_REF=unknown

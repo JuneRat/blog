@@ -24,7 +24,15 @@ export default class FakeVditor {
     const modes = document.createElement("div");
     for (const mode of ["sv", "ir"]) {
       const button = document.createElement("button"); button.dataset.mode = mode;
-      button.addEventListener("click", () => { this.mode = mode; this.display(); });
+      button.addEventListener("click", event => {
+        // Vditor carries the current Markdown into the new view and consumes this click.
+        const markdown = this.getValue();
+        this.mode = mode;
+        this.setValue(markdown);
+        this.display();
+        event.preventDefault();
+        event.stopPropagation();
+      });
       modes.appendChild(button);
     }
     modes.hidden = true;

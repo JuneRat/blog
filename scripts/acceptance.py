@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import shutil
 import signal
 import subprocess
 import sys
@@ -97,6 +98,7 @@ class Acceptance(SiteScenario):
         self.password = "Test-" + secrets.token_hex(16) + "!"
         self.config = root / "config.toml"
         self.media_dir = root / "media"
+        self.theme_dir = root / "themes"
         self.restore_dir = root / "restore"
         self.backup_dir = root / "backup"
         self.steps = []
@@ -104,7 +106,7 @@ class Acceptance(SiteScenario):
 
     def env(self, database=None, restored=False, isolated=False):
         env = clean_env()
-        theme = self.restore_dir / "resources/installed-themes/default" if restored else PROJECT / "themes/default"
+        theme = self.restore_dir / "resources/installed-themes/default" if restored else self.theme_dir / "default"
         media = self.restore_dir / "resources/media" if restored else self.media_dir
         env.update(BLOG_CONFIG_FILE=str(self.config), BLOG_ADMIN_DIST=str(self.args.admin_dist),
                    BLOG_MIGRATIONS_DIR=str(PROJECT / "migrations/postgres"),
@@ -141,6 +143,7 @@ class Acceptance(SiteScenario):
                     "random test database already exists; refusing to reuse it")
         self.pg.execute("createdb", ["--template=template0", self.source])
         self.owned.add(self.source)
+        shutil.copytree(PROJECT / "themes/default", self.theme_dir / "default")
 
     def start(self, database=None, restored=False, isolated=False, installer=False):
         require(self.process is None, "previous server must stop before starting another")
@@ -278,7 +281,7 @@ class Acceptance(SiteScenario):
 
     def backup_restore(self):
         require(self.process is None, "backup requires the owned writer to be stopped")
-        self.recovery_command("backup", ["--output", self.backup_dir, "--theme-dir", PROJECT / "themes/default",
+        self.recovery_command("backup", ["--output", self.backup_dir, "--theme-dir", self.theme_dir / "default",
                                           "--media-dir", self.media_dir, "--maintenance-confirmed"], self.source)
         self.recovery_command("verify", [self.backup_dir])
         manifest = json.loads((self.backup_dir / "manifest.json").read_text())

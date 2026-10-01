@@ -40,6 +40,20 @@ struct ThemeManifest {
 
 fn verify_manifest(theme_dir: &Path) -> Result<ThemeManifest, UseCaseError> {
     let path = theme_dir.join("theme.json");
+    for item in [theme_dir, path.as_path()] {
+        let meta =
+            std::fs::symlink_metadata(item).map_err(|e| UseCaseError::Render(e.to_string()))?;
+        if meta.file_type().is_symlink() {
+            return Err(UseCaseError::Render("主题目录和清单不允许符号链接".into()));
+        }
+    }
+    if std::fs::metadata(&path)
+        .map_err(|e| UseCaseError::Render(e.to_string()))?
+        .len()
+        > 16 * 1024
+    {
+        return Err(UseCaseError::Render("主题清单超过 16 KiB".into()));
+    }
     let raw =
         std::fs::read(&path).map_err(|e| UseCaseError::Render(format!("读取主题清单失败：{e}")))?;
     let manifest: ThemeManifest = serde_json::from_slice(&raw)
@@ -48,6 +62,7 @@ fn verify_manifest(theme_dir: &Path) -> Result<ThemeManifest, UseCaseError> {
         return Err(UseCaseError::Render("主题清单/API 版本不兼容".into()));
     }
     if manifest.slug.is_empty()
+        || manifest.slug.len() > 64
         || !manifest
             .slug
             .bytes()
@@ -266,6 +281,16 @@ impl MiniJinjaThemeRenderer {
         &self.name
     }
 
+    pub fn report(&self) -> application::themes::ThemePackageReport {
+        application::themes::ThemePackageReport {
+            slug: self.slug.clone(),
+            name: self.name.clone(),
+            release: self.release_assets.version.clone(),
+            template_count: self.env.templates().count(),
+            asset_count: self.release_assets.files.len(),
+        }
+    }
+
     pub fn with_data(mut self, data: Arc<ThemeData>) -> Self {
         self.data = Some(data);
         self
@@ -309,7 +334,17 @@ fn read_theme_files(root: &Path) -> Result<BTreeMap<String, Arc<[u8]>>, UseCaseE
         root: &Path,
         path: &Path,
         files: &mut BTreeMap<String, Arc<[u8]>>,
+        visited: &mut usize,
+        total: &mut u64,
     ) -> Result<(), UseCaseError> {
+        *visited += 1;
+        if *visited > 512
+            || path
+                .strip_prefix(root)
+                .is_ok_and(|path| path.components().count() > 16)
+        {
+            return Err(UseCaseError::Render("主题文件数量或目录深度超限".into()));
+        }
         let meta = std::fs::symlink_metadata(path).map_err(|e| {
             UseCaseError::Render(format!("读取主题文件 {} 失败：{e}", path.display()))
         })?;
@@ -319,7 +354,7 @@ fn read_theme_files(root: &Path) -> Result<BTreeMap<String, Arc<[u8]>>, UseCaseE
         if meta.is_dir() {
             for entry in std::fs::read_dir(path).map_err(|e| UseCaseError::Render(e.to_string()))? {
                 let entry = entry.map_err(|e| UseCaseError::Render(e.to_string()))?;
-                visit(root, &entry.path(), files)?;
+                visit(root, &entry.path(), files, visited, total)?;
             }
         } else if meta.is_file() {
             let name = path
@@ -330,7 +365,20 @@ fn read_theme_files(root: &Path) -> Result<BTreeMap<String, Arc<[u8]>>, UseCaseE
             if name.contains('\\') {
                 return Err(UseCaseError::Render("主题路径不允许反斜杠".into()));
             }
-            let bytes = std::fs::read(path).map_err(|e| UseCaseError::Render(e.to_string()))?;
+            if meta.len() > 4 * 1024 * 1024 || name.len() > 240 {
+                return Err(UseCaseError::Render("主题文件或路径过大".into()));
+            }
+            use std::io::Read;
+            let mut bytes = Vec::new();
+            std::fs::File::open(path)
+                .map_err(|e| UseCaseError::Render(e.to_string()))?
+                .take(4 * 1024 * 1024 + 1)
+                .read_to_end(&mut bytes)
+                .map_err(|e| UseCaseError::Render(e.to_string()))?;
+            *total += bytes.len() as u64;
+            if bytes.len() > 4 * 1024 * 1024 || *total > 32 * 1024 * 1024 {
+                return Err(UseCaseError::Render("主题文件大小超限".into()));
+            }
             files.insert(name.to_string(), bytes.into());
         } else {
             return Err(UseCaseError::Render("主题只允许普通文件和目录".into()));
@@ -340,7 +388,7 @@ fn read_theme_files(root: &Path) -> Result<BTreeMap<String, Arc<[u8]>>, UseCaseE
     let mut files = BTreeMap::new();
     match std::fs::symlink_metadata(root) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(files),
-        _ => visit(root, root, &mut files)?,
+        _ => visit(root, root, &mut files, &mut 0, &mut 0)?,
     }
     Ok(files)
 }
@@ -451,15 +499,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn builtin_themes_pass_all_page_contracts_including_fifty_posts() {
+    async fn default_and_third_party_paper_pass_all_page_contracts_including_fifty_posts() {
         let runtime = super::RenderingRuntime::default();
-        for name in ["default", "paper"] {
-            super::MiniJinjaThemeRenderer::load_checked(
-                &std::path::PathBuf::from(format!("../../themes/{name}")),
-                &runtime,
-            )
-            .await
-            .unwrap();
+        for directory in ["../../themes/default", "../../theme-packages/paper"] {
+            super::MiniJinjaThemeRenderer::load_checked(std::path::Path::new(directory), &runtime)
+                .await
+                .unwrap();
         }
     }
 

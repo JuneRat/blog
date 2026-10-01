@@ -1,6 +1,6 @@
 import type * as Wire from "./generated";
 import * as s from "./schemas/settings";
-import { json, request } from "./client";
+import { json, request, requestBinary } from "./client";
 import type { SiteSettings, ThemeSettings } from "../types";
 import type { SaveSiteSettingsInput, RetentionSettings } from "./generated";
 
@@ -27,6 +27,20 @@ export const themeSettingsApi = {
         slug,
         expected_version: expectedVersion,
       }),
+    }),
+  validatePackage: (file: File): Promise<Wire.ThemePackageReport> =>
+    requestBinary(s.themePackageReport, "/api/admin/v1/themes/validate-package", {
+      method: "POST", headers: { "Content-Type": "application/zip" }, body: file,
+    }),
+  install: (file: File): Promise<Wire.ThemePackageReport> =>
+    requestBinary(s.themePackageReport, "/api/admin/v1/themes", {
+      method: "POST", headers: { "Content-Type": "application/zip" }, body: file,
+    }),
+  validateInstalled: (slug: string): Promise<Wire.ThemePackageReport> =>
+    request(s.themePackageReport, `/api/admin/v1/themes/${encodeURIComponent(slug)}/validate`, { method: "POST" }),
+  uninstall: (slug: string, expectedVersion: number, expectedRelease: string): Promise<ThemeSettings> =>
+    request(s.themeSettings, `/api/admin/v1/themes/${encodeURIComponent(slug)}`, {
+      method: "DELETE", body: json<Wire.UninstallThemeInput>({ expected_version: expectedVersion, expected_release: expectedRelease }),
     }),
 };
 

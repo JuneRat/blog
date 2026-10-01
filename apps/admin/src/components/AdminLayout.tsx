@@ -50,6 +50,7 @@ const NAV: MenuProps["items"] = [
       { key: paths.users, label: "用户与角色" },
       { key: paths.roles, label: "角色" },
       { key: paths.settings, label: "站点设置" },
+      { key: paths.themes, label: "主题管理" },
       { key: paths.plugins, label: "插件管理" },
       { key: paths.tasks, label: "任务管理" },
       { key: paths.auditLogs, label: "审计日志" },
@@ -76,6 +77,7 @@ const TITLES: Record<Route["name"], string> = {
   profile: "个人资料",
   roleList: "角色目录",
   settings: "站点设置",
+  themes: "主题管理",
   plugins: "插件管理",
   tasks: "任务管理",
   auditLogs: "审计日志",
@@ -112,6 +114,8 @@ function selectedKey(route: Route): string {
       return paths.roles;
     case "settings":
       return paths.settings;
+    case "themes":
+      return paths.themes;
     case "plugins":
       return paths.plugins;
     case "tasks":

@@ -13,7 +13,8 @@ apps/admin/dist
 !migrations/
 !migrations/**
 !themes/
-!themes/**
+!themes/default/
+!themes/default/**
 !scripts/
 !scripts/recovery.py
 !scripts/recovery_inventory.py

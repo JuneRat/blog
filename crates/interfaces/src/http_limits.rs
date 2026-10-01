@@ -48,12 +48,17 @@ pub async fn run(request: Request, next: Next, id: &RequestId) -> Response {
         .get::<RequestTimeouts>()
         .copied()
         .unwrap_or_default();
-    let budget =
-        if request.method() == Method::POST && request.uri().path() == "/api/admin/v1/media" {
-            limits.upload
-        } else {
-            limits.request
-        };
+    let budget = if request.method() == Method::POST
+        && matches!(
+            request.uri().path(),
+            "/api/admin/v1/media"
+                | "/api/admin/v1/themes"
+                | "/api/admin/v1/themes/validate-package"
+        ) {
+        limits.upload
+    } else {
+        limits.request
+    };
     match tokio::time::timeout(budget, next.run(request)).await {
         Ok(response) => response,
         Err(_) => (StatusCode::REQUEST_TIMEOUT, [("cache-control", "no-store")], Json(serde_json::json!({

@@ -1,6 +1,6 @@
 # Docker Compose 部署
 
-单机常驻服务为 `blog` 和 `db`；备份恢复和媒体清理使用按需启动的 `ops` 服务，保留期维护使用独立的 `maintenance` 服务。主机只需 Docker Engine/Desktop 与 Docker Compose 2.24 或更新版本；构建及备份所需工具均在镜像内。运行镜像包含 release 二进制、后台生产资源、两套主题和 PostgreSQL 迁移，全部资源使用容器内绝对路径。
+单机常驻服务为 `blog` 和 `db`；备份恢复和媒体清理使用按需启动的 `ops` 服务，保留期维护使用独立的 `maintenance` 服务。主机只需 Docker Engine/Desktop 与 Docker Compose 2.24 或更新版本；构建及备份所需工具均在镜像内。运行镜像包含 release 二进制、后台生产资源、Default 主题和 PostgreSQL 迁移，全部资源使用容器内绝对路径。Paper 通过[第三方主题包](../theme-packages/README.md#paper)上传安装。
 
 ## 从源码构建并首次安装
 
@@ -65,10 +65,11 @@ python3 -B scripts/test_compose.py --image blog:local --ops-image blog-ops:local
 | `postgres-data` | `/var/lib/postgresql` | PostgreSQL 18 数据；实际 PGDATA 位于版本子目录 |
 | `blog-config` | `/var/lib/blog/config` | TOML 和未完成安装的临时恢复日志 |
 | `blog-media` | `/var/lib/blog/media` | 媒体原件与上传暂存 |
+| `blog-themes` | `/opt/blog/themes` | 内置及后台安装的主题 |
 
 默认项目名为 `blog`。保持同一项目名才能复用原卷；改用 `-p` 时，后续命令也必须使用同一名称。普通 `docker compose down` 保留卷，`down --volumes` 会删除这些持久数据。不要通过删卷解决安装或升级错误。
 
-首次创建命名卷时，Docker 复制镜像目录的 UID/GID 和权限，博客以 `10001:10001` 写入配置与媒体。若改成宿主机 bind mount，须提前创建目录并授予该 UID 写权限；配置目录应为 700。根文件系统只读，临时文件使用 `/tmp` 的 tmpfs。
+首次创建命名卷时，Docker 复制镜像目录的 UID/GID 和权限，博客以 `10001:10001` 写入配置、媒体与主题。若改成宿主机 bind mount，须提前创建目录并授予该 UID 写权限；配置目录应为 700。主题卷首次创建时复制镜像内的主题；已有卷不会随镜像替换自动更新内置主题，升级主题需显式维护卷内容。备份应包含实际使用的主题卷。根文件系统只读，临时文件使用 `/tmp` 的 tmpfs。
 
 PostgreSQL 初始化脚本只对新卷执行；修改 `.env` 的密码不会修改已有数据库角色密码。已有密码需用 `psql` 的 `\password` 修改，并同步实际连接配置。[官方镜像说明](https://hub.docker.com/_/postgres)
 

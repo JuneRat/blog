@@ -2,11 +2,20 @@
 pub struct ThemeOption {
     pub slug: String,
     pub name: String,
+    pub release: String,
 }
 impl From<application::themes::ThemeOption> for ThemeOption {
     fn from(value: application::themes::ThemeOption) -> Self {
-        let application::themes::ThemeOption { slug, name } = value;
-        Self { slug, name }
+        let application::themes::ThemeOption {
+            slug,
+            name,
+            release,
+        } = value;
+        Self {
+            slug,
+            name,
+            release,
+        }
     }
 }
 
@@ -28,6 +37,7 @@ impl From<application::settings::SiteSettingsSource> for SiteSettingsSource {
 pub struct ThemeSettings {
     pub slug: String,
     pub effective_slug: String,
+    pub fallback_slug: String,
     pub source: SiteSettingsSource,
     pub version: i64,
     pub available: Vec<ThemeOption>,
@@ -37,6 +47,7 @@ impl From<application::settings::ThemeSettingsView> for ThemeSettings {
         let application::settings::ThemeSettingsView {
             slug,
             effective_slug,
+            fallback_slug,
             source,
             version,
             available,
@@ -44,6 +55,7 @@ impl From<application::settings::ThemeSettingsView> for ThemeSettings {
         Self {
             slug,
             effective_slug,
+            fallback_slug,
             source: source.into(),
             version,
             available: available.into_iter().map(Into::into).collect(),

@@ -21,3 +21,8 @@
 # 已移除实验工程的本地构建残留不入库。
 /spikes/template-bridge/target
 /spikes/template-bridge/Cargo.lock
+# 后台安装的主题属于运行期数据，只保留内置 Default。
+/themes/*
+!/themes/default/
+# 主题 ZIP 按需生成，不提交分发包。
+/theme-packages/*.zip

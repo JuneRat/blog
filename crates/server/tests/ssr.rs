@@ -658,7 +658,7 @@ async fn tag_page_paginates_public_posts() {
 #[tokio::test]
 async fn taxonomy_pagination_keeps_return_links_after_shrinking_to_one_page() {
     let _g = SERIAL.lock().await;
-    for theme in ["../../themes/default", "../../themes/paper"] {
+    for theme in ["../../themes/default", "../../theme-packages/paper"] {
         let stack = stack_with_theme(theme).await;
         let tag = seed_tag(&stack, "分页标签", "pagination-tag").await;
         let now = time::OffsetDateTime::now_utc();
@@ -905,7 +905,7 @@ async fn series_page_lists_public_posts_in_reading_order() {
 #[tokio::test]
 async fn paper_theme_functions_use_only_public_data() {
     let _g = SERIAL.lock().await;
-    let s = stack_with_theme("../../themes/paper").await;
+    let s = stack_with_theme("../../theme-packages/paper").await;
     let tag = seed_tag(&s, "主题标签", "paper-tag").await;
     let category = domain::content::Category::new(
         "主题分类".into(),
@@ -1151,7 +1151,7 @@ async fn site_zone_formats_both_themes_and_theme_functions_without_changing_feed
         "{{ posts[0].published_at }}|{{ get_posts(limit=1).items[0].published_at }}|{{ get_post(slug='zoned-post').published_at }}").unwrap();
     for theme in [
         "../../themes/default",
-        "../../themes/paper",
+        "../../theme-packages/paper",
         function_theme.to_str().unwrap(),
     ] {
         let s = stack_with_zone(theme, "Asia/Shanghai").await;
@@ -1277,7 +1277,7 @@ async fn home_pagination_uses_the_current_site_setting() {
 #[tokio::test]
 async fn navigation_follows_page_publication() {
     let _guard = SERIAL.lock().await;
-    for theme in ["../../themes/default", "../../themes/paper"] {
+    for theme in ["../../themes/default", "../../theme-packages/paper"] {
         let stack = stack_with_theme(theme).await;
         sqlx::query("INSERT INTO pages (id,slug,title,content,content_html,content_render_version,status,published_at)
             VALUES(gen_random_uuid(),'about','About','body','<p>body</p>',1,'published',now()),

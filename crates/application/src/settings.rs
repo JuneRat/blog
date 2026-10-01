@@ -73,6 +73,7 @@ pub struct SettingsInteractor {
     /// 装配回退值：内置默认值（server 装配层构造，进程内不变）。
     fallback: SiteInfo,
     themes: Option<(Arc<dyn ThemeSettingsStore>, Arc<ThemeRegistry>)>,
+    theme_packages: Option<Arc<dyn crate::themes::ThemePackages>>,
     /// 站点 logo 附着的可用性校验（`ensure_attachable`）。
     media_guard: Arc<dyn crate::ports::MediaRefGuard>,
 }
@@ -81,6 +82,7 @@ pub struct SettingsInteractor {
 pub struct ThemeSettingsView {
     pub slug: String,
     pub effective_slug: String,
+    pub fallback_slug: String,
     pub source: SiteSettingsSource,
     pub version: i64,
     pub available: Vec<ThemeOption>,
@@ -104,6 +106,7 @@ impl SettingsInteractor {
             clock,
             fallback,
             themes: None,
+            theme_packages: None,
             media_guard,
         }
     }
@@ -146,6 +149,10 @@ impl SettingsInteractor {
         if !actor.has_permission("settings.manage") {
             return Err(UseCaseError::Forbidden);
         }
+        let _guard = match &self.theme_packages {
+            Some(packages) => Some(packages.lock().await),
+            None => None,
+        };
         let (store, registry) = self
             .themes
             .as_ref()
@@ -207,6 +214,7 @@ impl SettingsInteractor {
         registry: &ThemeRegistry,
     ) -> ThemeSettingsView {
         ThemeSettingsView {
+            fallback_slug: registry.fallback().to_string(),
             effective_slug: if registry.contains(&slug) {
                 slug.clone()
             } else {
@@ -217,6 +225,83 @@ impl SettingsInteractor {
             version,
             available: registry.options(),
         }
+    }
+
+    pub fn with_theme_packages(mut self, packages: Arc<dyn crate::themes::ThemePackages>) -> Self {
+        self.theme_packages = Some(packages);
+        self
+    }
+
+    fn theme_packages(
+        &self,
+        actor: &Actor,
+    ) -> Result<&Arc<dyn crate::themes::ThemePackages>, UseCaseError> {
+        actor.ensure_write_channel()?;
+        if !actor.has_permission("settings.manage") {
+            return Err(UseCaseError::Forbidden);
+        }
+        self.theme_packages
+            .as_ref()
+            .ok_or_else(|| UseCaseError::Invalid("主题包管理未装配".into()))
+    }
+
+    pub async fn validate_theme_package(
+        &self,
+        actor: &Actor,
+        bytes: Vec<u8>,
+    ) -> Result<crate::themes::ThemePackageReport, UseCaseError> {
+        self.theme_packages(actor)?.validate_package(bytes).await
+    }
+
+    pub async fn install_theme(
+        &self,
+        actor: &Actor,
+        bytes: Vec<u8>,
+    ) -> Result<crate::themes::ThemePackageReport, UseCaseError> {
+        let packages = self.theme_packages(actor)?;
+        let _guard = packages.lock().await;
+        packages.install(bytes, actor.audit_context()).await
+    }
+
+    pub async fn validate_installed_theme(
+        &self,
+        actor: &Actor,
+        slug: &str,
+    ) -> Result<crate::themes::ThemePackageReport, UseCaseError> {
+        let packages = self.theme_packages(actor)?;
+        let _guard = packages.lock().await;
+        packages.validate_installed(slug).await
+    }
+
+    pub async fn uninstall_theme(
+        &self,
+        actor: &Actor,
+        slug: &str,
+        expected_version: Option<i64>,
+        expected_release: &str,
+    ) -> Result<ThemeSettingsView, UseCaseError> {
+        let packages = self.theme_packages(actor)?;
+        let _guard = packages.lock().await;
+        let mut view = self.load_theme_view().await?;
+        checked_version(view.version, expected_version)?;
+        if slug == view.fallback_slug {
+            return Err(UseCaseError::Invalid("启动默认主题不能卸载".into()));
+        }
+        if slug == view.effective_slug || slug == view.slug {
+            return Err(UseCaseError::Invalid(
+                "当前生效主题不能卸载，请先激活其他主题".into(),
+            ));
+        }
+        let registry = &self.themes.as_ref().unwrap().1;
+        if !registry.contains(slug) {
+            return Err(UseCaseError::NotFound("主题未安装".into()));
+        }
+        if registry.assets(slug, expected_release).is_none() {
+            return Err(UseCaseError::VersionConflict);
+        }
+        packages.uninstall(slug, actor.audit_context()).await?;
+        view.available = registry.options();
+        Ok(view)
     }
 
     /// site 分组管理视图（读取也要求 `settings.manage`，见模块说明）。

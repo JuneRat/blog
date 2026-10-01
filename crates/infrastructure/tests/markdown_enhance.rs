@@ -327,17 +327,15 @@ async fn both_themes_include_preview_assets_for_posts_and_pages_but_not_indexes(
         category: None,
         series: vec![],
     };
-    for name in ["default", "paper"] {
+    for directory in ["../../themes/default", "../../theme-packages/paper"] {
         let theme = runtime.theme_renderer(
-            infrastructure::MiniJinjaThemeRenderer::load(Path::new(&format!(
-                "../../themes/{name}"
-            )))
-            .unwrap()
-            .with_data(Arc::new(application::theme_data::ThemeData::new(
-                Arc::new(EmptyPublicData),
-                Arc::new(EmptyPublicData),
-                Arc::new(EmptyPublicData),
-            ))),
+            infrastructure::MiniJinjaThemeRenderer::load(Path::new(directory))
+                .unwrap()
+                .with_data(Arc::new(application::theme_data::ThemeData::new(
+                    Arc::new(EmptyPublicData),
+                    Arc::new(EmptyPublicData),
+                    Arc::new(EmptyPublicData),
+                ))),
         );
         for html in [
             theme.render_page(&site, &seo, &page).await.unwrap(),

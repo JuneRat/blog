@@ -10,6 +10,7 @@ import type { HistoryBlocker } from "./navigationHistory";
  * - 媒体库：`/admin/media`
  * - 用户与角色：`/admin/users`、`/admin/roles`
  * - 站点设置：`/admin/settings`
+ * - 主题与插件管理：`/admin/themes`、`/admin/plugins`
  *
  * 管理地址使用稳定内容 ID；slug 只用于公开地址，改名不会改变编辑页身份。
  */
@@ -31,6 +32,7 @@ export type Route =
   | { name: "profile" }
   | { name: "roleList" }
   | { name: "settings" }
+  | { name: "themes" }
   | { name: "plugins" }
   | { name: "tasks" }
   | { name: "auditLogs" }
@@ -99,6 +101,9 @@ export function parseRoute(pathname: string): Route {
   if (segments[0] === "settings") {
     return segments.length === 1 ? { name: "settings" } : { name: "invalid" };
   }
+  if (segments[0] === "themes") {
+    return segments.length === 1 ? { name: "themes" } : { name: "invalid" };
+  }
   if (segments[0] === "plugins") {
     return segments.length === 1 ? { name: "plugins" } : { name: "invalid" };
   }
@@ -140,6 +145,7 @@ export const paths = {
   profile: `${BASE}/profile`,
   roles: `${BASE}/roles`,
   settings: `${BASE}/settings`,
+  themes: `${BASE}/themes`,
   plugins: `${BASE}/plugins`,
   tasks: `${BASE}/tasks`,
   auditLogs: `${BASE}/audit-logs`,

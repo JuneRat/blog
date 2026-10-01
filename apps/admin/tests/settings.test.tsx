@@ -30,7 +30,7 @@ vi.mock("../src/api/comments", async (load) => {
 });
 vi.mock("../src/api/settings", async (load) => {
   const original = await load<typeof import("../src/api/settings")>();
-  return { ...original, settingsApi: { get: vi.fn(), save: vi.fn() }, themeSettingsApi: { get: vi.fn(), save: vi.fn() }, retentionApi: { get: vi.fn(), save: vi.fn() } };
+  return { ...original, settingsApi: { get: vi.fn(), save: vi.fn() }, themeSettingsApi: { get: vi.fn(), save: vi.fn(), install: vi.fn(), validatePackage: vi.fn(), validateInstalled: vi.fn(), uninstall: vi.fn() }, retentionApi: { get: vi.fn(), save: vi.fn() } };
 });
 vi.mock("../src/api/media", async (load) => {
   const original = await load<typeof import("../src/api/media")>();
@@ -73,15 +73,98 @@ beforeEach(() => {
   vi.mocked(identityApi.accessSettings).mockResolvedValue({ registration_enabled: false, guest_comments_enabled: false, version: 0 });
   vi.mocked(commentsApi.policy).mockResolvedValue({ enabled: true, moderation: 'all', version: 4 });
   vi.mocked(retentionApi.get).mockResolvedValue({ comment_ip_days: 180, comment_version: 0, audit_days: 180, audit_version: 0 });
-  vi.mocked(themeSettingsApi.get).mockResolvedValue({ slug: "default", effective_slug: "default", source: "fallback", version: 0, available: [{ slug: "default", name: "Default" }, { slug: "paper", name: "Paper" }] });
+  vi.mocked(themeSettingsApi.get).mockResolvedValue({ slug: "default", effective_slug: "default", fallback_slug: "default", source: "fallback", version: 0, available: [{ slug: "default", name: "Default", release: "default-release" }, { slug: "paper", name: "Paper", release: "paper-release" }] });
 });
 afterEach(cleanup);
 
-describe("站点设置屏", () => {
-  it("站点设置保留四组配置，任务管理使用独立入口", async () => {
+describe("站点设置与主题管理", () => {
+  it("先验证 ZIP 再安装，验证不激活，新主题立即可选且保留待激活选择", async () => {
+    const report = { slug: "custom", name: "Custom", release: "a".repeat(64), template_count: 6, asset_count: 1 };
+    vi.mocked(themeSettingsApi.validatePackage).mockResolvedValue(report);
+    vi.mocked(themeSettingsApi.install).mockResolvedValue(report);
+    const initial = await themeSettingsApi.get();
+    vi.mocked(themeSettingsApi.get).mockResolvedValueOnce(initial).mockResolvedValue({ ...initial, available: [...initial.available, { slug: "custom", name: "Custom", release: "custom-release" }] });
+    render(<App />);
+    fireEvent.click(await screen.findByRole("menuitem", { name: "主题管理" }));
+    const paper = await screen.findByRole("button", { name: "选择主题 Paper" });
+    fireEvent.click(paper);
+    const file = new File(["zip"], "custom.zip", { type: "application/zip" });
+    fireEvent.change(screen.getByLabelText("主题 ZIP 包"), { target: { files: [file] } });
+    fireEvent.click(screen.getByRole("button", { name: "验证主题包" }));
+    await screen.findByText(/验证通过，尚未安装/);
+    expect(themeSettingsApi.validatePackage).toHaveBeenCalledWith(file);
+    expect(themeSettingsApi.install).not.toHaveBeenCalled();
+    expect(themeSettingsApi.save).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "安装主题" }));
+    await screen.findByRole("button", { name: "选择主题 Custom" });
+    expect(themeSettingsApi.install).toHaveBeenCalledWith(file);
+    expect(paper.getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", { name: "安装主题" }).hasAttribute("disabled")).toBe(true);
+  });
+
+  it("验证已安装快照不改变选择，默认和活动主题禁止卸载", async () => {
+    vi.mocked(themeSettingsApi.get).mockResolvedValue({ slug: "paper", effective_slug: "paper", fallback_slug: "default", source: "database", version: 4, available: [{ slug: "default", name: "Default", release: "default-release" }, { slug: "paper", name: "Paper", release: "paper-release" }] });
+    vi.mocked(themeSettingsApi.validateInstalled).mockResolvedValue({ slug: "default", name: "Default", release: "b".repeat(64), template_count: 7, asset_count: 1 });
+    render(<App />);
+    fireEvent.click(await screen.findByRole("menuitem", { name: "主题管理" }));
+    const verify = await screen.findByRole("button", { name: "验证主题 Default" });
+    expect(screen.getByRole("button", { name: "卸载主题 Default" }).hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("button", { name: "卸载主题 Paper" }).hasAttribute("disabled")).toBe(true);
+    fireEvent.click(verify);
+    await screen.findByText(/已安装快照验证通过/);
+    expect(themeSettingsApi.validateInstalled).toHaveBeenCalledWith("default");
+    expect(screen.getByRole("button", { name: "选择主题 Paper" }).getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("卸载前确认并携带激活版本，卸载待选主题后恢复当前生效选择", async () => {
+    const initial = await themeSettingsApi.get();
+    vi.mocked(themeSettingsApi.uninstall).mockResolvedValue({ ...initial, available: [initial.available[0]] });
+    render(<App />);
+    fireEvent.click(await screen.findByRole("menuitem", { name: "主题管理" }));
+    fireEvent.click(await screen.findByRole("button", { name: "选择主题 Paper" }));
+    fireEvent.click(screen.getByRole("button", { name: "卸载主题 Paper" }));
+    expect(themeSettingsApi.uninstall).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByRole("button", { name: "卸载" }));
+    await screen.findByText(/主题「paper」已卸载/);
+    expect(themeSettingsApi.uninstall).toHaveBeenCalledWith("paper", 0, "paper-release");
+    expect(screen.queryByRole("button", { name: "选择主题 Paper" })).toBeNull();
+    expect(screen.getByRole("button", { name: "选择主题 Default" }).getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("损坏包显示验证原因且不安装，换包会清除上次验证状态", async () => {
+    vi.mocked(themeSettingsApi.validatePackage).mockRejectedValue(new ApiError(400, "主题验证失败：empty/index.html", "invalid", "theme-1"));
+    render(<App />);
+    fireEvent.click(await screen.findByRole("menuitem", { name: "主题管理" }));
+    const input = await screen.findByLabelText("主题 ZIP 包");
+    fireEvent.change(input, { target: { files: [new File(["zip"], "broken.zip")] } });
+    fireEvent.click(screen.getByRole("button", { name: "验证主题包" }));
+    await screen.findByText(/主题验证失败：empty\/index.html/);
+    expect(themeSettingsApi.install).not.toHaveBeenCalled();
+    fireEvent.change(input, { target: { files: [new File([], "empty.zip")] } });
+    await screen.findByText(/请选择非空且不超过 10 MiB/);
+    expect(screen.getByRole("button", { name: "安装主题" }).hasAttribute("disabled")).toBe(true);
+  });
+
+  it("卸载版本冲突重取最新视图，不自动重试已经生效的主题", async () => {
+    const initial = await themeSettingsApi.get();
+    vi.mocked(themeSettingsApi.get).mockResolvedValueOnce(initial).mockResolvedValue({ ...initial, slug: "paper", effective_slug: "paper", source: "database", version: 1 });
+    vi.mocked(themeSettingsApi.uninstall).mockRejectedValue(new ApiError(409, "版本冲突", "version_conflict", "theme-2"));
+    render(<App />);
+    fireEvent.click(await screen.findByRole("menuitem", { name: "主题管理" }));
+    fireEvent.click(await screen.findByRole("button", { name: "卸载主题 Paper" }));
+    fireEvent.click(await screen.findByRole("button", { name: "卸载" }));
+    await screen.findByText(/当前主题：Paper/);
+    expect(themeSettingsApi.uninstall).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: "卸载主题 Paper" }).hasAttribute("disabled")).toBe(true);
+    expect(themeSettingsApi.save).not.toHaveBeenCalled();
+  });
+
+  it("站点设置保留三组配置，主题、插件和任务管理使用独立入口", async () => {
     render(<App />);
     await screen.findByLabelText("站点时区");
-    expect(screen.getAllByRole("tab")).toHaveLength(4);
+    expect(screen.getAllByRole("tab").map(tab => tab.textContent)).toEqual(["常规设置", "账号与评论", "数据保留"]);
+    expect(screen.getByRole("menuitem", { name: "主题管理" })).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: "插件管理" })).toBeTruthy();
     expect(screen.queryByRole("tab", { name: "内容维护" })).toBeNull();
     expect(screen.getByRole("menuitem", { name: "任务管理" })).toBeTruthy();
   });
@@ -154,16 +237,16 @@ describe("站点设置屏", () => {
     await screen.findByText("保留期已保存，下次维护时生效。");
   });
   it("切换主题携带版本并显示即时生效", async () => {
-    vi.mocked(themeSettingsApi.save).mockResolvedValue({ slug: "paper", effective_slug: "paper", source: "database", version: 1, available: [{ slug: "default", name: "Default" }, { slug: "paper", name: "Paper" }] });
+    vi.mocked(themeSettingsApi.save).mockResolvedValue({ slug: "paper", effective_slug: "paper", fallback_slug: "default", source: "database", version: 1, available: [{ slug: "default", name: "Default", release: "default-release" }, { slug: "paper", name: "Paper", release: "paper-release" }] });
     render(<App />);
-    fireEvent.click(await screen.findByRole("tab", { name: "主题外观" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "主题管理" }));
     // 主题下拉是 antd Select，不是原生控件：fireEvent.change 改不动它的值。
     // 先等主题加载完成（否则展开的是空列表），再 mouseDown 展开、点选项文案。
     await screen.findByText(/当前主题：Default/);
     const select = await screen.findByLabelText("选择主题");
     fireEvent.mouseDown(select);
     fireEvent.click(await screen.findByTitle("Paper"));
-    fireEvent.click(screen.getByRole("button", { name: "切换主题" }));
+    fireEvent.click(screen.getByRole("button", { name: "激活主题" }));
     await waitFor(() => expect(themeSettingsApi.save).toHaveBeenCalledWith("paper", 0));
     await waitFor(() => expect(screen.getByText(/主题已切换为「Paper」/)).toBeTruthy());
   });
@@ -171,28 +254,28 @@ describe("站点设置屏", () => {
   it("点击主题卡片可选择主题并触发切换保存", async () => {
     vi.mocked(themeSettingsApi.save).mockResolvedValue({
       slug: "paper",
-      effective_slug: "paper",
+      effective_slug: "paper", fallback_slug: "default",
       source: "database",
       version: 1,
       available: [
-        { slug: "default", name: "Default" },
-        { slug: "paper", name: "Paper" },
+        { slug: "default", name: "Default", release: "default-release" },
+        { slug: "paper", name: "Paper", release: "paper-release" },
       ],
     });
     render(<App />);
-    fireEvent.click(await screen.findByRole("tab", { name: "主题外观" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "主题管理" }));
     await screen.findByText(/当前主题：Default/);
     fireEvent.click(screen.getByText("Paper"));
-    fireEvent.click(screen.getByRole("button", { name: "切换主题" }));
+    fireEvent.click(screen.getByRole("button", { name: "激活主题" }));
     await waitFor(() => expect(themeSettingsApi.save).toHaveBeenCalledWith("paper", 0));
     await waitFor(() => expect(screen.getByText(/主题已切换为「Paper」/)).toBeTruthy());
   });
 
   it("键盘选择待生效主题后拦截离开，恢复原选择或保存后清除保护", async () => {
-    vi.mocked(themeSettingsApi.save).mockResolvedValue({ slug: "paper", effective_slug: "paper", source: "database", version: 1,
-      available: [{ slug: "default", name: "Default" }, { slug: "paper", name: "Paper" }] });
+    vi.mocked(themeSettingsApi.save).mockResolvedValue({ slug: "paper", effective_slug: "paper", fallback_slug: "default", source: "database", version: 1,
+      available: [{ slug: "default", name: "Default", release: "default-release" }, { slug: "paper", name: "Paper", release: "paper-release" }] });
     render(<App />);
-    fireEvent.click(await screen.findByRole("tab", { name: "主题外观" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "主题管理" }));
     const paper = await screen.findByRole("button", { name: "选择主题 Paper" });
     fireEvent.keyDown(paper, { key: "Enter" });
     expect(paper.getAttribute("aria-pressed")).toBe("true");
@@ -202,13 +285,13 @@ describe("站点设置屏", () => {
     fireEvent.click(screen.getByRole("button", { name: "个人资料" }));
     await screen.findByRole("dialog", { name: "有未保存的修改" });
     fireEvent.click(screen.getByRole("button", { name: "留在此页" }));
-    expect(window.location.pathname).toBe(paths.settings);
+    expect(window.location.pathname).toBe(paths.themes);
     fireEvent.keyDown(screen.getByRole("button", { name: "选择主题 Default" }), { key: " " });
     const reverted = new Event("beforeunload", { cancelable: true });
     act(() => { window.dispatchEvent(reverted); });
     expect(reverted.defaultPrevented).toBe(false);
     fireEvent.keyDown(paper, { key: "Enter" });
-    fireEvent.click(screen.getByRole("button", { name: "切换主题" }));
+    fireEvent.click(screen.getByRole("button", { name: "激活主题" }));
     await screen.findByText(/主题已切换为「Paper」/);
     const saved = new Event("beforeunload", { cancelable: true });
     act(() => { window.dispatchEvent(saved); });
@@ -216,12 +299,12 @@ describe("站点设置屏", () => {
   });
 
   it("已保存主题缺失时提示默认主题并允许修复", async () => {
-    vi.mocked(themeSettingsApi.get).mockResolvedValue({ slug: "removed", effective_slug: "default", source: "database", version: 3, available: [{ slug: "default", name: "Default" }, { slug: "paper", name: "Paper" }] });
-    vi.mocked(themeSettingsApi.save).mockResolvedValue({ slug: "default", effective_slug: "default", source: "database", version: 4, available: [{ slug: "default", name: "Default" }, { slug: "paper", name: "Paper" }] });
+    vi.mocked(themeSettingsApi.get).mockResolvedValue({ slug: "removed", effective_slug: "default", fallback_slug: "default", source: "database", version: 3, available: [{ slug: "default", name: "Default", release: "default-release" }, { slug: "paper", name: "Paper", release: "paper-release" }] });
+    vi.mocked(themeSettingsApi.save).mockResolvedValue({ slug: "default", effective_slug: "default", fallback_slug: "default", source: "database", version: 4, available: [{ slug: "default", name: "Default", release: "default-release" }, { slug: "paper", name: "Paper", release: "paper-release" }] });
     render(<App />);
-    fireEvent.click(await screen.findByRole("tab", { name: "主题外观" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "主题管理" }));
     expect(await screen.findByText(/已保存的主题「removed」当前未安装/)).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "切换主题" }));
+    fireEvent.click(screen.getByRole("button", { name: "激活主题" }));
     await waitFor(() => expect(themeSettingsApi.save).toHaveBeenCalledWith("default", 3));
   });
   it("加载生效值并标注来源为内置默认值", async () => {

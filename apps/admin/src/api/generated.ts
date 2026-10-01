@@ -319,9 +319,13 @@ export type TaskTrigger = "manual" | "once" | "periodic" | "retry";
 
 export type TaskView = { available: boolean, retention_available: boolean, pending_html: HtmlRebuildCounts | null, schedules: Array<TaskSchedule>, latest: Array<TaskRun>, runs: TaskRunPage, };
 
-export type ThemeOption = { slug: string, name: string, };
+export type ThemeOption = { slug: string, name: string, release: string, };
 
-export type ThemeSettings = { slug: string, effective_slug: string, source: SiteSettingsSource, version: number, available: Array<ThemeOption>, };
+export type ThemePackageReport = { slug: string, name: string, release: string, template_count: number, asset_count: number, };
+
+export type ThemeSettings = { slug: string, effective_slug: string, fallback_slug: string, source: SiteSettingsSource, version: number, available: Array<ThemeOption>, };
+
+export type UninstallThemeInput = { expected_version: number, expected_release: string, };
 
 export type UpdateCategoryInput = { name: string, description?: string | null,
 /**

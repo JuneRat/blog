@@ -12,6 +12,7 @@ import json
 import os
 from pathlib import Path
 import socket
+import shutil
 import subprocess
 import tempfile
 import time
@@ -49,6 +50,9 @@ class PostgresRecoveryTests(unittest.TestCase):
         self.addCleanup(self.cleanup_database)
         self.pg.run("createdb", ["--template=template0", self.source], database="postgres")
         self.media_dir = self.root / "media"
+        self.theme_dir = self.root / "themes"
+        shutil.copytree(PROJECT / "themes/default", self.theme_dir / "default")
+        shutil.copytree(PROJECT / "theme-packages/paper", self.theme_dir / "paper")
         (self.media_dir / "objects").mkdir(parents=True)
         self.ids = {key: str(uuid.uuid4()) for key in ("media", "unused", "deleted", "root", "reply", "nested", "series1", "series2")}
         self.cli(["migrate"])
@@ -73,7 +77,7 @@ class PostgresRecoveryTests(unittest.TestCase):
         env = dict(os.environ, DATABASE_URL=self.url(database or self.source, role),
                    BLOG_CONFIG_FILE=str(self.root / "config.toml"),
                    BLOG_MIGRATIONS_DIR=str(PROJECT / "migrations/postgres"),
-                   BLOG_THEME_DIR=str(PROJECT / "themes/default"),
+                   BLOG_THEME_DIR=str(self.theme_dir / "default"),
                    BLOG_MEDIA_DIR=str(self.media_dir), BLOG_RECOVERY_MODE="0",
                    BLOG_PUBLIC_BASE_URL="http://127.0.0.1:8080", BLOG_SECURE_COOKIES="0")
         env.update(extra)
@@ -145,7 +149,7 @@ class PostgresRecoveryTests(unittest.TestCase):
         self.assertEqual((result["comment_ips"],result["audit_logs"]),(3,1))
 
         backup = self.root / "backup"
-        args = argparse.Namespace(output=backup, theme_dir=PROJECT / "themes/default", media_dir=self.media_dir,
+        args = argparse.Namespace(output=backup, theme_dir=self.theme_dir / "default", media_dir=self.media_dir,
                                   resource=[], maintenance_confirmed=True, docker_container=self.container)
         with patch.dict(os.environ, {"DATABASE_URL":self.url(self.source)}), contextlib.redirect_stdout(io.StringIO()):
             # A missing formal object prevents completion, including a soft-deleted one.
@@ -206,7 +210,7 @@ class PostgresRecoveryTests(unittest.TestCase):
 
         docker = ["--docker-container", self.container] if self.container else []
         def backup(root, destination):
-            tool(root, ["backup", "--output", destination, "--theme-dir", PROJECT / "themes/default",
+            tool(root, ["backup", "--output", destination, "--theme-dir", self.theme_dir / "default",
                         "--media-dir", self.media_dir, "--blog-bin", PROJECT / "target/debug/blog",
                         "--maintenance-confirmed", *docker])
 

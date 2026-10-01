@@ -44,7 +44,7 @@ pub struct HttpConfig {
 }
 
 pub struct HttpAssets {
-    pub themes: Vec<application::themes::ThemeAssets>,
+    pub themes: Arc<application::themes::ThemeRegistry>,
     pub plugins: Vec<application::plugins::PluginAssets>,
     pub admin_dist: PathBuf,
 }
@@ -96,7 +96,7 @@ pub fn app_router(state: AppState, assets: HttpAssets, config: HttpConfig) -> Ro
     });
     let public =
         crate::http_plugins::mount_plugin_assets(public_router(state.public), assets.plugins);
-    let app = mount_theme_assets(public, assets.themes)
+    let app = mount_live_theme_assets(public, assets.themes)
         .merge(crate::http_auth::auth_router(state.auth))
         .merge(crate::http_auth::admin_router(state.admin.clone()))
         .merge(crate::http_admin::posts_router(state.admin.clone()))
@@ -105,6 +105,7 @@ pub fn app_router(state: AppState, assets: HttpAssets, config: HttpConfig) -> Ro
         .merge(crate::http_admin::categories_router(state.admin.clone()))
         .merge(crate::http_admin::series_router(state.admin.clone()))
         .merge(crate::http_admin::settings_router(state.admin.clone()))
+        .merge(crate::http_themes::themes_router(state.admin.clone()))
         .merge(crate::http_media::media_admin_router(state.admin.clone()))
         .merge(crate::http_identity::identity_router(state.admin))
         .merge(crate::http_media::media_read_router(media_read))
@@ -193,6 +194,47 @@ pub fn mount_theme_assets(
         );
     }
     router
+}
+
+/// Look up the immutable release snapshot on each asset request, including themes
+/// installed after the router was constructed. Never serve mutable disk content.
+pub fn mount_live_theme_assets(
+    router: Router,
+    registry: Arc<application::themes::ThemeRegistry>,
+) -> Router {
+    router.route(
+        "/assets/{slug}/{release}/{*path}",
+        get(
+            move |Path((slug, release, path)): Path<(String, String, String)>| {
+                let registry = registry.clone();
+                async move {
+                    let Some(assets) = registry.assets(&slug, &release) else {
+                        return StatusCode::NOT_FOUND.into_response();
+                    };
+                    let Some(bytes) = assets.files.get(&path) else {
+                        return StatusCode::NOT_FOUND.into_response();
+                    };
+                    (
+                        [
+                            (
+                                header::CONTENT_TYPE,
+                                mime_guess::from_path(&path)
+                                    .first_or_octet_stream()
+                                    .to_string(),
+                            ),
+                            (
+                                header::CACHE_CONTROL,
+                                "public, max-age=31536000, immutable".into(),
+                            ),
+                            (header::X_CONTENT_TYPE_OPTIONS, "nosniff".into()),
+                        ],
+                        axum::body::Bytes::from_owner(bytes.clone()),
+                    )
+                        .into_response()
+                }
+            },
+        ),
+    )
 }
 
 /// 挂载后台 SPA（`apps/admin` 的构建产物）到 `/admin` 子树。

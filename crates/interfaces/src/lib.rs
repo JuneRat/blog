@@ -17,6 +17,7 @@ pub mod http_media;
 pub mod http_plugins;
 pub mod http_support;
 pub mod http_tasks;
+pub mod http_themes;
 
 pub mod http_retention;
 

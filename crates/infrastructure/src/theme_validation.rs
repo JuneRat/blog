@@ -25,6 +25,15 @@ struct Fixtures {
     optional: bool,
 }
 
+#[cfg(test)]
+pub(crate) fn test_data() -> Arc<ThemeData> {
+    let fixtures = Arc::new(Fixtures {
+        count: 0,
+        optional: false,
+    });
+    Arc::new(ThemeData::new(fixtures.clone(), fixtures.clone(), fixtures))
+}
+
 impl Fixtures {
     fn summary(&self, index: usize) -> PublicPostSummary {
         PublicPostSummary {

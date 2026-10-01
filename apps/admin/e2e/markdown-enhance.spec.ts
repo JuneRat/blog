@@ -38,7 +38,7 @@ test.beforeAll(async () => {
     }
     const theme = url.searchParams.get("theme") === "paper" ? "paper" : "default";
     if (url.pathname === "/theme.css") {
-      res.writeHead(200, { "Content-Type": "text/css" }).end(await readFile(resolve(root, `themes/${theme}/assets/${theme === "paper" ? "paper" : "style"}.css`)));
+      res.writeHead(200, { "Content-Type": "text/css" }).end(await readFile(resolve(root, theme === "paper" ? "theme-packages/paper/assets/paper.css" : "themes/default/assets/style.css")));
       return;
     }
     if (url.pathname === "/preview") {

@@ -33,3 +33,4 @@ sqlx.workspace = true
 http-body-util = "0.1"
 reqwest.workspace = true
 domain = { path = "../domain" }
+zip = { version = "8.6", default-features = false }

@@ -197,10 +197,21 @@ Page 没有作者，使用站点级 `page.*` 权限。
 |---|---|
 | `GET /settings/site` | 标题、描述、logo、`home_page_size`、`navigation`、`time_zone`、可选 IANA 名称 `time_zones`、生效来源和版本 |
 | `PUT /settings/site` | `title`、`description`、`logo_media_id`、`home_page_size`、`navigation`、`time_zone`、`expected_version` |
-| `GET /settings/theme` | 所选 slug、生效 slug、来源、版本与可用主题 |
+| `GET /settings/theme` | 所选 `slug`、`effective_slug`、`fallback_slug`、来源、版本与可用主题；每个可用主题包含 `slug`、`name` 和快照 `release` |
 | `PUT /settings/theme` | `slug`、`expected_version` |
 | `GET /settings/retention` | 评论 IP 与审计的保留天数及两组版本 |
 | `PUT /settings/retention` | 必填 `comment_ip_days`、`comment_version`、`audit_days`、`audit_version` |
+
+主题包管理同样需要 `settings.manage`、会话、同源 Origin 和 CSRF，全部响应 `no-store`：
+
+| 方法与路径 | 行为 / 载荷 |
+|---|---|
+| `POST /themes/validate-package` | 裸 ZIP 字节，推荐 `Content-Type: application/zip`；验证成功 200，不安装 |
+| `POST /themes` | 裸 ZIP 字节；先验证再安装，成功 201，不覆盖同名目录 |
+| `POST /themes/{slug}/validate` | 无请求体；验证已安装快照，成功 200 |
+| `DELETE /themes/{slug}` | JSON `{ "expected_version": 2, "expected_release": "…" }`，版本为 `settings.theme` 的选择版本，快照来自 `available[].release`；成功 200，返回更新后的主题设置视图 |
+
+验证和安装成功均返回 `{ slug, name, release, template_count, asset_count }`；不兼容清单、模板/场景错误、非法包及受保护主题卸载返回 400，未知主题 404，选择版本或主题快照冲突 409，验证繁忙 429（`Retry-After: 1`），上传超过 10 MiB 返回 413。卸载请求上限 1 KiB；ZIP 接口使用上传超时预算（默认 120 秒）。完整打包、保护和持久化边界见[主题机制](themes-and-rendering.md#安装验证激活和卸载)。
 
 `time_zone` 是 IANA 名称（例如 `Asia/Shanghai`），保存后无需重启，`/me` 和公开评论列表读取当前值。未知时区返回 400；旧客户端省略或传 `null` 时保留已保存的时区。时区变更沿用 site 行的版本检查和审计。
 

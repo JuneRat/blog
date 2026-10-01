@@ -2,6 +2,8 @@
 //! 假 IdP 登录拿会话，走 JSON API 全流程。
 
 mod common;
+#[path = "admin_api/themes.rs"]
+mod themes;
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -85,6 +87,14 @@ struct Stack {
     session_validates: Arc<AtomicUsize>,
     #[allow(dead_code)]
     pool: PgPool,
+    theme_root: Option<TestThemeRoot>,
+}
+
+struct TestThemeRoot(std::path::PathBuf);
+impl Drop for TestThemeRoot {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
 }
 
 /// 计数包装：`validate` 次数可观测，其余委托内存实现。
@@ -124,6 +134,10 @@ impl SessionStore for CountingSessionStore {
 }
 
 async fn fresh_stack() -> Stack {
+    fresh_stack_with_themes(false).await
+}
+
+async fn fresh_stack_with_themes(with_themes: bool) -> Stack {
     let pool = common::fresh_database("blog_admin_test").await;
 
     sqlx::query(
@@ -260,7 +274,7 @@ async fn fresh_stack() -> Stack {
         clock.clone(),
         common::media_guard(pool.clone()),
     ));
-    let settings = Arc::new(application::settings::SettingsInteractor::new(
+    let mut settings = application::settings::SettingsInteractor::new(
         Arc::new(infrastructure::PostgresSettingsStore::new(
             common::database(pool.clone()),
         )),
@@ -274,7 +288,94 @@ async fn fresh_stack() -> Stack {
             logo_url: None,
         },
         common::media_guard(pool.clone()),
-    ));
+    );
+    let mut theme_root = None;
+    let mut public = axum::Router::new();
+    if with_themes {
+        let root = TestThemeRoot(
+            std::env::temp_dir().join(format!("blog-http-themes-{}", Uuid::now_v7())),
+        );
+        for kind in ["templates", "assets"] {
+            std::fs::create_dir_all(root.0.join("default").join(kind)).unwrap();
+            for entry in std::fs::read_dir(format!("../../themes/default/{kind}")).unwrap() {
+                let entry = entry.unwrap();
+                std::fs::copy(
+                    entry.path(),
+                    root.0.join("default").join(kind).join(entry.file_name()),
+                )
+                .unwrap();
+            }
+        }
+        std::fs::copy(
+            "../../themes/default/theme.json",
+            root.0.join("default/theme.json"),
+        )
+        .unwrap();
+        let runtime = Arc::new(infrastructure::RenderingRuntime::default());
+        let database = common::database(pool.clone());
+        let posts = Arc::new(infrastructure::PostgresPublishedPostQuery::new(
+            database.clone(),
+        ));
+        let pages = Arc::new(infrastructure::PostgresPublishedPageQuery::new(
+            database.clone(),
+        ));
+        let tags = Arc::new(infrastructure::PostgresPublishedTagQuery::new(
+            database.clone(),
+        ));
+        let categories = Arc::new(infrastructure::PostgresPublishedCategoryQuery::new(
+            database.clone(),
+        ));
+        let series = Arc::new(infrastructure::PostgresPublishedSeriesQuery::new(
+            database.clone(),
+        ));
+        let data = Arc::new(application::theme_data::ThemeData::new(
+            posts.clone(),
+            tags.clone(),
+            categories.clone(),
+        ));
+        let packages = Arc::new(
+            infrastructure::theme_packages::LocalThemePackages::load(
+                &root.0.join("default"),
+                data,
+                runtime,
+            )
+            .await
+            .unwrap(),
+        );
+        let registry = packages.registry();
+        let store = Arc::new(infrastructure::PostgresSettingsStore::new(database));
+        settings = settings
+            .with_themes(store.clone(), registry.clone())
+            .with_theme_packages(packages);
+        let site = application::public_site::PublicSiteInteractor::new(
+            posts,
+            pages,
+            tags,
+            categories,
+            series,
+            registry.renderer("default").unwrap(),
+            store.clone(),
+            application::site_info::SiteInfo {
+                home_page_size: 20,
+                navigation: vec![],
+                time_zone: "UTC".into(),
+                title: "测试站点".into(),
+                description: "".into(),
+                logo_url: None,
+            },
+            application::seo::PublicBaseUrl::parse("http://127.0.0.1:18099").unwrap(),
+        )
+        .with_themes(store, registry.clone());
+        public = interfaces::http::mount_live_theme_assets(
+            interfaces::http::public_router(interfaces::http::PublicSiteState {
+                site: Arc::new(site),
+                health: None,
+            }),
+            registry,
+        );
+        theme_root = Some(root);
+    }
+    let settings = Arc::new(settings);
 
     let session_validates = Arc::new(AtomicUsize::new(0));
     let sessions: Arc<dyn SessionStore> = Arc::new(CountingSessionStore {
@@ -325,6 +426,7 @@ async fn fresh_stack() -> Stack {
             admin: admin_state.clone(),
         });
     let router = auth_router(auth_state)
+        .merge(public)
         .merge(access_router)
         .merge(interfaces::http_content_preview::content_preview_router(
             interfaces::http_content_preview::ContentPreviewState {
@@ -342,6 +444,8 @@ async fn fresh_stack() -> Stack {
             admin_state.clone(),
         ))
         .merge(interfaces::http_admin::series_router(admin_state.clone()))
+        .merge(interfaces::http_admin::settings_router(admin_state.clone()))
+        .merge(interfaces::http_themes::themes_router(admin_state.clone()))
         .merge(interfaces::http_comments::comments_router(
             interfaces::http_comments::CommentState {
                 admission: Arc::new(infrastructure::InMemoryRequestAdmission::default()),
@@ -381,6 +485,7 @@ async fn fresh_stack() -> Stack {
         roles,
         session_validates,
         pool,
+        theme_root,
     }
 }
 

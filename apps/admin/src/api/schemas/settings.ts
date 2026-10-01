@@ -21,13 +21,22 @@ export const siteSettings = object<Wire.SiteSettings>()({
 export const themeOption = object<Wire.ThemeOption>()({
   slug: string,
   name: string,
+  release: string,
 });
 export const themeSettings = object<Wire.ThemeSettings>()({
   slug: string,
   effective_slug: string,
+  fallback_slug: string,
   source: siteSettingsSource,
   version: count,
   available: z.array(themeOption),
+});
+export const themePackageReport = object<Wire.ThemePackageReport>()({
+  slug: string,
+  name: string,
+  release: string,
+  template_count: count,
+  asset_count: count,
 });
 export const retentionSettings = object<Wire.RetentionSettings>()({
   comment_ip_days: count,

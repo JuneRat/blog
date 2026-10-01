@@ -1,7 +1,6 @@
 //! Full HTTP assembly. Theme files, static assets, public URLs and browser
 //! authentication belong exclusively to `serve`.
 
-use std::path::Path;
 use std::sync::Arc;
 
 use application::category::CategoryInteractor;
@@ -12,13 +11,12 @@ use application::series::SeriesInteractor;
 use application::settings::SettingsInteractor;
 use application::tag::TagInteractor;
 use application::theme_data::ThemeData;
-use application::themes::ThemeRegistry;
 use infrastructure::Database;
 use infrastructure::{
-    MiniJinjaThemeRenderer, PostgresCategoryRepository, PostgresPageRepository,
-    PostgresPublishedCategoryQuery, PostgresPublishedPageQuery, PostgresPublishedPostQuery,
-    PostgresPublishedSeriesQuery, PostgresPublishedTagQuery, PostgresSeriesRepository,
-    PostgresTagRepository, RenderingRuntime, SystemClock,
+    PostgresCategoryRepository, PostgresPageRepository, PostgresPublishedCategoryQuery,
+    PostgresPublishedPageQuery, PostgresPublishedPostQuery, PostgresPublishedSeriesQuery,
+    PostgresPublishedTagQuery, PostgresSeriesRepository, PostgresTagRepository, RenderingRuntime,
+    SystemClock,
 };
 use interfaces::http::{AppState, HttpAssets, HttpConfig, PublicSiteState};
 use interfaces::http_auth::{AdminState, AuthState};
@@ -56,10 +54,19 @@ pub async fn build_router(
         public_tags.clone(),
         public_categories.clone(),
     ));
-    let installed = load_themes(&config.theme_dir, theme_data, &runtime).await?;
-    let fallback = installed
-        .registry
-        .renderer(installed.registry.fallback())
+    let theme_packages = Arc::new(
+        infrastructure::theme_packages::LocalThemePackages::load(
+            &config.theme_dir,
+            theme_data,
+            runtime.clone(),
+        )
+        .await
+        .map_err(|error| format!("加载默认主题模板失败：{error}"))?
+        .with_mutations_enabled(!environment.recovery_mode),
+    );
+    let theme_registry = theme_packages.registry();
+    let fallback = theme_registry
+        .renderer(theme_registry.fallback())
         .map_err(|error| format!("默认主题未安装：{error}"))?;
 
     let clock = Arc::new(SystemClock);
@@ -75,7 +82,8 @@ pub async fn build_router(
             config.site.clone(),
             media_guard.clone(),
         )
-        .with_themes(settings_store.clone(), installed.registry.clone())
+        .with_themes(settings_store.clone(), theme_registry.clone())
+        .with_theme_packages(theme_packages)
         .with_time_zones(time_zones.clone()),
     );
     let public_site = Arc::new(
@@ -90,7 +98,7 @@ pub async fn build_router(
             config.site.clone(),
             config.public_base_url.clone(),
         )
-        .with_themes(settings_store, installed.registry)
+        .with_themes(settings_store, theme_registry.clone())
         .with_time_zones(time_zones),
     );
 
@@ -192,7 +200,7 @@ pub async fn build_router(
                 plugins: plugins.manager.clone(),
             },
             HttpAssets {
-                themes: installed.assets,
+                themes: theme_registry,
                 plugins: plugins.catalog.assets(),
                 admin_dist: config.admin_dist.clone(),
             },
@@ -207,76 +215,5 @@ pub async fn build_router(
         )
         .layer(axum::Extension(telemetry.clone()))
         .layer(axum::Extension(crate::observability::build_info())),
-    })
-}
-
-struct InstalledThemes {
-    registry: Arc<ThemeRegistry>,
-    assets: Vec<application::themes::ThemeAssets>,
-}
-
-async fn load_themes(
-    theme_dir: &Path,
-    data: Arc<ThemeData>,
-    runtime: &Arc<RenderingRuntime>,
-) -> Result<InstalledThemes, String> {
-    let fallback = MiniJinjaThemeRenderer::load_checked(theme_dir, runtime)
-        .await
-        .map_err(|error| format!("加载默认主题模板失败：{error}"))?;
-    if theme_dir.file_name().and_then(|name| name.to_str()) != Some(fallback.slug()) {
-        return Err("默认主题目录名必须与清单 slug 一致".into());
-    }
-    let fallback_slug = fallback.slug().to_string();
-    let mut registry = ThemeRegistry::new(fallback_slug.clone());
-    let mut assets = vec![fallback.assets()];
-    registry
-        .add(
-            fallback_slug,
-            fallback.name().to_string(),
-            runtime.theme_renderer(fallback.with_data(data.clone())),
-        )
-        .map_err(|error| format!("默认主题清单无效：{error}"))?;
-    if let Some(parent) = theme_dir.parent() {
-        for entry in
-            std::fs::read_dir(parent).map_err(|error| format!("读取主题目录失败：{error}"))?
-        {
-            let entry = entry.map_err(|error| format!("读取主题目录项失败：{error}"))?;
-            let dir = entry.path();
-            if dir == theme_dir
-                || entry.file_type().is_ok_and(|kind| kind.is_symlink())
-                || !dir.is_dir()
-                || !dir.join("theme.json").is_file()
-            {
-                continue;
-            }
-            match MiniJinjaThemeRenderer::load_checked(&dir, runtime).await {
-                Ok(renderer)
-                    if dir.file_name().and_then(|name| name.to_str()) == Some(renderer.slug()) =>
-                {
-                    let slug = renderer.slug().to_string();
-                    let name = renderer.name().to_string();
-                    let release_assets = renderer.assets();
-                    if registry
-                        .add(
-                            slug.clone(),
-                            name,
-                            runtime.theme_renderer(renderer.with_data(data.clone())),
-                        )
-                        .is_ok()
-                    {
-                        assets.push(release_assets);
-                    }
-                }
-                Ok(_) => eprintln!("跳过主题 {}：目录名与清单 slug 不一致", dir.display()),
-                Err(error) => eprintln!("跳过无效主题 {}：{error}", dir.display()),
-            }
-        }
-    }
-    registry
-        .validate()
-        .map_err(|error| format!("默认主题未安装：{error}"))?;
-    Ok(InstalledThemes {
-        registry: Arc::new(registry),
-        assets,
     })
 }

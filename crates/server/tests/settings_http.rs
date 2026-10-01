@@ -508,11 +508,12 @@ async fn build(pool: PgPool) -> Stack {
     let default_theme = MiniJinjaThemeRenderer::load(std::path::Path::new("../../themes/default"))
         .expect("默认主题加载失败")
         .with_data(theme_data.clone());
-    let paper_theme = MiniJinjaThemeRenderer::load(std::path::Path::new("../../themes/paper"))
-        .expect("Paper 主题加载失败")
-        .with_data(theme_data);
+    let paper_theme =
+        MiniJinjaThemeRenderer::load(std::path::Path::new("../../theme-packages/paper"))
+            .expect("Paper 主题加载失败")
+            .with_data(theme_data);
     let theme_assets = vec![default_theme.assets(), paper_theme.assets()];
-    let mut registry = ThemeRegistry::new("default".into());
+    let registry = ThemeRegistry::new("default".into());
     registry
         .add(
             "default".into(),

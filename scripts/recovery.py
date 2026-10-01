@@ -230,7 +230,8 @@ def backup(args):
         installed = data / "resources" / "installed-themes"
         installed.mkdir(parents=True)
         for candidate in Path(args.theme_dir).parent.iterdir():
-            if not candidate.is_symlink() and candidate.is_dir() and (candidate / "theme.json").is_file():
+            if (THEME_SLUG.fullmatch(candidate.name) and not candidate.is_symlink()
+                    and candidate.is_dir() and (candidate / "theme.json").is_file()):
                 copy_resource(candidate, installed / candidate.name)
         active_slug = pg.query("SELECT COALESCE((SELECT value->>'slug' FROM settings WHERE key='theme'), '')")
         if active_slug and not THEME_SLUG.fullmatch(active_slug):
