@@ -165,14 +165,20 @@ export function AdminLayout({ children, readerOnly = false }: { children: ReactN
           style={{
             background: token.colorBgContainer,
             paddingInline: 24,
+            paddingBlock: 12,
+            height: "auto",
+            minHeight: 64,
+            lineHeight: "normal",
             display: "flex",
+            flexWrap: "wrap",
+            gap: 12,
             alignItems: "center",
             justifyContent: "space-between",
             borderBottom: `1px solid ${token.colorBorderSecondary}`,
           }}
         >
           <Breadcrumb items={readerOnly ? [{ title: "个人中心" }] : [{ title: "博客后台" }, { title: TITLES[route.name] }]} />
-          <Flex gap={12} align="center">
+          <Flex gap={12} align="center" wrap style={{ maxWidth: "100%" }}>
             <Button type="link" href="/" target="_blank" style={{ paddingInline: 8 }}>
               查看站点 ↗
             </Button>

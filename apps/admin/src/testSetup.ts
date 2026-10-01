@@ -1,4 +1,9 @@
-import { beforeEach } from "vitest";
+import { beforeEach, vi } from "vitest";
+
+vi.mock("./components/vditorRuntime", async () => ({
+  editorCdn: "/admin/assets/vditor-test",
+  loadVditor: async () => (await import("../tests/fakes/vditor")).default,
+}));
 
 beforeEach(() => { localStorage.clear(); sessionStorage.clear(); });
 

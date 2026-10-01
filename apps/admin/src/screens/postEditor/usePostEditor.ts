@@ -17,6 +17,7 @@ import { useAuth } from "../../auth";
 import { navigate, paths } from "../../router";
 import { useUnsavedGuard } from "../../unsaved";
 import { useImageInsertion } from "../../components/useImageInsertion";
+import type { MarkdownEditorHandle } from "../../components/editorHandle";
 import type { PostDetail } from "../../types";
 import {
   EMPTY_FORM,
@@ -34,9 +35,6 @@ function isVersionConflict(error: unknown): boolean {
   // code 缺失时按旧契约（409 即版本冲突）保守处理。
   return error.code === null || error.code === "version_conflict";
 }
-
-/** antd `Input.TextArea` 的 ref 不是 DOM 节点，取出里面的原生 textarea 供插入逻辑使用。 */
-type TextAreaHandle = { resizableTextArea?: { textArea: HTMLTextAreaElement } };
 
 const watchForm = (values: FormState) =>
   normalizeForm({ ...EMPTY_FORM, ...values });
@@ -70,10 +68,10 @@ export function usePostEditor(id: string | null) {
   const localSavedRef = useRef<
     (id: string, version: number, merged: FormState, dirty: boolean) => void
   >(() => {});
-  /** 图片面板是否展开（编辑器内插入图片）。 */
+  /** 编辑器插图弹窗是否打开。 */
   const [mediaOpen, setMediaOpen] = useState(false);
-  /** 正文输入框：插入位置取自它的真实选区。 */
-  const contentRef = useRef<HTMLTextAreaElement | null>(null);
+  /** 当前编辑模式的插图接口，保存源码或 IR 选区。 */
+  const contentRef = useRef<MarkdownEditorHandle | null>(null);
   /** 最近一次与服务器同步的表单内容，用于判断是否有未保存编辑。 */
   const baselineRef = useRef<FormState>(EMPTY_FORM);
   /** 创建成功后切到新 ID 时保留已合并的输入，避免重复加载覆盖。 */
@@ -90,8 +88,8 @@ export function usePostEditor(id: string | null) {
    */
   const [formId, setFormId] = useState<string | null>(null);
 
-  const attachContentRef = useCallback((node: TextAreaHandle | null): void => {
-    contentRef.current = node?.resizableTextArea?.textArea ?? null;
+  const attachContentRef = useCallback((node: MarkdownEditorHandle | null): void => {
+    contentRef.current = node;
   }, []);
 
   /** 读当前值。字段尚未注册（例如「系列内序号」）时用 EMPTY_FORM 补齐成完整的 FormState。 */
@@ -194,6 +192,7 @@ export function usePostEditor(id: string | null) {
 
   useEffect(() => {
     setBusy(false);
+    if (id === null || id !== loadedIdRef.current) setMediaOpen(false);
     setNotice(null);
     setError(null);
     setConflict(false);

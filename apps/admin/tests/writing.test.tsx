@@ -7,7 +7,6 @@ import { ApiError } from "../src/api/client";
 import { pagesApi } from "../src/api/pages";
 import { postsApi } from "../src/api/posts";
 import { tagsApi, categoryApi, seriesApi } from "../src/api/taxonomy";
-import { contentApi } from "../src/api/content";
 import { commentsApi } from "../src/api/comments";
 import { draftIdentity, draftKey, draftScope } from "../src/draftStorage";
 import type { PageDetail, PostDetail } from "../src/types";
@@ -24,10 +23,6 @@ vi.mock("../src/api/posts", async (load) => {
 vi.mock("../src/api/pages", async (load) => {
   const original = await load<typeof import("../src/api/pages")>();
   return { ...original, pagesApi: { ...original.pagesApi, getPage: vi.fn(), createPage: vi.fn(), updatePage: vi.fn(), unpublishPage: vi.fn(), archivePage: vi.fn() } };
-});
-vi.mock("../src/api/content", async (load) => {
-  const original = await load<typeof import("../src/api/content")>();
-  return { ...original, contentApi: { ...original.contentApi, previewContent: vi.fn() } };
 });
 vi.mock("../src/api/taxonomy", async (load) => {
   const original = await load<typeof import("../src/api/taxonomy")>();
@@ -138,6 +133,8 @@ describe("写作恢复与发布边界", () => {
   it("创建时清除新建槽，将请求期间输入保留在新 UUID 下", async () => {
     const pending = deferred<PageDetail>(); vi.mocked(pagesApi.createPage).mockReturnValue(pending.promise);
     const mounted = render(editor("page", null));
+    await waitFor(() => expect(content().className).toContain("vditor-sv"));
+    const originalInput = content();
     fireEvent.change(content(), { target: { value: "首次保存" } });
     fireEvent.click(screen.getByRole("button", { name: "保存草稿" }));
     await waitFor(() => expect(pagesApi.createPage).toHaveBeenCalledTimes(1));
@@ -146,6 +143,7 @@ describe("写作恢复与发布边界", () => {
     expect(localStorage.getItem(ownKey("writer-1", null))).toBeNull();
     expect(JSON.parse(localStorage.getItem(ownKey("writer-1", "writing-id"))!).value.content).toBe("保存期间继续写");
     mounted.rerender(editor("page", page.id));
+    expect(content()).toBe(originalInput);
     expect(content().value).toBe("保存期间继续写");
     expect(screen.queryByText("发现本机未保存的编辑")).toBeNull();
   });
@@ -233,18 +231,15 @@ describe("写作恢复与发布边界", () => {
     await screen.findByRole("button", { name: "删除本机副本" }); expect(JSON.parse(localStorage.getItem(ownKey(auth.user, page.id))!).value.content).toBe("下一次编辑");
   });
 
-  it("预览未保存正文并忽略过期响应，不触发保存", async () => {
-    const pending = deferred<{ content_html: string; head_html: string }>(); vi.mocked(contentApi.previewContent).mockReturnValueOnce(pending.promise).mockResolvedValue({ content_html: "<strong>新正文</strong>", head_html: "" });
-    render(editor("page")); await screen.findByDisplayValue(page.content);
-    fireEvent.click(screen.getByRole("button", { name: "预览正文" }));
-    expect(contentApi.previewContent).toHaveBeenCalledWith(page.content);
-    fireEvent.change(content(), { target: { value: "**新正文**" } });
-    await act(async () => pending.resolve({ content_html: "<p>过期正文</p>", head_html: "" }));
-    expect(screen.queryByLabelText("正文预览")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "预览正文" }));
-    const preview = await screen.findByLabelText("正文预览") as HTMLIFrameElement;
-    expect(preview.srcdoc).toContain("<main data-content-root><strong>新正文</strong></main>");
-    expect(preview.getAttribute("sandbox")).toBe("allow-scripts");
-    expect(pagesApi.updatePage).not.toHaveBeenCalled();
+  it.each(["post", "page"] as const)("%s 格式工具更新现有表单并随显式保存提交", async kind => {
+    const update = kind === "post" ? vi.mocked(postsApi.updatePost) : vi.mocked(pagesApi.updatePage);
+    update.mockResolvedValue({ ...post, content: "**服务器正文**", version: 2 });
+    render(editor(kind)); await screen.findByDisplayValue(page.content);
+    content().setSelectionRange(0, page.content.length);
+    fireEvent.click(screen.getByRole("button", { name: "粗体" }));
+    expect(content().value).toBe("**服务器正文**");
+    expect(update).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "保存草稿" }));
+    await waitFor(() => expect(update).toHaveBeenCalledWith(page.id, expect.objectContaining({ content: "**服务器正文**", expected_version: 1 })));
   });
 });

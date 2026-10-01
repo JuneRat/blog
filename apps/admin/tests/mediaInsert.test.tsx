@@ -9,7 +9,7 @@ import { mediaApi } from "../src/api/media";
 import { navigate, paths } from "../src/router";
 import type { MediaAsset, PostDetail } from "../src/types";
 
-/** 每个用例可改写的权限集合（`media.read` 决定面板入口是否存在）。 */
+/** 读取和上传权限分别控制插图弹窗中的对应操作。 */
 const state = vi.hoisted(() => ({
   permissions: ["post.update", "media.read", "media.upload"] as string[],
 }));
@@ -86,9 +86,9 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-/** 打开图片面板并等待资产列表就绪。 */
+/** 打开插图弹窗并等待资产列表就绪。 */
 async function openPanel(): Promise<void> {
-  fireEvent.click(screen.getByRole("button", { name: "插入图片" }));
+  fireEvent.click(await screen.findByRole("button", { name: "插入图片" }));
   await waitFor(() => expect(screen.getByText("photo.png")).toBeTruthy());
 }
 
@@ -113,6 +113,7 @@ describe("编辑器内插入图片", () => {
   it("点击插入把站内图片写进正文光标处", async () => {
     render(<App />);
     await waitFor(() => expect(contentBox().value).toBe("原始正文"));
+    await screen.findByRole("button", { name: "插入图片" });
 
     // 把光标放到正文中间之后插入。
     const box = contentBox();
@@ -138,6 +139,7 @@ describe("编辑器内插入图片", () => {
     }));
     render(<App />);
     await waitFor(() => expect(contentBox().value).toBe("原始正文"));
+    await screen.findByRole("button", { name: "插入图片" });
     fireEvent.change(contentBox(), { target: { value: 'AB' } });
     contentBox().setSelectionRange(1, 1);
     await openPanel();
@@ -158,6 +160,7 @@ describe("编辑器内插入图片", () => {
   it("替代文字非空时写入 alt 而不是文件名", async () => {
     render(<App />);
     await waitFor(() => expect(contentBox().value).toBe("原始正文"));
+    await screen.findByRole("button", { name: "插入图片" });
     fireEvent.change(contentBox(), { target: { value: "" } });
     contentBox().setSelectionRange(0, 0);
 
@@ -184,6 +187,31 @@ describe("编辑器内插入图片", () => {
     await waitFor(() => expect(contentBox().value).toBe("![pasted](/media/pasted)"));
   });
 
+  it("统一插图入口保留上传错误，成功后关闭弹窗并保留正文插入位置", async () => {
+    const pending = deferred<MediaAsset>();
+    vi.mocked(mediaApi.upload).mockReturnValue(pending.promise);
+    render(<App />);
+    await waitFor(() => expect(contentBox().value).toBe("原始正文"));
+    await screen.findByRole("button", { name: "插入图片" });
+    fireEvent.change(contentBox(), { target: { value: "AB" } });
+    contentBox().setSelectionRange(1, 1);
+    await openPanel();
+    const upload = screen.getByLabelText("选择要上传的图片") as HTMLInputElement;
+    fireEvent.change(upload, { target: { files: [new File(["svg"], "bad.svg", { type: "image/svg+xml" })] } });
+    await screen.findByText(/不支持的图片类型/);
+    expect(screen.getByRole("dialog", { name: "插入图片" })).toBeTruthy();
+    expect(mediaApi.upload).not.toHaveBeenCalled();
+    const file = new File([new Uint8Array(8)], "toolbar.png", { type: "image/png" });
+    fireEvent.change(upload, { target: { files: [file] } });
+    await waitFor(() => expect(upload.disabled).toBe(true));
+    fireEvent.change(upload, { target: { files: [file] } });
+    expect(mediaApi.upload).toHaveBeenCalledExactlyOnceWith(file);
+    await act(async () => { pending.resolve(asset({ original_name: "toolbar.png" })); });
+    expect(contentBox().value).toBe("A\n\n![toolbar](/media/media-1)\n\nB");
+    expect(screen.queryByRole("dialog", { name: "插入图片" })).toBeNull();
+    expect(postsApi.updatePost).not.toHaveBeenCalled();
+  });
+
   it.each(["post", "page"] as const)("%s 切换目标后忽略旧上传，新稿保存获得 ID 后仍可插图", async (kind) => {
     state.permissions.push("post.create", "page.create", "page.update");
     const editPath = kind === "post" ? paths.editPost : paths.editPage;
@@ -200,7 +228,8 @@ describe("编辑器内插入图片", () => {
     await waitFor(() => expect(contentBox().value).toBe(post.content));
     await openPanel();
     const file = new File([new Uint8Array(8)], "pasted.png", { type: "image/png" });
-    fireEvent.paste(contentBox(), { clipboardData: { files: [file] } });
+    fireEvent.change(screen.getByLabelText("选择要上传的图片"), { target: { files: [file] } });
+    fireEvent.click(screen.getByRole("button", { name: "关闭插图窗口" }));
 
     act(() => { navigate(newPath); });
     await waitFor(() => expect(contentBox().value).toBe(""));
@@ -208,6 +237,7 @@ describe("编辑器内插入图片", () => {
     fireEvent.change(contentBox(), { target: { value: "新稿正文" } });
     fireEvent.paste(contentBox(), { clipboardData: { files: [file] } });
     expect(mediaApi.upload).toHaveBeenCalledTimes(2);
+    await openPanel();
 
     const uploaded = asset({ original_name: "old-target.png" });
     vi.mocked(mediaApi.list).mockResolvedValue({ items: [uploaded], total: 1, page: 1, per_page: 24 });
@@ -216,6 +246,7 @@ describe("编辑器内插入图片", () => {
     expect(screen.queryByText(/已插入.*张图片/)).toBeNull();
     expect(screen.getByRole("button", { name: "上传中…" }).hasAttribute("disabled")).toBe(true);
     await screen.findByText("old-target.png");
+    fireEvent.click(screen.getByRole("button", { name: "关闭插图窗口" }));
 
     fireEvent.click(screen.getByRole("button", { name: "保存草稿" }));
     await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
@@ -251,7 +282,7 @@ describe("编辑器内插入图片", () => {
     expect(mediaApi.upload).not.toHaveBeenCalled();
   });
 
-  it("没有 media.read 时不显示图片入口", async () => {
+  it("没有媒体权限时不显示图片入口", async () => {
     state.permissions = ["post.update"];
     render(<App />);
     await waitFor(() => expect(contentBox().value).toBe("原始正文"));
@@ -273,8 +304,19 @@ describe("编辑器内插入图片", () => {
 
     await openPanel();
     expect(screen.queryByRole("button", { name: "上传图片" })).toBeNull();
+    expect(screen.queryByLabelText("选择要上传的图片")).toBeNull();
     // 仍可插入已有图片。
     expect(screen.getByRole("button", { name: "插入" })).toBeTruthy();
+  });
+
+  it("只有上传权限时仍可打开统一入口，但不读取媒体库", async () => {
+    state.permissions = ["post.update", "media.upload"];
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "插入图片" }));
+    expect(screen.getByRole("dialog", { name: "插入图片" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "上传图片" })).toBeTruthy();
+    expect(screen.queryByLabelText("搜索图片")).toBeNull();
+    expect(mediaApi.list).not.toHaveBeenCalled();
   });
 
   it("页面编辑器同样支持插入（Page 无作者，共用同一实现）", async () => {
@@ -292,6 +334,7 @@ describe("编辑器内插入图片", () => {
     });
     render(<App />);
 
+    await screen.findByRole("button", { name: "插入图片" });
     const box = await waitFor(() => {
       const element = screen.getByLabelText(/正文/) as HTMLTextAreaElement;
       expect(element.value).toBe("");
@@ -301,7 +344,7 @@ describe("编辑器内插入图片", () => {
 
     expect(screen.getByText(/上传后图片链接立即公开/)).toBeTruthy();
     // 面板与文章编辑器同一实现：入口文案与插入结果一致。
-    fireEvent.click(screen.getByRole("button", { name: "插入图片" }));
+    fireEvent.click(await screen.findByRole("button", { name: "插入图片" }));
     await waitFor(() => expect(screen.getByText("photo.png")).toBeTruthy());
     fireEvent.click(screen.getByRole("button", { name: "插入" }));
 

@@ -6,3 +6,5 @@ overrides:
   # Mermaid's Chevrotain dependency pins a version with GHSA-r5fr-rjxr-66jc
   # and GHSA-f23m-r3pf-42rh; keep every copy on the patched release.
   lodash-es: 4.18.1
+patchedDependencies:
+  vditor@4.0.0: patches/vditor@4.0.0.patch

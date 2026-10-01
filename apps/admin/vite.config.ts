@@ -1,5 +1,6 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import { vditorAssets } from "./build/vditorAssets.ts";
 
 /**
  * 开发期同源策略（docs/identity-and-admin.md「可信身份与入口」）：
@@ -18,7 +19,7 @@ import react from "@vitejs/plugin-react";
 export default defineConfig({
   // 生产挂在 /admin 子树下（Rust 侧 mount_admin_spa）。
   base: "/admin/",
-  plugins: [react()],
+  plugins: [react(), vditorAssets()],
   build: {
     outDir: "dist",
     emptyOutDir: true,

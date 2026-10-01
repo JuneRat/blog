@@ -1,0 +1,2 @@
+# Unified diff context lines include significant whitespace, even for blank lines.
+apps/admin/patches/*.patch -whitespace

@@ -21,8 +21,7 @@ async function createDraft(page: Page, title: string) {
 
 test("production login, preview, publication and editor deep link", async ({ page, context }) => {
   await createDraft(page, "浏览器发布验收");
-  await page.getByRole("button", { name: "预览正文" }).click();
-  await expect(page.getByLabel("正文预览").locator("strong")).toHaveText("浏览器正文");
+  await expect(page.locator(".vditor-preview strong")).toHaveText("浏览器正文");
   await page.getByRole("button", { name: "发布", exact: true }).click();
   const publicLink = page.getByRole("link", { name: "查看公开页面" });
   await expect(publicLink).toBeVisible();

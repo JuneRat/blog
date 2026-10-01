@@ -15,6 +15,7 @@ import { useAuth } from "../../auth";
 import { navigate, paths } from "../../router";
 import { useUnsavedGuard } from "../../unsaved";
 import { useImageInsertion } from "../../components/useImageInsertion";
+import type { MarkdownEditorHandle } from "../../components/editorHandle";
 import { EMPTY_FORM, toForm, formEquals, mergeServer, type FormState } from "./form";
 
 /**
@@ -25,9 +26,6 @@ function isVersionConflict(error: unknown): boolean {
   if (!(error instanceof ApiError) || error.status !== 409) return false;
   return error.code === null || error.code === "version_conflict";
 }
-
-/** antd `Input.TextArea` 的 ref 不是 DOM 节点，取出里面的原生 textarea 供插入逻辑使用。 */
-type TextAreaHandle = { resizableTextArea?: { textArea: HTMLTextAreaElement } };
 
 /** Page request lifecycle and server baseline; editable values remain in the Form store. */
 export function usePageEditor(id: string | null) {
@@ -40,10 +38,10 @@ export function usePageEditor(id: string | null) {
   const [pageId, setPageId] = useState<string | null>(null);
   const [pageStatus, setPageStatus] = useState<string>("draft");
   const [publishedAt, setPublishedAt] = useState<string | null>(null);
-  /** 图片面板是否展开（编辑器内插入图片）。 */
+  /** 编辑器插图弹窗是否打开。 */
   const [mediaOpen, setMediaOpen] = useState(false);
-  /** 正文输入框：插入位置取自它的真实选区。 */
-  const contentRef = useRef<HTMLTextAreaElement | null>(null);
+  /** 当前编辑模式的插图接口，保存源码或 IR 选区。 */
+  const contentRef = useRef<MarkdownEditorHandle | null>(null);
   const [loading, setLoading] = useState(id !== null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -55,8 +53,8 @@ export function usePageEditor(id: string | null) {
   const baselineRef = useRef<FormState>(EMPTY_FORM);
   const loadedIdRef = useRef<string | null>(null);
 
-  const attachContentRef = useCallback((node: TextAreaHandle | null): void => {
-    contentRef.current = node?.resizableTextArea?.textArea ?? null;
+  const attachContentRef = useCallback((node: MarkdownEditorHandle | null): void => {
+    contentRef.current = node;
   }, []);
 
   /** 读当前值。字段未被注册时可能缺失，用 EMPTY_FORM 补齐成完整的 FormState。 */
@@ -148,6 +146,7 @@ export function usePageEditor(id: string | null) {
 
   useEffect(() => {
     setBusy(false);
+    if (id === null || id !== loadedIdRef.current) setMediaOpen(false);
     setNotice(null);
     setError(null);
     setConflict(false);

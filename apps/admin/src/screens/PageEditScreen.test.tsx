@@ -307,6 +307,8 @@ describe("PageEditScreen 保存流程", () => {
     fireEvent.change(field("标题"), { target: { value: "尚未保存的编辑" } });
     fireEvent.click(screen.getByRole("button", { name: /保存草稿|保存预约内容|更新已发布内容/ }));
     await screen.findByText("内容已在别处修改。");
+    // The conflict banner arrives before the asynchronous comparison snapshot.
+    await waitFor(() => expect((screen.getByRole("button", { name: "重新加载（丢弃本地改动）" }) as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(screen.getByRole("button", { name: "重新加载（丢弃本地改动）" }));
     await screen.findByDisplayValue(original.title);
     expect(getPage).toHaveBeenLastCalledWith(original.id);

@@ -1,0 +1,150 @@
+diff --git a/dist/index.js b/dist/index.js
+index 8fd06d74cc167e20899d1e779ced6014bac2bcc8..36426fe75f1775b108b9de4210e1a4c19a88a7c9 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -2758,6 +2758,7 @@ var Constants = /** @class */ (function () {
+ 
+ 
+ var SMILESRender = function (element, cdn, theme) {
++    return; // Blog admin: preserve unsupported diagram fences as code.
+     if (element === void 0) { element = document; }
+     if (cdn === void 0) { cdn = _constants__WEBPACK_IMPORTED_MODULE_0__/* .Constants.CDN */ .g.CDN; }
+     var SMILESElements = _adapterRender__WEBPACK_IMPORTED_MODULE_1__.SMILESRenderAdapter.getElements(element);
+@@ -2795,6 +2796,7 @@ var SMILESRender = function (element, cdn, theme) {
+ 
+ 
+ var abcRender = function (element, cdn) {
++    return; // Blog admin: preserve unsupported diagram fences as code.
+     if (element === void 0) { element = document; }
+     if (cdn === void 0) { cdn = _constants__WEBPACK_IMPORTED_MODULE_0__/* .Constants.CDN */ .g.CDN; }
+     var abcElements = _adapterRender__WEBPACK_IMPORTED_MODULE_1__.abcRenderAdapter.getElements(element);
+@@ -2938,6 +2940,7 @@ var __generator = (undefined && undefined.__generator) || function (thisArg, bod
+ 
+ 
+ var chartRender = function (element, cdn, theme) {
++    return; // Blog admin: preserve unsupported diagram fences as code.
+     if (element === void 0) { element = document; }
+     if (cdn === void 0) { cdn = _constants__WEBPACK_IMPORTED_MODULE_0__/* .Constants.CDN */ .g.CDN; }
+     var echartsElements = _adapterRender__WEBPACK_IMPORTED_MODULE_1__.chartRenderAdapter.getElements(element);
+@@ -3066,6 +3069,7 @@ var codeRender = function (element, option) {
+ 
+ 
+ var flowchartRender = function (element, cdn) {
++    return; // Blog admin: preserve unsupported diagram fences as code.
+     if (cdn === void 0) { cdn = _constants__WEBPACK_IMPORTED_MODULE_0__/* .Constants.CDN */ .g.CDN; }
+     var flowchartElements = _adapterRender__WEBPACK_IMPORTED_MODULE_1__.flowchartRenderAdapter.getElements(element);
+     if (flowchartElements.length === 0) {
+@@ -3101,6 +3105,7 @@ var flowchartRender = function (element, cdn) {
+ 
+ 
+ var graphvizRender = function (element, cdn) {
++    return; // Blog admin: preserve unsupported diagram fences as code.
+     if (cdn === void 0) { cdn = _constants__WEBPACK_IMPORTED_MODULE_0__/* .Constants.CDN */ .g.CDN; }
+     var graphvizElements = _adapterRender__WEBPACK_IMPORTED_MODULE_1__.graphvizRenderAdapter.getElements(element);
+     if (graphvizElements.length === 0) {
+@@ -3451,6 +3456,7 @@ var init = function (el, code) {
+     mm.fit();
+ };
+ var markmapRender = function (element, cdn) {
++    return; // Blog admin: preserve unsupported diagram fences as code.
+     if (element === void 0) { element = document; }
+     if (cdn === void 0) { cdn = _constants__WEBPACK_IMPORTED_MODULE_0__/* .Constants.CDN */ .g.CDN; }
+     var markmapElements = _adapterRender__WEBPACK_IMPORTED_MODULE_1__.markmapRenderAdapter.getElements(element);
+@@ -3535,14 +3541,22 @@ var mathRender = function (element, options) {
+                         });
+                     }
+                     catch (e) {
+-                        mathElement.innerHTML = e.message;
+-                        mathElement.className = "language-math vditor-reset--error";
++                        var mathSource = document.createElement("code");
++                        mathSource.className = "markdown-editor-math-source";
++                        mathSource.textContent = math;
++                        var mathHint = document.createElement("span");
++                        mathHint.className = "markdown-editor-render-error";
++                        mathHint.setAttribute("role", "status");
++                        mathHint.textContent = "公式渲染失败，请检查语法。";
++                        mathElement.replaceChildren(mathSource, mathHint);
++                        mathElement.className = "language-math markdown-editor-math-error";
+                     }
+                     mathElement.addEventListener("copy", function (event) {
+                         event.stopPropagation();
+                         event.preventDefault();
+                         var vditorMathElement = event.currentTarget.closest(".language-math");
+-                        event.clipboardData.setData("text/html", vditorMathElement.innerHTML);
++                        var mathSource = vditorMathElement.querySelector(".markdown-editor-math-source");
++                        event.clipboardData.setData("text/html", mathSource ? mathSource.innerHTML : vditorMathElement.innerHTML);
+                         event.clipboardData.setData("text/plain", vditorMathElement.getAttribute("data-math"));
+                     });
+                 });
+@@ -3797,12 +3811,17 @@ var mermaidRender = function (element, cdn, theme) {
+     }
+     (0,_util_addScript__WEBPACK_IMPORTED_MODULE_2__/* .addScript */ .G)("".concat(cdn, "/dist/js/mermaid/mermaid.min.js?v=11.16.1"), "vditorMermaidScript").then(function () {
+         var config = {
+-            securityLevel: "loose",
++            securityLevel: "strict",
++            suppressErrorRendering: true,
++            maxTextSize: 50000,
++            maxEdges: 500,
++            secure: ["secure", "securityLevel", "startOnLoad", "suppressErrorRendering", "maxTextSize", "maxEdges", "htmlLabels", "flowchart", "fontFamily", "dompurifyConfig", "themeCSS"],
++            htmlLabels: false,
+             altFontFamily: "sans-serif",
+             fontFamily: "sans-serif",
+             startOnLoad: false,
+             flowchart: {
+-                htmlLabels: true,
++                htmlLabels: false,
+                 useMaxWidth: !0
+             },
+             sequence: {
+@@ -3842,8 +3861,8 @@ var mermaidRender = function (element, cdn, theme) {
+                     case 3:
+                         e_1 = _a.sent();
+                         errorElement = document.querySelector("#" + id);
+-                        item.innerHTML = "".concat(errorElement.outerHTML, "<br>\n<div style=\"text-align: left\"><small>").concat(e_1.message.replace(/\n/, "<br>"), "</small></div>");
+-                        errorElement.parentElement.remove();
++                        item.textContent = e_1.message;
++                        if (errorElement) errorElement.parentElement.remove();
+                         return [3 /*break*/, 4];
+                     case 4:
+                         item.setAttribute("data-processed", "true");
+@@ -3871,6 +3890,7 @@ var mermaidRender = function (element, cdn, theme) {
+ 
+ 
+ var mindmapRender = function (element, cdn, theme) {
++    return; // Blog admin: preserve unsupported diagram fences as code.
+     if (element === void 0) { element = document; }
+     if (cdn === void 0) { cdn = _constants__WEBPACK_IMPORTED_MODULE_0__/* .Constants.CDN */ .g.CDN; }
+     var mindmapElements = _adapterRender__WEBPACK_IMPORTED_MODULE_1__.mindmapRenderAdapter.getElements(element);
+@@ -4090,6 +4110,7 @@ var outlineRender = function (contentElement, targetElement, vditor) {
+ 
+ 
+ var plantumlRender = function (element, cdn) {
++    return; // Blog admin: preserve unsupported diagram fences as code.
+     if (element === void 0) { element = document; }
+     if (cdn === void 0) { cdn = _constants__WEBPACK_IMPORTED_MODULE_0__/* .Constants.CDN */ .g.CDN; }
+     var plantumlElements = _adapterRender__WEBPACK_IMPORTED_MODULE_1__.plantumlRenderAdapter.getElements(element);
+@@ -4211,6 +4232,7 @@ var __generator = (undefined && undefined.__generator) || function (thisArg, bod
+ 
+ var wavedromIndex = 0;
+ var wavedromRender = function (element, cdn) {
++    return; // Blog admin: preserve unsupported diagram fences as code.
+     if (element === void 0) { element = document; }
+     if (cdn === void 0) { cdn = _constants__WEBPACK_IMPORTED_MODULE_0__/* .Constants.CDN */ .g.CDN; }
+     var wavedromElements = _adapterRender__WEBPACK_IMPORTED_MODULE_1__.wavedromRenderAdapter.getElements(element);
+@@ -16266,6 +16288,7 @@ var Vditor = /** @class */ (function (_super) {
+         }
+         (0,addScript/* addScript */.G)(mergedOptions._lutePath ||
+             "".concat(mergedOptions.cdn, "/dist/js/lute/lute.min.js"), "vditorLuteScript").then(function () {
++            if (_this.isDestroyed) return;
+             _this.vditor.lute = (0,setLute/* setLute */.X)({
+                 autoSpace: _this.vditor.options.preview.markdown.autoSpace,
+                 callout: _this.vditor.options.preview.markdown.callout,
+@@ -16298,7 +16321,7 @@ var Vditor = /** @class */ (function (_super) {
+             }
+             if (mergedOptions.icon) {
+                 // 防止初始化 2 个编辑器时加载 2 次
+-                (0,addScript/* addScriptSync */.J)("".concat(mergedOptions.cdn, "/dist/js/icons/").concat(mergedOptions.icon, ".js"), "vditorIconScript");
++                (0,addScript/* addScript */.G)("".concat(mergedOptions.cdn, "/dist/js/icons/").concat(mergedOptions.icon, ".js"), "vditorIconScript");
+             }
+         });
+     };

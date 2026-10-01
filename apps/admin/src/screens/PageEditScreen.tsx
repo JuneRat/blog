@@ -1,10 +1,10 @@
 import { MEDIA_PUBLIC_NOTICE } from "../media";
-import { ContentPreview } from "../components/ContentPreview";
+import { MarkdownEditor } from "../components/MarkdownEditor";
 import { ContentConflict, conflictFields } from "../components/ContentConflict";
 import { ContentLifecycleControls, statusLabel } from "../components/ContentLifecycleControls";
 import { Alert, Button, Card, Col, Flex, Form, Input, Row, Select, Tag, Typography } from "antd";
 import { useAuth } from "../auth";
-import { MediaInsertPanel } from "../components/MediaInsertPanel";
+import { MediaInsertDialog } from "../components/MediaInsertDialog";
 import { usePageEditor } from "./pageEditor/usePageEditor";
 import { EMPTY_FORM, toForm } from "./pageEditor/form";
 
@@ -119,7 +119,7 @@ function PageEditor({ id }: { id: string | null }) {
         onFinish={() => void save()}
       >
         <Row gutter={[24, 24]}>
-          <Col xs={24} lg={16} xl={17}>
+          <Col xs={24} xl={17}>
             <Form.Item label="标题" name="title" style={{ marginBottom: 16 }}>
               <Input
                 size="large"
@@ -128,68 +128,33 @@ function PageEditor({ id }: { id: string | null }) {
               />
             </Form.Item>
             <Form.Item label="正文（Markdown）" name="content" extra={canUploadMedia ? MEDIA_PUBLIC_NOTICE : undefined} style={{ marginBottom: 16 }}>
-              <Input.TextArea
-                ref={attachContentRef}
-                rows={22}
-                style={{
-                  fontFamily:
-                    'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace',
-                  fontSize: 14,
-                  lineHeight: 1.6,
-                }}
-                placeholder="在此输入 Markdown 正文…"
-                onDrop={(event) => {
-                  const files = Array.from(event.dataTransfer.files);
-                  if (files.length === 0) return;
-                  event.preventDefault();
-                  void insertion.insertFiles(files);
-                }}
-                onPaste={(event) => {
-                  const files = Array.from(event.clipboardData?.files ?? []);
-                  if (files.length === 0) return;
-                  event.preventDefault();
-                  void insertion.insertFiles(files);
-                }}
+              <MarkdownEditor
+                editorScope={id ?? "new"}
+                contentRef={attachContentRef}
+                disabled={loading || pageStatus === "archived" || formMismatch || localDraft.blocksEditing}
+                onInsertFiles={canUploadMedia ? insertion.insertFiles : undefined}
+                onOpenMedia={canReadMedia || canUploadMedia ? () => { insertion.clear(); setMediaOpen(true); } : undefined}
+                mediaOpen={mediaOpen}
               />
             </Form.Item>
 
-            {canReadMedia && (
-              <Flex gap={12} align="center" style={{ marginBottom: 16 }}>
-                <Button
-                  type="link"
-                  style={{ paddingInline: 0 }}
-                  onClick={() => {
-                    insertion.clear();
-                    setMediaOpen((open) => !open);
-                  }}
-                >
-                  {mediaOpen ? "收起图片面板" : "插入图片"}
-                </Button>
-                <Typography.Text type="secondary">
-                  也可以把图片拖入正文框，或在正文框内粘贴剪贴板图片。
-                </Typography.Text>
-              </Flex>
-            )}
-            {insertion.error !== null && (
+            {!mediaOpen && insertion.error !== null && (
               <Alert type="error" showIcon title={insertion.error} style={{ marginBottom: 16 }} />
             )}
             {insertion.notice !== null && (
               <Alert type="success" showIcon title={insertion.notice} style={{ marginBottom: 16 }} />
             )}
-            {mediaOpen && canReadMedia && (
-              <div style={{ marginBottom: 16 }}>
-                <MediaInsertPanel
-                  insertion={insertion}
-                  canUpload={canUploadMedia}
-                  onClose={() => setMediaOpen(false)}
-                />
-              </div>
+            {mediaOpen && (canReadMedia || canUploadMedia) && (
+              <MediaInsertDialog
+                insertion={insertion}
+                canRead={canReadMedia}
+                canUpload={canUploadMedia}
+                onClose={() => setMediaOpen(false)}
+              />
             )}
-
-            <ContentPreview key={id ?? "new"} content={view.content} disabled={formMismatch || busy} />
           </Col>
 
-          <Col xs={24} lg={8} xl={7}>
+          <Col xs={24} xl={7}>
             <Flex vertical gap={16} style={{ width: "100%" }}>
               <Card title="发布设置" size="small">
                 <Button
