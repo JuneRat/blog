@@ -1,6 +1,6 @@
 # 扩展设计候选
 
-本文保存后续扩展方案与启用条件。已实现的可信编译期[插件机制](plugins.md)提供独立管理、正文和前台资源钩子，通用后台正文预览可加载资源，具体插件后续接入；没有任意代码安装器或插件执行沙箱。其他功能状态见[路线图](product-roadmap.md)，主题契约见[主题与渲染](themes-and-rendering.md)。当前只有 PostgreSQL，没有外部搜索、统计、Webhook 或 outbox。
+本文保存后续扩展方案与启用条件。已实现的可信编译期[插件机制](plugins.md)提供独立管理、正文和前台资源钩子，内置 Markdown 增强支持公式、Mermaid 与后台正文预览；没有任意代码安装器或插件执行沙箱。其他功能状态见[路线图](product-roadmap.md)，主题契约见[主题与渲染](themes-and-rendering.md)。当前只有 PostgreSQL，没有外部搜索、统计、Webhook 或 outbox。
 
 ## 1. 扩展边界与启用条件
 

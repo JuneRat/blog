@@ -113,6 +113,9 @@ jobs:
       - name: Tests
         run: pnpm test
 
+      - name: Check bundled Markdown plugin assets
+        run: pnpm check:plugins
+
       # tsc --noEmit + vite build：类型与产物同时自检。
       - name: Build
         run: pnpm build

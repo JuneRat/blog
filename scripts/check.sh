@@ -23,7 +23,7 @@ echo "==> cargo test --workspace"
 cargo test --workspace
 
 echo "==> admin SPA: tsc --noEmit + vitest"
-(cd apps/admin && pnpm typecheck && pnpm test)
+(cd apps/admin && pnpm check:plugins && pnpm typecheck && pnpm test)
 
 echo "==> script unit tests"
 BLOG_RECOVERY_TEST=0 PYTHONPATH=scripts python3 -B -m unittest discover -s scripts -p 'test_*.py'

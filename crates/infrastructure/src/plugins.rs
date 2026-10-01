@@ -1,5 +1,6 @@
 //! Trusted, compiled-in plugins. The catalog owns code and immutable assets;
 //! application::plugins owns configuration, permissions and lifecycle state.
+mod markdown_enhance;
 mod store;
 pub use store::PostgresPluginStore;
 pub(crate) use store::content_version_on;
@@ -86,7 +87,7 @@ pub struct PluginCatalog {
 impl PluginCatalog {
     /// Built-in plugins are opt-in. Test fixtures use separate catalogs.
     pub fn builtins() -> Self {
-        Self::new(vec![]).expect("valid built-in plugin catalog")
+        Self::new(vec![markdown_enhance::registration()]).expect("valid built-in plugin catalog")
     }
 
     pub fn new(registrations: Vec<PluginRegistration>) -> Result<Self, UseCaseError> {

@@ -90,7 +90,7 @@ GET 和 POST 都必须带启动终端显示的 `X-Install-Token`，并执行 Ori
 
 以下所有路径均相对于 `/api/admin/v1`。读写权限按文章作者区分 own / any；创建文章的作者取当前会话用户。
 
-正文预览使用 `POST /content-preview`，请求 `{ "content": "Markdown" }`，返回 `{ "content_html": "清洗后的 HTML", "head_html": "宿主生成的插件资源标签" }`。需要会话、CSRF，以及 `post.create/post.update/post.update_any/page.create/page.update` 中任一权限。它复用保存时的正文渲染器、源文与 HTML 预算；正文和头部资源使用同一插件快照。它不读取已有内容，不更新正文、引用或审计，响应 `Cache-Control: no-store`。后台用沙箱 iframe 展示正文并加载已启用插件的资源，不代表完整主题、发布校验或媒体引用提交已经成功。评论预览的返回结构仍仅含 `content_html`。
+正文预览使用 `POST /content-preview`，请求 `{ "content": "Markdown" }`，返回 `{ "content_html": "清洗后的 HTML", "head_html": "宿主生成的插件资源标签" }`。需要会话、CSRF，以及 `post.create/post.update/post.update_any/page.create/page.update` 中任一权限。它复用保存时的正文渲染器、源文与 HTML 预算；正文和头部资源使用同一插件快照。它不读取已有内容，不更新正文、引用或审计，响应 `Cache-Control: no-store`。后台用沙箱 iframe 展示正文并加载已启用的公式/图表资源，不代表完整主题、发布校验或媒体引用提交已经成功。评论预览的返回结构仍仅含 `content_html`。
 
 | 方法与路径 | 行为 |
 |---|---|
