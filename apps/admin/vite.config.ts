@@ -37,6 +37,8 @@ export default defineConfig({
     proxy: {
       "/api": { target: "http://127.0.0.1:3000" },
       "/auth": { target: "http://127.0.0.1:3000" },
+      "/assets/plugins": { target: "http://127.0.0.1:3000" },
+      "/media": { target: "http://127.0.0.1:3000" },
     },
   },
 });

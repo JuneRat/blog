@@ -25,6 +25,7 @@ const THEME_FUNCTIONS: &[&str] = &[
     "get_tags",
     "asset_url",
     "post_url",
+    "plugin_head",
 ];
 
 #[derive(serde::Deserialize)]
@@ -171,6 +172,7 @@ pub struct MiniJinjaThemeRenderer {
     release_assets: ThemeAssets,
     slug: String,
     name: String,
+    plugin_head: String,
 }
 
 impl MiniJinjaThemeRenderer {
@@ -234,6 +236,7 @@ impl MiniJinjaThemeRenderer {
             release_assets,
             slug: manifest.slug,
             name: manifest.name,
+            plugin_head: String::new(),
         })
     }
 
@@ -248,7 +251,8 @@ impl MiniJinjaThemeRenderer {
     }
 
     pub async fn validate(&self, runtime: &RenderingRuntime) -> Result<(), UseCaseError> {
-        crate::theme_validation::validate(self, runtime).await
+        // Template preflight uses fixed public fixtures and no live plugin state.
+        crate::theme_validation::validate(self, &runtime.for_theme_validation()).await
     }
 
     pub fn assets(&self) -> ThemeAssets {
@@ -267,6 +271,11 @@ impl MiniJinjaThemeRenderer {
         self
     }
 
+    pub(crate) fn with_plugin_head(mut self, html: String) -> Self {
+        self.plugin_head = html;
+        self
+    }
+
     fn render<T: serde::Serialize>(
         &self,
         template: &str,
@@ -274,6 +283,8 @@ impl MiniJinjaThemeRenderer {
         time_zone: &str,
     ) -> Result<String, UseCaseError> {
         let mut env = self.env.clone();
+        let head = self.plugin_head.clone();
+        env.add_function("plugin_head", move || Value::from_safe_string(head.clone()));
         let dates = Arc::new(crate::SiteTimeZone::parse(time_zone).map_err(UseCaseError::Invalid)?);
         let data = self
             .data

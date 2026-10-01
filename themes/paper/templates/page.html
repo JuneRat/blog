@@ -5,6 +5,6 @@
   <p class="meta">
     {% if page.published_at %}<time>{{ page.published_at }}</time>{% endif %}
   </p>
-  <div class="content">{{ page.content_html | safe }}</div>
+  <div class="content" data-content-root>{{ page.content_html | safe }}</div>
 </article>
 {% endblock %}

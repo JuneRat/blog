@@ -20,18 +20,40 @@ pub trait TimeZoneProvider: Send + Sync {
     fn names(&self) -> Vec<String>;
 }
 
-/// 同次渲染的清洗后 HTML 与正文图片引用，必须一起持久化。
+/// Core content pipeline revision (1..1024). Bump when Markdown, sanitization,
+/// media extraction or compiled content-plugin output rules change.
+pub const CONTENT_RENDER_VERSION: i32 = 2;
+
+/// 同次渲染的清洗后 HTML、渲染版本与正文图片引用，必须一起持久化。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RenderedContent {
     pub content_html: String,
+    /// The exact pipeline snapshot that produced this HTML (including plugin revision).
+    pub render_version: i32,
     /// 仅包含 HTML 中的站内图片引用；按 UUID 排序并去重，不含独立封面字段。
     pub media_ids: Vec<Uuid>,
+}
+
+/// Non-persistent preview. The host-generated head and body share one plugin snapshot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RenderedPreview {
+    pub content_html: String,
+    pub head_html: String,
 }
 
 /// Markdown → 清洗后 HTML 和媒体引用；CPU 工作与执行策略由适配器负责。
 #[async_trait]
 pub trait ContentRenderer: Send + Sync {
     async fn render_content(&self, source: &str) -> Result<RenderedContent, UseCaseError>;
+    async fn render_preview(&self, source: &str) -> Result<RenderedPreview, UseCaseError> {
+        Ok(RenderedPreview {
+            content_html: self.render_content(source).await?.content_html,
+            head_html: String::new(),
+        })
+    }
+    async fn current_render_version(&self) -> Result<i32, UseCaseError> {
+        Ok(CONTENT_RENDER_VERSION)
+    }
 }
 
 /// 受限评论 Markdown；预览与持久化使用相同规则，不生成媒体引用。

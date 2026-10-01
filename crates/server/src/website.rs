@@ -43,6 +43,8 @@ pub async fn build_router(
     telemetry: &interfaces::observability::Telemetry,
     environment: TaskEnvironment,
 ) -> Result<WebsiteSetup, String> {
+    let plugins = assembly::plugins(pool);
+    let runtime = Arc::new(runtime.as_ref().clone().with_plugins(plugins.clone()));
     let time_zones = Arc::new(infrastructure::IanaTimeZones);
     let public_posts = Arc::new(PostgresPublishedPostQuery::new(pool.clone()));
     let public_pages = Arc::new(PostgresPublishedPageQuery::new(pool.clone()));
@@ -187,9 +189,11 @@ pub async fn build_router(
                 audit,
                 html_rebuild,
                 tasks,
+                plugins: plugins.manager.clone(),
             },
             HttpAssets {
                 themes: installed.assets,
+                plugins: plugins.catalog.assets(),
                 admin_dist: config.admin_dist.clone(),
             },
             HttpConfig {

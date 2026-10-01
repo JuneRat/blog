@@ -27,6 +27,7 @@ pub mod media_storage;
 pub mod oauth;
 pub mod password;
 pub mod persistence;
+pub mod plugins;
 pub mod rbac;
 mod render_executor;
 pub mod rendering;

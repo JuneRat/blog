@@ -2,6 +2,7 @@ import { Alert, Button, Space, Typography, theme } from "antd";
 import { useEffect, useRef, useState } from "react";
 import { contentApi } from "../api/content";
 import { messageOf } from "../apiError";
+import { previewDocument } from "./previewDocument";
 
 /** Render unsaved Markdown with the same server rules as publication. */
 export function ContentPreview({ content, disabled }: { content: string; disabled: boolean }) {
@@ -23,7 +24,7 @@ export function ContentPreview({ content, disabled }: { content: string; disable
     setError(null);
     try {
       const result = await contentApi.previewContent(content);
-      if (current === revision.current) setHtml(result.content_html);
+      if (current === revision.current) setHtml(previewDocument(result, window.location.origin));
     } catch (e) {
       if (current === revision.current) setError(messageOf(e));
     } finally {
@@ -38,20 +39,24 @@ export function ContentPreview({ content, disabled }: { content: string; disable
     </Space>
     {error && <Alert type="error" showIcon title={error} style={{ marginTop: 12 }} />}
     {html !== null && (
-      <div
+      <iframe
         aria-label="正文预览"
+        title="正文预览"
+        sandbox="allow-scripts"
+        referrerPolicy="no-referrer"
+        srcDoc={html}
         style={{
-          overflowWrap: "anywhere",
-          overflowX: "auto",
+          display: "block",
+          width: "100%",
+          height: "min(65vh, 640px)",
+          minHeight: 280,
           marginTop: 12,
-          padding: "20px 24px",
           background: token.colorBgContainer,
           border: `1px solid ${token.colorBorderSecondary}`,
           borderRadius: token.borderRadiusLG,
           lineHeight: 1.8,
           fontSize: 15,
         }}
-        dangerouslySetInnerHTML={{ __html: html }}
       />
     )}
   </div>;

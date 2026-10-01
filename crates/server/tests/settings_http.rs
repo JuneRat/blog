@@ -604,6 +604,30 @@ async fn build(pool: PgPool) -> Stack {
     .merge(admin_router(admin_state.clone()))
     .merge(pages_router(admin_state.clone()))
     .merge(settings_router(admin_state.clone()))
+    .merge(interfaces::http_plugins::plugins_router(
+        interfaces::http_plugins::PluginsState {
+            plugins: Arc::new(application::plugins::PluginsInteractor::new(
+                Arc::new(infrastructure::plugins::PostgresPluginStore::new(
+                    common::database(pool.clone()),
+                )),
+                Arc::new(
+                    application::plugins::PluginRegistry::new(vec![
+                        application::plugins::PluginDefinition {
+                            id: "fixture".into(),
+                            name: "HTTP fixture".into(),
+                            description: String::new(),
+                            version: "1".into(),
+                            hooks: vec![],
+                            config_fields: vec![],
+                        },
+                    ])
+                    .unwrap(),
+                ),
+                Arc::new(SystemClock),
+            )),
+            admin: admin_state.clone(),
+        },
+    ))
     .merge(interfaces::http_tasks::tasks_router(
         interfaces::http_tasks::TasksState {
             tasks: Arc::new(TasksInteractor::new(tasks.clone(), Arc::new(SystemClock))),
@@ -675,6 +699,93 @@ where
 }
 
 const HTML_REBUILD_PATH: &str = "/api/admin/v1/maintenance/html-rebuild";
+
+#[tokio::test]
+async fn plugin_management_enforces_separate_permission_csrf_versions_and_audit() {
+    isolated_html_rebuild(|stack| async move {
+        let path = "/api/admin/v1/plugins";
+        let item = "/api/admin/v1/plugins/fixture";
+        let (owner, csrf) = login_as(&stack, "owner").await;
+        let (settings_manager, settings_csrf) = login_as(&stack, "admin").await;
+        let (status, _, cache) = get(&stack.router, path, None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert_eq!(cache.as_deref(), Some("no-store"));
+        assert_eq!(
+            get(&stack.router, path, Some(&settings_manager)).await.0,
+            StatusCode::FORBIDDEN
+        );
+        let input = json!({"enabled":true,"config":{},"expected_version":0});
+        assert_eq!(
+            put(
+                &stack.router,
+                item,
+                &settings_manager,
+                &settings_csrf,
+                input.clone()
+            )
+            .await
+            .0,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            put(&stack.router, item, &owner, "wrong", input.clone())
+                .await
+                .0,
+            StatusCode::BAD_REQUEST
+        );
+        let (status, before, _) = get(&stack.router, path, Some(&owner)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(before["version"], 0);
+        assert_eq!(before["plugins"][0]["enabled"], false);
+        let (status, saved) = put(&stack.router, item, &owner, &csrf, input.clone()).await;
+        assert_eq!(status, StatusCode::OK, "{saved}");
+        assert_eq!(saved["version"], 1);
+        assert_eq!(saved["plugins"][0]["enabled"], true);
+        let (status, conflict) = put(&stack.router, item, &owner, &csrf, input).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(conflict["code"], "version_conflict");
+        let (status, _) = put(
+            &stack.router,
+            item,
+            &owner,
+            &csrf,
+            json!({"enabled":true,"config":{},"expected_version":1}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            put(
+                &stack.router,
+                item,
+                &owner,
+                &csrf,
+                json!({"enabled":false,"config":{}})
+            )
+            .await
+            .0,
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            put(
+                &stack.router,
+                "/api/admin/v1/plugins/unknown",
+                &owner,
+                &csrf,
+                json!({"enabled":true,"config":{},"expected_version":1})
+            )
+            .await
+            .0,
+            StatusCode::NOT_FOUND
+        );
+        let audits: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM audit_logs WHERE action='plugin.configure'")
+                .fetch_one(&stack.pool)
+                .await
+                .unwrap();
+        assert_eq!(audits, 1);
+    })
+    .await;
+}
 
 async fn html_rebuild_exchange(
     router: &axum::Router,

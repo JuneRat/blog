@@ -566,6 +566,7 @@ async fn content_preview_is_authorized_sanitized_non_persistent_and_not_cached()
     let json: serde_json::Value =
         serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
     let html = json["content_html"].as_str().unwrap();
+    assert_eq!(json["head_html"], "");
     assert!(html.contains("<h1>预览</h1>"));
     assert!(html.contains("<strong>正文</strong>"));
     assert!(!html.contains("<script"));

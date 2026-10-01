@@ -8,7 +8,10 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use application::error::UseCaseError;
-use application::ports::{CommentRenderer, ContentRenderer, RenderedContent, ThemeRenderer};
+use application::plugins::{PluginPage, PluginSnapshot, content_render_version};
+use application::ports::{
+    CommentRenderer, ContentRenderer, RenderedContent, RenderedPreview, ThemeRenderer,
+};
 use application::public_site::{CategoryView, PageView, PostCard, PostView, SeriesView, TagView};
 use application::rendering_observer::{
     QueueOutcome, RenderKind as RenderPool, RenderingEvent, RenderingObserver,
@@ -112,6 +115,7 @@ struct RuntimeState {
 pub struct RenderingRuntime {
     state: Arc<RuntimeState>,
     observer: Option<Arc<dyn RenderingObserver>>,
+    plugins: Option<Arc<crate::plugins::PluginRuntime>>,
 }
 
 struct QueueMeasurement {
@@ -163,6 +167,24 @@ impl Default for RenderingRuntime {
 }
 
 impl RenderingRuntime {
+    pub fn with_plugins(mut self, plugins: Arc<crate::plugins::PluginRuntime>) -> Self {
+        self.plugins = Some(plugins);
+        self
+    }
+
+    pub(crate) fn for_theme_validation(&self) -> Self {
+        let mut runtime = self.clone();
+        runtime.plugins = None;
+        runtime
+    }
+
+    async fn plugin_snapshot(&self) -> Result<PluginSnapshot, UseCaseError> {
+        match &self.plugins {
+            Some(plugins) => plugins.manager.snapshot().await,
+            None => Ok(PluginSnapshot::default()),
+        }
+    }
+
     pub fn with_observer(mut self, observer: Arc<dyn RenderingObserver>) -> Self {
         self.observer = Some(observer);
         self
@@ -191,6 +213,7 @@ impl RenderingRuntime {
                 markdown: Mutex::new(MarkdownCache::default()),
             }),
             observer: None,
+            plugins: None,
         })
     }
 
@@ -309,16 +332,59 @@ impl CommentRenderer for RenderingRuntime {
 
 #[async_trait]
 impl ContentRenderer for RenderingRuntime {
+    async fn current_render_version(&self) -> Result<i32, UseCaseError> {
+        content_render_version(
+            crate::CONTENT_RENDER_VERSION,
+            self.plugin_snapshot().await?.render_revision,
+        )
+    }
+
     async fn render_content(&self, source: &str) -> Result<RenderedContent, UseCaseError> {
         domain::content::budget::validate_source(source)
             .map_err(|e| UseCaseError::Invalid(e.to_string()))?;
+        let snapshot = self.plugin_snapshot().await?;
+        self.render_content_with_snapshot(source, snapshot).await
+    }
+
+    async fn render_preview(&self, source: &str) -> Result<RenderedPreview, UseCaseError> {
+        domain::content::budget::validate_source(source)
+            .map_err(|e| UseCaseError::Invalid(e.to_string()))?;
+        let snapshot = self.plugin_snapshot().await?;
+        let rendered = self
+            .render_content_with_snapshot(source, snapshot.clone())
+            .await?;
+        let plugins = self.plugins.clone();
+        let head_html = self
+            .execute(RenderPool::Content, "preview.head", move || match plugins {
+                Some(plugins) => plugins.catalog.head_html(PluginPage::Preview, &snapshot),
+                None => Ok(String::new()),
+            })
+            .await?;
+        Ok(RenderedPreview {
+            content_html: rendered.content_html,
+            head_html,
+        })
+    }
+}
+
+impl RenderingRuntime {
+    async fn render_content_with_snapshot(
+        &self,
+        source: &str,
+        snapshot: PluginSnapshot,
+    ) -> Result<RenderedContent, UseCaseError> {
+        let render_version =
+            content_render_version(crate::CONTENT_RENDER_VERSION, snapshot.render_revision)?;
+        // The version distinguishes disabled/configured hooks even for identical Markdown.
+        let cache_key = format!("{render_version}\0{source}");
+        let plugins = self.plugins.clone();
         let started = Instant::now();
         let cached = self
             .state
             .markdown
             .lock()
             .map_err(|_| UseCaseError::Render("Markdown 缓存锁失效".into()))?
-            .get(source);
+            .get(&cache_key);
         tracing::debug!(
             kind = "markdown",
             cache_hit = cached.is_some(),
@@ -332,12 +398,16 @@ impl ContentRenderer for RenderingRuntime {
         let source = source.to_owned();
         let state = self.state.clone();
         self.execute(RenderPool::Content, "markdown", move || {
-            let content_html = SanitizingMarkdownRenderer::new().render_markdown(&source);
+            let content_html = match plugins {
+                Some(plugins) => plugins.catalog.render_markdown(&source, &snapshot)?,
+                None => SanitizingMarkdownRenderer::new().render_markdown(&source),
+            };
             application::rendering_budget::validate_html(&content_html)
                 .map_err(|e| UseCaseError::Invalid(e.to_string()))?;
             let media_ids = extract_media_ids_from_html(&content_html);
             let rendered = RenderedContent {
                 content_html,
+                render_version,
                 media_ids,
             };
             tracing::debug!(
@@ -349,7 +419,7 @@ impl ContentRenderer for RenderingRuntime {
                 .markdown
                 .lock()
                 .map_err(|_| UseCaseError::Render("Markdown 缓存锁失效".into()))?
-                .insert(source, rendered.clone(), &state.limits);
+                .insert(cache_key, rendered.clone(), &state.limits);
             Ok(rendered)
         })
         .await
@@ -361,6 +431,31 @@ struct ThemeExecutor {
     renderer: Arc<MiniJinjaThemeRenderer>,
 }
 
+impl ThemeExecutor {
+    async fn render<F>(
+        &self,
+        page: PluginPage,
+        kind: &'static str,
+        task: F,
+    ) -> Result<String, UseCaseError>
+    where
+        F: FnOnce(&MiniJinjaThemeRenderer) -> Result<String, UseCaseError> + Send + 'static,
+    {
+        let snapshot = self.runtime.plugin_snapshot().await?;
+        let plugins = self.runtime.plugins.clone();
+        let renderer = self.renderer.as_ref().clone();
+        self.runtime
+            .execute(RenderPool::Theme, kind, move || {
+                let head = match plugins {
+                    Some(plugins) => plugins.catalog.head_html(page, &snapshot)?,
+                    None => String::new(),
+                };
+                task(&renderer.with_plugin_head(head))
+            })
+            .await
+    }
+}
+
 #[async_trait]
 impl ThemeRenderer for ThemeExecutor {
     async fn render_index(
@@ -370,18 +465,16 @@ impl ThemeRenderer for ThemeExecutor {
         posts: &[PostCard],
         pagination: &application::public_site::IndexPagination,
     ) -> Result<String, UseCaseError> {
-        let renderer = self.renderer.clone();
         let (site, seo, posts, pagination) = (
             site.clone(),
             seo.clone(),
             posts.to_vec(),
             pagination.clone(),
         );
-        self.runtime
-            .execute(RenderPool::Theme, "theme.index", move || {
-                renderer.render_index(&site, &seo, &posts, &pagination)
-            })
-            .await
+        self.render(PluginPage::Index, "theme.index", move |renderer| {
+            renderer.render_index(&site, &seo, &posts, &pagination)
+        })
+        .await
     }
 
     async fn render_post(
@@ -390,13 +483,11 @@ impl ThemeRenderer for ThemeExecutor {
         seo: &SeoMeta,
         view: &PostView,
     ) -> Result<String, UseCaseError> {
-        let renderer = self.renderer.clone();
         let (site, seo, view) = (site.clone(), seo.clone(), view.clone());
-        self.runtime
-            .execute(RenderPool::Theme, "theme.post", move || {
-                renderer.render_post(&site, &seo, &view)
-            })
-            .await
+        self.render(PluginPage::Post, "theme.post", move |renderer| {
+            renderer.render_post(&site, &seo, &view)
+        })
+        .await
     }
     async fn render_page(
         &self,
@@ -404,13 +495,11 @@ impl ThemeRenderer for ThemeExecutor {
         seo: &SeoMeta,
         view: &PageView,
     ) -> Result<String, UseCaseError> {
-        let renderer = self.renderer.clone();
         let (site, seo, view) = (site.clone(), seo.clone(), view.clone());
-        self.runtime
-            .execute(RenderPool::Theme, "theme.page", move || {
-                renderer.render_page(&site, &seo, &view)
-            })
-            .await
+        self.render(PluginPage::Page, "theme.page", move |renderer| {
+            renderer.render_page(&site, &seo, &view)
+        })
+        .await
     }
     async fn render_tag(
         &self,
@@ -418,13 +507,11 @@ impl ThemeRenderer for ThemeExecutor {
         seo: &SeoMeta,
         view: &TagView,
     ) -> Result<String, UseCaseError> {
-        let renderer = self.renderer.clone();
         let (site, seo, view) = (site.clone(), seo.clone(), view.clone());
-        self.runtime
-            .execute(RenderPool::Theme, "theme.tag", move || {
-                renderer.render_tag(&site, &seo, &view)
-            })
-            .await
+        self.render(PluginPage::Tag, "theme.tag", move |renderer| {
+            renderer.render_tag(&site, &seo, &view)
+        })
+        .await
     }
     async fn render_category(
         &self,
@@ -432,13 +519,11 @@ impl ThemeRenderer for ThemeExecutor {
         seo: &SeoMeta,
         view: &CategoryView,
     ) -> Result<String, UseCaseError> {
-        let renderer = self.renderer.clone();
         let (site, seo, view) = (site.clone(), seo.clone(), view.clone());
-        self.runtime
-            .execute(RenderPool::Theme, "theme.category", move || {
-                renderer.render_category(&site, &seo, &view)
-            })
-            .await
+        self.render(PluginPage::Category, "theme.category", move |renderer| {
+            renderer.render_category(&site, &seo, &view)
+        })
+        .await
     }
     async fn render_series(
         &self,
@@ -446,13 +531,11 @@ impl ThemeRenderer for ThemeExecutor {
         seo: &SeoMeta,
         view: &SeriesView,
     ) -> Result<String, UseCaseError> {
-        let renderer = self.renderer.clone();
         let (site, seo, view) = (site.clone(), seo.clone(), view.clone());
-        self.runtime
-            .execute(RenderPool::Theme, "theme.series", move || {
-                renderer.render_series(&site, &seo, &view)
-            })
-            .await
+        self.render(PluginPage::Series, "theme.series", move |renderer| {
+            renderer.render_series(&site, &seo, &view)
+        })
+        .await
     }
 }
 

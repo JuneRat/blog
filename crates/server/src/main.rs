@@ -221,7 +221,7 @@ async fn run(command: Command, mut config: config::DeploymentConfig) -> Result<(
         }
         Command::Post { action } => {
             interfaces::cli::run_post(
-                assembly::post_commands(&pool, Arc::new(RenderingRuntime::default())),
+                assembly::post_commands(&pool, Arc::new(assembly::rendering(&pool))),
                 action,
             )
             .await

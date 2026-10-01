@@ -51,11 +51,12 @@ impl PostgresMediaPurgeStore {
     }
 
     async fn require_current_references(connection: &mut PgConnection) -> Result<(), UseCaseError> {
+        let render_version = crate::plugins::content_version_on(connection).await?;
         let outdated: bool = sqlx::query_scalar(
             "SELECT EXISTS(SELECT 1 FROM posts WHERE content_render_version<>$1) \
              OR EXISTS(SELECT 1 FROM pages WHERE content_render_version<>$1)",
         )
-        .bind(crate::CONTENT_RENDER_VERSION)
+        .bind(render_version)
         .fetch_one(connection)
         .await
         .map_err(db)?;
@@ -148,6 +149,9 @@ impl MediaPurgeStore for PostgresMediaPurgeStore {
         let mut tx = self.database.pool.begin().await.map_err(db)?;
         sqlx::query("SET LOCAL lock_timeout='10s'")
             .execute(&mut *tx)
+            .await
+            .map_err(db)?;
+        crate::locks::acquire(&mut *tx, crate::locks::CONTENT_RELATIONS, true)
             .await
             .map_err(db)?;
         if self.identity_on(&mut tx).await? != plan.plan.database {

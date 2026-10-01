@@ -39,8 +39,8 @@ pub use media::{
     SITE_MEDIA_CONTENT_ID,
 };
 pub use rendering::{
-    CommentRenderer, ContentRenderer, DateTimeFormatter, RenderedContent, ThemeRenderer,
-    TimeZoneProvider,
+    CONTENT_RENDER_VERSION, CommentRenderer, ContentRenderer, DateTimeFormatter, RenderedContent,
+    RenderedPreview, ThemeRenderer, TimeZoneProvider,
 };
 pub use runtime::{Clock, HealthCheck, SaveOutcome};
 pub use site::{

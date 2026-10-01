@@ -234,15 +234,17 @@ describe("写作恢复与发布边界", () => {
   });
 
   it("预览未保存正文并忽略过期响应，不触发保存", async () => {
-    const pending = deferred<{ content_html: string }>(); vi.mocked(contentApi.previewContent).mockReturnValueOnce(pending.promise).mockResolvedValue({ content_html: "<strong>新正文</strong>" });
+    const pending = deferred<{ content_html: string; head_html: string }>(); vi.mocked(contentApi.previewContent).mockReturnValueOnce(pending.promise).mockResolvedValue({ content_html: "<strong>新正文</strong>", head_html: "" });
     render(editor("page")); await screen.findByDisplayValue(page.content);
     fireEvent.click(screen.getByRole("button", { name: "预览正文" }));
     expect(contentApi.previewContent).toHaveBeenCalledWith(page.content);
     fireEvent.change(content(), { target: { value: "**新正文**" } });
-    await act(async () => pending.resolve({ content_html: "<p>过期正文</p>" }));
+    await act(async () => pending.resolve({ content_html: "<p>过期正文</p>", head_html: "" }));
     expect(screen.queryByLabelText("正文预览")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "预览正文" }));
-    expect((await screen.findByLabelText("正文预览")).innerHTML).toBe("<strong>新正文</strong>");
+    const preview = await screen.findByLabelText("正文预览") as HTMLIFrameElement;
+    expect(preview.srcdoc).toContain("<main data-content-root><strong>新正文</strong></main>");
+    expect(preview.getAttribute("sandbox")).toBe("allow-scripts");
     expect(pagesApi.updatePage).not.toHaveBeenCalled();
   });
 });

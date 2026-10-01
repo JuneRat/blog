@@ -90,7 +90,7 @@ GET 和 POST 都必须带启动终端显示的 `X-Install-Token`，并执行 Ori
 
 以下所有路径均相对于 `/api/admin/v1`。读写权限按文章作者区分 own / any；创建文章的作者取当前会话用户。
 
-正文预览使用 `POST /content-preview`，请求 `{ "content": "Markdown" }`，返回 `{ "content_html": "清洗后的 HTML" }`。需要会话、CSRF，以及 `post.create/post.update/post.update_any/page.create/page.update` 中任一权限。它复用保存时的正文渲染器、源文与 HTML 预算，不读取已有内容，不更新正文、引用或审计，响应 `Cache-Control: no-store`。预览只展示正文，不代表完整主题、发布校验或媒体引用提交已经成功。
+正文预览使用 `POST /content-preview`，请求 `{ "content": "Markdown" }`，返回 `{ "content_html": "清洗后的 HTML", "head_html": "宿主生成的插件资源标签" }`。需要会话、CSRF，以及 `post.create/post.update/post.update_any/page.create/page.update` 中任一权限。它复用保存时的正文渲染器、源文与 HTML 预算；正文和头部资源使用同一插件快照。它不读取已有内容，不更新正文、引用或审计，响应 `Cache-Control: no-store`。后台用沙箱 iframe 展示正文并加载已启用插件的资源，不代表完整主题、发布校验或媒体引用提交已经成功。评论预览的返回结构仍仅含 `content_html`。
 
 | 方法与路径 | 行为 |
 |---|---|
@@ -188,6 +188,8 @@ Page 没有作者，使用站点级 `page.*` 权限。
 用户列表包含 `status` 和编辑 `version`；状态与登录方式分开显示，停用不删除密码、外部身份、角色或文章。状态 PUT 成功返回 `{ "id": "UUID", "status": "disabled", "version": 4 }`。实际启用或停用同事务递增 `version/auth_version`、删除全部持久会话、追加 `user.status.update` 审计；启用后必须重新登录。相同状态且版本匹配时不写入、不撤销会话、不重复审计；旧版本仍返回 409 `version_conflict`。最后可登录 Admin 不能停用，返回 403 `last_admin`；软删除账号不能在此恢复，返回 404。未知状态或字段拒绝。后台 `/admin/users` 提供确认操作；允许停用本人，但仍执行最后 Admin 保护，成功后本人会话失效。
 
 ## 设置
+
+独立的插件管理使用 `GET /plugins` 和 `PUT /plugins/{id}`，读取与写入均需 `plugins.manage`。PUT 载荷为 `{ enabled, config, expected_version }`，请求体上限 48 KiB。状态与审计同事务保存，版本冲突不覆盖；完整配置、前台资源和正文重建契约见[插件机制](plugins.md)。它不经过下述 `settings.manage` 分组接口。
 
 读取与写入均需 `settings.manage`，请求体上限为 16 KiB。
 

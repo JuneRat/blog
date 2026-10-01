@@ -19,6 +19,7 @@ impl ContentRenderer for Renderer {
     async fn render_content(&self, source: &str) -> Result<RenderedContent, UseCaseError> {
         self.0.fetch_add(1, Ordering::SeqCst);
         Ok(RenderedContent {
+            render_version: application::ports::CONTENT_RENDER_VERSION,
             content_html: source.into(),
             media_ids: vec![Uuid::nil()],
         })
@@ -74,7 +75,8 @@ async fn preview_authorizes_before_work_and_enforces_source_and_output_budgets()
             preview
                 .render(&actor(&[permission]), "rendered")
                 .await
-                .unwrap(),
+                .unwrap()
+                .content_html,
             "rendered"
         );
     }

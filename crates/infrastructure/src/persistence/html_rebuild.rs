@@ -12,7 +12,6 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use super::{
-    content::CONTENT_RENDER_VERSION,
     media::{media_ids_for, sync_rebuilt_media_refs},
     sql::map_sqlx_error,
 };
@@ -59,13 +58,14 @@ impl PostgresHtmlRebuildStore {
 #[async_trait]
 impl HtmlRebuildStore for PostgresHtmlRebuildStore {
     async fn pending(&self) -> Result<RebuildCounts, UseCaseError> {
+        let content_version = self.content_renderer.current_render_version().await?;
         // 同一条语句保证三类数量来自同一读取快照，不加载正文。
         let (posts, pages, comments): (i64, i64, i64) = sqlx::query_as(
             "SELECT (SELECT count(*) FROM posts WHERE content_render_version <> $1),
                     (SELECT count(*) FROM pages WHERE content_render_version <> $1),
                     (SELECT count(*) FROM comments WHERE content_render_version <> $2)",
         )
-        .bind(CONTENT_RENDER_VERSION)
+        .bind(content_version)
         .bind(COMMENT_RENDER_VERSION)
         .fetch_one(&self.pool)
         .await
@@ -106,17 +106,29 @@ impl HtmlRebuildStore for PostgresHtmlRebuildStore {
                 source: UseCaseError::Invalid("重建批量大小须为 1–1,000".into()),
             });
         }
+        let content_version = if kind == HtmlKind::Comment {
+            0
+        } else {
+            self.content_renderer
+                .current_render_version()
+                .await
+                .map_err(|source| RebuildBatchError {
+                    progress: RebuildBatch::default(),
+                    id: None,
+                    source,
+                })?
+        };
         let (table, cover, render_version, media_kind) = match kind {
             HtmlKind::Post => (
                 "posts",
                 "cover_media_id",
-                CONTENT_RENDER_VERSION,
+                content_version,
                 Some(MediaContentKind::Post),
             ),
             HtmlKind::Page => (
                 "pages",
                 "NULL::uuid",
-                CONTENT_RENDER_VERSION,
+                content_version,
                 Some(MediaContentKind::Page),
             ),
             HtmlKind::Comment => ("comments", "NULL::uuid", COMMENT_RENDER_VERSION, None),
@@ -156,11 +168,15 @@ impl HtmlRebuildStore for PostgresHtmlRebuildStore {
                 let rendered = if kind == HtmlKind::Comment {
                     RenderedContent {
                         content_html: self.comment_renderer.render_comment(&source).await?,
+                        render_version: COMMENT_RENDER_VERSION,
                         media_ids: vec![],
                     }
                 } else {
                     self.content_renderer.render_content(&source).await?
                 };
+                // Settings may have changed after the batch query. Persist the
+                // version of the actual render so a later pass can detect it.
+                let render_version = rendered.render_version;
                 application::rendering_budget::validate_html(&rendered.content_html)
                     .map_err(|error| UseCaseError::Invalid(error.to_string()))?;
                 // Historical HTML proves an existing relationship when the old

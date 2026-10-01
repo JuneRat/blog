@@ -17,6 +17,7 @@ pub mod media_cleanup;
 pub mod oauth_config;
 pub mod page;
 pub mod password;
+pub mod plugins;
 pub mod ports;
 pub mod public_site;
 pub mod publishing;

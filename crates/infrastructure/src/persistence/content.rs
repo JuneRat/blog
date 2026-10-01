@@ -22,7 +22,7 @@ use crate::audit::{AuditEntry, append_audit_log};
 
 /// Markdown 渲染、清洗或媒体引用提取规则变更时递增。
 /// HTML 与引用属于同一派生流水线；rebuild-html 同事务重建不匹配的两者。
-pub const CONTENT_RENDER_VERSION: i32 = 2;
+pub use application::ports::CONTENT_RENDER_VERSION;
 
 // ---------------------------------------------------------------------------
 // 文章仓储
@@ -70,7 +70,7 @@ impl PostgresPostRepository {
             .bind(&snapshot.slug).bind(&snapshot.excerpt).bind(&snapshot.content).bind(snapshot.cover_media_id)
             .bind(snapshot.status.as_str()).bind(snapshot.visibility.as_str()).bind(snapshot.published_at)
             .bind(snapshot.version).bind(snapshot.created_at).bind(snapshot.updated_at).bind(snapshot.deleted_at)
-            .bind(&rendered.content_html).bind(CONTENT_RENDER_VERSION)
+            .bind(&rendered.content_html).bind(rendered.render_version)
             .execute(&mut *tx).await.map_err(map_sqlx_error)?;
         insert_post_tags(&mut tx, snapshot.id, tag_ids)
             .await
@@ -129,7 +129,7 @@ impl PostgresPostRepository {
             .bind(snapshot.id).bind(expected_version).bind(&snapshot.title).bind(&snapshot.slug)
             .bind(&snapshot.excerpt).bind(&snapshot.content).bind(snapshot.category_id).bind(snapshot.cover_media_id)
             .bind(snapshot.status.as_str()).bind(snapshot.visibility.as_str()).bind(snapshot.published_at)
-            .bind(now).bind(&rendered.content_html).bind(CONTENT_RENDER_VERSION)
+            .bind(now).bind(&rendered.content_html).bind(rendered.render_version)
             .execute(&mut *tx).await.map_err(map_sqlx_error)?;
         if let Some(ids) = tag_ids {
             sqlx::query("DELETE FROM post_tags WHERE post_id=$1")
@@ -696,7 +696,7 @@ impl PageRepository for PostgresPageRepository {
         let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
         sqlx::query("INSERT INTO pages (id,title,slug,content,status,visibility,published_at,version,created_at,updated_at,deleted_at,content_html,content_render_version) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)")
             .bind(s.id).bind(&s.title).bind(&s.slug).bind(&s.content).bind(s.status.as_str()).bind(s.visibility.as_str())
-            .bind(s.published_at).bind(s.version).bind(s.created_at).bind(s.updated_at).bind(s.deleted_at).bind(&rendered.content_html).bind(CONTENT_RENDER_VERSION)
+            .bind(s.published_at).bind(s.version).bind(s.created_at).bind(s.updated_at).bind(s.deleted_at).bind(&rendered.content_html).bind(rendered.render_version)
             .execute(&mut *tx).await.map_err(map_sqlx_error)?;
         sync_media_refs(&mut tx, MediaContentKind::Page, s.id, &rendered.media_ids).await?;
         audit_content(
@@ -738,7 +738,7 @@ impl PageRepository for PostgresPageRepository {
         }
         sqlx::query("UPDATE pages SET title=$3,slug=$4,content=$5,status=$6,visibility=$7,published_at=$8,updated_at=$9,version=version+1,content_html=$10,content_render_version=$11 WHERE id=$1 AND version=$2 AND deleted_at IS NULL")
             .bind(s.id).bind(expected_version).bind(&s.title).bind(&s.slug).bind(&s.content).bind(s.status.as_str()).bind(s.visibility.as_str())
-            .bind(s.published_at).bind(now).bind(&rendered.content_html).bind(CONTENT_RENDER_VERSION)
+            .bind(s.published_at).bind(now).bind(&rendered.content_html).bind(rendered.render_version)
             .execute(&mut *tx).await.map_err(map_sqlx_error)?;
         sync_media_refs(&mut tx, MediaContentKind::Page, s.id, &rendered.media_ids).await?;
         audit_content(&mut tx, actor_id, "page.update", "page", s.id, serde_json::json!({"version": expected_version+1, "previous_status": status, "status": s.status.as_str(), "published_at": s.published_at})).await?;

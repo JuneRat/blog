@@ -12,7 +12,7 @@ import type { AuditFilter, AuditRecord } from "../types";
 
 const targetNames: Record<string, string> = {
   post: "文章", page: "页面", comment: "评论", media: "媒体", user: "用户",
-  role: "角色", system: "系统", settings: "设置", tag: "标签", category: "分类", series: "系列",
+  role: "角色", system: "系统", settings: "设置", plugin: "插件", tag: "标签", category: "分类", series: "系列",
 };
 
 function actorName(item: AuditRecord): string {

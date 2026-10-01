@@ -7,6 +7,7 @@ import type { AuditFilter, ContentListFilter } from "./types";
  * 失效（invalidate）写错键是这类库最常见、也最难发现的 bug。
  */
 export const queryKeys = {
+  plugins: () => ["plugins"] as const,
   auditLogsAll: () => ["audit-logs"] as const,
   auditLogs: (filter: AuditFilter, cursor?: string) => ["audit-logs", filter, cursor] as const,
   posts: () => ["posts"] as const,

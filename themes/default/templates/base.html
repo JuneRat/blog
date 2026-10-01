@@ -16,6 +16,7 @@
   <meta property="og:description" content="{{ seo.description }}">
   <meta property="og:url" content="{{ seo.canonical_url | url }}">
   <link rel="stylesheet" href="{{ asset_url(path='style.css') | url }}">
+  {{ plugin_head() }}
 </head>
 <body>
   <header class="site-header">

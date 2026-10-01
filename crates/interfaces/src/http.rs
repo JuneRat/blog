@@ -35,6 +35,7 @@ pub struct AppState {
     pub audit: Arc<application::audit::AuditInteractor>,
     pub html_rebuild: Arc<application::html_rebuild_admin::HtmlRebuildAdminInteractor>,
     pub tasks: Arc<application::tasks::TasksInteractor>,
+    pub plugins: Arc<application::plugins::PluginsInteractor>,
 }
 
 pub struct HttpConfig {
@@ -44,11 +45,16 @@ pub struct HttpConfig {
 
 pub struct HttpAssets {
     pub themes: Vec<application::themes::ThemeAssets>,
+    pub plugins: Vec<application::plugins::PluginAssets>,
     pub admin_dist: PathBuf,
 }
 
 /// 组合完整站点路由；监听地址、进程信号和关闭策略由 server 装配层负责。
 pub fn app_router(state: AppState, assets: HttpAssets, config: HttpConfig) -> Router {
+    let plugins = crate::http_plugins::plugins_router(crate::http_plugins::PluginsState {
+        plugins: state.plugins,
+        admin: state.admin.clone(),
+    });
     let https = config.public_origin.starts_with("https://");
     let content_preview = crate::http_content_preview::content_preview_router(
         crate::http_content_preview::ContentPreviewState {
@@ -88,7 +94,9 @@ pub fn app_router(state: AppState, assets: HttpAssets, config: HttpConfig) -> Ro
         registration: state.auth.registration.clone(),
         admin: state.admin.clone(),
     });
-    let app = mount_theme_assets(public_router(state.public), assets.themes)
+    let public =
+        crate::http_plugins::mount_plugin_assets(public_router(state.public), assets.plugins);
+    let app = mount_theme_assets(public, assets.themes)
         .merge(crate::http_auth::auth_router(state.auth))
         .merge(crate::http_auth::admin_router(state.admin.clone()))
         .merge(crate::http_admin::posts_router(state.admin.clone()))
@@ -106,6 +114,7 @@ pub fn app_router(state: AppState, assets: HttpAssets, config: HttpConfig) -> Ro
         .merge(audit)
         .merge(html_rebuild)
         .merge(tasks)
+        .merge(plugins)
         .merge(access);
     mount_admin_spa(app, Some(assets.admin_dist))
         .layer(middleware::from_fn(crate::http_support::request_context))

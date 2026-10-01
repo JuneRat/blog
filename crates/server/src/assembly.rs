@@ -1,5 +1,5 @@
 //! Narrow command assemblies. These constructors never read website settings
-//! or load themes and static assets.
+//! or load themes. Content commands share the installed plugin pipeline.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -33,10 +33,24 @@ pub fn retention_maintenance(pool: &Database) -> application::retention::Retenti
 }
 
 pub fn html_rebuilder(pool: &Database) -> application::html_rebuild::HtmlRebuildInteractor {
-    let runtime = Arc::new(infrastructure::RenderingRuntime::default());
+    let runtime = Arc::new(rendering(pool));
     application::html_rebuild::HtmlRebuildInteractor::new(Arc::new(
         infrastructure::PostgresHtmlRebuildStore::new(pool.clone(), runtime.clone(), runtime),
     ))
+}
+
+pub fn plugins(pool: &Database) -> Arc<infrastructure::plugins::PluginRuntime> {
+    Arc::new(infrastructure::plugins::PluginRuntime::new(
+        Arc::new(infrastructure::plugins::PluginCatalog::builtins()),
+        Arc::new(infrastructure::plugins::PostgresPluginStore::new(
+            pool.clone(),
+        )),
+        Arc::new(SystemClock),
+    ))
+}
+
+pub fn rendering(pool: &Database) -> infrastructure::RenderingRuntime {
+    infrastructure::RenderingRuntime::default().with_plugins(plugins(pool))
 }
 
 pub fn users(pool: &Database) -> Arc<UserInteractor> {

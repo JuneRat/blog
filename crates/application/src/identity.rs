@@ -152,6 +152,11 @@ pub const PERMISSION_REGISTRY: &[PermissionDescriptor] = &[
         description: "管理角色与分配（不能绕过委派检查与 Admin 保护）。",
     },
     PermissionDescriptor {
+        key: "plugins.manage",
+        name: "插件管理",
+        description: "查看、启停和配置已注册的站点插件。",
+    },
+    PermissionDescriptor {
         key: "settings.manage",
         name: "站点设置",
         description: "修改普通站点设置；不覆盖受保护的 OAuth 配置。",
@@ -239,6 +244,7 @@ pub const BUILTIN_ROLES: &[BuiltinRoleDef] = &[
             "user.manage",
             "role.manage",
             "settings.manage",
+            "plugins.manage",
             "media.read",
             "media.upload",
             "media.delete",

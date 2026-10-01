@@ -46,6 +46,10 @@ tokio = { workspace = true, features = ["time"] }
 # Workspace tests also enable this feature through server dev-dependencies.
 
 [[test]]
+name = "plugins"
+required-features = ["sqlx-test-support"]
+
+[[test]]
 name = "admin_content_queries"
 required-features = ["sqlx-test-support"]
 

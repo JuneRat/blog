@@ -13,6 +13,7 @@
   <meta property="og:description" content="{{ seo.description }}">
   <meta property="og:url" content="{{ seo.canonical_url | url }}">
   <link rel="stylesheet" href="{{ asset_url(path='paper.css') | url }}">
+  {{ plugin_head() }}
 </head>
 <body>
   <div class="site-shell">

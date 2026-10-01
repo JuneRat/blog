@@ -7,6 +7,7 @@ import { queryKeys as keys } from "./queryClient";
  * 表单基线仍由写响应维护，不用查询重取的结果覆盖正在编辑的输入。
  */
 const effects = {
+  plugin: [keys.tasksAll(), keys.htmlRebuild()],
   post: [keys.posts(), keys.trashAll(), keys.tags(), keys.categories(), keys.series(), keys.mediaAll(), keys.commentsAll()],
   page: [keys.pages(), keys.pageTrashAll(), keys.mediaAll()],
   tag: [keys.tags(), keys.posts(), keys.trashAll()],

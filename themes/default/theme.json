@@ -3,5 +3,5 @@
   "slug": "default",
   "name": "Default",
   "theme_api_version": 1,
-  "required_functions": []
+  "required_functions": ["plugin_head"]
 }
