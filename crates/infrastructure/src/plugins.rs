@@ -192,7 +192,7 @@ impl PluginCatalog {
         source: &str,
         snapshot: &PluginSnapshot,
     ) -> Result<String, UseCaseError> {
-        let mut options = Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH;
+        let mut options = crate::content_markdown::options();
         let mut source = source.to_owned();
         for (id, config) in &snapshot.active {
             if let Some(hook) = self.plugins.get(id).and_then(|p| p.content.as_ref()) {
@@ -203,7 +203,7 @@ impl PluginCatalog {
         }
         let mut html = String::new();
         push_html(&mut html, Parser::new_ext(&source, options));
-        let mut sanitizer = ammonia::Builder::default();
+        let mut sanitizer = crate::content_markdown::sanitizer();
         for (id, config) in &snapshot.active {
             if let Some(plugin) = self.plugins.get(id) {
                 if let Some(hook) = &plugin.content {

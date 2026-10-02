@@ -12,7 +12,7 @@ use application::site_info::SiteInfo;
 use application::theme_data::ThemeData;
 use application::themes::ThemeAssets;
 use minijinja::{AutoEscape, Environment, UndefinedBehavior, Value};
-use pulldown_cmark::{Options, Parser, html::push_html};
+use pulldown_cmark::{Parser, html::push_html};
 use sha2::{Digest, Sha256};
 
 pub use crate::render_executor::{RenderingLimits, RenderingRuntime};
@@ -99,13 +99,12 @@ impl Default for SanitizingMarkdownRenderer {
 
 impl SanitizingMarkdownRenderer {
     pub fn render_markdown(&self, source: &str) -> String {
-        let mut options = Options::empty();
-        options.insert(Options::ENABLE_TABLES);
-        options.insert(Options::ENABLE_STRIKETHROUGH);
-        let parser = Parser::new_ext(source, options);
+        let parser = Parser::new_ext(source, crate::content_markdown::options());
         let mut html = String::new();
         push_html(&mut html, parser);
-        ammonia::clean(&html)
+        crate::content_markdown::sanitizer()
+            .clean(&html)
+            .to_string()
     }
 }
 

@@ -134,7 +134,7 @@ async fn saves_track_query_fragment_and_encoded_local_urls_but_ignore_external_i
 #[tokio::test]
 async fn old_html_backfills_trashed_media_atomically_and_blocks_purge_until_complete() {
     isolated(|pool| async move {
-        assert_eq!(CONTENT_RENDER_VERSION, 2);
+        const { assert!(CONTENT_RENDER_VERSION >= 2) };
         let author = common::seed_user(&pool, "legacy-author").await;
         let id = media(&pool, true).await;
         let purge = PostgresMediaPurgeStore::new(common::database(pool.clone()), None);

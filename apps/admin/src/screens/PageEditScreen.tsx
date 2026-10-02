@@ -1,5 +1,6 @@
 import { MEDIA_PUBLIC_NOTICE } from "../media";
 import { MarkdownEditor } from "../components/MarkdownEditor";
+import { PublicationPreview } from "../components/PublicationPreview";
 import { ContentConflict, conflictFields } from "../components/ContentConflict";
 import { ContentLifecycleControls, statusLabel } from "../components/ContentLifecycleControls";
 import { Alert, Button, Card, Col, Flex, Form, Input, Row, Select, Tag, Typography } from "antd";
@@ -137,6 +138,10 @@ function PageEditor({ id }: { id: string | null }) {
                 mediaOpen={mediaOpen}
               />
             </Form.Item>
+
+            <PublicationPreview key={id ?? "new"} content={view.content}
+              readContent={() => formApi.getFieldValue("content") ?? ""}
+              disabled={loading || formMismatch || localDraft.blocksEditing} />
 
             {!mediaOpen && insertion.error !== null && (
               <Alert type="error" showIcon title={insertion.error} style={{ marginBottom: 16 }} />

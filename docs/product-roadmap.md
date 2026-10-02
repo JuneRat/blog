@@ -29,7 +29,7 @@
 | 结构演进 | 冻结现有迁移、后续只追加；安装和恢复共用迁移/表清单，生成授权与 DDL 参考；CI 检查历史不可变并演练新增表升级、权限及跨版本恢复 | [迁移演进](schema-migrations.md) |
 | 可观测性 | 独立 livez/readyz、版本信息、JSON 日志和独立端口 Prometheus 指标；覆盖请求量、状态、响应头延迟、运行池容量、渲染队列/实际执行/超时及预约轮询健康。HTTP、渲染定向验证与工作区测试通过，已有 Compose 数据库故障演练；生产告警阈值和容量另行验收 | [探针、日志与指标](observability.md) |
 | 用户与角色管理 | 已实现账号列表/创建、个人资料、账号启停、角色目录、角色分配/移除及 Admin 保护。公开注册可由后台开放，默认 reader；用户名/邮箱登录与游客评论开关已实现。角色目录只读，自定义角色创建/权限编辑未实现 | [身份与后台](identity-and-admin.md) |
-| 后台与 CLI | 已实现 Ant Design 后台、关联写入后统一刷新与浏览器前进/后退未保存提醒；Post/Page 提供 Vditor 即时渲染、双栏滚动联动、格式工具、窄屏视图切换、本机草稿恢复和版本冲突对比，保存期间的新输入继续保留，撤回/归档不先保存本地修改。Post 有受控 CLI；Page 管理目前通过后台 API，没有 CLI 子命令 | [后台开发约定](admin-development.md)、[开发与 CLI](development.md)、[管理 API](admin-api.md) |
+| 后台与 CLI | 已实现 Ant Design 后台、关联写入后统一刷新与浏览器前进/后退未保存提醒；Post/Page 提供 Vditor 即时渲染、使用当前服务端规则的显式发布效果预览、双栏滚动联动、格式工具、窄屏视图切换、本机草稿恢复和版本冲突对比，保存期间的新输入继续保留，撤回/归档不先保存本地修改。Post 有受控 CLI；Page 管理目前通过后台 API，没有 CLI 子命令 | [后台开发约定](admin-development.md)、[开发与 CLI](development.md)、[管理 API](admin-api.md) |
 | 站点设置 | 已实现 site/theme（含有序页头/页脚独立页面导航）、评论开关与评论 IP/审计保留期，包含分组版本冲突处理；固定维护任务在独立任务页面管理，CLI/外部调度仍可使用 | [配置](configuration.md) |
 | 后台任务 | 已实现三种固定任务的持久运行/计划、跨进程租约、取消 queued 请求与新 ID 重试；HTML 手动或未来一次性计划、retention 默认关闭的每日周期、publish_due 固定 30 秒启用；每类历史最多 500 条。应用、数据库、HTTP、真实浏览器与本地 Docker 验证通过，不提供通用 cron 或命令执行器 | [ADR-0020](adr/0020-persistent-admin-tasks.md)、[任务操作](operations-and-recovery.md#后台任务管理) |
 | 公开发现 | 已实现可配置每页数量的首页分页、RSS、sitemap、robots 与基础 SEO；使用统一公开条件，不收录草稿、私密或回收站内容 | [内容生命周期](content-lifecycle.md)、[主题与渲染](themes-and-rendering.md) |

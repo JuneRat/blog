@@ -141,7 +141,7 @@ async fn configure(
         .await
         .unwrap();
 }
-const SOURCE: &str = "行内 $x < y$\n\n$$\\frac{a}{b}$$\n\n```mermaid\ngraph LR\n A-->B\n```";
+const SOURCE: &str = "行内 $x < y$\n\n$$\\frac{a}{b}$$\n\n```mermaid\ngraph LR\n A-->B\n```\n\n- [x] 已完成\n- [ ] 待处理";
 
 #[tokio::test]
 async fn umami_tracks_both_public_themes_without_entering_previews_or_stored_content() {
@@ -369,6 +369,9 @@ async fn defaults_are_off_and_feature_switches_control_parser_and_browser_assets
         let saved = runtime.render_content(SOURCE).await.unwrap();
         let preview = runtime.render_preview(SOURCE).await.unwrap();
         assert_eq!(saved.content_html, preview.content_html);
+        assert_eq!(preview.content_html.matches("type=\"checkbox\"").count(), 2);
+        assert_eq!(preview.content_html.matches("disabled=\"\"").count(), 2);
+        assert_eq!(preview.content_html.matches("checked=\"\"").count(), 1);
         assert_eq!(preview.content_html.contains("math-inline"), math);
         assert_eq!(preview.content_html.contains("math-display"), math);
         assert_eq!(preview.head_html.contains("math.js"), math);
@@ -383,6 +386,7 @@ async fn defaults_are_off_and_feature_switches_control_parser_and_browser_assets
     }
     configure(&plugins, false, true, true, 4).await;
     assert_eq!(runtime.render_preview(SOURCE).await.unwrap(), off);
+    assert_eq!(off.content_html.matches("type=\"checkbox\"").count(), 2);
 }
 
 #[tokio::test]

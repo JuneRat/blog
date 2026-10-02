@@ -64,7 +64,7 @@ for (const kind of ["posts", "pages"]) {
       if (path.endsWith("/content-preview")) {
         const input = route.request().postDataJSON() as { content: string };
         previews.push(input.content);
-        return route.fulfill({ json: { content_html: "", head_html: "" } });
+        return route.fulfill({ json: { content_html: '<ul><li><input type="checkbox" disabled checked>任务</li></ul>', head_html: "" } });
       }
       if (path.endsWith("/media")) {
         if (route.request().method() === "POST") {
@@ -88,7 +88,7 @@ for (const kind of ["posts", "pages"]) {
     await page.goto(`${origin}/admin/${kind}/${post.id}/edit`);
     const body = page.getByLabel("正文（Markdown）");
     await expect(page.locator(".markdown-editor-vditor")).toBeVisible();
-    await expect(page.getByRole("button", { name: "发布效果预览", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "发布效果预览", exact: true })).toHaveCount(1);
     await expect(page.locator('iframe[title="正文预览"]')).toHaveCount(0);
     await expect(body).toHaveValue(source);
     const toolbar = page.locator(".vditor-toolbar");
@@ -210,6 +210,15 @@ for (const kind of ["posts", "pages"]) {
     await expect(page.getByText("已保存；等待期间的新改动尚未保存。", { exact: true })).toBeVisible();
     await page.getByLabel("编辑器视图").getByText("源码", { exact: true }).click();
     await expect(body).toHaveValue(/保存期间继续输入/);
+    await body.fill("- [x] 任务");
+    await page.getByRole("button", { name: "发布效果预览", exact: true }).click();
+    const publication = page.frameLocator('iframe[title="发布正文预览"]');
+    await expect(publication.getByRole("checkbox")).toBeChecked();
+    await expect(publication.getByRole("checkbox")).toBeDisabled();
+    expect(previews).toEqual(["- [x] 任务"]);
+    expect(saves).toHaveLength(1);
+    await page.getByRole("dialog").getByRole("button", { name: "关闭", exact: true }).last().click();
+    await expect(body).toHaveValue("- [x] 任务");
     expect(failures).toEqual([]);
   });
 }

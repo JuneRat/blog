@@ -22,7 +22,7 @@ pub trait TimeZoneProvider: Send + Sync {
 
 /// Core content pipeline revision (1..1024). Bump when Markdown, sanitization,
 /// media extraction or compiled content-plugin output rules change.
-pub const CONTENT_RENDER_VERSION: i32 = 2;
+pub const CONTENT_RENDER_VERSION: i32 = 3;
 
 /// 同次渲染的清洗后 HTML、渲染版本与正文图片引用，必须一起持久化。
 #[derive(Debug, Clone, PartialEq, Eq)]
