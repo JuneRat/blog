@@ -33,6 +33,16 @@ pub enum PageCommitOutcome {
 
 #[async_trait]
 pub trait PostRepository: Send + Sync {
+    /// Validate current locked ownership/version and aggregate rules for every target.
+    /// Changes, relation cleanup and one aggregate audit must commit or roll back together.
+    async fn batch(
+        &self,
+        actor: &crate::identity::Actor,
+        items: &crate::batch::BatchItems,
+        action: crate::batch::PostBatchAction,
+        now: OffsetDateTime,
+    ) -> Result<crate::batch::BatchResult, UseCaseError>;
+
     /// 一次读取正文、版本和标签，禁止以独立查询拼装不同快照。
     async fn find_record_by_id(&self, id: Uuid) -> Result<Option<PostRecord>, UseCaseError>;
 

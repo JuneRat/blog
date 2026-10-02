@@ -2,6 +2,7 @@
 import { contentPage } from "./contentFixtures";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ConfigProvider } from "antd";
 import { App } from "../src/App";
 import { ApiError } from "../src/api/client";
 import { postsApi } from "../src/api/posts";
@@ -42,7 +43,7 @@ vi.mock("../src/api/taxonomy", async (load) => {
 });
 vi.mock("../src/api/posts", async (load) => {
   const original = await load<typeof import("../src/api/posts")>();
-  return { ...original, postsApi: { ...original.postsApi, listPosts: vi.fn(), trashPost: vi.fn(), listTrash: vi.fn(), restorePost: vi.fn(), purgePost: vi.fn(), getPost: vi.fn() } };
+  return { ...original, postsApi: { ...original.postsApi, listPosts: vi.fn(), trashPost: vi.fn(), listTrash: vi.fn(), restorePost: vi.fn(), purgePost: vi.fn(), getPost: vi.fn(), batch: vi.fn() } };
 });
 vi.mock("../src/api/pages", async (load) => {
   const original = await load<typeof import("../src/api/pages")>();
@@ -120,6 +121,7 @@ beforeEach(() => {
   vi.mocked(postsApi.trashPost).mockResolvedValue(rustDetail);
   vi.mocked(postsApi.restorePost).mockResolvedValue(rustDetail);
   vi.mocked(postsApi.purgePost).mockResolvedValue(undefined);
+  vi.mocked(postsApi.batch).mockResolvedValue({ items: [], affected: 0 });
 });
 afterEach(cleanup);
 
@@ -608,5 +610,198 @@ describe("跨页搜索与协作范围", () => {
     fireEvent.change(screen.getByRole("searchbox", { name: "搜索内容" }), { target: { value: "联系" } });
     fireEvent.click(screen.getByRole("button", { name: "搜索" }));
     await waitFor(() => expect(pagesApi.listPages).toHaveBeenLastCalledWith({ page: 1, q: "联系" }));
+  });
+});
+
+describe("文章列表批量操作", () => {
+  beforeEach(() => {
+    window.history.replaceState(null, "", paths.list);
+    state.permissions = ["post.create", "post.delete", "post.publish", "post.unpublish", "post.update"];
+  });
+
+  it("批量移入回收站：调用 postsApi.batch 并刷新列表", async () => {
+    render(<App />);
+    await screen.findByText("Rust 指南");
+    const checkboxes = screen.getAllByRole("checkbox");
+    fireEvent.click(checkboxes[1]);
+    expect(await screen.findByText(/已选 1 篇：/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "批量移入回收站" }));
+    fireEvent.click(await screen.findByRole("button", { name: "确定" }));
+
+    await waitFor(() => expect(postsApi.batch).toHaveBeenCalledWith({
+      action: "trash",
+      items: [{ id: rustPost.id, expected_version: rustPost.version }],
+    }));
+  });
+
+  it("批量发布：调用 postsApi.batch status=published", async () => {
+    render(<App />);
+    await screen.findByText("Rust 指南");
+    const checkboxes = screen.getAllByRole("checkbox");
+    fireEvent.click(checkboxes[1]);
+    fireEvent.click(screen.getByRole("button", { name: "批量发布" }));
+
+    await waitFor(() => expect(postsApi.batch).toHaveBeenCalledWith({
+      action: "change_status",
+      params: { status: "published" },
+      items: [{ id: rustPost.id, expected_version: rustPost.version }],
+    }));
+  });
+
+  it("批量撤回草稿：调用 postsApi.batch status=draft", async () => {
+    render(<App />);
+    await screen.findByText("Rust 指南");
+    const checkboxes = screen.getAllByRole("checkbox");
+    fireEvent.click(checkboxes[1]);
+    fireEvent.click(screen.getByRole("button", { name: "批量撤回草稿" }));
+
+    await waitFor(() => expect(postsApi.batch).toHaveBeenCalledWith({
+      action: "change_status",
+      params: { status: "draft" },
+      items: [{ id: rustPost.id, expected_version: rustPost.version }],
+    }));
+  });
+
+  it("批量修改分类：未选择时禁用保存，明确选择清除时提交 null", async () => {
+    vi.mocked(categoryApi.list).mockResolvedValue([
+      { id: "cat-1", name: "后端技术", slug: "backend", parent_id: null, description: null, version: 1, pub_post_count: 5 },
+    ]);
+    render(<App />);
+    await screen.findByText("Rust 指南");
+    const checkboxes = screen.getAllByRole("checkbox");
+    fireEvent.click(checkboxes[1]);
+    fireEvent.click(screen.getByRole("button", { name: "批量修改分类" }));
+
+    const saveBtn = await screen.findByRole("button", { name: "保存" });
+    expect(saveBtn.hasAttribute("disabled")).toBe(true);
+
+    const select = screen.getByRole("combobox", { name: "" });
+    fireEvent.mouseDown(select);
+    fireEvent.click(await screen.findByText("（清除分类）"));
+
+    expect(saveBtn.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(saveBtn);
+
+    await waitFor(() => expect(postsApi.batch).toHaveBeenCalledWith({
+      action: "change_category",
+      params: { category_id: null },
+      items: [{ id: rustPost.id, expected_version: rustPost.version }],
+    }));
+  });
+
+  it("分类更新冲突后关闭弹窗，显示错误并在重新选择后提交最新版本", async () => {
+    vi.mocked(categoryApi.list).mockResolvedValue([
+      { id: "cat-1", name: "后端技术", slug: "backend", parent_id: null, description: null, version: 1, pub_post_count: 5 },
+    ]);
+    vi.mocked(postsApi.listPosts)
+      .mockResolvedValueOnce(contentPage([rustPost]))
+      .mockResolvedValue(contentPage([{ ...rustPost, version: 4 }]));
+    vi.mocked(postsApi.batch)
+      .mockRejectedValueOnce(new ApiError(409, "分类版本冲突", "version_conflict", "req-category-conflict"))
+      .mockResolvedValue({ items: [{ id: rustPost.id, version: 5, changed: true }], affected: 1 });
+
+    // jsdom does not complete CSS animations; assert the actual closed state.
+    render(<ConfigProvider theme={{ token: { motion: false } }}><App /></ConfigProvider>);
+    await screen.findByText("v3");
+    fireEvent.click(screen.getAllByRole("checkbox")[1]);
+    fireEvent.click(screen.getByRole("button", { name: "批量修改分类" }));
+    let dialog = await screen.findByRole("dialog");
+    fireEvent.mouseDown(within(dialog).getByRole("combobox"));
+    fireEvent.click(await screen.findByText("（清除分类）"));
+    fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(await screen.findByText("分类版本冲突（错误编号 req-category-conflict）")).toBeTruthy();
+    await screen.findByText("v4");
+    expect(screen.queryByRole("button", { name: "批量修改分类" })).toBeNull();
+    expect(postsApi.batch).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getAllByRole("checkbox")[1]);
+    const editCategory = screen.getByRole("button", { name: "批量修改分类" });
+    await waitFor(() => expect(editCategory.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(editCategory);
+    dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByRole("button", { name: "保存" }).hasAttribute("disabled")).toBe(true);
+    fireEvent.mouseDown(within(dialog).getByRole("combobox"));
+    fireEvent.click(await screen.findByText("后端技术"));
+    fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
+
+    await waitFor(() => expect(postsApi.batch).toHaveBeenLastCalledWith({
+      action: "change_category",
+      params: { category_id: "cat-1" },
+      items: [{ id: rustPost.id, expected_version: 4 }],
+    }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("409 冲突后刷新文章列表并清空选中项", async () => {
+    vi.mocked(postsApi.batch).mockRejectedValue(
+      new ApiError(409, "版本冲突：内容已被并发修改", "version_conflict", "req-batch-conflict"),
+    );
+    render(<App />);
+    await screen.findByText("Rust 指南");
+    const checkboxes = screen.getAllByRole("checkbox");
+    fireEvent.click(checkboxes[1]);
+    expect(await screen.findByText(/已选 1 篇：/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "批量发布" }));
+
+    expect(await screen.findByText("版本冲突：内容已被并发修改（错误编号 req-batch-conflict）")).toBeTruthy();
+    await waitFor(() => expect(screen.queryByText(/已选 1 篇：/)).toBeNull());
+    expect(postsApi.listPosts).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("回收站批量操作", () => {
+  beforeEach(() => {
+    window.history.replaceState(null, "", paths.postTrash);
+    state.permissions = ["post.delete", "post.purge"];
+  });
+
+  it("批量恢复：调用 postsApi.batch action=restore", async () => {
+    render(<App />);
+    await screen.findByText("已删除的稿子");
+    const checkboxes = screen.getAllByRole("checkbox");
+    fireEvent.click(checkboxes[1]);
+    expect(await screen.findByText(/已选 1 篇：/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "批量恢复" }));
+    await waitFor(() => expect(postsApi.batch).toHaveBeenCalledWith({
+      action: "restore",
+      items: [{ id: trashed.id, expected_version: trashed.version }],
+    }));
+  });
+
+  it("批量永久删除：确认后调用 postsApi.batch action=purge", async () => {
+    render(<App />);
+    await screen.findByText("已删除的稿子");
+    const checkboxes = screen.getAllByRole("checkbox");
+    fireEvent.click(checkboxes[1]);
+    expect(await screen.findByText(/已选 1 篇：/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "批量永久删除" }));
+    fireEvent.click(await screen.findByRole("button", { name: "确定" }));
+    await waitFor(() => expect(postsApi.batch).toHaveBeenCalledWith({
+      action: "purge",
+      items: [{ id: trashed.id, expected_version: trashed.version }],
+    }));
+  });
+
+  it("409 冲突后刷新回收站列表并清空选中项", async () => {
+    vi.mocked(postsApi.batch).mockRejectedValue(
+      new ApiError(409, "版本冲突：内容已被并发修改", "version_conflict", "req-trash-conflict"),
+    );
+    render(<App />);
+    await screen.findByText("已删除的稿子");
+    const checkboxes = screen.getAllByRole("checkbox");
+    fireEvent.click(checkboxes[1]);
+    expect(await screen.findByText(/已选 1 篇：/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "批量恢复" }));
+
+    expect(await screen.findByText("版本冲突：内容已被并发修改（错误编号 req-trash-conflict）")).toBeTruthy();
+    await waitFor(() => expect(screen.queryByText(/已选 1 篇：/)).toBeNull());
+    expect(postsApi.listTrash).toHaveBeenCalledTimes(2);
   });
 });

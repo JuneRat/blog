@@ -17,6 +17,7 @@
 | 检查服务健康、错误率、延迟或运行版本 | [探针、日志与指标](observability.md) |
 | 修改当前编辑、发布、删除或媒体引用实现 | [内容生命周期](content-lifecycle.md) → [当前数据库实现](database-current.md)；新方案的实施见[路线图](product-roadmap.md#已采纳数据库设计的实施) |
 | 开发后台界面 | [后台开发指南](admin-development.md) → [管理 API](admin-api.md) |
+| 规划后台与后端的协作优化 | [后台后端配合优化规划](admin-backend-optimizations.md) |
 | 接入管理接口 | [管理 API](admin-api.md) → [身份、权限与后台](identity-and-admin.md) |
 | 使用或开发原生评论 | [评论](comments.md) |
 | 开发公开页面、主题或 SEO | [主题与渲染](themes-and-rendering.md) |
@@ -37,6 +38,7 @@
 | [Docker Compose 部署](docker-compose.md) | 镜像构建与交付、持久卷、安装、健康检查和部署维护 |
 | [Compose 备份恢复](compose-backup.md) | 容器内工具、完整备份包、隔离核验、加密仓库与定时任务 |
 | [后台开发指南](admin-development.md) | 组件、表单、查询缓存、失效与前端测试约定 |
+| [后台后端配合优化规划](admin-backend-optimizations.md) | 后台需要后端配合的优化方案、API 规划与落地优先级 |
 | [配置参考](configuration.md) | 环境变量、配置优先级、路径与命令作用域 |
 | [架构](architecture.md) | 模块职责、依赖方向、装配、事务与执行边界 |
 | [领域模型](domain.md) | 对象关系、业务不变量与公开可见性 |

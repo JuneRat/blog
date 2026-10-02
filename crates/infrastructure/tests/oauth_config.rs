@@ -199,7 +199,7 @@ async fn disabled_deleted_and_unconfigured_owners_are_not_fallbacks() {
         .list_admin(20, 0)
         .await
         .unwrap();
-    let broken = rows.iter().find(|row| row.id == broken).unwrap();
+    let broken = rows.items.iter().find(|row| row.id == broken).unwrap();
     assert_eq!(broken.external_identities, 0);
     assert!(!broken.can_login());
 }

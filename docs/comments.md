@@ -78,7 +78,8 @@ IP 以可空 inet 保存主机地址，审核不覆盖提交 IP。默认保留 1
 | `GET /api/v1/posts/{slug}/comments` | `page=1`；`root_id=UUID` 读取某根全部后代；返回 `{items,total,enabled,guest_comments_enabled,time_zone}`，total 含必要占位 |
 | `POST /api/v1/posts/{slug}/comments` | `{body,nickname?,email?,parent_id?}`；游客必须提供昵称；202 待审或 201 已发布回执 `{message,status}`；登录身份由会话决定 |
 | `POST /api/v1/comments/preview` | `{body}`；返回 `{content_html}`，不写数据库 |
-| `GET /api/admin/v1/comments` | `page=1&status=pending&post_id=UUID`；状态和文章筛选可省略 |
+| `GET /api/admin/v1/comments` | `page=1&status=pending&post_id=UUID`；状态和文章筛选可省略；返回 `{items,total,page,per_page,enabled}`，每页 20 条，enabled 为全站评论开关，关闭后仍可管理历史评论 |
+| `POST /api/admin/v1/comments/batch` | `{action,items:[{id,expected_version}]}`；action 为 approve/spam/trash/restore/pending；最多 100 项，整批提交或回滚；200 返回 `{items:[{id,version,changed}],affected}`；详见[批量契约](admin-api.md#文章与评论批量操作) |
 | `POST /api/admin/v1/comments/{id}` | `{version,status}`，status 为 pending/approved/spam/trash；204 |
 | `GET /api/admin/v1/comment-settings` | 全站策略 `{enabled,moderation,version}`；未配置时 `{enabled:true,moderation:"all",version:0}` |
 | `PUT /api/admin/v1/comment-settings` | `{enabled,moderation?,version}`，省略 moderation 保留原策略；返回保存结果 |

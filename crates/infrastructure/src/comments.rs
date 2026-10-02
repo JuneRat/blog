@@ -43,6 +43,17 @@ fn domain_error(error: CommentError) -> UseCaseError {
         CommentError::InvalidSnapshot(_) => UseCaseError::Repository(error.to_string()),
     }
 }
+fn moderation_reason(current: CommentStatus, next: CommentStatus) -> &'static str {
+    match next {
+        CommentStatus::Approved => "manual_approval",
+        CommentStatus::Pending if matches!(current, CommentStatus::Spam | CommentStatus::Trash) => {
+            "restored"
+        }
+        CommentStatus::Pending => "manual_review",
+        CommentStatus::Spam => "spam",
+        CommentStatus::Trash => "trash",
+    }
+}
 fn status(row: &PgRow) -> Result<CommentStatus, UseCaseError> {
     CommentStatus::parse(row.get("status")).map_err(|e| UseCaseError::DataCorrupt(e.into()))
 }
@@ -158,6 +169,79 @@ fn comment(r: PgRow) -> Result<CommentDto, UseCaseError> {
 }
 #[async_trait]
 impl CommentRepository for PostgresCommentRepository {
+    async fn batch_moderate(
+        &self,
+        scope: CommentScope,
+        items: &application::batch::BatchItems,
+        action: application::batch::CommentBatchAction,
+    ) -> Result<application::batch::BatchResult, UseCaseError> {
+        use application::batch::{BatchItemResult, BatchResult};
+        let mut tx = self.pool.begin().await.map_err(db)?;
+        // Submissions may hold a parent and then an unrelated manual-approval proof.
+        // Serialize bounded batch moderation with those submissions before locking multiple rows.
+        crate::locks::acquire(&mut *tx, crate::locks::COMMENT_POLICY, false)
+            .await
+            .map_err(db)?;
+        let ids = items.sorted_ids();
+        let posts = sqlx::query("SELECT id,author_id FROM posts WHERE id IN (SELECT post_id FROM comments WHERE id=ANY($1::uuid[])) ORDER BY id FOR SHARE")
+            .bind(&ids).fetch_all(&mut *tx).await.map_err(db)?;
+        for post in &posts {
+            scope.authorize_post(post.get("author_id"))?;
+        }
+        let locked_posts: std::collections::BTreeSet<Uuid> =
+            posts.iter().map(|post| post.get("id")).collect();
+        let rows = sqlx::query("SELECT id,post_id,parent_id,root_id,user_id,author_name,author_email,content,status,version FROM comments WHERE id=ANY($1::uuid[]) ORDER BY id FOR UPDATE")
+            .bind(&ids).fetch_all(&mut *tx).await.map_err(db)?;
+        let mut comments: std::collections::BTreeMap<_, _> = rows
+            .iter()
+            .map(aggregate)
+            .map(|c| c.map(|c| (c.snapshot().id, c)))
+            .collect::<Result<_, _>>()?;
+        let mut plans = Vec::with_capacity(items.items().len());
+        for item in items.items() {
+            let mut comment = comments.remove(&item.id).ok_or_else(missing)?;
+            if !locked_posts.contains(&comment.snapshot().post_id) {
+                return Err(missing());
+            }
+            let current = comment.status();
+            let changed = comment
+                .moderate(item.expected_version, action.moderation())
+                .map_err(domain_error)?;
+            plans.push((*item, current, comment.status(), changed));
+        }
+        let mut result = BatchResult {
+            items: Vec::with_capacity(plans.len()),
+            affected: 0,
+        };
+        let mut changes = Vec::new();
+        for (item, current, next, changed) in plans {
+            let version = item
+                .expected_version
+                .checked_add(i64::from(changed))
+                .ok_or_else(|| UseCaseError::Invalid("版本已达到上限".into()))?;
+            if changed {
+                let reason = moderation_reason(current, next);
+                let saved = sqlx::query("UPDATE comments SET status=$2,moderation_reason=$4,version=version+1,updated_at=now() WHERE id=$1 AND version=$3")
+                    .bind(item.id).bind(next.as_str()).bind(item.expected_version).bind(reason).execute(&mut *tx).await.map_err(db)?;
+                if saved.rows_affected() != 1 {
+                    return Err(UseCaseError::VersionConflict);
+                }
+                result.affected += 1;
+                changes.push(json!({"id":item.id,"from":current.as_str(),"to":next.as_str(),"reason":reason,"from_version":item.expected_version,"version":version}));
+            }
+            result.items.push(BatchItemResult {
+                id: item.id,
+                version: Some(version),
+                changed,
+            });
+        }
+        if result.affected > 0 {
+            append_audit_log(&mut tx, AuditEntry { actor_id:Some(scope.user_id), ip_address:scope.ip_address, action:"comment.batch", target_type:"comment_batch", target_id:&Uuid::now_v7().to_string(), metadata:json!({"action":action.name(),"affected":result.affected,"items":changes}) }).await?;
+        }
+        tx.commit().await.map_err(db)?;
+        Ok(result)
+    }
+
     async fn public_list(
         &self,
         slug: &str,
@@ -337,13 +421,16 @@ impl CommentRepository for PostgresCommentRepository {
         .fetch_one(&mut *tx)
         .await
         .map_err(db)?;
-        let items = sqlx::query(&format!("SELECT c.id,c.post_id,c.parent_id,c.root_id,c.author_name,c.author_email,host(c.ip_address) AS ip_address,c.content,c.content_html,c.status,c.moderation_reason,c.version,c.created_at,p.slug AS post_slug,p.title AS post_title,COALESCE(c.user_id=p.author_id,false) AS is_author,parent.author_name AS parent_nickname FROM comments c JOIN posts p ON p.id=c.post_id LEFT JOIN comments parent ON parent.id=c.parent_id WHERE {filter} ORDER BY c.created_at DESC,c.id DESC LIMIT 20 OFFSET $5"))
-            .bind(scope.all).bind(scope.user_id).bind(status.map(CommentStatus::as_str)).bind(post).bind((page-1)*20).fetch_all(&mut *tx).await.map_err(db)?.into_iter().map(comment).collect::<Result<Vec<_>, _>>()?;
+        let items = sqlx::query(&format!("SELECT c.id,c.post_id,c.parent_id,c.root_id,c.author_name,c.author_email,host(c.ip_address) AS ip_address,c.content,c.content_html,c.status,c.moderation_reason,c.version,c.created_at,p.slug AS post_slug,p.title AS post_title,COALESCE(c.user_id=p.author_id,false) AS is_author,parent.author_name AS parent_nickname FROM comments c JOIN posts p ON p.id=c.post_id LEFT JOIN comments parent ON parent.id=c.parent_id WHERE {filter} ORDER BY c.created_at DESC,c.id DESC LIMIT $5 OFFSET $6"))
+            .bind(scope.all).bind(scope.user_id).bind(status.map(CommentStatus::as_str)).bind(post).bind(ADMIN_COMMENT_PAGE_SIZE).bind((page-1)*ADMIN_COMMENT_PAGE_SIZE).fetch_all(&mut *tx).await.map_err(db)?.into_iter().map(comment).collect::<Result<Vec<_>, _>>()?;
+        let enabled = global_policy(&mut tx).await?.0.enabled;
         tx.commit().await.map_err(db)?;
         Ok(CommentPage {
             items,
             total,
-            enabled: true,
+            page,
+            per_page: ADMIN_COMMENT_PAGE_SIZE,
+            enabled,
         })
     }
     async fn moderate(
@@ -367,17 +454,7 @@ impl CommentRepository for PostgresCommentRepository {
         let current = comment.status();
         if comment.moderate(version, action).map_err(domain_error)? {
             let next = comment.status();
-            let reason = match next {
-                CommentStatus::Approved => "manual_approval",
-                CommentStatus::Pending
-                    if matches!(current, CommentStatus::Spam | CommentStatus::Trash) =>
-                {
-                    "restored"
-                }
-                CommentStatus::Pending => "manual_review",
-                CommentStatus::Spam => "spam",
-                CommentStatus::Trash => "trash",
-            };
+            let reason = moderation_reason(current, next);
             let result = sqlx::query(
                 "UPDATE comments SET status=$2,moderation_reason=$4,version=version+1,updated_at=now() WHERE id=$1 AND version=$3",
             )

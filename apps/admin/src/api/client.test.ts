@@ -9,6 +9,7 @@ import {
   setCsrfToken,
   setUnauthorizedHandler,
 } from "./index";
+import { identityApi } from "./identity";
 import { jsonResponse, postResponse } from "../../tests/httpFixtures";
 
 function respond(response: Response) {
@@ -23,6 +24,20 @@ afterEach(() => {
 });
 
 describe("HTTP response boundary", () => {
+  it("user and comment lists require pagination metadata", async () => {
+    const page = { items: [], total: 101, page: 3, per_page: 50 };
+    const fetcher = respond(jsonResponse(page));
+    await expect(identityApi.listUsers(3, 50)).resolves.toEqual(page);
+    expect(fetcher.mock.calls[0][0]).toBe("/api/admin/v1/users?page=3&per_page=50");
+    fetcher.mockResolvedValueOnce(jsonResponse([]));
+    await expect(identityApi.listUsers()).rejects.toBeInstanceOf(ApiProtocolError);
+    fetcher.mockResolvedValueOnce(jsonResponse({ items: [], total: 0, enabled: true }));
+    await expect(commentsApi.list(1, "pending")).rejects.toBeInstanceOf(ApiProtocolError);
+    const comments = { ...page, per_page: 20, enabled: false };
+    fetcher.mockResolvedValueOnce(jsonResponse(comments));
+    await expect(commentsApi.list(3, "pending")).resolves.toEqual(comments);
+  });
+
   it.each([
     [
       "missing required nullable field",

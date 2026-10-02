@@ -53,6 +53,13 @@ impl AdminUserRow {
     }
 }
 
+/// 管理列表的条目与全站账号总数，必须来自同一读取快照（含软删除账号）。
+#[derive(Debug, Clone, Default)]
+pub struct AdminUserPage {
+    pub items: Vec<AdminUserRow>,
+    pub total: i64,
+}
+
 /// 账号读取端口；不提供资料、状态或凭据写入。
 #[async_trait]
 pub trait UserQuery: Send + Sync {
@@ -60,10 +67,10 @@ pub trait UserQuery: Send + Sync {
 
     async fn find_by_username(&self, username: &str) -> Result<Option<UserSnapshot>, UseCaseError>;
 
-    /// 管理列表：按用户名排序的分页读取（含软删除账号，供界面标注）。
+    /// 管理列表：按用户名及 ID 稳定排序（含软删除账号，供界面标注）。
     ///
-    /// 调用方负责给出已收敛的 `limit`/`offset`；实现方不再做范围裁剪。
-    async fn list_admin(&self, limit: i64, offset: i64) -> Result<Vec<AdminUserRow>, UseCaseError>;
+    /// 调用方给出已验证的 `limit`/`offset`；实现方从同一快照读取条目和总数。
+    async fn list_admin(&self, limit: i64, offset: i64) -> Result<AdminUserPage, UseCaseError>;
 }
 
 /// 本人资料与头像提交；保留媒体引用和审计的原子边界。

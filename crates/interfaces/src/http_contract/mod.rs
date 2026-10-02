@@ -1,5 +1,6 @@
 //! TypeScript contract generated from the DTOs actually used by HTTP handlers.
 mod audit;
+mod batch;
 mod comments;
 mod common;
 mod html_rebuild;
@@ -7,6 +8,7 @@ mod identity;
 mod settings;
 mod tasks;
 pub use audit::*;
+pub use batch::*;
 pub use comments::*;
 pub use common::*;
 pub use html_rebuild::*;
@@ -25,11 +27,20 @@ pub(crate) fn declare<T: ts_rs::TS>(out: &mut Vec<String>) {
 pub fn typescript() -> String {
     let mut out = Vec::new();
     declare::<ContentPage<String>>(&mut out);
+    declare::<BatchItemInput>(&mut out);
+    declare::<BatchPostStatusInput>(&mut out);
+    declare::<BatchPostCategoryInput>(&mut out);
+    declare::<PostBatchInput>(&mut out);
+    declare::<CommentBatchActionInput>(&mut out);
+    declare::<CommentBatchInput>(&mut out);
+    declare::<BatchItemResult>(&mut out);
+    declare::<BatchResult>(&mut out);
     declare::<SeriesPlacement>(&mut out);
     declare::<PreviewResult>(&mut out);
     declare::<MessageResult>(&mut out);
     declare::<Profile>(&mut out);
     declare::<AdminUser>(&mut out);
+    declare::<UserPage>(&mut out);
     declare::<CreatedUser>(&mut out);
     declare::<UserStatusResult>(&mut out);
     declare::<Me>(&mut out);

@@ -2,7 +2,7 @@ import { statusLabel } from "../components/ContentLifecycleControls";
 import { Alert, App as AntdApp, Button, Flex, Table, Typography } from "antd";
 import type { TableProps } from "antd";
 import { useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { pagesApi } from "../api/pages";
 import { postsApi } from "../api/posts";
 import { permissionMessageOf } from "../apiError";
@@ -38,6 +38,9 @@ export function PostTrashScreen({kind = "post"}: {kind?: "post" | "page"} = {}) 
   const [actionError, setActionError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
+  const [batchBusy, setBatchBusy] = useState(false);
+
   const canPurge = me?.permissions.includes(isPage ? "page.purge" : "post.purge") ?? false;
 
   const canRestore = me?.permissions.some((p) => isPage ? p === "page.delete" : p === "post.delete" || p === "post.delete_any") ?? false;
@@ -49,6 +52,65 @@ export function PostTrashScreen({kind = "post"}: {kind?: "post" | "page"} = {}) 
   const data = trash.data;
   const errorText =
     actionError ?? (trash.error === null ? null : permissionMessageOf(trash.error));
+
+  useEffect(() => {
+    setSelectedRowKeys([]);
+  }, [filter.page, filter.scope, filter.author, filter.q, filter.category_id, filter.status, filter.visibility]);
+
+  async function handleBatchRestore() {
+    if (isPage) return;
+    const targets = (data?.items ?? []).filter((p): p is PostSummary => selectedRowKeys.includes(p.id));
+    if (targets.length === 0) return;
+    setBatchBusy(true);
+    setActionError(null);
+    setNotice(null);
+    try {
+      const res = await postsApi.batch({
+        action: "restore",
+        items: targets.map(p => ({ id: p.id, expected_version: p.version })),
+      });
+      setNotice(`已恢复选中的 ${res.affected} 篇文章。`);
+      setSelectedRowKeys([]);
+      await invalidateAfterWrite(queryClient, "post");
+    } catch (e) {
+      setActionError(permissionMessageOf(e));
+      setSelectedRowKeys([]);
+      await invalidateAfterWrite(queryClient, "post");
+    } finally {
+      setBatchBusy(false);
+    }
+  }
+
+  function handleBatchPurge() {
+    if (isPage) return;
+    const targets = (data?.items ?? []).filter((p): p is PostSummary => selectedRowKeys.includes(p.id));
+    if (targets.length === 0) return;
+    modal.confirm({
+      title: `永久删除选中的 ${targets.length} 篇文章？`,
+      content: "文章、评论和目录关联将无法恢复。",
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        setBatchBusy(true);
+        setActionError(null);
+        setNotice(null);
+        try {
+          const res = await postsApi.batch({
+            action: "purge",
+            items: targets.map(p => ({ id: p.id, expected_version: p.version })),
+          });
+          setNotice(`已永久删除选中的 ${res.affected} 篇文章。`);
+          setSelectedRowKeys([]);
+          await invalidateAfterWrite(queryClient, "post");
+        } catch (e) {
+          setActionError(permissionMessageOf(e));
+          setSelectedRowKeys([]);
+          await invalidateAfterWrite(queryClient, "post");
+        } finally {
+          setBatchBusy(false);
+        }
+      },
+    });
+  }
 
   async function run(post: PostSummary | PageSummary, purge: boolean): Promise<void> {
     setBusy(post.id);
@@ -134,12 +196,39 @@ export function PostTrashScreen({kind = "post"}: {kind?: "post" | "page"} = {}) 
         <Alert type="success" showIcon title={notice} style={{ marginBottom: 16 }} />
       )}
 
+      {!isPage && selectedRowKeys.length > 0 && (
+        <Flex gap={8} align="center" wrap style={{ background: "#f5f5f5", padding: "8px 12px", borderRadius: 6, marginBottom: 16 }}>
+          <Typography.Text strong style={{ fontSize: 13 }}>已选 {selectedRowKeys.length} 篇：</Typography.Text>
+          {canRestore && (
+            <Button size="small" type="primary" disabled={batchBusy || busy !== null} onClick={() => void handleBatchRestore()}>
+              批量恢复
+            </Button>
+          )}
+          {canPurge && (
+            <Button size="small" danger disabled={batchBusy || busy !== null} onClick={handleBatchPurge}>
+              批量永久删除
+            </Button>
+          )}
+          <Button size="small" type="text" onClick={() => setSelectedRowKeys([])}>
+            取消选择
+          </Button>
+        </Flex>
+      )}
+
       {data !== undefined && (
         <Typography.Paragraph type="secondary">共 {data.total} 篇</Typography.Paragraph>
       )}
 
       <Table<PostSummary | PageSummary>
         rowKey="id"
+        rowSelection={
+          !isPage
+            ? {
+                selectedRowKeys,
+                onChange: setSelectedRowKeys,
+              }
+            : undefined
+        }
         size="middle"
         loading={trash.isFetching}
         dataSource={data?.items ?? []}

@@ -4,6 +4,7 @@ import {
   Flex,
   Form,
   Input,
+  Pagination,
   Popconfirm,
   Select,
   Space,
@@ -13,7 +14,7 @@ import {
 } from "antd";
 import type { TableProps } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ApiError, withRequestId } from "../api/client";
 import { identityApi } from "../api/identity";
 import { messageOf as apiMessageOf } from "../apiError";
@@ -21,7 +22,6 @@ import { useAuth } from "../auth";
 import { queryKeys } from "../queryClient";
 import type { AdminUser, RoleSummary } from "../types";
 
-// 接口返回数组、不含总数；多读取一条判断是否还有下一页。
 const USER_PAGE_SIZE = 50;
 
 /**
@@ -111,9 +111,14 @@ export function UserListScreen() {
    */
   const users = useQuery({
     queryKey: queryKeys.userList(page),
-    queryFn: () => identityApi.listUsers(USER_PAGE_SIZE + 1, (page - 1) * USER_PAGE_SIZE),
+    queryFn: () => identityApi.listUsers(page, USER_PAGE_SIZE),
     enabled: canAdminister,
   });
+  useEffect(() => {
+    if (!users.data || users.isFetching || users.isError) return;
+    const lastPage = Math.max(1, Math.ceil(users.data.total / users.data.per_page));
+    if (page > lastPage) setPage(lastPage);
+  }, [page, users.data, users.isFetching, users.isError]);
   const roles = useQuery({
     queryKey: queryKeys.roles(),
     queryFn: () => identityApi.listRoles(),
@@ -441,7 +446,7 @@ export function UserListScreen() {
         rowKey="id"
         size="middle"
         loading={users.isFetching}
-        dataSource={users.isError ? [] : (users.data ?? []).slice(0, USER_PAGE_SIZE)}
+        dataSource={users.isError ? [] : users.data?.items ?? []}
         columns={columns}
         pagination={false}
         scroll={{ x: 1000 }}
@@ -451,8 +456,16 @@ export function UserListScreen() {
       />
       <Flex gap={12} justify="flex-end" align="center" style={{ marginTop: 16 }}>
         <Typography.Text type="secondary">第 {page} 页</Typography.Text>
-        <Button disabled={page === 1 || busy || users.isFetching} onClick={() => setPage(current => current - 1)}>上一页</Button>
-        <Button disabled={busy || users.isFetching || users.isError || (users.data?.length ?? 0) <= USER_PAGE_SIZE} onClick={() => setPage(current => current + 1)}>下一页</Button>
+        <Pagination
+          current={page}
+          total={users.data?.total ?? 0}
+          pageSize={users.data?.per_page ?? USER_PAGE_SIZE}
+          showSizeChanger={false}
+          showQuickJumper
+          showTotal={total => `共 ${total} 个账号`}
+          disabled={busy || users.isFetching || users.isError}
+          onChange={setPage}
+        />
       </Flex>
     </>
   );

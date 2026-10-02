@@ -1100,7 +1100,7 @@ async fn disabling_blocks_password_login_and_enabling_requires_a_new_session() {
     let (status, _, list) =
         request(&stack.router, "GET", "/api/admin/v1/users", &headers, None).await;
     assert_eq!(status, StatusCode::OK);
-    let target = list
+    let target = list["items"]
         .as_array()
         .unwrap()
         .iter()

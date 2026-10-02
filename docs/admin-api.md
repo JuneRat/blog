@@ -106,6 +106,7 @@ GET 和 POST 都必须带启动终端显示的 `X-Install-Token`，并执行 Ori
 | `GET /post-trash?page=1` | 回收站分页，支持与文章列表相同的筛选；返回 `items/total/page/per_page` |
 | `POST /posts/{id}/restore` | 一律恢复为草稿，返回详情 |
 | `POST /posts/{id}/purge` | 永久删除回收站文章，返回 204 |
+| `POST /posts/batch` | 原子批量操作，见下方契约；返回 200 和逐项提交结果 |
 
 普通文章、页面及两类回收站列表统一返回 `{ "items": [...], "total": 23, "page": 1, "per_page": 20 }`。`page` 默认 1，每页固定 20 条，超出末页返回空 `items` 与实际总数；零、负数及会导致偏移溢出的页码返回 400。可选筛选 `status=draft|scheduled|published|archived`、`visibility=public|private`，非法值返回 400。普通列表按 `updated_at DESC, id DESC`，回收站按 `deleted_at DESC, id DESC`；总数与当前页属于同一数据库快照，跨次翻页不冻结内容集合。
 
@@ -127,6 +128,50 @@ GET 和 POST 都必须带启动终端显示的 `X-Install-Token`，并执行 Ori
 `visibility` 为 `public` 或 `private`。状态由动作端点变更，不通过编辑请求直接赋值。`content` 始终是 Markdown；`content_html` 由服务端派生并持久化，不是客户端可设置的字段，也不是管理详情的正文格式。
 
 Post/Page 的 schedule 请求为 `{ "published_at": "2026-10-01T10:00:00+08:00", "expected_version": 3 }`。时间必须为带时区的 RFC 3339 且晚于当前时间，只接受草稿或已预约状态；已发布或已归档内容须先退回草稿。内容 DTO 的 published_at 和 updated_at 同样使用 RFC 3339，后台输入按 `/me.time_zone` 指定的站点时区转换后提交。预约即锁定 slug，取消预约不解锁。
+
+## 文章与评论批量操作
+
+`POST /api/admin/v1/posts/batch` 和 `POST /api/admin/v1/comments/batch` 沿用管理会话、CSRF、同源 Origin 和 no-store 契约。请求体最多 16 KiB，`items` 必须包含 1–100 项；每项必填 UUID `id` 和正整数 `expected_version`，不能重复 ID。直接使用列表条目的 `version` 作为该项的前提版本。未知动作、未知字段、缺少字段、错误类型或超预算均返回 400 `invalid_request`。
+
+```json
+{
+  "action": "trash",
+  "items": [
+    { "id": "018f3000-0000-7000-8000-000000000001", "expected_version": 3 },
+    { "id": "018f3000-0000-7000-8000-000000000002", "expected_version": 7 }
+  ]
+}
+```
+
+文章动作及参数如下；`trash/restore/purge` 不接受 `params`。
+
+| action | params | 权限与行为 |
+|---|---|---|
+| `trash` | 无 | `post.delete` / `post.delete_any`；移入回收站，保留发布状态和媒体引用 |
+| `restore` | 无 | 同上；只能恢复回收站文章，一律回到 draft |
+| `purge` | 无 | `post.purge`；只能永久删除回收站文章；同事务删除其评论树、标签/系列关系和媒体引用；媒体对象仍保留，受影响系列各递增一次版本 |
+| `change_status` | `{"status":"published"}` | `post.publish` / `post.publish_any`；沿用立即发布规则，空标题/正文及直接发布归档文章拒绝 |
+| `change_status` | `{"status":"scheduled","published_at":"2027-01-01T10:00:00+08:00"}` | 同上；必须是含时区的未来时间，只接受 draft/scheduled |
+| `change_status` | `{"status":"draft"}` 或 `{"status":"archived"}` | `post.unpublish` / `post.unpublish_any`；撤回或归档 |
+| `change_category` | `{"category_id":"UUID"}` 或 `{"category_id":null}` | `post.update` / `post.update_any`；设置或清空分类，字段必须明确出现；分类存在性在事务内校验 |
+
+评论动作是 `approve/spam/trash/restore/pending`，均无 `params`。`approve` 对应 approved；`restore/pending` 都回到 pending。垃圾或回收站评论必须先恢复为 pending，才能再次通过审核。沿用 `post.update` / `post.update_any`，逐项按当前锁定的文章作者授权；正文、身份和回复关系保持不变。单条评论的物理删除不属于此端点，`delete` 返回 400；保留父链与公开占位规则，整篇文章永久删除时清理完整评论树。
+
+两个端点都在同一个数据库事务中核验全部对象、权限、版本和领域转换，再提交变化。任何一项失败都回滚整批（含关联清理和审计），没有部分成功响应：403 `forbidden`、404 `not_found`、409 `version_conflict`、非法转换 400 `invalid_request`；审计或存储失败返回 500。客户端遇到冲突应刷新相关列表，核对后重新选择版本；不要自动用新版本重放写入。
+
+成功响应的 `items` 顺序与请求一致，`affected` 是实际改变的条目数。未变化条目返回原版本和 `changed:false`，仍须匹配当前版本；全部未变化时不写审计，也不更新时间或版本。永久删除后的 `version` 为 null，其他变化条目的版本加一。
+
+```json
+{
+  "items": [
+    { "id": "018f3000-0000-7000-8000-000000000001", "version": 4, "changed": true },
+    { "id": "018f3000-0000-7000-8000-000000000002", "version": 8, "changed": true }
+  ],
+  "affected": 2
+}
+```
+
+有实际变化时追加一条 `post.batch` 或 `comment.batch` 聚合审计，摘要含动作、改变条目的 ID 和前后版本/状态，不含正文、邮箱或凭据。前端成功后应刷新相关列表和目录/媒体使用位置缓存；批量永久删除还会影响评论与系列成员。生成契约提供 `PostBatchInput`、`CommentBatchInput` 和 `BatchResult`。
 
 ## 独立页面
 
@@ -172,7 +217,7 @@ Page 没有作者，使用站点级 `page.*` 权限。
 
 | 方法与路径 | 行为 / 权限 |
 |---|---|
-| `GET /users?limit=…&offset=…` | 分页查询，返回用户数组；`user.manage` 或 `role.manage` |
+| `GET /users?page=1&per_page=50` | 分页查询，返回 `{items,total,page,per_page}`；`user.manage` 或 `role.manage` |
 | `POST /users` | 创建用户：`username`，可带 `email`、`display_name`；`user.manage` |
 | `PUT /users/{id}/status` | UUID 定位；`status: "active" / "disabled"`、必填正整数 `expected_version`；需 `user.manage`，目标持有 Admin 时另需 `admin.manage` |
 | `GET /roles` | 角色列表，`user.manage` 或 `role.manage` |
@@ -181,9 +226,9 @@ Page 没有作者，使用站点级 `page.*` 权限。
 
 创建用户响应的 `created_at` 使用 RFC 3339 字符串，与其它 HTTP 时间字段一致。
 
-用户查询默认取 50 条，最多 200 条，负 offset 收敛为 0。角色变更需要 `role.manage`，授予范围不能超出操作者权限，Admin 变更额外需要 `admin.manage`，最后 Admin 保护仍生效。用户与角色请求体上限为 4 KiB。当前 API 不提供自定义角色编辑、OAuth 提供商配置或管理员强制重置密码；后两者使用受控 CLI。
+用户查询默认第 1 页、每页 50 条；page 范围 1–100,000，per_page 范围 1–200，越界或未知查询字段返回 400。总数与条目来自同一数据库快照，均包含软删除账号；超出最后一页时返回空 items，保留实际 total 和请求分页参数。角色变更需要 `role.manage`，授予范围不能超出操作者权限，Admin 变更额外需要 `admin.manage`，最后 Admin 保护仍生效。用户与角色请求体上限为 4 KiB。当前 API 不提供自定义角色编辑、OAuth 提供商配置或管理员强制重置密码；后两者使用受控 CLI。
 
-账号按用户名排序。后台每页展示 50 条，多读取一条判断是否可继续翻页，不推算总数；创建账号、角色或状态变更后使全部账号分页缓存失效。角色操作因 `last_admin` 被拒时也重新读取列表，更新最后 Admin 标记。
+账号按用户名及 UUID 稳定排序。后台每页展示 50 条，显示实际总数，支持点击页码和直接跳页；创建账号、角色或状态变更后使全部账号分页缓存失效，当前页超出范围时回到有效页。角色操作因 `last_admin` 被拒时也重新读取列表，更新最后 Admin 标记；最后可登录 Admin 的判定使用全站计数，不受当前页影响。
 
 用户列表包含 `status` 和编辑 `version`；状态与登录方式分开显示，停用不删除密码、外部身份、角色或文章。状态 PUT 成功返回 `{ "id": "UUID", "status": "disabled", "version": 4 }`。实际启用或停用同事务递增 `version/auth_version`、删除全部持久会话、追加 `user.status.update` 审计；启用后必须重新登录。相同状态且版本匹配时不写入、不撤销会话、不重复审计；旧版本仍返回 409 `version_conflict`。最后可登录 Admin 不能停用，返回 403 `last_admin`；软删除账号不能在此恢复，返回 404。未知状态或字段拒绝。后台 `/admin/users` 提供确认操作；允许停用本人，但仍执行最后 Admin 保护，成功后本人会话失效。
 
@@ -247,7 +292,7 @@ Page 没有作者，使用站点级 `page.*` 权限。
 
 显式版本过期返回 409 `version_conflict`，即使操作本身幂等也不会绕过版本检查。允许省略版本的用例会读取当前版本再条件写入，仍能检测读取后的并发变化，但不能识别客户端此前编辑的是旧副本。编辑器应总是提交已读取的版本，冲突后让用户选择重新加载或基于新版本再次提交。
 
-内容和目录请求体默认上限为 2 MiB，认证、身份、设置、媒体的特定限制见各节。列表响应形态并不统一：文章、页面、回收站与媒体返回 `items/total/page/per_page`；用户接受 limit/offset，但仍返回数组，不包含总数。客户端不能假定所有列表共享一个分页 DTO。
+内容和目录请求体默认上限为 2 MiB，认证、身份、设置、媒体的特定限制见各节。文章、页面、回收站、媒体、用户及后台评论列表均返回 `items/total/page/per_page`；后台评论额外包含全站评论开关 `enabled`，关闭后仍可管理历史评论。目录列表仍返回数组，审计日志使用游标分页，客户端应按各端点契约解析。
 
 ## 错误与追踪
 

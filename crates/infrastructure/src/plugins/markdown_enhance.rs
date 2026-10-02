@@ -91,6 +91,7 @@ pub(super) fn registration() -> PluginRegistration {
         },
         content: Some(hook.clone()),
         page_head: Some(hook),
+        config_validator: None,
         html_rules: vec![
             HtmlRule { tag: "span", classes: vec!["math", "math-inline", "math-display"], data_attributes: vec![] },
             HtmlRule { tag: "code", classes: vec!["language-mermaid"], data_attributes: vec![] },

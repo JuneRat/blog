@@ -276,8 +276,8 @@ impl application::ports::UserQuery for FakeUserRepo {
         &self,
         _limit: i64,
         _offset: i64,
-    ) -> Result<Vec<application::ports::AdminUserRow>, UseCaseError> {
-        Ok(Vec::new())
+    ) -> Result<application::ports::AdminUserPage, UseCaseError> {
+        Ok(application::ports::AdminUserPage::default())
     }
 }
 

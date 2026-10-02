@@ -11,6 +11,15 @@ use uuid::Uuid;
 
 #[async_trait]
 pub trait CommentRepository: Send + Sync {
+    /// Keep current post ownership and all comment versions stable through one atomic commit.
+    /// Validate transitions even for noops; write one aggregate audit only if anything changes.
+    async fn batch_moderate(
+        &self,
+        scope: CommentScope,
+        items: &crate::batch::BatchItems,
+        action: crate::batch::CommentBatchAction,
+    ) -> Result<crate::batch::BatchResult, UseCaseError>;
+
     async fn public_list(
         &self,
         slug: &str,

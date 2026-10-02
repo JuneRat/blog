@@ -143,6 +143,142 @@ async fn configure(
 }
 const SOURCE: &str = "行内 $x < y$\n\n$$\\frac{a}{b}$$\n\n```mermaid\ngraph LR\n A-->B\n```";
 
+#[tokio::test]
+async fn umami_tracks_both_public_themes_without_entering_previews_or_stored_content() {
+    let (runtime, plugins) = runtime();
+    let source = "**Article**";
+    let before = runtime.render_content(source).await.unwrap();
+    let config = BTreeMap::from([
+        (
+            "script-url".into(),
+            PluginConfigValue::Text("https://stats.example.test/script.js".into()),
+        ),
+        (
+            "website-id".into(),
+            PluginConfigValue::Text("94db1cb1-74f4-4a40-ad6c-962362670409".into()),
+        ),
+        (
+            "dashboard-url".into(),
+            PluginConfigValue::Text("https://stats.example.test/websites/report".into()),
+        ),
+    ]);
+    plugins
+        .manager
+        .save(
+            &Actor::bootstrap_cli(),
+            SavePluginCmd {
+                id: "analytics-umami".into(),
+                enabled: true,
+                config: config.clone(),
+                expected_version: 0,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(runtime.render_content(source).await.unwrap(), before);
+    assert!(
+        runtime
+            .render_preview(source)
+            .await
+            .unwrap()
+            .head_html
+            .is_empty()
+    );
+    let site = SiteInfo::default();
+    let seo = SeoMeta::page(
+        &site,
+        &PublicBaseUrl::parse("https://example.test").unwrap(),
+        "Example",
+        "example",
+    );
+    let page = PageView {
+        title: "Example".into(),
+        slug: "example".into(),
+        published_at: None,
+        updated_at: "now".into(),
+        content_html: before.content_html.clone(),
+    };
+    let post = PostView {
+        title: page.title.clone(),
+        slug: page.slug.clone(),
+        url: "/posts/example".into(),
+        excerpt: None,
+        published_at: None,
+        updated_at: "now".into(),
+        author_display: "Author".into(),
+        author_avatar_url: None,
+        content_html: page.content_html.clone(),
+        cover_url: None,
+        tags: vec![],
+        category: None,
+        series: vec![],
+    };
+    let mut version = 1;
+    for directory in ["../../themes/default", "../../theme-packages/paper"] {
+        let theme = runtime.theme_renderer(
+            infrastructure::MiniJinjaThemeRenderer::load(Path::new(directory))
+                .unwrap()
+                .with_data(Arc::new(application::theme_data::ThemeData::new(
+                    Arc::new(EmptyPublicData),
+                    Arc::new(EmptyPublicData),
+                    Arc::new(EmptyPublicData),
+                ))),
+        );
+        for html in [
+            theme
+                .render_index(&site, &seo, &[], &Default::default())
+                .await
+                .unwrap(),
+            theme.render_post(&site, &seo, &post).await.unwrap(),
+            theme.render_page(&site, &seo, &page).await.unwrap(),
+        ] {
+            let head = html.split("</head>").next().unwrap();
+            assert_eq!(
+                head.matches("src=\"https://stats.example.test/script.js\"")
+                    .count(),
+                1
+            );
+            assert!(head.contains("data-website-id=\"94db1cb1-74f4-4a40-ad6c-962362670409\""));
+            assert!(!html.contains("/websites/report"));
+        }
+        plugins
+            .manager
+            .save(
+                &Actor::bootstrap_cli(),
+                SavePluginCmd {
+                    id: "analytics-umami".into(),
+                    enabled: false,
+                    config: config.clone(),
+                    expected_version: version,
+                },
+            )
+            .await
+            .unwrap();
+        version += 1;
+        assert!(
+            !theme
+                .render_post(&site, &seo, &post)
+                .await
+                .unwrap()
+                .contains("stats.example.test")
+        );
+        plugins
+            .manager
+            .save(
+                &Actor::bootstrap_cli(),
+                SavePluginCmd {
+                    id: "analytics-umami".into(),
+                    enabled: true,
+                    config: config.clone(),
+                    expected_version: version,
+                },
+            )
+            .await
+            .unwrap();
+        version += 1;
+    }
+}
+
 #[cfg(feature = "sqlx-test-support")]
 mod common;
 

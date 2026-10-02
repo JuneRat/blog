@@ -9,7 +9,7 @@
 //! `username_taken` / `email_taken` 定位到创建表单字段，`last_admin` 解释
 //! 为什么移除 Admin 角色被拒（与 `forbidden` 区分）。
 
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, Query, State, rejection::QueryRejection};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, put};
@@ -27,10 +27,10 @@ use crate::http_support::{RequestId, admin_error, no_store};
 pub const IDENTITY_BODY_LIMIT: usize = 4 * 1024;
 
 #[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct UserListQuery {
-    /// 缺省由用例回落到 `ADMIN_USER_PAGE_DEFAULT`；超过上限由用例收敛。
-    pub limit: Option<i64>,
-    pub offset: Option<i64>,
+    pub page: Option<i64>,
+    pub per_page: Option<i64>,
 }
 
 #[derive(Deserialize, ts_rs::TS)]
@@ -91,23 +91,29 @@ async fn list_users(
     AdminAuth { actor }: AdminAuth,
     request_id: RequestId,
     State(state): State<AdminState>,
-    Query(query): Query<UserListQuery>,
+    query: Result<Query<UserListQuery>, QueryRejection>,
 ) -> Response {
+    let query = match query {
+        Ok(Query(query)) => query,
+        Err(_) => {
+            return admin_error(
+                application::error::UseCaseError::Invalid("用户分页参数无效".into()),
+                &request_id,
+            );
+        }
+    };
     match state
         .users
-        .list_users(&actor, query.limit.unwrap_or(0), query.offset.unwrap_or(0))
+        .list_users(
+            &actor,
+            query.page.unwrap_or(1),
+            query
+                .per_page
+                .unwrap_or(application::identity::ADMIN_USER_PAGE_DEFAULT),
+        )
         .await
     {
-        Ok(users) => (
-            StatusCode::OK,
-            Json(
-                users
-                    .into_iter()
-                    .map(crate::http_contract::AdminUser::from)
-                    .collect::<Vec<_>>(),
-            ),
-        )
-            .into_response(),
+        Ok(users) => Json(crate::http_contract::UserPage::from(users)).into_response(),
         Err(e) => admin_error(e, &request_id),
     }
 }

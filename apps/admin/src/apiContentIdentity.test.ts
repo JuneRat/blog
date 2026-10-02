@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { postsApi } from "./api/posts";
 import { pagesApi } from "./api/pages";
+import { commentsApi } from "./api/comments";
 import { jsonResponse, postResponse } from "../tests/httpFixtures";
 
 const id = "0195c98a-6430-7000-8000-000000000001";
@@ -48,8 +49,16 @@ describe("内容管理 API 的稳定身份契约", () => {
     { path: "/post-trash?page=2&q=body&scope=all&author=disabled", method: "GET", run: () => postsApi.listTrash(2, "disabled", { q: "body", scope: "all" }) },
     { path: "/posts", method: "POST", run: () => postsApi.createPost({ title: "新文章", content: "正文", visibility: "public" }) },
     { path: "/pages", method: "POST", run: () => pagesApi.createPage({ title: "新页面", content: "正文", visibility: "public" }) },
+    { path: "/posts/batch", method: "POST", run: () => postsApi.batch({ action: "trash", items: [{ id, expected_version: 1 }] }) },
+    { path: "/comments/batch", method: "POST", run: () => commentsApi.batch({ action: "approve", items: [{ id, expected_version: 1 }] }) },
   ])("列表和新建使用 v1 的 ID 契约：$method $path", async ({ path, method, run }) => {
-    const fetch = vi.fn().mockResolvedValue(jsonResponse(method === "GET" ? { items: [{ ...postResponse(), author_username: "author" }], total: 1, page: 1, per_page: 20 } : postResponse()));
+    const fetch = vi.fn().mockResolvedValue(jsonResponse(
+      path.includes("/batch")
+        ? { items: [{ id, version: 2, changed: true }], affected: 1 }
+        : method === "GET"
+          ? { items: [{ ...postResponse(), author_username: "author" }], total: 1, page: 1, per_page: 20 }
+          : postResponse(),
+    ));
     vi.stubGlobal("fetch", fetch);
     await run();
     const [url, init] = fetch.mock.calls[0] as [string, RequestInit];

@@ -12,6 +12,7 @@ export type PostDetail = z.output<typeof schemas.postDetail>;
 export type PageSummary = z.output<typeof schemas.pageSummary>;
 export type PageDetail = z.output<typeof schemas.pageDetail>;
 export type AdminUser = z.output<typeof schemas.adminUser>;
+export type UserPage = z.output<typeof schemas.userPage>;
 export type CreatedUser = z.output<typeof schemas.createdUser>;
 export type RoleSummary = z.output<typeof schemas.roleSummary>;
 export type TagSummary = z.output<typeof schemas.tagSummary>;

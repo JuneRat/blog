@@ -35,7 +35,7 @@ impl application::ports::UserQuery for QuerySpy {
         &self,
         _: i64,
         _: i64,
-    ) -> Result<Vec<application::ports::AdminUserRow>, UseCaseError> {
+    ) -> Result<application::ports::AdminUserPage, UseCaseError> {
         unreachable!()
     }
 }

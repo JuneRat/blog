@@ -52,6 +52,12 @@ export const createdUser = object<Wire.CreatedUser>()({
   display_name: nullable,
   created_at: string,
 });
+export const userPage = object<Wire.UserPage>()({
+  items: z.array(adminUser),
+  total: count,
+  page: count,
+  per_page: count,
+});
 export const userStatusResult = object<Wire.UserStatusResult>()({
   id: string,
   status: accountStatus,

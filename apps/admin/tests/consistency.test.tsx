@@ -105,7 +105,7 @@ beforeEach(() => {
     id: "comment", post_id: post.id, post_slug: post.slug, post_title: post.title, status: "pending", version: 1,
     parent_id: null, root_id: null, parent_nickname: null, author_email: null, ip_address: null, moderation_reason: "all_comments",
     content_html: "<p>读者留言</p>", body: "读者留言", nickname: "读者", is_author: false, created_at: "2026-09-28T00:00:00Z",
-  }], total: 1, enabled: true }));
+  }], total: 1, page: 1, per_page: 20, enabled: true }));
   vi.mocked(mediaApi.list).mockImplementation(async () => ({ items: [media()], total: 1, page: 1, per_page: 24 }));
   vi.mocked(mediaApi.detail).mockImplementation(async () => ({ media: media(), references: references(), hidden_references: 0 }));
   vi.mocked(pagesApi.getPage).mockImplementation(async () => page);

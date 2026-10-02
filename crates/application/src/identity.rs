@@ -454,6 +454,14 @@ impl ProfileView {
 pub const ADMIN_USER_PAGE_DEFAULT: i64 = 50;
 pub const ADMIN_USER_PAGE_MAX: i64 = 200;
 
+#[derive(Debug, Clone)]
+pub struct UserPageDto {
+    pub items: Vec<AdminUserDto>,
+    pub total: i64,
+    pub page: i64,
+    pub per_page: i64,
+}
+
 /// 账号管理列表条目：账号字段 + 角色 + 登录方式是否存在。
 ///
 /// `can_login` 与最后 Admin 保护使用同一谓词，界面可据它在移除 Admin 前提示；
@@ -685,20 +693,27 @@ impl UserInteractor {
     pub async fn list_users(
         &self,
         actor: &Actor,
-        limit: i64,
-        offset: i64,
-    ) -> Result<Vec<AdminUserDto>, UseCaseError> {
+        page: i64,
+        per_page: i64,
+    ) -> Result<UserPageDto, UseCaseError> {
         if !can_administer_accounts(actor) {
             return Err(UseCaseError::Forbidden);
         }
-        let limit = if limit <= 0 {
-            ADMIN_USER_PAGE_DEFAULT
-        } else {
-            limit.min(ADMIN_USER_PAGE_MAX)
-        };
-        let offset = offset.max(0);
+        if !(1..=100_000).contains(&page) {
+            return Err(UseCaseError::Invalid("页码超出范围".into()));
+        }
+        if !(1..=ADMIN_USER_PAGE_MAX).contains(&per_page) {
+            return Err(UseCaseError::Invalid(format!(
+                "每页数量必须为 1–{ADMIN_USER_PAGE_MAX}"
+            )));
+        }
 
-        let rows = self.users.query.list_admin(limit, offset).await?;
+        let result = self
+            .users
+            .query
+            .list_admin(per_page, (page - 1) * per_page)
+            .await?;
+        let rows = result.items;
         let ids: Vec<Uuid> = rows.iter().map(|row| row.id).collect();
         let mut roles: std::collections::HashMap<Uuid, Vec<String>> =
             std::collections::HashMap::new();
@@ -707,7 +722,7 @@ impl UserInteractor {
         }
         let loginable_admins = self.rbac.loginable_admin_count().await?;
 
-        Ok(rows
+        let items = rows
             .into_iter()
             .map(|row| {
                 let can_login = row.can_login();
@@ -732,7 +747,13 @@ impl UserInteractor {
                     roles,
                 }
             })
-            .collect())
+            .collect();
+        Ok(UserPageDto {
+            items,
+            total: result.total,
+            page,
+            per_page,
+        })
     }
 
     /// 按用户名解析 Actor：同一规范化路径 + 软删除拒绝 + 读取当前权限并集。

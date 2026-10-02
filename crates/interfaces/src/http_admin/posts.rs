@@ -170,6 +170,12 @@ pub struct EditPostBody {
 pub fn posts_router(state: AdminState) -> Router {
     Router::new()
         .route("/api/admin/v1/posts", get(list_posts).post(create_post))
+        .route(
+            "/api/admin/v1/posts/batch",
+            post(batch_posts).layer(axum::extract::DefaultBodyLimit::max(
+                crate::http_contract::BATCH_BODY_LIMIT,
+            )),
+        )
         .route("/api/admin/v1/post-trash", get(list_trash))
         .route("/api/admin/v1/posts/{id}", get(get_post).patch(edit_post))
         .route("/api/admin/v1/posts/{id}/trash", post(trash_post))
@@ -182,6 +188,34 @@ pub fn posts_router(state: AdminState) -> Router {
         .layer(axum::extract::DefaultBodyLimit::max(ADMIN_BODY_LIMIT))
         .layer(middleware::from_fn(no_store))
         .with_state(state)
+}
+
+async fn batch_posts(
+    AdminAuth { actor }: AdminAuth,
+    request_id: RequestId,
+    State(state): State<AdminState>,
+    body: Result<
+        Json<crate::http_contract::PostBatchInput>,
+        axum::extract::rejection::JsonRejection,
+    >,
+) -> Response {
+    let body = match body {
+        Ok(Json(body)) => body,
+        Err(_) => {
+            return admin_error(
+                UseCaseError::Invalid("批量文章操作请求无效".into()),
+                &request_id,
+            );
+        }
+    };
+    let (items, action) = match body.into_command() {
+        Ok(cmd) => cmd,
+        Err(e) => return admin_error(e, &request_id),
+    };
+    match state.posts.batch(&actor, items, action).await {
+        Ok(result) => Json(crate::http_contract::BatchResult::from(result)).into_response(),
+        Err(e) => admin_error(e, &request_id),
+    }
 }
 
 // ---------------------------------------------------------------------------

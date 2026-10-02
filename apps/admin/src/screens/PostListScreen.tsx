@@ -2,13 +2,15 @@ import { formatDateTime } from "../timeZone";
 import { useTimeZone } from "../timeZoneContext";
 import { invalidateAfterWrite } from "../queryEffects";
 import { statusLabel } from "../components/ContentLifecycleControls";
-import { Alert, App as AntdApp, Button, Flex, Space, Table, Typography } from "antd";
+import { Alert, App as AntdApp, Button, Flex, Modal, Select, Space, Table, Typography } from "antd";
 import type { TableProps } from "antd";
-import { useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
 import { postsApi } from "../api/posts";
+import { categoryApi } from "../api/taxonomy";
 import { permissionMessageOf } from "../apiError";
 import { useAuth } from "../auth";
+import { queryKeys } from "../queryClient";
 import { useContentList } from "../useContentList";
 import { ContentListFilters, ContentPagination } from "../components/ContentListControls";
 import { PostScopeFilters } from "../components/PostScopeFilters";
@@ -37,8 +39,99 @@ export function PostListScreen() {
   const errorText = actionError ?? (posts.error === null ? null : permissionMessageOf(posts.error));
   const canCreate = me?.permissions.includes("post.create") ?? false;
   const canTrash = me?.permissions.some((p) => p === "post.delete" || p === "post.delete_any") ?? false;
+  const canPublish = me?.permissions.some((p) => p === "post.publish" || p === "post.publish_any") ?? false;
+  const canUnpublish = me?.permissions.some((p) => p === "post.unpublish" || p === "post.unpublish_any") ?? false;
+  const canUpdate = me?.permissions.some((p) => p === "post.update" || p === "post.update_any") ?? false;
   // 移入回收站的失败文案沿用同一个 setter（查询只管取数那一次）。
   const setError = setActionError;
+
+  const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
+  const [batchBusy, setBatchBusy] = useState(false);
+  const [categoryModalOpen, setCategoryModalOpen] = useState(false);
+  const [selectedCategoryId, setSelectedCategoryId] = useState<string | undefined>(undefined);
+
+  const categories = useQuery({
+    queryKey: queryKeys.categories(),
+    queryFn: categoryApi.list,
+    enabled: canUpdate,
+  });
+
+  useEffect(() => {
+    setSelectedRowKeys([]);
+  }, [filter.page, filter.status, filter.visibility, filter.q, filter.scope, filter.author, filter.category_id]);
+
+  const selectedPosts = (posts.data?.items ?? []).filter((p) => selectedRowKeys.includes(p.id));
+
+  async function handleBatchStatus(status: "published" | "draft" | "archived") {
+    if (selectedPosts.length === 0) return;
+    setBatchBusy(true);
+    setError(null);
+    try {
+      await postsApi.batch({
+        action: "change_status",
+        params: { status },
+        items: selectedPosts.map(p => ({ id: p.id, expected_version: p.version })),
+      });
+      setSelectedRowKeys([]);
+      await invalidateAfterWrite(queryClient, "post");
+    } catch (e) {
+      setError(permissionMessageOf(e));
+      setSelectedRowKeys([]);
+      await invalidateAfterWrite(queryClient, "post");
+    } finally {
+      setBatchBusy(false);
+    }
+  }
+
+  function handleBatchTrash() {
+    if (selectedPosts.length === 0) return;
+    modal.confirm({
+      title: `将选中的 ${selectedPosts.length} 篇文章移入回收站？`,
+      content: "公开入口会立即隐藏。",
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        setBatchBusy(true);
+        setError(null);
+        try {
+          await postsApi.batch({
+            action: "trash",
+            items: selectedPosts.map(p => ({ id: p.id, expected_version: p.version })),
+          });
+          setSelectedRowKeys([]);
+          await invalidateAfterWrite(queryClient, "post");
+        } catch (e) {
+          setError(permissionMessageOf(e));
+          setSelectedRowKeys([]);
+          await invalidateAfterWrite(queryClient, "post");
+        } finally {
+          setBatchBusy(false);
+        }
+      },
+    });
+  }
+
+  async function handleBatchCategory() {
+    if (selectedCategoryId === undefined || selectedPosts.length === 0) return;
+    setBatchBusy(true);
+    setError(null);
+    try {
+      await postsApi.batch({
+        action: "change_category",
+        params: { category_id: selectedCategoryId === "" ? null : selectedCategoryId },
+        items: selectedPosts.map(p => ({ id: p.id, expected_version: p.version })),
+      });
+      setCategoryModalOpen(false);
+      setSelectedRowKeys([]);
+      await invalidateAfterWrite(queryClient, "post");
+    } catch (e) {
+      setError(permissionMessageOf(e));
+      setCategoryModalOpen(false);
+      setSelectedRowKeys([]);
+      await invalidateAfterWrite(queryClient, "post");
+    } finally {
+      setBatchBusy(false);
+    }
+  }
 
   function trash(post: PostSummary): void {
     modal.confirm({
@@ -136,7 +229,9 @@ export function PostListScreen() {
       )}
 
       <Flex justify="space-between" align="center" style={{ marginBottom: 16 }}>
-        <Typography.Text type="secondary">{me?.permissions.length ?? 0} 项权限</Typography.Text>
+        <Typography.Paragraph type="secondary" style={{ margin: 0 }}>
+          管理已发布的文章与草稿。
+        </Typography.Paragraph>
         {canCreate && (
           <Button type="primary" onClick={() => navigate(paths.newPost)}>
             新建草稿
@@ -149,8 +244,46 @@ export function PostListScreen() {
         <ContentListFilters filter={filter} onChange={setFilter} />
       </Flex>
 
+      {selectedRowKeys.length > 0 && (
+        <Flex gap={8} align="center" wrap style={{ background: "#f5f5f5", padding: "8px 12px", borderRadius: 6, marginBottom: 16 }}>
+          <Typography.Text strong style={{ fontSize: 13 }}>已选 {selectedRowKeys.length} 篇：</Typography.Text>
+          {canTrash && (
+            <Button size="small" danger disabled={batchBusy} onClick={handleBatchTrash}>
+              批量移入回收站
+            </Button>
+          )}
+          {canPublish && (
+            <Button size="small" type="primary" disabled={batchBusy} onClick={() => void handleBatchStatus("published")}>
+              批量发布
+            </Button>
+          )}
+          {canUnpublish && (
+            <>
+              <Button size="small" disabled={batchBusy} onClick={() => void handleBatchStatus("draft")}>
+                批量撤回草稿
+              </Button>
+              <Button size="small" disabled={batchBusy} onClick={() => void handleBatchStatus("archived")}>
+                批量归档
+              </Button>
+            </>
+          )}
+          {canUpdate && (
+            <Button size="small" disabled={batchBusy} onClick={() => { setSelectedCategoryId(undefined); setCategoryModalOpen(true); }}>
+              批量修改分类
+            </Button>
+          )}
+          <Button size="small" type="text" onClick={() => setSelectedRowKeys([])}>
+            取消选择
+          </Button>
+        </Flex>
+      )}
+
       <Table<PostSummary>
         rowKey="id"
+        rowSelection={{
+          selectedRowKeys,
+          onChange: setSelectedRowKeys,
+        }}
         size="middle"
         loading={posts.isFetching}
         dataSource={posts.data?.items ?? []}
@@ -158,7 +291,13 @@ export function PostListScreen() {
         pagination={false}
         // 保留迁移前的语义：整行点击进入该文章的编辑页。
         onRow={(post) => ({
-          onClick: () => navigate(paths.editPost(post.id)),
+          onClick: (e) => {
+            const target = e.target as HTMLElement;
+            if (target.closest(".ant-table-selection-column, .ant-checkbox-wrapper, button, a")) {
+              return;
+            }
+            navigate(paths.editPost(post.id));
+          },
           style: { cursor: "pointer" },
         })}
         locale={{
@@ -173,6 +312,32 @@ export function PostListScreen() {
         }}
       />
       <ContentPagination data={posts.data} busy={posts.isFetching} onChange={setPage} />
+
+      <Modal
+        title="批量修改分类"
+        open={categoryModalOpen}
+        onCancel={() => setCategoryModalOpen(false)}
+        confirmLoading={batchBusy}
+        okButtonProps={{ disabled: selectedCategoryId === undefined }}
+        onOk={() => void handleBatchCategory()}
+        okText="保存"
+        cancelText="取消"
+      >
+        <Typography.Paragraph type="secondary">
+          将选中的 {selectedRowKeys.length} 篇文章分类批量设置为：
+        </Typography.Paragraph>
+        <Select
+          style={{ width: "100%" }}
+          placeholder="请选择分类（选择清除分类则解绑分类）"
+          allowClear
+          value={selectedCategoryId}
+          onChange={(val) => setSelectedCategoryId(val ?? undefined)}
+          options={[
+            { value: "", label: "（清除分类）" },
+            ...(categories.data ?? []).map((c) => ({ value: c.id, label: c.name })),
+          ]}
+        />
+      </Modal>
     </>
   );
 }

@@ -1,5 +1,6 @@
 import type * as Wire from "./generated";
 import * as s from "./schemas/comments";
+import { batchResult } from "./schemas/batch";
 import { previewResult } from "./schemas/preview";
 import { json, request, requestEmpty } from "./client";
 import type { CommentItem, CommentPolicy } from "./responseTypes";
@@ -15,6 +16,11 @@ export const commentsApi = {
     requestEmpty(`/api/admin/v1/comments/${item.id}`, {
       method: "POST",
       body: json<Wire.ModerateCommentInput>({ version: item.version, status }),
+    }),
+  batch: (input: Wire.CommentBatchInput): Promise<Wire.BatchResult> =>
+    request(batchResult, "/api/admin/v1/comments/batch", {
+      method: "POST",
+      body: json<Wire.CommentBatchInput>(input),
     }),
   reply: (item: CommentItem, body: string) =>
     request(

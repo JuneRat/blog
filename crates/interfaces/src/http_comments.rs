@@ -122,6 +122,7 @@ pub fn comments_router(state: CommentState) -> Router {
             )),
         )
         .route("/api/admin/v1/comments", get(list))
+        .route("/api/admin/v1/comments/batch", post(batch_moderate))
         .route("/api/admin/v1/comments/{id}", post(moderate))
         .route(
             "/api/admin/v1/comment-settings",
@@ -134,6 +135,36 @@ pub fn comments_router(state: CommentState) -> Router {
         .layer(DefaultBodyLimit::max(16 * 1024))
         .layer(middleware::from_fn(no_store))
         .with_state(state)
+}
+
+async fn batch_moderate(
+    State(s): State<CommentState>,
+    auth: AdminAuth,
+    id: RequestId,
+    peer: Option<axum::Extension<ConnectInfo<SocketAddr>>>,
+    headers: HeaderMap,
+    body: Result<
+        Json<crate::http_contract::CommentBatchInput>,
+        axum::extract::rejection::JsonRejection,
+    >,
+) -> Response {
+    let body = match body {
+        Ok(Json(body)) => body,
+        Err(_) => return admin_error(UseCaseError::Invalid("批量评论操作请求无效".into()), &id),
+    };
+    match s
+        .comments
+        .batch_moderate(
+            &auth.actor,
+            body.items.into_iter().map(Into::into).collect(),
+            body.action.into(),
+            client_ip(peer.map(|p| p.0.0.ip()), &headers, &s.trusted_proxies),
+        )
+        .await
+    {
+        Ok(result) => Json(crate::http_contract::BatchResult::from(result)).into_response(),
+        Err(e) => admin_error(e, &id),
+    }
 }
 #[derive(Deserialize)]
 struct PageQuery {
@@ -228,6 +259,8 @@ async fn list(
 struct CommentPageJson {
     items: Vec<CommentJson>,
     total: i64,
+    page: i64,
+    per_page: i64,
     enabled: bool,
 }
 impl From<CommentPage> for CommentPageJson {
@@ -235,6 +268,8 @@ impl From<CommentPage> for CommentPageJson {
         Self {
             items: page.items.into_iter().map(CommentJson::from).collect(),
             total: page.total,
+            page: page.page,
+            per_page: page.per_page,
             enabled: page.enabled,
         }
     }

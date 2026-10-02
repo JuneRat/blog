@@ -1,6 +1,8 @@
 //! 管理写 API 集成测试：会话认证 + CSRF + Origin + own/any 授权 + 乐观并发。
 //! 假 IdP 登录拿会话，走 JSON API 全流程。
 
+#[path = "admin_api/batch.rs"]
+mod batch;
 mod common;
 #[path = "admin_api/themes.rs"]
 mod themes;
@@ -1513,11 +1515,14 @@ async fn request_me(
 
 /// 从账号列表 JSON 里取某个用户名的条目；找不到直接失败（避免断言静默落空）。
 fn listed_user(body: &str, username: &str) -> serde_json::Value {
-    let users: Vec<serde_json::Value> = serde_json::from_str(body)
-        .unwrap_or_else(|e| panic!("账号列表不是 JSON 数组：{e}：{body}"));
-    users
-        .into_iter()
+    let page: serde_json::Value =
+        serde_json::from_str(body).unwrap_or_else(|e| panic!("账号列表不是 JSON：{e}：{body}"));
+    page["items"]
+        .as_array()
+        .expect("账号列表缺少 items")
+        .iter()
         .find(|user| user["username"] == username)
+        .cloned()
         .unwrap_or_else(|| panic!("列表中没有 {username}：{body}"))
 }
 
@@ -1854,6 +1859,79 @@ async fn account_api_enforces_permission_boundaries() {
     assert!(body.contains("\"username\":\"drafted\""), "{body}");
 }
 
+/// 用户分页包含总数、稳定顺序与请求参数，越界输入不能进入仓储。
+#[tokio::test]
+async fn user_listing_returns_total_and_validated_pagination() {
+    let _g = SERIAL.lock().await;
+    let stack = fresh_stack().await;
+    let (cookie, _) = login_as(&stack.router, &stack.idp, "admin").await;
+    for (query, page, per_page, names) in [
+        (
+            "",
+            1,
+            50,
+            vec!["admin", "author", "author2", "editor", "owner", "stranger"],
+        ),
+        ("?page=2&per_page=2", 2, 2, vec!["author2", "editor"]),
+        ("?page=3&per_page=2", 3, 2, vec!["owner", "stranger"]),
+        ("?page=100000&per_page=200", 100_000, 200, vec![]),
+    ] {
+        let (status, body) = api(
+            &stack.router,
+            "GET",
+            &format!("/api/admin/v1/users{query}"),
+            Some(&cookie),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let result: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(result["total"], 6);
+        assert_eq!(result["page"], page);
+        assert_eq!(result["per_page"], per_page);
+        let actual: Vec<_> = result["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|u| u["username"].as_str().unwrap())
+            .collect();
+        assert_eq!(actual, names);
+    }
+    for query in [
+        "page=0",
+        "page=-1",
+        "page=100001",
+        "page=9223372036854775807",
+        "per_page=0",
+        "per_page=-1",
+        "per_page=201",
+    ] {
+        let (status, body) = api(
+            &stack.router,
+            "GET",
+            &format!("/api/admin/v1/users?{query}"),
+            Some(&cookie),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{query}: {body}");
+        let error: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(error["code"], "invalid_request");
+    }
+    let (status, _) = api(
+        &stack.router,
+        "GET",
+        "/api/admin/v1/users?limit=2&offset=2",
+        Some(&cookie),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "旧分页参数不能被静默忽略");
+}
+
 /// 用户名与邮箱占用必须给出可区分的业务码，创建表单据此把错误定位到字段。
 #[tokio::test]
 async fn username_and_email_conflicts_reach_the_ui_as_distinct_codes() {
@@ -2099,7 +2177,7 @@ async fn last_admin_flag_is_global_across_pages() {
     let (status, body) = api(
         &stack.router,
         "GET",
-        "/api/admin/v1/users?limit=1",
+        "/api/admin/v1/users?page=1&per_page=1",
         Some(&cookie),
         None,
         None,
@@ -3909,6 +3987,9 @@ async fn native_comments_guest_moderation_and_http_boundaries() {
     )
     .await;
     let data: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(data["page"], 1);
+    assert_eq!(data["per_page"], 20);
+    assert_eq!(data["enabled"], true);
     assert!(
         time::OffsetDateTime::parse(
             data["items"][0]["created_at"].as_str().unwrap(),

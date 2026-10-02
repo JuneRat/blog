@@ -120,6 +120,7 @@ fn registration(calls: Arc<AtomicUsize>) -> PluginRegistration {
         },
         content: Some(hook.clone()),
         page_head: Some(hook),
+        config_validator: None,
         html_rules: vec![
             HtmlRule {
                 tag: "span",

@@ -1,6 +1,27 @@
 # 插件机制
 
-插件是独立的站点功能，管理入口为 `/admin/plugins`。框架提供注册、启停、配置、正文钩子和前台资源钩子；目前内置「Markdown 增强」插件，支持 KaTeX 公式与 Mermaid 图表。插件默认关闭，原有 Markdown 行为保持不变。
+插件是独立的站点功能，管理入口为 `/admin/plugins`。框架提供注册、启停、配置、正文钩子和前台资源钩子；目前内置「Markdown 增强」和「Umami 访问统计」。插件默认关闭。
+
+## Umami 访问统计
+
+插件 ID 为 `analytics-umami`，接入已有的 Umami Cloud 或自托管服务。博客不存储访问事件或统计报表；访客浏览器直接向配置的 Umami 服务发送数据，统计服务不可用时页面仍可阅读。需要自行准备 Umami 服务并添加站点。
+
+在“插件管理 → 配置 Umami 访问统计”中填写并保存：
+
+| 配置 | 用途 |
+|---|---|
+| Umami 脚本地址 | 必填，复制 Umami 跟踪代码中的完整 `src` 地址，如 `https://cloud.umami.is/script.js`；也支持自托管地址 |
+| Umami 站点 ID | 必填，复制 `data-website-id` 中的 UUID |
+| Umami 报表地址 | 可选，填写该站点的报表或分享链接；保存后插件卡片显示“查看统计”，通过新标签页打开 |
+| 尊重 Do Not Track | 默认开启，传递 `data-do-not-track="true"` |
+
+完成配置后开启插件。脚本与报表地址要求无 URL 账号密码的 HTTPS 地址；本机开发可使用 localhost 或回环 IP 的 HTTP 地址。未完成必填项时禁止启用，已填写的非法地址或站点 ID 在保存时拒绝；停用状态允许保留尚未完成的配置。
+
+首页、公开文章、公开独立页面及标签/分类/系列页在 `<head>` 输出一条 `defer` 脚本，站点 ID 通过 `data-website-id` 传递。正文预览、后台、安装页、RSS 和 sitemap 不加载统计脚本，草稿和私密内容也不进入公开读取。报表地址只用于后台按钮，不出现在公开页面。两个内置主题已支持；第三方主题需接入 `plugin_head()`。
+
+URL 查询参数和片段始终通过 `data-exclude-search`、`data-exclude-hash` 排除。这些选项沿用 [Umami 官方追踪配置](https://docs.umami.is/docs/tracker-configuration)，Do Not Track 选项需要 Umami 2.17.0 或更新版本。若不想统计自己的公开页面访问，可按[官方说明](https://docs.umami.is/docs/exclude-my-own-visits)在该站点的浏览器中设置 `localStorage.setItem('umami.disabled', 1)`。
+
+此插件只有前台资源钩子，启停或修改配置不改变正文渲染版本，无须内容重建。首期通过外部报表查看结果，没有后台统计 API、阅读量排序或报表 iframe。API 密钥与登录凭据不属于插件配置；普通报表链接由 Umami 自己鉴权，分享链接持有者的访问范围由 Umami 控制。
 
 ## Markdown 增强
 
@@ -52,6 +73,7 @@ pnpm --dir apps/admin exec playwright test e2e/markdown-enhance.spec.ts
 | `content` | 可选 `ContentHook`，处理正文 |
 | `html_rules` | 正文节点需要保留的 class 和 `data-*` 属性 |
 | `page_head` | 可选 `PageHeadHook`，声明当前页面需要的资源 |
+| `config_validator` | 可选提供商校验器，在保存前及读取启用快照时校验地址、标识和必填项 |
 | `files` | 相对路径到静态字节的快照，通常使用 `include_bytes!` 打包 |
 
 ID 长度 1–48，首字符为小写字母，其他字符只允许小写字母、数字、`-`。重复 ID、非法路径和节点规则在装配时拒绝。钩子按插件 ID 字典序执行；单插件返回的资源保持声明顺序。首版没有插件依赖解析或动态加载器。
@@ -100,7 +122,7 @@ Markdown → ContentHook.prepare → Markdown 解析
 
 ## 前台资源钩子
 
-`PageHeadHook::assets(page, config)` 接收页面种类（首页、文章、独立页面、标签、分类、系列、正文预览），返回当前插件快照内的 CSS/JS 文件。无须扫描文章或保存每篇文章的功能清单。Markdown 增强在文章、独立页面和正文预览输出资源；其他类型插件自行决定适用页面。
+`PageHeadHook::assets(page, config)` 接收页面种类（首页、文章、独立页面、标签、分类、系列、正文预览），返回当前插件快照内的 CSS/JS 文件。`external_scripts(page, config)` 可声明外部脚本 URL 和具体 `data-*` 属性；宿主校验地址、限制属性并转义值，始终使用 `defer`，相同 URL 和属性组合只输出一次。外部脚本钩子不在正文预览中调用。无须扫描文章或保存每篇文章的功能清单。Markdown 增强在文章、独立页面和正文预览输出本地资源；Umami 只在公开站点页面声明外部脚本。
 
 主题在 `<head>` 内调用一次：
 
@@ -117,7 +139,7 @@ default/paper 已接入，正文容器统一提供 `data-content-root`，插件�
 <script src="/assets/plugins/example-extension/资源哈希/display.js" defer></script>
 ```
 
-JS 使用经典外部脚本的 `defer`，同页按声明顺序执行；CSS 使用普通样式表链接。没有行内脚本、资源 URL 配置或客户端动态加载器。`files` 也可包含 CSS 引用的字体/图片，使用相对路径。全部文件属于公开资源，不能放入秘密。
+JS 使用经典外部脚本的 `defer`，同页按声明顺序执行；CSS 使用普通样式表链接。插件不接收任意 HTML 或行内脚本。已注册的可信提供商可声明经校验的外部脚本地址；本地 `files` 也可包含 CSS 引用的字体/图片，使用相对路径。全部本地文件属于公开资源，不能放入秘密。
 
 资源版本是路径和字节内容的完整 SHA-256。HTTP 只返回注册快照中的文件，正确设置 MIME、`nosniff` 和一年 immutable 缓存；缺失文件/版本返回 404。停用后新页面不再输出资源，已缓存的文件可以继续读取。插件更新后跨版本资源保留与主题相同，由部署层负责。
 

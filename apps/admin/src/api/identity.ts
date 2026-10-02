@@ -10,6 +10,7 @@ import type {
   Profile,
   ProviderSummary,
   RoleSummary,
+  UserPage,
 } from "../types";
 import type {
   PasswordLoginInput,
@@ -56,13 +57,11 @@ export const identityApi = {
       body: json<PasswordLoginInput>(input),
     }),
 
-  listUsers: (limit?: number, offset?: number): Promise<AdminUser[]> => {
+  listUsers: (page = 1, perPage = 50): Promise<UserPage> => {
     const query = new URLSearchParams();
-    if (limit !== undefined) query.set("limit", String(limit));
-    if (offset !== undefined) query.set("offset", String(offset));
-    const encoded = query.toString();
-    const suffix = encoded.length > 0 ? `?${encoded}` : "";
-    return request(z.array(s.adminUser), `/api/admin/v1/users${suffix}`);
+    query.set("page", String(page));
+    query.set("per_page", String(perPage));
+    return request(s.userPage, `/api/admin/v1/users?${query}`);
   },
 
   createUser: (input: CreateUserInput): Promise<CreatedUser> =>

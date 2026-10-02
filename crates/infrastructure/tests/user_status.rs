@@ -220,7 +220,7 @@ async fn status_changes_revoke_sessions_and_never_revive_old_tokens() {
         )
     );
     let rows = repo.list_admin(50, 0).await.unwrap();
-    let row = rows.iter().find(|row| row.id == user.id).unwrap();
+    let row = rows.items.iter().find(|row| row.id == user.id).unwrap();
     assert_eq!(
         (row.status, row.version),
         (UserStatus::Active, enabled.version)

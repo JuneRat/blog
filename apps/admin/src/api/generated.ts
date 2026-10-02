@@ -12,6 +12,20 @@ export type AuditPage = { items: Array<AuditRecord>, next_cursor: string | null,
 
 export type AuditRecord = { id: string, created_at: string, actor_id: string | null, actor_display: string | null, ip_address: string | null, action: string, target_type: string, target_id: string, summary: Array<AuditField>, };
 
+export type BatchItemInput = { id: string, expected_version: number, };
+
+export type BatchItemResult = { id: string, version: number | null, changed: boolean, };
+
+export type BatchPostCategoryInput = {
+/**
+ * Explicit null clears the category; omission is invalid.
+ */
+category_id: string | null, };
+
+export type BatchPostStatusInput = { "status": "draft", } | { "status": "published", } | { "status": "archived", } | { "status": "scheduled", published_at: string, };
+
+export type BatchResult = { items: Array<BatchItemResult>, affected: number, };
+
 export type CategorySummary = { id: string, slug: string, name: string, parent_id: string | null, description: string | null, version: number,
 /**
  * 直接归属的公开文章计数。
@@ -26,11 +40,15 @@ current_password?: string | null, new_password: string, };
 
 export type ChangeStatusInput = { status: AccountStatus, expected_version: number, };
 
+export type CommentBatchActionInput = "approve" | "spam" | "trash" | "restore" | "pending";
+
+export type CommentBatchInput = { items: Array<BatchItemInput>, action: CommentBatchActionInput, };
+
 export type CommentItem = { id: string, post_id: string, post_slug: string, post_title: string, parent_id: string | null, root_id: string | null, parent_nickname: string | null, author_email: string | null, ip_address: string | null, content_html: string, nickname: string, body: string, is_author: boolean, status: string, moderation_reason: string | null, version: number, created_at: string, };
 
 export type CommentModerationMode = "all" | "guests" | "first_comment" | "none";
 
-export type CommentPage = { items: Array<CommentItem>, total: number, enabled: boolean, };
+export type CommentPage = { items: Array<CommentItem>, total: number, page: number, per_page: number, enabled: boolean, };
 
 export type CommentPolicy = { enabled: boolean, moderation?: CommentModerationMode | null, version: number, };
 
@@ -170,6 +188,8 @@ export type PluginHook = "content" | "page_head";
 export type PluginView = { id: string, name: string, description: string, version: string, hooks: Array<PluginHook>, config_fields: Array<PluginConfigField>, available: boolean, enabled: boolean, config: { [key in string]: PluginConfigValue }, };
 
 export type PluginsView = { version: number, plugins: Array<PluginView>, };
+
+export type PostBatchInput = { "action": "trash", items: Array<BatchItemInput>, } | { "action": "restore", items: Array<BatchItemInput>, } | { "action": "purge", items: Array<BatchItemInput>, } | { "action": "change_status", items: Array<BatchItemInput>, params: BatchPostStatusInput, } | { "action": "change_category", items: Array<BatchItemInput>, params: BatchPostCategoryInput, };
 
 export type PostDetail = { excerpt: string | null, content: string, id: string, slug: string, title: string, status: string, visibility: string, version: number, published_at: string | null, updated_at: string, author_id: string,
 /**
@@ -352,6 +372,8 @@ export type UpdateSeriesInput = { name: string, description?: string | null,
  * 封面三态：缺省不修改；null 移除封面；id 设置封面。
  */
 cover_media_id?: string | null, expected_version?: number | null, };
+
+export type UserPage = { items: Array<AdminUser>, total: number, page: number, per_page: number, };
 
 export type UserStatusResult = { id: string, status: string, version: number, };
 

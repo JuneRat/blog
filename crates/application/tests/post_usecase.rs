@@ -92,6 +92,16 @@ impl FakePostRepo {
 
 #[async_trait::async_trait]
 impl PostRepository for FakePostRepo {
+    async fn batch(
+        &self,
+        _: &Actor,
+        _: &application::batch::BatchItems,
+        _: application::batch::PostBatchAction,
+        _: OffsetDateTime,
+    ) -> Result<application::batch::BatchResult, UseCaseError> {
+        unreachable!("atomic batch behavior is covered by database integration tests")
+    }
+
     async fn find_record_by_id(
         &self,
         id: Uuid,
@@ -215,10 +225,11 @@ impl application::ports::UserQuery for FakeUserRepo {
         &self,
         limit: i64,
         offset: i64,
-    ) -> Result<Vec<application::ports::AdminUserRow>, UseCaseError> {
+    ) -> Result<application::ports::AdminUserPage, UseCaseError> {
         let mut users: Vec<UserSnapshot> = self.users.lock().unwrap().values().cloned().collect();
         users.sort_by(|a, b| a.username.cmp(&b.username));
-        Ok(users
+        let total = users.len() as i64;
+        let items = users
             .into_iter()
             .skip(offset.max(0) as usize)
             .take(limit.max(0) as usize)
@@ -233,7 +244,8 @@ impl application::ports::UserQuery for FakeUserRepo {
                 password_enabled: false,
                 external_identities: 0,
             })
-            .collect())
+            .collect();
+        Ok(application::ports::AdminUserPage { items, total })
     }
 }
 

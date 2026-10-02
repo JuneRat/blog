@@ -8,3 +8,4 @@ export * from "./schemas/media";
 export * from "./schemas/audit";
 export * from "./schemas/comments";
 export * from "./schemas/preview";
+export * from "./schemas/batch";

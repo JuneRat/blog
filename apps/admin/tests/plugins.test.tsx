@@ -74,3 +74,26 @@ it("shows removed plugins and permits disabling them without inventing configura
   fireEvent.click(screen.getByRole("switch", { name: "启用 示例扩展" }));
   await waitFor(() => expect(pluginsApi.save).toHaveBeenCalled());
 });
+
+it("opens the configured Umami report without exposing it as a tracker", async () => {
+  vi.mocked(pluginsApi.get).mockResolvedValue({ version: 0, plugins: [{
+    ...fixture.plugins[0], id: "analytics-umami", name: "Umami 访问统计", hooks: ["page_head"],
+    config: { "dashboard-url": "https://stats.example.test/websites/site" }, config_fields: [],
+  }] });
+  render(<App />);
+  const link = await screen.findByRole("link", { name: "查看统计" });
+  expect(link.getAttribute("href")).toBe("https://stats.example.test/websites/site");
+  expect(link.getAttribute("target")).toBe("_blank");
+  expect(link.getAttribute("rel")).toBe("noopener noreferrer");
+  expect(document.querySelector('script[src*="stats.example.test"]')).toBeNull();
+});
+
+it.each(["", "javascript:alert(1)", "https://user:pass@stats.example.test", "http://stats.example.test"])("does not offer an unsafe or empty report URL: %s", async url => {
+  vi.mocked(pluginsApi.get).mockResolvedValue({ version: 0, plugins: [{
+    ...fixture.plugins[0], id: "analytics-umami", name: "Umami 访问统计",
+    config: { "dashboard-url": url }, config_fields: [],
+  }] });
+  render(<App />);
+  await screen.findByText("Umami 访问统计");
+  expect(screen.queryByRole("link", { name: "查看统计" })).toBeNull();
+});

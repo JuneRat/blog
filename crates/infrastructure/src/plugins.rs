@@ -1,5 +1,6 @@
 //! Trusted, compiled-in plugins. The catalog owns code and immutable assets;
 //! application::plugins owns configuration, permissions and lifecycle state.
+mod analytics_umami;
 mod markdown_enhance;
 mod store;
 pub use store::PostgresPluginStore;
@@ -13,8 +14,8 @@ use std::{
 use application::{
     UseCaseError,
     plugins::{
-        PluginAssets, PluginConfig, PluginDefinition, PluginHook, PluginPage, PluginRegistry,
-        PluginSnapshot, PluginsInteractor,
+        PluginAssets, PluginConfig, PluginConfigValidator, PluginDefinition, PluginHook,
+        PluginPage, PluginRegistry, PluginSnapshot, PluginsInteractor,
     },
 };
 use pulldown_cmark::{Options, Parser, html::push_html};
@@ -56,12 +57,27 @@ pub struct HeadAsset {
     pub path: String,
 }
 
+/// External scripts are declared by trusted providers, never supplied as HTML.
+#[derive(Clone)]
+pub struct ExternalScript {
+    pub src: String,
+    pub data_attributes: BTreeMap<String, String>,
+}
+
 pub trait PageHeadHook: Send + Sync {
     fn assets(
         &self,
         page: PluginPage,
         config: &PluginConfig,
     ) -> Result<Vec<HeadAsset>, UseCaseError>;
+
+    fn external_scripts(
+        &self,
+        _page: PluginPage,
+        _config: &PluginConfig,
+    ) -> Result<Vec<ExternalScript>, UseCaseError> {
+        Ok(vec![])
+    }
 }
 
 pub struct PluginRegistration {
@@ -69,6 +85,7 @@ pub struct PluginRegistration {
     pub content: Option<Arc<dyn ContentHook>>,
     pub html_rules: Vec<HtmlRule>,
     pub page_head: Option<Arc<dyn PageHeadHook>>,
+    pub config_validator: Option<Arc<dyn PluginConfigValidator>>,
     pub files: BTreeMap<String, Arc<[u8]>>,
 }
 
@@ -87,12 +104,17 @@ pub struct PluginCatalog {
 impl PluginCatalog {
     /// Built-in plugins are opt-in. Test fixtures use separate catalogs.
     pub fn builtins() -> Self {
-        Self::new(vec![markdown_enhance::registration()]).expect("valid built-in plugin catalog")
+        Self::new(vec![
+            analytics_umami::registration(),
+            markdown_enhance::registration(),
+        ])
+        .expect("valid built-in plugin catalog")
     }
 
     pub fn new(registrations: Vec<PluginRegistration>) -> Result<Self, UseCaseError> {
         let mut plugins = BTreeMap::new();
         let mut definitions = Vec::new();
+        let mut validators = Vec::new();
         for mut registration in registrations {
             registration.definition.hooks = [
                 registration.content.as_ref().map(|_| PluginHook::Content),
@@ -127,6 +149,9 @@ impl PluginCatalog {
                 hash.update(bytes);
             }
             let id = registration.definition.id.clone();
+            if let Some(validator) = registration.config_validator {
+                validators.push((id.clone(), validator));
+            }
             let assets = PluginAssets {
                 id: id.clone(),
                 version: format!("{:x}", hash.finalize()),
@@ -143,7 +168,11 @@ impl PluginCatalog {
                 },
             );
         }
-        let registry = Arc::new(PluginRegistry::new(definitions)?);
+        let mut registry = PluginRegistry::new(definitions)?;
+        for (id, validator) in validators {
+            registry = registry.with_config_validator(id, validator)?;
+        }
+        let registry = Arc::new(registry);
         Ok(Self { registry, plugins })
     }
 
@@ -198,6 +227,7 @@ impl PluginCatalog {
     ) -> Result<String, UseCaseError> {
         let mut html = String::new();
         let mut seen = BTreeSet::new();
+        let mut external_seen = BTreeSet::new();
         for (id, config) in &snapshot.active {
             let Some(plugin) = self.plugins.get(id) else {
                 continue;
@@ -226,9 +256,73 @@ impl PluginCatalog {
                     }
                 }
             }
+            // External providers must never receive data from an editor preview.
+            if page != PluginPage::Preview {
+                for script in hook.external_scripts(page, config)? {
+                    let url = browser_url(&script.src, "插件脚本地址")?;
+                    if url.fragment().is_some()
+                        || script.data_attributes.len() > 16
+                        || script.data_attributes.iter().any(|(key, value)| {
+                            !key.starts_with("data-")
+                                || key.len() <= 5
+                                || !valid_token(key)
+                                || value.len() > 2048
+                        })
+                    {
+                        return Err(UseCaseError::Render("插件外部脚本声明无效".into()));
+                    }
+                    if external_seen.insert((url.to_string(), script.data_attributes.clone())) {
+                        html.push_str(&format!(
+                            "<script src=\"{}\" defer",
+                            escape_attribute(url.as_str())
+                        ));
+                        for (key, value) in script.data_attributes {
+                            html.push_str(&format!(" {key}=\"{}\"", escape_attribute(&value)));
+                        }
+                        html.push_str("></script>\n");
+                    }
+                }
+            }
         }
         Ok(html)
     }
+}
+
+/// Browser-only targets: HTTPS, or loopback HTTP for local development. The
+/// server never fetches these URLs; credentials and ambiguous whitespace fail.
+fn browser_url(raw: &str, label: &str) -> Result<url::Url, UseCaseError> {
+    let raw = raw.trim();
+    let invalid = || {
+        UseCaseError::Invalid(format!(
+            "{label}须为无账号密码的 HTTPS 地址，本机开发可使用 HTTP"
+        ))
+    };
+    let url = url::Url::parse(raw).map_err(|_| invalid())?;
+    let loopback = match url.host() {
+        Some(url::Host::Domain(host)) => host == "localhost",
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+        None => false,
+    };
+    if raw.len() > 2048
+        || raw.chars().any(|c| c.is_whitespace() || c.is_control())
+        || url.host().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || !(url.scheme() == "https" || (url.scheme() == "http" && loopback))
+    {
+        return Err(invalid());
+    }
+    Ok(url)
+}
+
+fn escape_attribute(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('"', "&quot;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('\'', "&#39;")
 }
 
 fn valid_token(token: &str) -> bool {
@@ -264,5 +358,78 @@ impl PluginRuntime {
     ) -> Self {
         let manager = Arc::new(PluginsInteractor::new(store, catalog.registry(), clock));
         Self { catalog, manager }
+    }
+}
+
+#[cfg(test)]
+mod external_script_tests {
+    use super::*;
+
+    struct Hook(Vec<ExternalScript>);
+    impl PageHeadHook for Hook {
+        fn assets(&self, _: PluginPage, _: &PluginConfig) -> Result<Vec<HeadAsset>, UseCaseError> {
+            Ok(vec![])
+        }
+        fn external_scripts(
+            &self,
+            _: PluginPage,
+            _: &PluginConfig,
+        ) -> Result<Vec<ExternalScript>, UseCaseError> {
+            Ok(self.0.clone())
+        }
+    }
+
+    fn render(scripts: Vec<ExternalScript>, page: PluginPage) -> Result<String, UseCaseError> {
+        let catalog = PluginCatalog::new(vec![PluginRegistration {
+            definition: PluginDefinition {
+                id: "external-fixture".into(),
+                name: "External fixture".into(),
+                description: String::new(),
+                version: "1".into(),
+                hooks: vec![],
+                config_fields: vec![],
+            },
+            content: None,
+            html_rules: vec![],
+            page_head: Some(Arc::new(Hook(scripts))),
+            config_validator: None,
+            files: BTreeMap::new(),
+        }])?;
+        catalog.head_html(
+            page,
+            &PluginSnapshot {
+                active: BTreeMap::from([("external-fixture".into(), PluginConfig::new())]),
+                ..Default::default()
+            },
+        )
+    }
+
+    #[test]
+    fn external_declarations_escape_values_deduplicate_and_cannot_add_event_handlers() {
+        let script = ExternalScript {
+            src: "https://stats.example.test/script.js?a=1&b=2".into(),
+            data_attributes: BTreeMap::from([(
+                "data-value".into(),
+                "\"><script>bad()</script>&'".into(),
+            )]),
+        };
+        let html = render(vec![script.clone(), script.clone()], PluginPage::Index).unwrap();
+        assert_eq!(html.matches("<script ").count(), 1);
+        assert!(!html.contains("<script>bad()"));
+        assert!(
+            html.contains("data-value=\"&quot;&gt;&lt;script&gt;bad()&lt;/script&gt;&amp;&#39;\"")
+        );
+        assert!(html.contains("?a=1&amp;b=2"));
+        // Even an external hook that ignores page scope cannot enter a preview.
+        assert!(
+            render(vec![script.clone()], PluginPage::Preview)
+                .unwrap()
+                .is_empty()
+        );
+        for name in ["onload", "src", "data-", "data-x\" onload"] {
+            let mut invalid = script.clone();
+            invalid.data_attributes = BTreeMap::from([(name.into(), "bad()".into())]);
+            assert!(render(vec![invalid], PluginPage::Index).is_err());
+        }
     }
 }

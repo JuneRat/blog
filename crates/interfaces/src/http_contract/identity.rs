@@ -79,6 +79,23 @@ impl From<application::identity::AdminUserDto> for AdminUser {
     }
 }
 #[derive(serde::Serialize, ts_rs::TS)]
+pub struct UserPage {
+    pub items: Vec<AdminUser>,
+    pub total: i64,
+    pub page: i64,
+    pub per_page: i64,
+}
+impl From<application::identity::UserPageDto> for UserPage {
+    fn from(value: application::identity::UserPageDto) -> Self {
+        Self {
+            items: value.items.into_iter().map(AdminUser::from).collect(),
+            total: value.total,
+            page: value.page,
+            per_page: value.per_page,
+        }
+    }
+}
+#[derive(serde::Serialize, ts_rs::TS)]
 pub struct CreatedUser {
     pub id: Uuid,
     pub username: String,

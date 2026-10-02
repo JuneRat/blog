@@ -14,6 +14,19 @@ import { useUnsavedGuard } from "../unsaved";
 
 type Draft = { plugin: PluginView; config: Record<string, PluginConfigValue>; version: number };
 
+function umamiReportUrl(plugin: PluginView): string | null {
+  if (plugin.id !== "analytics-umami" || !plugin.available) return null;
+  const value = plugin.config["dashboard-url"];
+  if (typeof value !== "string" || !value.trim()) return null;
+  try {
+    const url = new URL(value.trim());
+    const loopback = url.hostname === "localhost" || url.hostname === "[::1]" || /^127\.(\d{1,3}\.){2}\d{1,3}$/.test(url.hostname);
+    return !url.username && !url.password && (url.protocol === "https:" || (url.protocol === "http:" && loopback)) ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
 export function PluginManagementScreen() {
   const { me } = useAuth();
   const allowed = me?.permissions.includes("plugins.manage") ?? false;
@@ -79,6 +92,7 @@ export function PluginManagementScreen() {
         <Space wrap>
           {plugin.hooks.map(hook => <Tag key={hook}>{hook === "content" ? "正文扩展" : "前台资源"}</Tag>)}
           {!plugin.available && <Tag color="warning">插件不可用</Tag>}
+          {umamiReportUrl(plugin) && <Button href={umamiReportUrl(plugin)!} target="_blank" rel="noopener noreferrer">查看统计</Button>}
           {plugin.available && plugin.config_fields.length > 0 && <Button disabled={busy || query.isError} onClick={() => {
             setError(null); setNotice(null); setDraft({ plugin, config: { ...plugin.config }, version: query.data!.version });
           }}>配置 {plugin.name}</Button>}

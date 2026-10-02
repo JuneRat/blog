@@ -60,8 +60,11 @@ pub struct CommentPolicy {
 pub struct CommentPage {
     pub items: Vec<CommentDto>,
     pub total: i64,
+    pub page: i64,
+    pub per_page: i64,
     pub enabled: bool,
 }
+pub const ADMIN_COMMENT_PAGE_SIZE: i64 = 20;
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SubmitComment {
@@ -195,6 +198,19 @@ impl CommentInteractor {
         let mut scope = scope(actor)?;
         scope.ip_address = ip_address;
         self.repo.moderate(scope, id, version, action).await
+    }
+    pub async fn batch_moderate(
+        &self,
+        actor: &Actor,
+        items: Vec<crate::batch::BatchItem>,
+        action: crate::batch::CommentBatchAction,
+        ip_address: Option<IpAddr>,
+    ) -> Result<crate::batch::BatchResult, UseCaseError> {
+        actor.ensure_write_channel()?;
+        let mut scope = scope(actor)?;
+        scope.ip_address = ip_address;
+        let items = crate::batch::BatchItems::new(items)?;
+        self.repo.batch_moderate(scope, &items, action).await
     }
     pub async fn policy(
         &self,

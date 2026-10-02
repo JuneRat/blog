@@ -25,6 +25,8 @@ export const commentItem = object<Wire.CommentItem>()({
 export const commentPage = object<Wire.CommentPage>()({
   items: z.array(commentItem),
   total: count,
+  page: count,
+  per_page: count,
   enabled: z.boolean(),
 });
 export const commentPolicy = object<Wire.CommentPolicy>()({

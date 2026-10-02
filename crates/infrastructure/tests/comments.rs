@@ -721,6 +721,33 @@ async fn public_roots_and_flat_descendants_have_independent_pagination() {
         service.public_list("discussion", None, 0).await,
         Err(UseCaseError::Invalid(_))
     ));
+    let admin_page = service.list(&admin, None, None, 3).await.unwrap();
+    assert_eq!(
+        (admin_page.total, admin_page.page, admin_page.per_page),
+        (43, 3, 20)
+    );
+    assert_eq!(admin_page.items.len(), 3);
+    assert!(admin_page.enabled);
+    service
+        .policy(
+            &admin,
+            None,
+            Some(CommentPolicy {
+                enabled: false,
+                moderation: None,
+                version: 0,
+            }),
+            None,
+        )
+        .await
+        .unwrap();
+    let beyond = service.list(&admin, None, None, 4).await.unwrap();
+    assert_eq!((beyond.total, beyond.page, beyond.per_page), (43, 4, 20));
+    assert!(beyond.items.is_empty());
+    assert!(
+        !beyond.enabled,
+        "后台仍可读取已关闭评论的数据，enabled 反映全站开关"
+    );
     pool.close().await;
 }
 

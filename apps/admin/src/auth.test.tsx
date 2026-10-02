@@ -48,7 +48,7 @@ it("discards private cached comments when an expired session logs in as another 
       if (account === "account-b") return (await nextComments).clone();
       return expired
         ? jsonResponse({ code: "unauthenticated", error: "会话过期" }, 401)
-        : jsonResponse({ items: [item], total: 1, enabled: true });
+        : jsonResponse({ items: [item], total: 1, page: 1, per_page: 20, enabled: true });
     }
     throw new Error(`Unexpected request: ${path}`);
   }));

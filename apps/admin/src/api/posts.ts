@@ -1,5 +1,6 @@
 import type * as Wire from "./generated";
 import * as s from "./schemas/content";
+import { batchResult } from "./schemas/batch";
 import { json, request, requestEmpty } from "./client";
 import type {
   ContentListFilter,
@@ -118,4 +119,10 @@ export const postsApi = {
         body: json<Wire.VersionInput>({ expected_version: expectedVersion }),
       },
     ),
+
+  batch: (input: Wire.PostBatchInput): Promise<Wire.BatchResult> =>
+    request(batchResult, "/api/admin/v1/posts/batch", {
+      method: "POST",
+      body: json<Wire.PostBatchInput>(input),
+    }),
 };

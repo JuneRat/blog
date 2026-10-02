@@ -8,7 +8,7 @@ use crate::rbac::CONFIGURED_EXTERNAL_IDENTITY;
 use application::error::UseCaseError;
 use application::identity::policy::{self, StatusChangePlan};
 use application::ports::{
-    AccountAdministration, AdminUserRow, ClearPasswordOutcome, PasswordCredential,
+    AccountAdministration, AdminUserPage, AdminUserRow, ClearPasswordOutcome, PasswordCredential,
     PasswordCredentialStore, UserProfileStore, UserQuery,
 };
 use domain::identity::{LoginMethod, LoginMethods, UserSnapshot, UserStatus};
@@ -90,7 +90,16 @@ impl UserQuery for PostgresUserRepository {
         row.as_ref().map(user_from_row).transpose()
     }
 
-    async fn list_admin(&self, limit: i64, offset: i64) -> Result<Vec<AdminUserRow>, UseCaseError> {
+    async fn list_admin(&self, limit: i64, offset: i64) -> Result<AdminUserPage, UseCaseError> {
+        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+            .execute(&mut *tx)
+            .await
+            .map_err(map_sqlx_error)?;
+        let total = sqlx::query_scalar("SELECT count(*) FROM users")
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(map_sqlx_error)?;
         // 登录方式与 RBAC 的最后 Admin 判定保持同一谓词（已配置 OAuth 或密码），
         // 否则界面会提示「可登录」而后端拒绝，两处定义漂移。
         let rows = sqlx::query(&format!(
@@ -101,16 +110,17 @@ impl UserQuery for PostgresUserRepository {
                      AND {CONFIGURED_EXTERNAL_IDENTITY}) \
                         AS external_identities \
              FROM users u \
-             ORDER BY u.username \
+             ORDER BY u.username, u.id \
              LIMIT $1 OFFSET $2",
         ))
         .bind(limit)
         .bind(offset)
-        .fetch_all(&self.pool)
+        .fetch_all(&mut *tx)
         .await
         .map_err(map_sqlx_error)?;
 
-        rows.iter()
+        let items = rows
+            .iter()
             .map(|row| {
                 Ok(AdminUserRow {
                     id: row.try_get("id").map_err(map_row_error)?,
@@ -126,7 +136,9 @@ impl UserQuery for PostgresUserRepository {
                         .map_err(map_row_error)?,
                 })
             })
-            .collect()
+            .collect::<Result<Vec<_>, UseCaseError>>()?;
+        tx.commit().await.map_err(map_sqlx_error)?;
+        Ok(AdminUserPage { items, total })
     }
 }
 

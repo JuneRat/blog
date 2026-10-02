@@ -390,6 +390,20 @@ impl PostInteractor {
         )
     }
 
+    pub async fn batch(
+        &self,
+        actor: &Actor,
+        items: Vec<crate::batch::BatchItem>,
+        action: crate::batch::PostBatchAction,
+    ) -> Result<crate::batch::BatchResult, UseCaseError> {
+        actor.ensure_write_channel()?;
+        action.ensure_permission(actor)?;
+        let items = crate::batch::BatchItems::new(items)?;
+        self.posts
+            .batch(actor, &items, action, self.clock.now())
+            .await
+    }
+
     pub async fn restore(
         &self,
         actor: &Actor,

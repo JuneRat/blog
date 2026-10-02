@@ -8,11 +8,11 @@ const item={id:'c1',post_id:'p1',post_slug:'post',post_title:'Title',parent_id:n
 vi.mock('../auth',()=>({useAuth:()=>({me:{permissions:['post.update']}})}));
 vi.mock("../api/comments", async (load) => {
   const original = await load<typeof import("../api/comments")>();
-  return { ...original, commentsApi: {list:vi.fn(),moderate:vi.fn()} };
+  return { ...original, commentsApi: {list:vi.fn(),moderate:vi.fn(),batch:vi.fn()} };
 });
 afterEach(()=>{cleanup();vi.clearAllMocks();});
 it('renders sanitized comment HTML in moderation and submits the displayed version',async()=>{
-  vi.mocked(commentsApi.list).mockResolvedValue({items:[item],total:1,enabled:true});
+  vi.mocked(commentsApi.list).mockResolvedValue({items:[item],total:1,page:1,per_page:20,enabled:true});
   vi.mocked(commentsApi.moderate).mockResolvedValue();
   render(<QueryClientProvider client={new QueryClient({defaultOptions:{queries:{retry:false}}})}><AdminProviders><CommentListScreen/></AdminProviders></QueryClientProvider>);
   await screen.findByText('<script>name</script>');
@@ -30,6 +30,8 @@ it('returns to the remaining comments after moderating the last item on the fina
   vi.mocked(commentsApi.list).mockImplementation(async page => ({
     items: page === 1 ? firstPage : moderated ? [] : [last],
     total: moderated ? 20 : 21,
+    page: page ?? 1,
+    per_page: 20,
     enabled: true,
   }));
   vi.mocked(commentsApi.moderate).mockImplementation(async () => { moderated = true; });
@@ -40,4 +42,28 @@ it('returns to the remaining comments after moderating the last item on the fina
   fireEvent.click(screen.getByRole('button', { name: '通过审核' }));
   await screen.findByText('待审评论 1');
   expect(screen.queryByText('当前筛选下没有评论。')).toBeNull();
+});
+
+it('supports batch moderation via commentsApi.batch', async () => {
+  vi.mocked(commentsApi.list).mockResolvedValue({items:[item],total:1,page:1,per_page:20,enabled:true});
+  vi.mocked(commentsApi.batch).mockResolvedValue({items:[{id: item.id, version: 4, changed: true}], affected: 1});
+  render(<AdminProviders><CommentListScreen /></AdminProviders>);
+  await screen.findByText('<script>name</script>');
+  fireEvent.click(screen.getByRole('checkbox', { name: '全选本页' }));
+  fireEvent.click(screen.getByRole('button', { name: '批量通过' }));
+  await waitFor(() => expect(commentsApi.batch).toHaveBeenCalledWith({
+    action: 'approve',
+    items: [{ id: item.id, expected_version: item.version }],
+  }));
+});
+
+it('disables batch approve and shows restore warning when selection contains spam or trash comments', async () => {
+  const spamItem = { ...item, id: 'c2', nickname: '垃圾评论者', status: 'spam' };
+  vi.mocked(commentsApi.list).mockResolvedValue({ items: [item, spamItem], total: 2, page: 1, per_page: 20, enabled: true });
+  render(<AdminProviders><CommentListScreen /></AdminProviders>);
+  await screen.findByText('垃圾评论者');
+  fireEvent.click(screen.getByRole('checkbox', { name: '全选本页' }));
+  const approveBtn = screen.getByRole('button', { name: '批量通过' });
+  expect(approveBtn.hasAttribute('disabled')).toBe(true);
+  expect(screen.getByText('含垃圾/回收站评论，须先恢复待审')).toBeTruthy();
 });

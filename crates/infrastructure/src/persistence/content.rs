@@ -19,6 +19,7 @@ use domain::content::{Post, PostSnapshot, PostStatus, Visibility};
 use super::media::{clear_media_refs, media_ids_for, sync_media_refs};
 use super::sql::{PAGE_PUBLIC_PREDICATE, POST_PUBLIC_PREDICATE, map_row_error, map_sqlx_error};
 use crate::audit::{AuditEntry, append_audit_log};
+mod batch;
 
 /// Markdown 渲染、清洗或媒体引用提取规则变更时递增。
 /// HTML 与引用属于同一派生流水线；rebuild-html 同事务重建不匹配的两者。
@@ -202,6 +203,16 @@ fn post_from_row(row: &sqlx::postgres::PgRow) -> Result<PostSnapshot, UseCaseErr
 
 #[async_trait]
 impl PostRepository for PostgresPostRepository {
+    async fn batch(
+        &self,
+        actor: &application::identity::Actor,
+        items: &application::batch::BatchItems,
+        action: application::batch::PostBatchAction,
+        now: OffsetDateTime,
+    ) -> Result<application::batch::BatchResult, UseCaseError> {
+        self.batch_posts(actor, items, action, now).await
+    }
+
     async fn find_record_by_id(&self, id: Uuid) -> Result<Option<PostRecord>, UseCaseError> {
         let row = sqlx::query(&format!(
             "SELECT {POST_COLUMNS}, {POST_TAG_IDS} FROM posts WHERE id = $1"

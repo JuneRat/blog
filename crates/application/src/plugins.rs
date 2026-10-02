@@ -61,8 +61,17 @@ pub struct PluginDefinition {
     pub config_fields: Vec<PluginConfigField>,
 }
 
+/// Provider-specific checks run before configuration is persisted. Implementations
+/// receive normalized, typed values; disabled plugins may allow incomplete setup.
+pub trait PluginConfigValidator: Send + Sync {
+    fn validate(&self, config: &PluginConfig, enabled: bool) -> Result<(), UseCaseError>;
+}
+
 #[derive(Default)]
-pub struct PluginRegistry(BTreeMap<String, PluginDefinition>);
+pub struct PluginRegistry {
+    definitions: BTreeMap<String, PluginDefinition>,
+    validators: BTreeMap<String, Arc<dyn PluginConfigValidator>>,
+}
 
 pub fn valid_plugin_id(id: &str) -> bool {
     !id.is_empty()
@@ -98,11 +107,42 @@ impl PluginRegistry {
                 return Err(UseCaseError::Invalid("插件标识重复".into()));
             }
         }
-        Ok(Self(entries))
+        Ok(Self {
+            definitions: entries,
+            validators: BTreeMap::new(),
+        })
     }
 
     pub fn definitions(&self) -> impl Iterator<Item = &PluginDefinition> {
-        self.0.values()
+        self.definitions.values()
+    }
+
+    pub fn with_config_validator(
+        mut self,
+        id: String,
+        validator: Arc<dyn PluginConfigValidator>,
+    ) -> Result<Self, UseCaseError> {
+        let definition = self
+            .definitions
+            .get(&id)
+            .ok_or_else(|| UseCaseError::Invalid("配置校验器对应的插件未注册".into()))?;
+        validator.validate(&normalize_config(definition, &PluginConfig::new())?, false)?;
+        if self.validators.insert(id, validator).is_some() {
+            return Err(UseCaseError::Invalid("插件配置校验器重复".into()));
+        }
+        Ok(self)
+    }
+
+    fn validate_config(
+        &self,
+        id: &str,
+        config: &PluginConfig,
+        enabled: bool,
+    ) -> Result<(), UseCaseError> {
+        if let Some(validator) = self.validators.get(id) {
+            validator.validate(config, enabled)?;
+        }
+        Ok(())
     }
 }
 
@@ -259,15 +299,19 @@ impl PluginsInteractor {
                 .get(&definition.id)
                 .filter(|s| s.enabled)
             {
-                active.insert(
-                    definition.id.clone(),
-                    normalize_config(definition, &state.config).map_err(|_| {
+                let config = normalize_config(definition, &state.config)
+                    .and_then(|config| {
+                        self.registry
+                            .validate_config(&definition.id, &config, true)?;
+                        Ok(config)
+                    })
+                    .map_err(|_| {
                         UseCaseError::DataCorrupt(format!(
                             "插件 {} 配置与清单不兼容",
                             definition.id
                         ))
-                    })?,
-                );
+                    })?;
+                active.insert(definition.id.clone(), config);
             }
         }
         Ok(PluginSnapshot {
@@ -325,7 +369,7 @@ impl PluginsInteractor {
         let mut current = self.store.load().await?;
         current.value.validate()?;
         let expected = checked_version(current.version, Some(cmd.expected_version))?;
-        let definition = self.registry.0.get(&cmd.id);
+        let definition = self.registry.definitions.get(&cmd.id);
         let old = current
             .value
             .plugins
@@ -346,6 +390,8 @@ impl PluginsInteractor {
             enabled: cmd.enabled,
             config,
         };
+        self.registry
+            .validate_config(&cmd.id, &next.config, next.enabled)?;
         let old_normalized = PluginState {
             enabled: old.enabled,
             config: match definition {

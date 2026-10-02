@@ -3,6 +3,7 @@
 
 pub mod audit;
 pub mod auth;
+pub mod batch;
 pub mod category;
 pub mod content;
 pub mod content_preview;

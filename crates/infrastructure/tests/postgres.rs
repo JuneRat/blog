@@ -1441,8 +1441,9 @@ async fn admin_listing_reports_login_methods_and_roles_in_bulk() {
 
     let users = PostgresUserRepository::new(common::database(pool.clone()));
     let rows = users.list_admin(50, 0).await.unwrap();
-    assert_eq!(rows.len(), 4);
-    let row = |name: &str| rows.iter().find(|r| r.username == name).unwrap();
+    assert_eq!(rows.total, 4);
+    assert_eq!(rows.items.len(), 4);
+    let row = |name: &str| rows.items.iter().find(|r| r.username == name).unwrap();
     assert!(row("bound").can_login(), "oauth 绑定即一种登录方式");
     assert!(row("password-only").can_login(), "本地密码即一种登录方式");
     assert_eq!(row("password-only").external_identities, 0);
@@ -1454,7 +1455,7 @@ async fn admin_listing_reports_login_methods_and_roles_in_bulk() {
     assert_eq!(row("deleted").external_identities, 1);
 
     // 批量角色查询与逐个查询结果一致，且不串号。
-    let ids: Vec<uuid::Uuid> = rows.iter().map(|r| r.id).collect();
+    let ids: Vec<uuid::Uuid> = rows.items.iter().map(|r| r.id).collect();
     let roles = rbac.roles_of_users(&ids).await.unwrap();
     assert_eq!(roles.len(), 2);
     assert!(roles.contains(&(bound, "admin".to_string())));
@@ -1472,12 +1473,20 @@ async fn admin_listing_paginates_in_stable_username_order() {
     let users = PostgresUserRepository::new(common::database(pool.clone()));
     let first = users.list_admin(2, 0).await.unwrap();
     let rest = users.list_admin(2, 2).await.unwrap();
+    assert_eq!(first.total, 3);
+    assert_eq!(rest.total, 3);
+    assert_eq!(first.items.len(), 2);
+    assert_eq!(rest.items.len(), 1);
     let names: Vec<&str> = first
+        .items
         .iter()
-        .chain(rest.iter())
+        .chain(rest.items.iter())
         .map(|r| r.username.as_str())
         .collect();
     assert_eq!(names, ["alice", "bob", "carol"]);
+    let empty = users.list_admin(2, 100).await.unwrap();
+    assert_eq!(empty.total, 3);
+    assert!(empty.items.is_empty());
 }
 
 // ---------------------------------------------------------------------------
