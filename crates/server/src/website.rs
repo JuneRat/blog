@@ -117,6 +117,9 @@ pub async fn build_router(
             config.site.clone(),
             config.public_base_url.clone(),
         )
+        .with_discovery(Arc::new(
+            infrastructure::persistence::PostgresPublicDiscoveryQuery::new(pool.clone()),
+        ))
         .with_themes(settings_store, theme_registry.clone())
         .with_theme_configs(theme_configs)
         .with_time_zones(time_zones),

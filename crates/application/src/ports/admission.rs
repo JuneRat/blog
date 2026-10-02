@@ -5,6 +5,7 @@ pub enum PublicRequest {
     OAuthStart,
     Registration,
     PasswordRecovery,
+    Discovery,
     CommentSubmit,
     CommentPreview,
 }

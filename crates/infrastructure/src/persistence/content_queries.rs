@@ -245,7 +245,7 @@ fn search_filter<'a>(query: &mut QueryBuilder<'a, Postgres>, q: &'a str, columns
     query.push(")");
 }
 
-fn substring_pattern(q: &str) -> String {
+pub(super) fn substring_pattern(q: &str) -> String {
     let mut pattern = String::with_capacity(q.len() + 2);
     pattern.push('%');
     for ch in q.chars() {

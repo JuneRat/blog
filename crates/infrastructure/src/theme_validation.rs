@@ -252,6 +252,7 @@ pub(crate) async fn validate(
             .collect();
         let detail = fixtures.detail("示例-0");
         let mut post = PostView {
+            author_url: "/authors/author".into(),
             url: application::seo::post_path(&detail.slug),
             title: detail.title,
             slug: detail.slug,
@@ -358,6 +359,43 @@ pub(crate) async fn validate(
                 )
                 .await,
         )?;
+        for kind in ["search", "author", "archive"] {
+            let discovery = application::discovery::DiscoveryView {
+                kind,
+                title: "公开目录 <标题>".into(),
+                query: if optional {
+                    "中文 & query".into()
+                } else {
+                    String::new()
+                },
+                month: "2026-01".into(),
+                months: vec![application::discovery::ArchiveMonth {
+                    month: "2026-01".into(),
+                    count: count as i64,
+                }],
+                total: count as i64,
+                posts: posts
+                    .iter()
+                    .take(application::discovery::PAGE_SIZE as usize)
+                    .cloned()
+                    .collect(),
+                pagination: application::public_site::IndexPagination {
+                    page,
+                    previous_url: (page > 1).then(|| "/search/?q=word&page=1".into()),
+                    next_url: (page < total_pages).then(|| "/search/?q=word&page=3".into()),
+                },
+            };
+            check(
+                "discovery.html",
+                theme
+                    .render_discovery(
+                        &site,
+                        &SeoMeta::discovery(&site, &base, &discovery.title, "/search/?q=word"),
+                        &discovery,
+                    )
+                    .await,
+            )?;
+        }
         check(
             "post.html",
             theme

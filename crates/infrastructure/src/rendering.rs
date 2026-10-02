@@ -431,6 +431,20 @@ fn read_theme_files(root: &Path) -> Result<BTreeMap<String, Arc<[u8]>>, UseCaseE
 }
 
 impl MiniJinjaThemeRenderer {
+    pub(crate) fn render_discovery(
+        &self,
+        site: &SiteInfo,
+        seo: &SeoMeta,
+        view: &application::discovery::DiscoveryView,
+    ) -> Result<String, UseCaseError> {
+        let entry = if self.env.get_template("discovery.html").is_ok() {
+            "discovery.html"
+        } else {
+            "index.html"
+        };
+        self.render(entry, minijinja::context! { site => site, seo => seo, posts => &view.posts, pagination => &view.pagination, discovery => view }, &site.time_zone)
+    }
+
     pub(crate) fn render_index(
         &self,
         site: &SiteInfo,
@@ -560,6 +574,7 @@ mod tests {
         for entry in ["post", "page", "tag", "category", "series"] {
             theme.write(&format!("templates/{entry}.html"), "Standalone page");
         }
+        std::fs::remove_file(theme.0.join("templates/discovery.html")).unwrap();
         std::fs::remove_file(theme.0.join("templates/base.html")).unwrap();
         super::MiniJinjaThemeRenderer::load_checked(&theme.0, &super::RenderingRuntime::default())
             .await

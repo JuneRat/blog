@@ -24,7 +24,7 @@ themes/default/
     └── style.css
 ```
 
-六个页面入口（index/post/page/tag/category/series）是必需文件。`base.html` 是可选辅助模板；`templates/` 递归加载，包括 `partials/`、宏等辅助文件，禁止符号链接。所有模板在启动时编译并持有源码，不在请求中读取磁盘。清单只接受以下字段；两个版本字段当前都必须为 `1`：
+六个页面入口（index/post/page/tag/category/series）是必需文件。公开内容发现可选提供 `discovery.html`，未提供时使用 `index.html` 展示结果；Default/Paper 已提供搜索及归档表单。`base.html` 是可选辅助模板；`templates/` 递归加载，包括 `partials/`、宏等辅助文件，禁止符号链接。所有模板在启动时编译并持有源码，不在请求中读取磁盘。清单只接受以下字段；两个版本字段当前都必须为 `1`：
 
 ```json
 {
@@ -110,7 +110,7 @@ ZIP 可以直接包含 `theme.json`、`templates/` 和 `assets/`，或包含一�
 | `site.home_page_size` | 首页每页文章数 | 全部主题页面 |
 | `site.navigation` | 当前公开页面导航数组：`label/url/placement`，保持配置顺序 | 全部主题页面 |
 | `posts` | 文章卡片列表：标题、slug、`url`、摘要、发布时间、作者展示名及可空头像 URL | index |
-| `post` | 文章详情、清洗后 `content_html`、标签、系列数组、可空分类/封面 | post |
+| `post` | 文章详情、`author_url` 作者文章页链接、清洗后 `content_html`、标签、系列数组、可空分类/封面 | post |
 | `page` | 页面详情与清洗后 `content_html` | page |
 | `tag` / `category` | 目录名称、slug、页码、总页数和文章卡片 | tag / category |
 | `series` | 系列名称、slug、可空封面、分页和带连续阅读序号的文章卡片 | series |
@@ -223,3 +223,9 @@ sitemap 的 50,000 条限制是整个文件的预算：首页、文章、Page、
 内置 Default 和第三方 Paper 的文章模板通过 `data-comments-slug="{{ post.slug }}"` 挂载原生评论，容器初始带 `hidden`，同源 API 确认全站及文章评论均开启后才显示整个区域，加载 `/assets/comments.js` 与 `/assets/comments.css`。这些共享资源由 Rust 提供；昵称、错误和占位使用 DOM `textContent`，正文仅将服务端受限渲染的 `content_html` 放入 HTML 节点，不使用源文回退。公开列表和提交开关由同源 API 实时检查文章可见性。行为、分页及接口见[评论](comments.md)。
 
 模板中的 `published_at`、`updated_at` 是按数据库站点设置 `site.time_zone` 格式化的展示文本，包含时区标记；`get_posts` / `get_post` 与页面主体使用该次渲染的同一时区快照；后台保存后，下次请求即生效。主题直接展示即可，不应按固定 UTC 格式解析这些文本。
+
+## 内容发现模板
+
+`discovery.html` 共享 `site/seo/posts/pagination`，新增 `discovery`：`kind` 为 search、author 或 archive，包含 `title/query/month/total/months`。`months` 是 `{month,count}` 数组，只含公开文章；`posts` 复用卡片契约，页面结果的 `url` 指向 Page 路径。模板必须使用应用生成的 `post.url` 和分页 URL，不能按 slug 假定所有结果都是文章。
+
+所有变量默认转义，关键词只作文本/输入值。搜索及归档的完整入口包含尾斜杠。自定义主题可复制内置模板并沿用自己的 CSS；可选入口同样参与空结果、完整结果和分页的预检，沿用主题渲染资源限制及公开列表插件钩子。

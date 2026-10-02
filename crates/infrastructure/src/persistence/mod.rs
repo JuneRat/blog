@@ -36,3 +36,6 @@ pub use registration::PostgresRegistrationStore;
 
 mod account_links;
 pub use account_links::PostgresAccountLinkStore;
+
+mod discovery;
+pub use discovery::PostgresPublicDiscoveryQuery;

@@ -199,6 +199,7 @@ async fn umami_tracks_both_public_themes_without_entering_previews_or_stored_con
         content_html: before.content_html.clone(),
     };
     let post = PostView {
+        author_url: "/authors/author".into(),
         title: page.title.clone(),
         slug: page.slug.clone(),
         url: "/posts/example".into(),
@@ -453,6 +454,7 @@ async fn both_themes_include_preview_assets_for_posts_and_pages_but_not_indexes(
         content_html: preview.content_html.clone(),
     };
     let post = PostView {
+        author_url: "/authors/author".into(),
         title: page.title.clone(),
         slug: page.slug.clone(),
         url: "/posts/example".into(),

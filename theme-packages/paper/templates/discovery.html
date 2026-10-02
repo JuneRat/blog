@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="discovery" aria-label="{{ discovery.title }}">
+<h1>{{ discovery.title }}</h1>
+{% if discovery.kind == 'search' %}
+<form class="discovery-form" action="/search/" method="get" role="search">
+  <label for="search-query">搜索文章和页面</label>
+  <div><input id="search-query" name="q" type="search" value="{{ discovery.query }}" maxlength="120" placeholder="输入标题或正文关键词"><button type="submit">搜索</button></div>
+</form>
+{% elif discovery.kind == 'archive' %}
+<form class="discovery-form" action="/archive/" method="get">
+  <label for="archive-month">按月份筛选</label>
+  <div><input id="archive-month" name="month" type="month" value="{{ discovery.month }}"><button type="submit">查看</button><a href="/archive/">全部文章</a></div>
+</form>
+{% if discovery.months %}<details class="archive-months"><summary>有文章的月份</summary><ul>{% for item in discovery.months %}<li><a href="/archive/?month={{ item.month }}">{{ item.month }}</a>（{{ item.count }} 篇）</li>{% endfor %}</ul></details>{% endif %}
+{% endif %}
+{% if discovery.kind != 'search' or discovery.query %}<p class="meta">共 {{ discovery.total }} 条结果</p>{% endif %}
+{% if posts %}
+<ul class="post-list article-list">
+{% for post in posts %}<li class="post-item article-card">
+  <h2><a href="{{ post.url | url }}">{{ post.title }}</a></h2>
+  {% if post.excerpt %}<p class="excerpt">{{ post.excerpt }}</p>{% endif %}
+  <p class="meta article-meta"><time>{{ post.published_at }}</time><span>{{ post.author_display }}</span></p>
+</li>{% endfor %}
+</ul>
+{% elif discovery.kind == 'search' and not discovery.query %}<p class="empty">输入关键词搜索公开内容。</p>
+{% else %}<p class="empty">没有找到公开内容。</p>{% endif %}
+<nav class="pagination" aria-label="结果分页">
+  {% if pagination.previous_url %}<a rel="prev" href="{{ pagination.previous_url | url }}">上一页</a>{% endif %}
+  <span>第 {{ pagination.page }} 页</span>
+  {% if pagination.next_url %}<a rel="next" href="{{ pagination.next_url | url }}">下一页</a>{% endif %}
+</nav>
+</section>
+{% endblock %}

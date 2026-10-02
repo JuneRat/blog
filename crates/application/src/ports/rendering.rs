@@ -74,6 +74,15 @@ pub trait ThemeRenderer: Send + Sync {
     ) -> Option<std::sync::Arc<dyn ThemeRenderer>> {
         None
     }
+    async fn render_discovery(
+        &self,
+        site: &SiteInfo,
+        seo: &SeoMeta,
+        view: &crate::discovery::DiscoveryView,
+    ) -> Result<String, UseCaseError> {
+        self.render_index(site, seo, &view.posts, &view.pagination)
+            .await
+    }
     async fn render_index(
         &self,
         site: &SiteInfo,

@@ -94,8 +94,13 @@ pub fn app_router(state: AppState, assets: HttpAssets, config: HttpConfig) -> Ro
         registration: state.auth.registration.clone(),
         admin: state.admin.clone(),
     });
-    let public =
-        crate::http_plugins::mount_plugin_assets(public_router(state.public), assets.plugins);
+    let public = crate::http_plugins::mount_plugin_assets(
+        public_router(state.public).route_layer(middleware::from_fn_with_state(
+            state.auth.admission.clone(),
+            discovery_admission,
+        )),
+        assets.plugins,
+    );
     let app = mount_live_theme_assets(public, assets.themes)
         .merge(crate::http_auth::auth_router(state.auth))
         .merge(crate::http_auth::admin_router(state.admin.clone()))
@@ -137,6 +142,9 @@ pub fn app_router(state: AppState, assets: HttpAssets, config: HttpConfig) -> Ro
 pub fn public_router(state: PublicSiteState) -> Router {
     Router::new()
         .route("/", get(index))
+        .route("/search/", get(search))
+        .route("/archive/", get(archive))
+        .route("/authors/{username}", get(author))
         .route("/posts/{slug}", get(post_detail))
         .route("/tags/{slug}", get(tag_detail))
         .route("/categories/{slug}", get(category_detail))
@@ -273,6 +281,93 @@ async fn admin_cache_headers(req: Request, next: Next) -> Response {
         }),
     );
     response
+}
+
+async fn discovery_admission(
+    State(admission): State<Arc<dyn application::ports::RequestAdmission>>,
+    client: crate::http_client_ip::ClientRateLimitKey,
+    id: crate::http_support::RequestId,
+    request: Request,
+    next: Next,
+) -> Response {
+    let path = request.uri().path();
+    if (matches!(path, "/search/" | "/archive/") || path.starts_with("/authors/"))
+        && let Err(error) = admission.admit(
+            application::ports::PublicRequest::Discovery,
+            client.0.as_deref(),
+        )
+    {
+        return crate::http_support::admin_error(error, &id);
+    }
+    next.run(request).await
+}
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct SearchQuery {
+    q: Option<String>,
+    page: Option<i64>,
+}
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct ArchiveQuery {
+    month: Option<String>,
+    page: Option<i64>,
+}
+async fn search(
+    State(state): State<PublicSiteState>,
+    Query(query): Query<SearchQuery>,
+) -> Response {
+    let filter = application::discovery::DiscoveryFilter::Search(
+        query.q.unwrap_or_default().trim().to_owned(),
+    );
+    let mut response = discovery_response(
+        state
+            .site
+            .render_discovery(filter, query.page.unwrap_or(1))
+            .await,
+    );
+    response
+        .headers_mut()
+        .insert("x-robots-tag", HeaderValue::from_static("noindex, follow"));
+    response
+}
+async fn archive(
+    State(state): State<PublicSiteState>,
+    Query(query): Query<ArchiveQuery>,
+) -> Response {
+    let filter =
+        application::discovery::DiscoveryFilter::Archive(query.month.filter(|m| !m.is_empty()));
+    discovery_response(
+        state
+            .site
+            .render_discovery(filter, query.page.unwrap_or(1))
+            .await,
+    )
+}
+async fn author(
+    State(state): State<PublicSiteState>,
+    Path(username): Path<String>,
+    Query(query): Query<TagPageQuery>,
+) -> Response {
+    discovery_response(
+        state
+            .site
+            .render_discovery(
+                application::discovery::DiscoveryFilter::Author(username),
+                query.page.unwrap_or(1),
+            )
+            .await,
+    )
+}
+fn discovery_response(result: Result<String, UseCaseError>) -> Response {
+    match result {
+        Ok(html) => Html(html).into_response(),
+        Err(UseCaseError::NotFound(_)) => {
+            (StatusCode::NOT_FOUND, "公开目录或分页不存在").into_response()
+        }
+        Err(UseCaseError::Invalid(message)) => (StatusCode::BAD_REQUEST, message).into_response(),
+        Err(error) => server_error(error),
+    }
 }
 
 async fn index(

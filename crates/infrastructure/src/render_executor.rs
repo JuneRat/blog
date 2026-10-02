@@ -467,6 +467,18 @@ impl ThemeRenderer for ThemeExecutor {
             renderer: Arc::new(self.renderer.as_ref().clone().with_config(config)),
         }))
     }
+    async fn render_discovery(
+        &self,
+        site: &SiteInfo,
+        seo: &SeoMeta,
+        view: &application::discovery::DiscoveryView,
+    ) -> Result<String, UseCaseError> {
+        let (site, seo, view) = (site.clone(), seo.clone(), view.clone());
+        self.render(PluginPage::Index, "theme.discovery", move |renderer| {
+            renderer.render_discovery(&site, &seo, &view)
+        })
+        .await
+    }
     async fn render_index(
         &self,
         site: &SiteInfo,

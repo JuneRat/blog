@@ -216,6 +216,10 @@ impl SeoMeta {
         }
     }
 
+    pub fn discovery(site: &SiteInfo, base: &PublicBaseUrl, title: &str, path: &str) -> Self {
+        Self::build(site, base, Some(title), None, path, "website")
+    }
+
     /// 首页：标题即站点标题，描述取站点描述。
     pub fn home(site: &SiteInfo, base: &PublicBaseUrl) -> Self {
         Self::build(site, base, None, None, "/", "website")

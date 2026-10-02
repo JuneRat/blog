@@ -24,7 +24,7 @@
     <h1><a href="/">{{ site.title }}</a></h1>
     {% if theme.config.show_description %}<p class="site-description">{{ site.description }}</p>{% endif %}
     {% if theme.config.header_image %}<img class="theme-header-image" src="{{ ('/media/' ~ theme.config.header_image) | url }}" alt="">{% endif %}
-    <nav class="page-navigation" aria-label="页面导航">{% for item in site.navigation %}{% if item.placement == 'header' %}<a href="{{ item.url | url }}">{{ item.label }}</a>{% endif %}{% endfor %}<a href="/admin/">账号</a>
+    <nav class="page-navigation" aria-label="页面导航">{% for item in site.navigation %}{% if item.placement == 'header' %}<a href="{{ item.url | url }}">{{ item.label }}</a>{% endif %}{% endfor %}<a href="/search/">搜索</a><a href="/archive/">归档</a><a href="/admin/">账号</a>
 </nav>
   </header>
   <main>

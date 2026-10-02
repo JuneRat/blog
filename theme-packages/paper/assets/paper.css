@@ -397,3 +397,13 @@ h1, h2, p {
 
 .page-navigation, .pagination { display: flex; flex-wrap: wrap; gap: 1rem; align-items: center; margin-block: 1rem; }
 .page-navigation:empty { display: none; }
+
+.discovery-form { margin: 1.5rem 0; }
+.discovery-form label { display: block; margin-bottom: .5rem; }
+.discovery-form > div { display: flex; flex-wrap: wrap; align-items: center; gap: .75rem; }
+.discovery-form input { padding: .6rem .75rem; border: 1px solid #9b9b9b; border-radius: .3rem; font: inherit; max-width: 100%; box-sizing: border-box; }
+.discovery-form input[type="search"] { flex: 1; min-width: 12rem; }
+.discovery-form button { padding: .6rem 1rem; font: inherit; cursor: pointer; }
+.archive-months { margin: 1rem 0; }
+.archive-months ul { columns: 3 10rem; }
+.discovery .article-list { padding: 0; list-style: none; }

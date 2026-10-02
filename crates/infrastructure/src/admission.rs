@@ -70,6 +70,7 @@ impl RequestAdmission for InMemoryRequestAdmission {
             PublicRequest::Registration | PublicRequest::PasswordRecovery => (3, 30),
             PublicRequest::OAuthStart => (10, 60),
             PublicRequest::CommentSubmit => (5, 120),
+            PublicRequest::Discovery => (20, 240),
             PublicRequest::CommentPreview => (20, 240),
         };
         let now = (self.clock)();

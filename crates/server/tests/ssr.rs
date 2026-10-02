@@ -157,6 +157,11 @@ async fn stack_with_zone(theme_dir: &str, time_zone: &str) -> Stack {
             fallback,
             application::seo::PublicBaseUrl::parse("https://blog.test").unwrap(),
         )
+        .with_discovery(Arc::new(
+            infrastructure::persistence::PostgresPublicDiscoveryQuery::new(common::database(
+                pool.clone(),
+            )),
+        ))
         .with_time_zones(Arc::new(infrastructure::IanaTimeZones)),
     );
 
@@ -1309,5 +1314,137 @@ async fn navigation_follows_page_publication() {
         assert!(!body.contains("href=\"/about\""));
         assert!(body.contains("href=\"/contact\""));
         stack.pool.close().await;
+    }
+}
+
+#[tokio::test]
+async fn discovery_search_authors_and_archive_share_public_visibility_and_both_themes() {
+    let _guard = SERIAL.lock().await;
+    for theme in ["../../themes/default", "../../theme-packages/paper"] {
+        let stack = stack_with_zone(theme, "Asia/Shanghai").await;
+        sqlx::query("INSERT INTO posts(id,author_id,slug,title,content,content_html,content_render_version,status,visibility,published_at) SELECT gen_random_uuid(),$1,'discovery-'||n,'公开 Rust 中文 '||n,$2,'<p>正文</p>',$3,'published','public',CASE WHEN n=1 THEN '2019-12-31 16:30:00Z'::timestamptz ELSE '2020-01-10 00:00:00Z'::timestamptz END FROM generate_series(1,24) n")
+            .bind(stack.author.user_id.0).bind(r"Rust 中文 100%_\路径").bind(infrastructure::CONTENT_RENDER_VERSION).execute(&stack.pool).await.unwrap();
+        sqlx::query("INSERT INTO pages(id,slug,title,content,content_html,content_render_version,status,visibility,published_at) VALUES(gen_random_uuid(),'search','旧页面 Rust','页面正文','<p>旧页面正文</p>',$1,'published','public','2020-01-15Z')")
+            .bind(infrastructure::CONTENT_RENDER_VERSION).execute(&stack.pool).await.unwrap();
+        for (n, status, visibility, deleted, future) in [
+            (1, "draft", "public", false, false),
+            (2, "published", "private", false, false),
+            (3, "published", "public", true, false),
+            (4, "published", "public", false, true),
+        ] {
+            for table in ["posts", "pages"] {
+                let author_col = if table == "posts" { ",author_id" } else { "" };
+                let author_value = if table == "posts" {
+                    format!(",'{}'", stack.editor.user_id.0)
+                } else {
+                    String::new()
+                };
+                sqlx::query(&format!("INSERT INTO {table}(id,slug,title,content,content_html,content_render_version,status,visibility,deleted_at,published_at{author_col}) VALUES(gen_random_uuid(),$1,'hidden secret Rust','Rust','<p>secret</p>',$2,$3,$4,CASE WHEN $5 THEN now() ELSE NULL END,CASE WHEN $6 THEN now()+interval '100 years' ELSE now()-interval '1 day' END{author_value})"))
+                    .bind(format!("hidden-{n}")).bind(infrastructure::CONTENT_RENDER_VERSION).bind(status).bind(visibility).bind(deleted).bind(future).execute(&stack.pool).await.unwrap();
+            }
+        }
+        let (status, empty) = get(&stack.router, "/search/").await;
+        assert_eq!(status, StatusCode::OK, "{empty}");
+        assert!(empty.contains("输入关键词搜索公开内容"));
+        assert!(get(&stack.router, "/search").await.1.contains("旧页面正文"));
+        let response = stack
+            .router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/search/?q=RUST")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.headers()["x-robots-tag"], "noindex, follow");
+        let (status, search) = get(&stack.router, "/search/?q=RUST").await;
+        assert_eq!(status, StatusCode::OK, "{search}");
+        assert!(search.contains("共 25 条结果"));
+        assert_eq!(
+            search.matches("class=\"post-item article-card\"").count(),
+            20
+        );
+        assert!(search.contains("/search/?q=RUST&amp;page=2"));
+        assert!(!search.contains("hidden secret"));
+        let (_, second) = get(&stack.router, "/search/?q=RUST&page=2").await;
+        assert_eq!(
+            second.matches("class=\"post-item article-card\"").count(),
+            5
+        );
+        assert_eq!(
+            get(&stack.router, "/search/?q=RUST&page=3").await.0,
+            StatusCode::NOT_FOUND
+        );
+        assert!(
+            get(&stack.router, "/search/?q=%E4%B8%AD%E6%96%87")
+                .await
+                .1
+                .contains("共 24 条结果")
+        );
+        assert!(
+            get(&stack.router, "/search/?q=100%25_%5C")
+                .await
+                .1
+                .contains("共 24 条结果")
+        );
+        assert!(
+            get(&stack.router, "/search/?q=secret")
+                .await
+                .1
+                .contains("共 0 条结果")
+        );
+        let (_, escaped) = get(
+            &stack.router,
+            "/search/?q=%3Cscript%3Ealert(1)%3C%2Fscript%3E",
+        )
+        .await;
+        assert!(!escaped.contains("<script>alert(1)</script>"));
+        let (_, author) = get(&stack.router, "/authors/author").await;
+        assert!(author.contains("作者甲 的文章") && author.contains("共 24 条结果"));
+        assert_eq!(
+            get(&stack.router, "/authors/editor").await.0,
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            get(&stack.router, "/authors/unknown").await.0,
+            StatusCode::NOT_FOUND
+        );
+        assert!(
+            get(&stack.router, "/posts/discovery-1")
+                .await
+                .1
+                .contains("href=\"/authors/author\"")
+        );
+        assert!(
+            get(&stack.router, "/archive/?month=2020-01")
+                .await
+                .1
+                .contains("共 24 条结果")
+        );
+        sqlx::query("INSERT INTO settings(key,value) VALUES('site','{\"time_zone\":\"UTC\"}')")
+            .execute(&stack.pool)
+            .await
+            .unwrap();
+        assert!(
+            get(&stack.router, "/archive/?month=2020-01")
+                .await
+                .1
+                .contains("共 23 条结果")
+        );
+        assert!(
+            get(&stack.router, "/archive/?month=2019-12")
+                .await
+                .1
+                .contains("共 1 条结果")
+        );
+        for path in [
+            "/archive/?month=2020-99",
+            "/archive/?page=100001",
+            "/search/?page=0",
+        ] {
+            assert_eq!(get(&stack.router, path).await.0, StatusCode::BAD_REQUEST);
+        }
     }
 }

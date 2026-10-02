@@ -4,7 +4,7 @@
   <h1>{{ post.title }}</h1>
   <p class="meta">
     {% if post.published_at %}<time>{{ post.published_at }}</time>{% endif %}
-    <span class="author">{% if post.author_avatar_url %}<img class="avatar" src="{{ post.author_avatar_url | url }}" alt="">{% endif %}{{ post.author_display }}</span>
+    <span class="author">{% if post.author_avatar_url %}<img class="avatar" src="{{ post.author_avatar_url | url }}" alt="">{% endif %}<a href="{{ post.author_url | url }}">{{ post.author_display }}</a></span>
   </p>
   {% if post.cover_url %}<img class="cover" src="{{ post.cover_url | url }}" alt="{{ post.title }}">{% endif %}
   {% if post.excerpt %}<p class="excerpt">{{ post.excerpt }}</p>{% endif %}

@@ -134,6 +134,7 @@ pub struct SeriesCard {
 /// 详情页模板数据契约；content_html 已经过清洗。
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct PostView {
+    pub author_url: String,
     pub title: String,
     pub slug: String,
     pub url: String,
@@ -215,6 +216,7 @@ pub const CATEGORY_PAGE_SIZE: i64 = 20;
 pub const SERIES_PAGE_SIZE: i64 = 20;
 
 pub struct PublicSiteInteractor {
+    discovery: Option<Arc<dyn crate::discovery::PublicDiscoveryQuery>>,
     time_zones: Arc<dyn TimeZoneProvider>,
     posts: Arc<dyn PublishedPostQuery>,
     pages: Arc<dyn PublishedPageQuery>,
@@ -247,6 +249,7 @@ impl PublicSiteInteractor {
     ) -> Self {
         Self {
             time_zones: Arc::new(UtcTimeZones),
+            discovery: None,
             posts,
             pages,
             tags,
@@ -259,6 +262,14 @@ impl PublicSiteInteractor {
             fallback,
             base_url,
         }
+    }
+
+    pub fn with_discovery(
+        mut self,
+        query: Arc<dyn crate::discovery::PublicDiscoveryQuery>,
+    ) -> Self {
+        self.discovery = Some(query);
+        self
     }
 
     pub fn with_time_zones(mut self, time_zones: Arc<dyn TimeZoneProvider>) -> Self {
@@ -341,6 +352,76 @@ impl PublicSiteInteractor {
         Ok(site)
     }
 
+    pub async fn render_discovery(
+        &self,
+        filter: crate::discovery::DiscoveryFilter,
+        page: i64,
+    ) -> Result<String, UseCaseError> {
+        use crate::discovery::{DiscoveryFilter, DiscoveryView, PAGE_SIZE};
+        filter.validate()?;
+        if !(1..=100_000).contains(&page) {
+            return Err(UseCaseError::Invalid("页码须在 1–100000 之间".into()));
+        }
+        let site = self.render_site_info().await?;
+        let dates = self.time_zones.resolve(&site.time_zone)?;
+        let query = self
+            .discovery
+            .as_ref()
+            .ok_or_else(|| UseCaseError::NotFound("公开目录".into()))?;
+        let result = query
+            .list(&filter, &site.time_zone, PAGE_SIZE, (page - 1) * PAGE_SIZE)
+            .await?;
+        if (page > 1 || matches!(filter, DiscoveryFilter::Author(_))) && result.items.is_empty() {
+            return Err(UseCaseError::NotFound("公开目录或分页".into()));
+        }
+        let (kind, title, q, month) = match &filter {
+            DiscoveryFilter::Search(q) => ("search", "搜索".to_owned(), q.clone(), String::new()),
+            DiscoveryFilter::Author(_) => (
+                "author",
+                format!("{} 的文章", result.items[0].post.author_display),
+                String::new(),
+                String::new(),
+            ),
+            DiscoveryFilter::Archive(month) => (
+                "archive",
+                "文章归档".into(),
+                String::new(),
+                month.clone().unwrap_or_default(),
+            ),
+        };
+        let posts = result
+            .items
+            .into_iter()
+            .map(|row| {
+                let mut card = PostCard::in_time_zone(row.post, dates.as_ref());
+                if row.is_page {
+                    card.url = seo::page_path(&card.slug);
+                    card.author_display = "页面".into();
+                }
+                card
+            })
+            .collect();
+        let seo = SeoMeta::discovery(&site, &self.base_url, &title, &filter.path(page));
+        let view = DiscoveryView {
+            kind,
+            title,
+            query: q,
+            month,
+            months: result.months,
+            total: result.total,
+            posts,
+            pagination: IndexPagination {
+                page,
+                previous_url: (page > 1).then(|| filter.path(page - 1)),
+                next_url: (page * PAGE_SIZE < result.total).then(|| filter.path(page + 1)),
+            },
+        };
+        self.active_theme()
+            .await?
+            .render_discovery(&site, &seo, &view)
+            .await
+    }
+
     pub async fn render_index(&self, page: i64) -> Result<String, UseCaseError> {
         let site = self.render_site_info().await?;
         let dates = self.time_zones.resolve(&site.time_zone)?;
@@ -378,6 +459,8 @@ impl PublicSiteInteractor {
             .await?
             .ok_or_else(|| UseCaseError::NotFound(format!("文章 {slug}")))?;
         let view = PostView {
+            author_url: crate::discovery::DiscoveryFilter::Author(detail.author_username.clone())
+                .path(1),
             url: seo::post_path(&detail.slug),
             title: detail.title.clone(),
             slug: detail.slug.clone(),
