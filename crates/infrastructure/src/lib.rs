@@ -78,3 +78,5 @@ pub mod image_inspection;
 pub mod retention;
 
 pub use persistence::PostgresRegistrationStore;
+
+pub mod mail;

@@ -67,7 +67,7 @@ impl RequestAdmission for InMemoryRequestAdmission {
     fn admit(&self, action: PublicRequest, client: Option<&str>) -> Result<(), UseCaseError> {
         let (client_limit, global_limit) = match action {
             // At most 660 admitted starts in any 600 s: below the 1000-state pool.
-            PublicRequest::Registration => (3, 30),
+            PublicRequest::Registration | PublicRequest::PasswordRecovery => (3, 30),
             PublicRequest::OAuthStart => (10, 60),
             PublicRequest::CommentSubmit => (5, 120),
             PublicRequest::CommentPreview => (20, 240),

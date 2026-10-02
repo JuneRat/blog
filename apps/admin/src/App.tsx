@@ -1,9 +1,10 @@
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { Button, Result, Spin, Typography } from "antd";
 import { useAuth } from "./auth";
 import { AdminLayout } from "./components/AdminLayout";
 import { AdminProviders } from "./providers";
 import { navigate, paths, useRoute } from "./router";
+import { PasswordRecoveryScreen } from "./screens/PasswordRecoveryScreen";
 import { LoginScreen } from "./screens/LoginScreen";
 import { UnsavedChangesProvider } from "./unsaved";
 
@@ -80,21 +81,29 @@ function Loading(): React.ReactNode {
  */
 export function App() {
   const auth = useAuth();
+  // Keep the bearer above the session-keyed provider: /me completing must not
+  // discard it after the fragment has already been removed from history.
+  const [resetToken] = useState(() => new URLSearchParams(window.location.hash.slice(1)).get("password-reset"));
+  useEffect(() => {
+    if (resetToken !== null) window.history.replaceState(window.history.state, "", window.location.pathname + window.location.search);
+  }, [resetToken]);
   // A session's queries and editor state must not survive a different identity.
   const sessionKey = auth.status === "authenticated" ? auth.me?.user_id : auth.status;
   return (
     <AdminProviders key={sessionKey}>
       {/* 未保存改动登记处：屏幕登记、外壳在导航前确认（见 src/unsaved.tsx）。 */}
       <UnsavedChangesProvider>
-        <AdminRoutes />
+        <AdminRoutes resetToken={resetToken} />
       </UnsavedChangesProvider>
     </AdminProviders>
   );
 }
 
-function AdminRoutes() {
+function AdminRoutes({ resetToken }: { resetToken: string | null }) {
   const auth = useAuth();
   const route = useRoute();
+  if (resetToken !== null) return <PasswordRecoveryScreen token={resetToken} onBack={() => window.location.assign("/admin/")} />;
+
 
   if (auth.status === "loading") {
     return (

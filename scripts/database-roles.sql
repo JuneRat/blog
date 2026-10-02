@@ -30,7 +30,7 @@ BEGIN
   IF (SELECT array_agg(table_name::text ORDER BY table_name)
       FROM information_schema.tables
       WHERE table_schema='public' AND table_type='BASE TABLE'
-        AND table_name<>'_sqlx_migrations') IS DISTINCT FROM ARRAY['audit_logs','categories','comments','media','media_refs','oauth_accounts','pages','permissions','plugin_runtime','plugins','post_series','post_tags','posts','role_permissions','roles','series','sessions','settings','tags','task_runs','task_schedules','themes','user_roles','users']::text[] THEN
+        AND table_name<>'_sqlx_migrations') IS DISTINCT FROM ARRAY['account_links','audit_logs','categories','comments','media','media_refs','oauth_accounts','pages','permissions','plugin_runtime','plugins','post_series','post_tags','posts','role_permissions','roles','series','sessions','settings','tags','task_runs','task_schedules','themes','user_roles','users']::text[] THEN
     RAISE EXCEPTION 'Database tables differ from schema.json; use the matching release';
   END IF;
 END $$;
@@ -54,6 +54,7 @@ END $$;
 REVOKE ALL ON SCHEMA public FROM :"app_role", :"maintenance_role";
 GRANT USAGE ON SCHEMA public TO :"app_role", :"maintenance_role";
 GRANT SELECT ON public._sqlx_migrations TO :"app_role";
+GRANT SELECT,INSERT,UPDATE,DELETE ON public."account_links" TO :"app_role";
 GRANT SELECT,INSERT ON public."audit_logs" TO :"app_role";
 GRANT SELECT(id,created_at),INSERT,DELETE ON public."audit_logs" TO :"maintenance_role";
 GRANT SELECT,INSERT,UPDATE,DELETE ON public."categories" TO :"app_role";

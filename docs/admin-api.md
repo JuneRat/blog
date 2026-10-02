@@ -219,6 +219,7 @@ Page 没有作者，使用站点级 `page.*` 权限。
 |---|---|
 | `GET /users?page=1&per_page=50` | 分页查询，返回 `{items,total,page,per_page}`；`user.manage` 或 `role.manage` |
 | `POST /users` | 创建用户：`username`，可带 `email`、`display_name`；`user.manage` |
+| `POST /users/{id}/invitation` | 向无密码且已填邮箱的启用账号发送邀请；`user.manage`，Admin 目标另需 `admin.manage`；成功返回 `{message}` |
 | `PUT /users/{id}/status` | UUID 定位；`status: "active" / "disabled"`、必填正整数 `expected_version`；需 `user.manage`，目标持有 Admin 时另需 `admin.manage` |
 | `GET /roles` | 角色列表，`user.manage` 或 `role.manage` |
 | `PUT /users/{username}/roles/{role}` | 分配角色，成功 204 |
@@ -341,3 +342,11 @@ Page 没有作者，使用站点级 `page.*` 权限。
 完整站点路由统一返回安全响应头，策略与 HTTPS 部署要求见[配置说明](configuration.md)。Secure 会话 Cookie 名为 `__Host-blog_session`，HTTP 开发使用 `blog_session`；前端仍通过 `/me` 获取 CSRF token，不读取 Cookie。
 
 `SeriesSummary.post_count` 类型为 `number | null`：仅 `post.read_any` 可见含草稿、私密和回收站的总数，其他账号得到 null。`pub_post_count` 始终为公开成员数量。列表、创建和更新响应一致；标签与分类仍仅有公开文章计数。后台对不可见总数仅展示公开数量，不把 null 当作 0。
+
+## 邮件找回（匿名认证入口）
+
+- `GET /auth/password/recovery` 返回 `{enabled}`，表示部署是否配置 SMTP。
+- `POST /auth/password/recovery` 接收 `{email}`，统一返回 202 `{message}`，不透露账号是否存在或投递结果。
+- `POST /auth/password/reset` 接收 `{token,password}`，成功返回 200 `{message}`；一次性链接失效/过期返回 400。新密码必须满足本站策略。成功撤销全部会话，不签发新 Cookie。
+
+均使用 `no-store`、4 KiB 请求体限制、客户端与全局准入；匿名写请求校验 Origin。未配置 SMTP 返回明确的 400 提示。令牌在邮件 URL fragment，提交时只通过 JSON 正文发送。管理员邀请仍经过会话和 CSRF 校验。

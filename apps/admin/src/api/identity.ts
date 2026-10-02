@@ -20,6 +20,9 @@ import type {
 } from "./generated";
 
 export const identityApi = {
+  requestPasswordRecovery: (input: Wire.RecoveryEmailInput) => request(s.messageResult, "/auth/password/recovery", { method: "POST", body: json<Wire.RecoveryEmailInput>(input) }),
+  resetPassword: (input: Wire.ResetPasswordInput) => request(s.messageResult, "/auth/password/reset", { method: "POST", body: json<Wire.ResetPasswordInput>(input) }),
+  inviteUser: (id: string) => request(s.messageResult, `/api/admin/v1/users/${encodeURIComponent(id)}/invitation`, { method: "POST" }),
   registrationStatus: () => request(s.registrationStatus, "/auth/register"),
   register: (input: Wire.RegistrationInput) => request(s.messageResult, "/auth/register", {method: "POST", body: json<Wire.RegistrationInput>(input)}),
   accessSettings: () => request(s.accessSettings, "/api/admin/v1/access-settings"),

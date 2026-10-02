@@ -4,6 +4,7 @@ use crate::UseCaseError;
 pub enum PublicRequest {
     OAuthStart,
     Registration,
+    PasswordRecovery,
     CommentSubmit,
     CommentPreview,
 }

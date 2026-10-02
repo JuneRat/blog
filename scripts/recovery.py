@@ -361,6 +361,7 @@ def restore(args):
         # 会话是运行态：恢复后一律作废，防止备份回退让旧 Cookie 重新有效（ADR-0010）。
         # 失败限流与 OAuth 尝试本就在进程内存，不随备份回来。
         pg.query("DELETE FROM sessions", database=args.target_db)
+        pg.query("DELETE FROM account_links", database=args.target_db)
         source_data = Path(args.backup) / "data"
         shutil.copytree(source_data / "theme", target / "theme")
         if (source_data / "resources").is_dir():
@@ -382,7 +383,7 @@ def validate_restored(pg, database, manifest, output):
     if owners < 1:
         raise RecoveryError("no active loginable Owner in restored database")
     counts = database_counts(pg, database)
-    expected = {**manifest["database_counts"], "sessions": 0}
+    expected = {**manifest["database_counts"], "sessions": 0, "account_links": 0}
     if counts != expected:
         raise RecoveryError("restored data counts differ from backup (sessions must be empty)")
     media = media_inventory(pg, database)
@@ -417,7 +418,7 @@ def release(args):
     validate_relations(pg, database)
     assert_secret_refs(secret_refs(pg, database))
     # Revoke even sessions created during verification; opening requires a new login.
-    pg.query(f'BEGIN; DELETE FROM sessions; COMMENT ON DATABASE "{database}" IS NULL; COMMIT', database)
+    pg.query(f'BEGIN; DELETE FROM sessions; DELETE FROM account_links; COMMENT ON DATABASE "{database}" IS NULL; COMMIT', database)
     (target / "RELEASED").write_text(dt.datetime.now(dt.timezone.utc).isoformat() + "\n")
     (target / "ISOLATED").unlink()
     print(json.dumps({"released": database, "sessions_revoked": True}))

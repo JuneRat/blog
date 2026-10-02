@@ -288,7 +288,7 @@ class Acceptance(SiteScenario):
         result = self.recovery_command("restore", [self.backup_dir, "--target-db", self.target,
                                                     "--output", self.restore_dir, "--isolation-confirmed"])
         self.owned.add(self.target)
-        require(result["counts"] == {**manifest["database_counts"], "sessions": 0},
+        require(result["counts"] == {**manifest["database_counts"], "sessions": 0, "account_links": 0},
                 "all business row counts must survive restore; sessions must be revoked")
         require(result["verified_media"] == 1 and result["verified_references"] == 7,
                 "restore must verify original media and all references")

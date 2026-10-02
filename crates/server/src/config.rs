@@ -23,6 +23,7 @@ pub struct DatabaseConfig {
 }
 
 pub struct SiteConfig {
+    pub mail: Option<infrastructure::mail::SmtpConfig>,
     pub http: crate::transport::HttpLimits,
     pub theme_dir: PathBuf,
     pub site: SiteInfo,
@@ -324,6 +325,30 @@ impl DeploymentConfig {
         Ok(limits)
     }
 
+    pub fn mail(&self) -> Result<Option<infrastructure::mail::SmtpConfig>, String> {
+        let Some(host) = self.optional_string("mail.host")? else {
+            for key in ["mail.username", "mail.password", "mail.from"] {
+                if self.optional_string(key)?.is_some() {
+                    return Err("配置 SMTP 时必须提供 mail.host / BLOG_SMTP_HOST".into());
+                }
+            }
+            return Ok(None);
+        };
+        let port = self.value("mail.port")?.0.unwrap().as_integer().unwrap();
+        let config = infrastructure::mail::SmtpConfig {
+            host,
+            port: u16::try_from(port).map_err(|_| "mail.port 必须在 1–65535 之间")?,
+            security: self.string("mail.security")?,
+            username: self.optional_string("mail.username")?,
+            password: self.optional_string("mail.password")?,
+            from: self
+                .optional_string("mail.from")?
+                .ok_or("请配置 mail.from / BLOG_SMTP_FROM")?,
+        };
+        infrastructure::mail::SmtpMailer::new(&config)?;
+        Ok(Some(config))
+    }
+
     pub fn site(&self, addr: Option<String>) -> Result<SiteConfig, String> {
         self.metrics_bind()?;
         let public_base_url = PublicBaseUrl::parse(&self.string("server.public_base_url")?)
@@ -356,6 +381,7 @@ impl DeploymentConfig {
             })
             .collect::<Result<Vec<_>, _>>()?;
         Ok(SiteConfig {
+            mail: self.mail()?,
             http: self.http_limits()?,
             secure_cookies,
             public_base_url,

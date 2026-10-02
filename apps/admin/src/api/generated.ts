@@ -235,6 +235,10 @@ export type Profile = { user_id: string, username: string, display_name: string 
 
 export type ProviderSummary = { id: string, name: string, kind: string, };
 
+export type RecoveryEmailInput = { email: string, };
+
+export type RecoveryStatus = { enabled: boolean, };
+
 export type RegistrationInput = { username: string, display_name?: string | null, email: string, password: string, };
 
 export type RegistrationStatus = { enabled: boolean, };
@@ -248,6 +252,8 @@ export type ReorderSeriesInput = {
 ordered_post_ids: Array<string>, expected_series_version?: number | null, };
 
 export type ReorderSeriesResult = { series_version: number, ordered_post_ids: Array<string>, };
+
+export type ResetPasswordInput = { token: string, password: string, };
 
 export type RetentionSettings = { comment_ip_days: number, comment_version: number, audit_days: number, audit_version: number, };
 

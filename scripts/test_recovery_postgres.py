@@ -149,6 +149,7 @@ class PostgresRecoveryTests(unittest.TestCase):
             root_sql = "NULL" if parent is None else f"'{self.ids['root']}'"
             self.query(f"INSERT INTO comments(id,post_id,parent_id,root_id,author_name,content,content_html,content_render_version,status,ip_address,created_at) VALUES('{self.ids[key]}','{post}',{parent_sql},{root_sql},'Guest','body','<p>body</p>',1,'{'trash' if key == 'root' else 'approved'}','192.0.2.1',now()-interval '200 days')")
         self.query(f"INSERT INTO sessions(token_hash,user_id,csrf_token,auth_version,expires_at) SELECT repeat('1',64),id,repeat('2',64),auth_version,now()+interval '1 day' FROM users WHERE id='{owner}'")
+        self.query(f"INSERT INTO account_links(user_id,token_hash,email,auth_version,issued_at,expires_at) SELECT id,repeat('a',43),'owner@example.com',auth_version,now(),now()+interval '30 minutes' FROM users WHERE id='{owner}'")
         self.query("INSERT INTO audit_logs(id,action,target_type,target_id,created_at) VALUES(gen_random_uuid(),'fixture','system','old',now()-interval '200 days')")
 
     def test_roundtrip_roles_isolation_and_media_integrity(self):
@@ -201,6 +202,7 @@ class PostgresRecoveryTests(unittest.TestCase):
             output=self.root / "restore"
             recovery.restore(argparse.Namespace(backup=backup,target_db=self.target,output=output,isolation_confirmed=True,docker_container=self.container))
         self.assertEqual(self.query("SELECT count(*) FROM sessions",self.target),"0")
+        self.assertEqual(self.query("SELECT count(*) FROM account_links",self.target),"0")
         self.assertEqual(self.query("SELECT config->>'footer_note' FROM themes WHERE slug='default'",self.target), "restore theme fixture")
         self.assertEqual(self.query("SELECT enabled||':'||config::text||':'||version FROM plugins WHERE id='markdown-enhance'",self.target), self.query("SELECT enabled||':'||config::text||':'||version FROM plugins WHERE id='markdown-enhance'"))
         self.assertEqual(self.query("SELECT schema_version||':'||render_revision||':'||version FROM plugin_runtime",self.target), "1:0:6")
@@ -225,6 +227,7 @@ class PostgresRecoveryTests(unittest.TestCase):
             self.query(f"INSERT INTO media_refs SELECT '{self.ids['media']}','theme',id FROM themes WHERE slug='default'",self.target)
             recovery.release(release_args)
         self.assertEqual(self.query("SELECT count(*) FROM sessions",self.target),"0")
+        self.assertEqual(self.query("SELECT count(*) FROM account_links",self.target),"0")
         self.assertEqual(self.query("SELECT config->>'footer_note' FROM themes WHERE slug='default'",self.target), "restore theme fixture")
         self.assertTrue((output / "RELEASED").is_file())
         self.cli(["publish-due"],database=self.target)

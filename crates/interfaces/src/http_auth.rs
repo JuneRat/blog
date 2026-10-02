@@ -53,6 +53,7 @@ const PASSWORD_BODY_LIMIT: usize = 4 * 1024;
 
 pub fn auth_router(state: AuthState) -> Router {
     let registration_state = state.clone();
+    let account_links = crate::http_account_links::public_router(state.clone());
     let providers_route = Router::new()
         .route("/auth/providers", get(list_providers))
         .layer(middleware::from_fn(no_store))
@@ -79,6 +80,7 @@ pub fn auth_router(state: AuthState) -> Router {
         .merge(providers_route)
         .merge(password_route)
         .merge(crate::http_registration::public_router(registration_state))
+        .merge(account_links)
 }
 
 // ---------------------------------------------------------------------------

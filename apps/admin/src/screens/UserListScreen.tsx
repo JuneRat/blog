@@ -147,13 +147,25 @@ export function UserListScreen() {
       });
       form.resetFields();
       setCreateDraft(EMPTY_CREATE);
-      setNotice(`已创建账号 ${created.username}；请为其分配角色并绑定登录方式。`);
+      setNotice(`已创建账号 ${created.username}；请为其分配角色，可发送邀请邮件设置密码或绑定外部身份。`);
       await load();
     } catch (e) {
       setError(messageOf(e));
     } finally {
       setBusy(false);
     }
+  }
+
+  async function inviteUser(user: AdminUser): Promise<void> {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const result = await identityApi.inviteUser(user.id);
+      setNotice(result.message);
+    } catch (cause) { setError(messageOf(cause)); }
+    finally { setBusy(false); }
   }
 
   async function mutateRole(
@@ -298,6 +310,11 @@ export function UserListScreen() {
     },
   ];
   if (canManageUsers) {
+    columns.push({ title: "邀请", key: "invitation", render: (_value, user) => (
+      <Button disabled={busy || user.deleted || user.status !== "active" || !user.email || user.password_enabled || (user.roles.includes("admin") && !canAdminship)}
+        aria-label={`邀请 ${user.username}`} title="为已填写邮箱且尚未设置密码的账号发送一次性邀请"
+        onClick={() => void inviteUser(user)}>发送邀请</Button>
+    ) });
     columns.push({
       title: "账号操作",
       key: "statusAction",

@@ -4,6 +4,7 @@ import { identityApi } from "../api/identity";
 import { messageOf } from "../apiError";
 import { useAuth } from "../auth";
 
+import { PasswordRecoveryScreen } from "./PasswordRecoveryScreen";
 import { RegisterScreen } from "./RegisterScreen";
 
 interface Credentials {
@@ -21,6 +22,7 @@ interface Credentials {
 export function LoginScreen() {
   const { providers, providersLoaded, refresh } = useAuth();
   const [registrationEnabled, setRegistrationEnabled] = useState(false);
+  const [recovering, setRecovering] = useState(false);
   const [registering, setRegistering] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const next = new URLSearchParams(window.location.search).get("next") || "/admin/";
@@ -80,6 +82,8 @@ export function LoginScreen() {
     }
   }
 
+  if (recovering) return <PasswordRecoveryScreen onBack={() => setRecovering(false)} />;
+
   if (registering) {
     return (
       <RegisterScreen
@@ -129,6 +133,7 @@ export function LoginScreen() {
           登录后可在个人资料中修改昵称，在账号菜单中修改密码。
         </Typography.Paragraph>
 
+        <Button type="link" onClick={() => { clearPassword(); setRecovering(true); }}>忘记密码</Button>
         {registrationEnabled && <Button type="link" onClick={() => { clearPassword(); setRegistering(true); }}>注册账号</Button>}
         <Button type="link" href="/">返回首页</Button>
 

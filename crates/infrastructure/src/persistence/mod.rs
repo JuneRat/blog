@@ -33,3 +33,6 @@ pub(crate) use media::{media_ids_for, sync_media_refs};
 
 pub(crate) mod registration;
 pub use registration::PostgresRegistrationStore;
+
+mod account_links;
+pub use account_links::PostgresAccountLinkStore;

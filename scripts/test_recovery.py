@@ -205,6 +205,7 @@ class RecoveryTests(unittest.TestCase):
 
             # 持久会话不能因备份回退而复活：恢复流程必须显式清空 sessions。
             self.assertIn(("query", "DELETE FROM sessions"), fake.calls)
+            self.assertIn(("query", "DELETE FROM account_links"), fake.calls)
             self.assertTrue((args.output / "ISOLATED").read_text().startswith(recovery.ISOLATION_PREFIX))
             self.assertTrue((args.output / "RESTORED").is_file())
 

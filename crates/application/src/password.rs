@@ -7,8 +7,7 @@
 //!   避免攻击者用自己的账号反复把来源地址的计数清零。
 //! - 设置/清除密码需 `user.manage`；清除若会移除最后一种登录方式则拒绝。
 //! - 自助改密必须由已认证会话发起并重新提供当前密码；成功后轮换该用户全部会话。
-//! - 密码重置的**唯一**入口是受控 CLI（部署权限）；面向公众的自助找回需要
-//!   一次性令牌存储与邮件投递，未在本版交付，也不以 13 表之外的临时方案冒充。
+//! - 邮件邀请/找回由 AccountLinks 使用一次性持久令牌；受控 CLI 仍可重置。
 
 use std::sync::{Arc, OnceLock};
 
@@ -40,6 +39,7 @@ pub struct PasswordDeps {
 }
 
 pub struct PasswordInteractor {
+    links: Option<Arc<crate::account_links::AccountLinks>>,
     deps: PasswordDeps,
     /// 未知用户也做一次等价开销校验；首次使用时用固定明文生成。
     dummy_hash: OnceLock<String>,
@@ -50,7 +50,18 @@ impl PasswordInteractor {
         Self {
             deps,
             dummy_hash: OnceLock::new(),
+            links: None,
         }
+    }
+
+    pub fn with_account_links(mut self, links: Arc<crate::account_links::AccountLinks>) -> Self {
+        self.links = Some(links);
+        self
+    }
+    pub fn account_links(&self) -> Result<Arc<crate::account_links::AccountLinks>, UseCaseError> {
+        self.links
+            .clone()
+            .ok_or_else(|| UseCaseError::Invalid("本站尚未配置 SMTP 邮件，请联系管理员。".into()))
     }
 
     /// 密码登录：预占限流额度 → 凭据校验（未知用户等价开销）→ 落账 → 签发会话。

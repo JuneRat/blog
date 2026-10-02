@@ -81,14 +81,39 @@ pub fn sessions(pool: &Database) -> Arc<dyn SessionStore> {
 }
 
 pub fn passwords(pool: &Database, sessions: Arc<dyn SessionStore>) -> Arc<PasswordInteractor> {
+    Arc::new(password_service(pool, sessions))
+}
+
+fn password_service(pool: &Database, sessions: Arc<dyn SessionStore>) -> PasswordInteractor {
     let store = Arc::new(PostgresUserRepository::new(pool.clone()));
-    Arc::new(PasswordInteractor::new(PasswordDeps {
+    PasswordInteractor::new(PasswordDeps {
         users: store.clone(),
         credentials: store,
         hasher: Arc::new(infrastructure::Argon2PasswordHasher::with_defaults()),
         throttle: Arc::new(infrastructure::InMemoryLoginThrottle::with_defaults()),
         sessions,
-    }))
+    })
+}
+
+pub fn passwords_with_mail(
+    pool: &Database,
+    sessions: Arc<dyn SessionStore>,
+    config: &crate::config::SiteConfig,
+) -> Result<Arc<PasswordInteractor>, String> {
+    let mut service = password_service(pool, sessions);
+    if let Some(mail) = &config.mail {
+        service = service.with_account_links(Arc::new(application::account_links::AccountLinks {
+            store: Arc::new(infrastructure::persistence::PostgresAccountLinkStore::new(
+                pool.clone(),
+            )),
+            mailer: Arc::new(infrastructure::mail::SmtpMailer::new(mail)?),
+            random: Arc::new(infrastructure::SystemSecureRandom),
+            hasher: Arc::new(infrastructure::Argon2PasswordHasher::with_defaults()),
+            clock: Arc::new(infrastructure::SystemClock),
+            public_url: config.public_base_url.clone(),
+        }));
+    }
+    Ok(Arc::new(service))
 }
 
 pub fn user_commands(pool: &Database) -> UserCliDeps {

@@ -70,6 +70,12 @@ services:
       - BLOG_THEME_DIR=${BLOG_THEME_DIR:-/opt/blog/themes/default}
       - IDP_SECRET
       - GH_SECRET
+      - BLOG_SMTP_HOST
+      - BLOG_SMTP_PORT
+      - BLOG_SMTP_SECURITY
+      - BLOG_SMTP_USERNAME
+      - BLOG_SMTP_PASSWORD
+      - BLOG_SMTP_FROM
     ports:
       - "${BLOG_HTTP_HOST:-127.0.0.1}:${BLOG_HTTP_PORT:-8080}:8080"
       # Management is reachable only from this host and the trusted Compose network.

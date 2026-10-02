@@ -124,7 +124,11 @@ pub async fn build_router(
 
     let users = assembly::users(pool);
     let sessions = assembly::sessions(pool);
-    let passwords = assembly::passwords(pool, sessions.clone());
+    let passwords = if environment.recovery_mode {
+        assembly::passwords(pool, sessions.clone())
+    } else {
+        assembly::passwords_with_mail(pool, sessions.clone(), config)?
+    };
     let auth = assembly::auth(
         pool,
         users.clone(),

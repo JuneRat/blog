@@ -63,3 +63,14 @@ enabled = false
 [bootstrap]
 # title = "我的博客"
 # description = ""
+
+# 账号邀请和自助找回。未配置 host 时关闭；修改后重启服务。
+# 建议凭据通过环境变量注入；config show 对用户名和密码脱敏。
+# [mail]
+# host = "smtp.example.com"
+# port = 587
+# security = "starttls" # 强制升级 TLS；隐式 TLS 使用 tls（通常 465）
+# from = "我的博客 <noreply@example.com>"
+# username = "smtp-user"
+# password = "smtp-password"
+# 本地开发可用 security="local"，仅允许回环地址且不发送认证凭据。

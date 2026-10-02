@@ -44,6 +44,7 @@ pub struct CreateUserBody {
 }
 
 pub fn identity_router(state: AdminState) -> Router {
+    let invitations = crate::http_account_links::admin_router(state.clone());
     Router::new()
         .route("/api/admin/v1/me/profile", put(update_profile))
         .route("/api/admin/v1/users", get(list_users).post(create_user))
@@ -56,6 +57,7 @@ pub fn identity_router(state: AdminState) -> Router {
         .layer(axum::extract::DefaultBodyLimit::max(IDENTITY_BODY_LIMIT))
         .layer(axum::middleware::from_fn(no_store))
         .with_state(state)
+        .merge(invitations)
 }
 
 // ---------------------------------------------------------------------------

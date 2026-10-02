@@ -1,6 +1,6 @@
 # 保留期、媒体清理与备份恢复
 
-当前工具依据[共享结构清单](../migrations/postgres/schema.json)核对当前版本，初始结构为 [19 表基线](database-design.md)，后续任务管理追加 `task_runs` 与 `task_schedules`，主题配置追加 `themes`，插件配置追加 `plugins` 与 `plugin_runtime`，当前为 24 张应用表。迁移不可变与跨版本恢复步骤见[迁移演进](schema-migrations.md)。采用维护窗口备份和隔离恢复；部署验收仍见[路线图](product-roadmap.md)，不提供在线一致备份或零数据丢失承诺。
+当前工具依据[共享结构清单](../migrations/postgres/schema.json)核对当前版本，初始结构为 [19 表基线](database-design.md)，后续任务管理追加 `task_runs` 与 `task_schedules`，主题配置追加 `themes`，插件配置追加 `plugins` 与 `plugin_runtime`，账号邮件追加 `account_links`，当前为 25 张应用表。迁移不可变与跨版本恢复步骤见[迁移演进](schema-migrations.md)。采用维护窗口备份和隔离恢复；部署验收仍见[路线图](product-roadmap.md)，不提供在线一致备份或零数据丢失承诺。
 
 Docker Compose 部署优先使用[Compose 备份恢复入口](compose-backup.md)：自动编排停写、命名卷读取、age 公钥加密、独立项目恢复和 HTTP 核验，并支持定时执行及 restic 异地副本。先在现有 `.env` 配置备份公钥，私钥单独保存；新归档不携带原数据库或异地仓库凭据。下文保留通用宿主机工具的操作方式。
 
@@ -280,3 +280,5 @@ cargo test -p infrastructure --features sqlx-test-support --test media_cleanup
 密码泄露时通过 blog user passwd 的隐藏输入或 --password-stdin 轮换；改密递增认证版本并撤销会话。核对角色、外部绑定与有效 Admin，OAuth 秘密独立轮换。不能靠恢复旧备份撤销泄露，恢复后必须保留必要轮换并清空会话。密码不放进参数、日志或脚本回显。
 
 目前没有外部搜索、Webhook、通用任务队列或跨请求整页缓存。以后引入时同步交付恢复隔离：搜索重建新索引/水位，事件建立新 stream_epoch 并显式核对/重放；数据库回退不能撤销外部副作用。详见[扩展候选](extensions-and-data.md)与 [ADR-0005](adr/0005-consistent-backup-and-recovery.md)。
+
+邮件邀请/找回的 `account_links` 随数据库备份，但 restore 和 release 均清空，避免旧链接恢复有效；恢复核验模式关闭邮件功能。恢复后需重新申请链接，并单独恢复受保护的 SMTP 配置。

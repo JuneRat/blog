@@ -87,6 +87,7 @@ pub fn typescript() -> String {
     crate::http_identity::export_contract(&mut out);
     crate::http_content_preview::export_contract(&mut out);
     crate::http_registration::export_contract(&mut out);
+    crate::http_account_links::export_contract(&mut out);
     crate::http_plugins::export_contract(&mut out);
     crate::http_themes::export_contract(&mut out);
     out.sort();

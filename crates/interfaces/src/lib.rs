@@ -30,3 +30,5 @@ pub mod http_contract;
 pub mod http_registration;
 
 mod http_theme_config;
+
+pub mod http_account_links;

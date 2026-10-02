@@ -319,6 +319,36 @@ pub(super) const FIELDS: &[Field] = &[
         Some("false"),
         false
     ),
+    field!("mail.host", Some("BLOG_SMTP_HOST"), String, None, false),
+    field!(
+        "mail.port",
+        Some("BLOG_SMTP_PORT"),
+        Integer,
+        Some("587"),
+        false
+    ),
+    field!(
+        "mail.security",
+        Some("BLOG_SMTP_SECURITY"),
+        String,
+        Some("starttls"),
+        false
+    ),
+    field!(
+        "mail.username",
+        Some("BLOG_SMTP_USERNAME"),
+        String,
+        None,
+        true
+    ),
+    field!(
+        "mail.password",
+        Some("BLOG_SMTP_PASSWORD"),
+        String,
+        None,
+        true
+    ),
+    field!("mail.from", Some("BLOG_SMTP_FROM"), String, None, false),
     field!("bootstrap.title", None, String, None, false),
     field!("bootstrap.description", None, String, None, false),
 ];

@@ -616,3 +616,28 @@ fn https_public_origin_cannot_disable_secure_cookies() {
         .secure_cookies
     );
 }
+
+#[test]
+fn smtp_config_is_optional_scoped_and_redacted() {
+    assert!(config("", &[]).site(None).unwrap().mail.is_none());
+    let source = "[mail]\nhost='smtp.example.com'\nfrom='Blog <noreply@example.com>'\nusername='smtp-user'\npassword='smtp-secret'";
+    let cfg = config(
+        source,
+        &[("BLOG_SMTP_PORT", "465"), ("BLOG_SMTP_SECURITY", "tls")],
+    );
+    let mail = cfg.site(None).unwrap().mail.unwrap();
+    assert_eq!(mail.port, 465);
+    assert_eq!(mail.security, "tls");
+    let shown = cfg.show(ConfigScope::Serve, true).unwrap().to_string();
+    assert!(!shown.contains("smtp-secret"));
+    assert!(!shown.contains("smtp-user"));
+    for bad in [
+        "[mail]\nhost='smtp.test'",
+        "[mail]\npassword='secret'",
+        "[mail]\nhost='smtp.test'\nfrom='a@example.com'\nport=0",
+        "[mail]\nhost='smtp.test'\nfrom='a@example.com'\nsecurity='local'",
+    ] {
+        assert!(config(bad, &[]).site(None).is_err());
+        assert!(config(bad, &[]).check(ConfigScope::Resources).is_ok());
+    }
+}

@@ -90,6 +90,12 @@ async fn fresh_stack() -> Stack {
 }
 
 async fn fresh_stack_with(throttle_config: ThrottleConfig) -> Stack {
+    fresh_stack_with_mail(throttle_config, None).await
+}
+async fn fresh_stack_with_mail(
+    throttle_config: ThrottleConfig,
+    mail: Option<Arc<dyn application::account_links::AccountMailer>>,
+) -> Stack {
     let pool = common::fresh_database("blog_password_test").await;
 
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
@@ -138,6 +144,25 @@ async fn fresh_stack_with(throttle_config: ThrottleConfig) -> Stack {
             Box::new(time::OffsetDateTime::now_utc),
         )),
     );
+    let passwords = if let Some(mailer) = mail {
+        let service =
+            Arc::try_unwrap(passwords).unwrap_or_else(|_| panic!("unshared test service"));
+        Arc::new(
+            service.with_account_links(Arc::new(application::account_links::AccountLinks {
+                store: Arc::new(infrastructure::persistence::PostgresAccountLinkStore::new(
+                    common::database(pool.clone()),
+                )),
+                mailer,
+                random: Arc::new(infrastructure::SystemSecureRandom),
+                hasher: Arc::new(infrastructure::Argon2PasswordHasher::with_defaults()),
+                clock: clock.clone(),
+                public_url: application::seo::PublicBaseUrl::parse("https://blog.example.com")
+                    .unwrap(),
+            })),
+        )
+    } else {
+        passwords
+    };
     // 受控 CLI 设置初始密码（与 `blog user passwd` 同一用例）。
     passwords
         .set_password(&Actor::bootstrap_cli(), "sun", PASSWORD)
@@ -1266,5 +1291,167 @@ async fn status_endpoint_enforces_csrf_permissions_owner_guard_and_versions() {
             .await
             .0,
         StatusCode::UNAUTHORIZED
+    );
+}
+
+#[derive(Default)]
+struct RecoveryMail(std::sync::Mutex<Vec<String>>);
+#[async_trait::async_trait]
+impl application::account_links::AccountMailer for RecoveryMail {
+    async fn send_link(
+        &self,
+        _: &str,
+        url: &str,
+        _: bool,
+    ) -> Result<(), application::UseCaseError> {
+        self.0.lock().unwrap().push(url.to_owned());
+        Ok(())
+    }
+}
+#[tokio::test]
+async fn email_recovery_http_is_generic_origin_checked_one_use_and_revokes_sessions() {
+    let _g = SERIAL.lock().await;
+    let mail = Arc::new(RecoveryMail::default());
+    let stack = fresh_stack_with_mail(ThrottleConfig::default(), Some(mail.clone())).await;
+    sqlx::query("UPDATE users SET email='member@example.com' WHERE id=$1")
+        .bind(stack.user_id)
+        .execute(&stack.pool)
+        .await
+        .unwrap();
+    let (_, headers, _) = login(&stack, PASSWORD).await;
+    let old_cookie = session_cookie(&headers).unwrap();
+    let mut responses = vec![];
+    for email in ["unknown@example.com", "member@example.com"] {
+        let (status, headers, body) = request(
+            &stack.router,
+            "POST",
+            "/auth/password/recovery",
+            &[],
+            Some(serde_json::json!({"email":email})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::ACCEPTED);
+        assert_eq!(response_header(&headers, "cache-control"), Some("no-store"));
+        responses.push(body);
+    }
+    assert_eq!(responses[0], responses[1]);
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        while mail.0.lock().unwrap().is_empty() {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let token = mail.0.lock().unwrap()[0]
+        .split("#password-reset=")
+        .nth(1)
+        .unwrap()
+        .to_owned();
+    let body = serde_json::json!({"token":token,"password":NEW_PASSWORD});
+    let (cross, _, _) = request_with_client(
+        &stack.router,
+        "POST",
+        "/auth/password/reset",
+        &[
+            ("origin", "https://evil.test"),
+            ("host", "blog.example.com"),
+        ],
+        Some(body.clone()),
+        Some("127.0.0.2:9999".parse().unwrap()),
+    )
+    .await;
+    assert_eq!(cross, StatusCode::FORBIDDEN);
+    let (status, _, _) = request(
+        &stack.router,
+        "POST",
+        "/auth/password/reset",
+        &[],
+        Some(body.clone()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(me(&stack, &old_cookie).await.0, StatusCode::UNAUTHORIZED);
+    assert_eq!(login(&stack, NEW_PASSWORD).await.0, StatusCode::OK);
+    let (again, _, _) = request_with_client(
+        &stack.router,
+        "POST",
+        "/auth/password/reset",
+        &[],
+        Some(body),
+        Some("127.0.0.3:9999".parse().unwrap()),
+    )
+    .await;
+    assert_eq!(again, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn invitation_http_requires_current_permission_and_csrf_and_sends_to_created_user() {
+    let _g = SERIAL.lock().await;
+    let mail = Arc::new(RecoveryMail::default());
+    let stack = fresh_stack_with_mail(ThrottleConfig::default(), Some(mail.clone())).await;
+    let (_, headers, _) = login(&stack, PASSWORD).await;
+    let token = session_cookie(&headers).unwrap();
+    let cookie = format!("blog_session={token}");
+    let (_, profile) = me(&stack, &token).await;
+    let csrf = profile["csrf_token"].as_str().unwrap();
+    let path = format!("/api/admin/v1/users/{}/invitation", stack.user_id);
+    assert_eq!(
+        request(
+            &stack.router,
+            "POST",
+            &path,
+            &[("cookie", &cookie), ("x-csrf-token", csrf)],
+            None
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    stack
+        .roles
+        .assign_to_username(&Actor::bootstrap_cli(), "sun", "admin")
+        .await
+        .unwrap();
+    let (created, _, user) = request(
+        &stack.router,
+        "POST",
+        "/api/admin/v1/users",
+        &[("cookie", &cookie), ("x-csrf-token", csrf)],
+        Some(serde_json::json!({"username":"invited","email":"invited@example.com"})),
+    )
+    .await;
+    assert_eq!(created, StatusCode::CREATED, "{user}");
+    let path = format!(
+        "/api/admin/v1/users/{}/invitation",
+        user["id"].as_str().unwrap()
+    );
+    assert_eq!(
+        request(&stack.router, "POST", &path, &[("cookie", &cookie)], None)
+            .await
+            .0,
+        StatusCode::BAD_REQUEST
+    );
+    assert!(mail.0.lock().unwrap().is_empty());
+    let (sent, _, body) = request(
+        &stack.router,
+        "POST",
+        &path,
+        &[("cookie", &cookie), ("x-csrf-token", csrf)],
+        None,
+    )
+    .await;
+    assert_eq!(sent, StatusCode::OK, "{body}");
+    assert_eq!(mail.0.lock().unwrap().len(), 1);
+    assert_eq!(
+        request(
+            &stack.router,
+            "POST",
+            &path,
+            &[("cookie", &cookie), ("x-csrf-token", csrf)],
+            None
+        )
+        .await
+        .0,
+        StatusCode::TOO_MANY_REQUESTS
     );
 }

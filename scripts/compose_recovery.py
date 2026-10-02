@@ -526,6 +526,7 @@ def check(username, password_stdin=False):
             process.kill()
             process.wait()
         client.query("DELETE FROM sessions")
+        client.query("DELETE FROM account_links")
     # Publish success only after the process is stopped and verification sessions
     # are revoked. A failed cleanup must never authorize a later release.
     private_write(STATE / "VERIFIED", json.dumps(verification))

@@ -46,3 +46,5 @@ pub mod navigation;
 pub mod registration;
 
 pub mod theme_config;
+
+pub mod account_links;

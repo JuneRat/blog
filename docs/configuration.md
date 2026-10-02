@@ -171,3 +171,20 @@ Secure 模式使用 `__Host-blog_session`（`Secure; HttpOnly; SameSite=Lax; Pat
 公开入口使用独立令牌桶：OAuth 发起每来源容量 10、全局 60；评论提交每来源 5、全局 120；预览每来源 20、全局 240。每分钟补满一桶，允许桶容量内的短突发；成功、失败和被后续校验拒绝的已准入请求均计数。超限返回 429 和 `Retry-After`，公开读取不计入这些桶。OAuth 尝试池满时保留已接受的状态，拒绝新状态并提示重试时间；不淘汰仍有效的登录。
 
 来源使用 `trusted_proxies` 与 socket 对端解析；不信任任意 `X-Forwarded-For`，代理转发信息缺失时回落到代理地址，来源完全未知时使用共享桶。准入计数与 OAuth 临时状态仍是单进程状态；多副本必须在网关统一限流并另行解决回调状态共享。
+
+## 账号邮件
+
+账号邀请和密码找回使用 `[mail]`。不配置 `host` 时关闭邮件提交能力，并保留本地密码登录及 CLI 重置。修改后重启服务。Compose 已透传下列环境变量。
+
+| TOML | 环境变量 | 含义 |
+|---|---|---|
+| `mail.host` | `BLOG_SMTP_HOST` | SMTP 主机 |
+| `mail.port` | `BLOG_SMTP_PORT` | 端口，默认 587；隐式 TLS 通常使用 465 |
+| `mail.security` | `BLOG_SMTP_SECURITY` | 默认 `starttls`（必须升级 TLS）；`tls` 为隐式 TLS |
+| `mail.from` | `BLOG_SMTP_FROM` | 必填发件地址，可写 `博客 <noreply@example.com>` |
+| `mail.username` | `BLOG_SMTP_USERNAME` | 可选认证用户名，必须与密码成对配置 |
+| `mail.password` | `BLOG_SMTP_PASSWORD` | SMTP 密码；推荐从受保护环境注入 |
+
+TLS 校验证书且不自动降级为明文。`local` 仅用于回环地址的开发 SMTP，不允许认证。每次投递总期限 12 秒，错误日志不打印 SMTP 返回、收件地址或邮件内容。`config show` 对用户名、密码脱敏。请确保 `server.public_base_url` 为用户可访问的正式 HTTPS 根地址，邮件链接只从该配置生成，不信任请求 Host。
+
+SMTP 配置、凭据与发件域名验证由部署方提供；可先使用测试邮箱验证收件。此功能没有自动重试队列，失败或服务中断时重新申请即可。恢复核验模式不会发送邮件。
