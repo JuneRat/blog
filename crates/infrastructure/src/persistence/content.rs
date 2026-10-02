@@ -20,6 +20,9 @@ use super::media::{clear_media_refs, media_ids_for, sync_media_refs};
 use super::sql::{PAGE_PUBLIC_PREDICATE, POST_PUBLIC_PREDICATE, map_row_error, map_sqlx_error};
 use crate::audit::{AuditEntry, append_audit_log};
 mod batch;
+mod revisions;
+use application::revisions::RevisionContent;
+use revisions::WriteMode;
 
 /// Markdown 渲染、清洗或媒体引用提取规则变更时递增。
 /// HTML 与引用属于同一派生流水线；rebuild-html 同事务重建不匹配的两者。
@@ -55,6 +58,21 @@ impl PostgresPostRepository {
         .await
         .map_err(map_sqlx_error)?;
         post_record_from_row(&row)
+    }
+
+    async fn outcome_in_transaction(
+        &self,
+        tx: &mut sqlx::PgConnection,
+        id: Uuid,
+    ) -> Result<PostCommitOutcome, UseCaseError> {
+        let mut record = self.record_in_transaction(tx, id).await?;
+        if let Some((draft, updated_at)) = revisions::editing_copy(tx, "post", id).await? {
+            draft.apply_post(&mut record)?;
+            record.snapshot.updated_at = updated_at;
+            Ok(PostCommitOutcome::SavedEditingDraft(Box::new(record)))
+        } else {
+            Ok(PostCommitOutcome::Saved(Box::new(record)))
+        }
     }
 
     async fn insert_record(
@@ -94,10 +112,24 @@ impl PostgresPostRepository {
         )
         .await?;
         let record = self.record_in_transaction(&mut tx, snapshot.id).await?;
+        let ids = media_ids_for(&rendered.media_ids, snapshot.cover_media_id);
+        revisions::save(
+            &mut tx,
+            "post",
+            snapshot.id,
+            snapshot.version,
+            &RevisionContent::post(&record),
+            &ids,
+            &ids,
+            actor_id,
+            snapshot.updated_at,
+        )
+        .await?;
         tx.commit().await.map_err(map_sqlx_error)?;
         Ok(record)
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn save_record(
         &self,
         snapshot: &PostSnapshot,
@@ -105,6 +137,7 @@ impl PostgresPostRepository {
         now: OffsetDateTime,
         tag_ids: Option<&[Uuid]>,
         actor_id: application::audit::AuditContext,
+        mode: WriteMode,
     ) -> Result<PostCommitOutcome, UseCaseError> {
         let rendered = render_content(&*self.renderer, &snapshot.content).await?;
         let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
@@ -126,6 +159,73 @@ impl PostgresPostRepository {
         if previous.version != expected_version {
             return Ok(PostCommitOutcome::StaleConflict);
         }
+        let original = self.record_in_transaction(&mut tx, snapshot.id).await?;
+        let retained = revisions::prior_media(&mut tx, "post", snapshot.id).await?;
+        let live_media: Vec<Uuid> = sqlx::query_scalar(
+            "SELECT media_id FROM media_refs WHERE source_type='post' AND source_id=$1",
+        )
+        .bind(snapshot.id)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(map_sqlx_error)?;
+        revisions::save(
+            &mut tx,
+            "post",
+            snapshot.id,
+            previous.version,
+            &RevisionContent::post(&original),
+            &live_media,
+            &live_media,
+            application::audit::AuditContext::system(),
+            previous.updated_at,
+        )
+        .await?;
+        let ids = media_ids_for(&rendered.media_ids, snapshot.cover_media_id);
+        let mut edited = PostRecord {
+            snapshot: snapshot.clone(),
+            tag_ids: tag_ids.map_or(original.tag_ids, <[Uuid]>::to_vec),
+        };
+        edited.snapshot.version = expected_version + 1;
+        edited.snapshot.updated_at = now;
+        let revision = revisions::save(
+            &mut tx,
+            "post",
+            snapshot.id,
+            expected_version + 1,
+            &RevisionContent::post(&edited),
+            &ids,
+            &retained,
+            actor_id,
+            now,
+        )
+        .await?;
+        if mode == WriteMode::Edit && previous.status == PostStatus::Published {
+            sqlx::query("UPDATE posts SET version=version+1,draft_revision_id=$2 WHERE id=$1")
+                .bind(snapshot.id)
+                .bind(revision)
+                .execute(&mut *tx)
+                .await
+                .map_err(map_sqlx_error)?;
+            audit_content(
+                &mut tx,
+                actor_id,
+                "post.draft",
+                "post",
+                snapshot.id,
+                serde_json::json!({"version":expected_version+1}),
+            )
+            .await?;
+            revisions::prune(&mut tx, "post", snapshot.id).await?;
+            tx.commit().await.map_err(map_sqlx_error)?;
+            return Ok(PostCommitOutcome::SavedEditingDraft(Box::new(edited)));
+        }
+        if mode != WriteMode::Lifecycle {
+            sqlx::query("UPDATE posts SET draft_revision_id=NULL WHERE id=$1")
+                .bind(snapshot.id)
+                .execute(&mut *tx)
+                .await
+                .map_err(map_sqlx_error)?;
+        }
         sqlx::query("UPDATE posts SET title=$3, slug=$4, excerpt=$5, content=$6, category_id=$7, cover_media_id=$8, status=$9, visibility=$10, published_at=$11, updated_at=$12, version=version+1, content_html=$13, content_render_version=$14 WHERE id=$1 AND version=$2 AND deleted_at IS NULL")
             .bind(snapshot.id).bind(expected_version).bind(&snapshot.title).bind(&snapshot.slug)
             .bind(&snapshot.excerpt).bind(&snapshot.content).bind(snapshot.category_id).bind(snapshot.cover_media_id)
@@ -143,17 +243,19 @@ impl PostgresPostRepository {
                 .map_err(map_sqlx_error)?;
         }
         replace_post_series(&mut tx, snapshot.id, &previous.series, &snapshot.series).await?;
-        sync_media_refs(
+        super::media::sync_rebuilt_media_refs(
             &mut tx,
             MediaContentKind::Post,
             snapshot.id,
-            &media_ids_for(&rendered.media_ids, snapshot.cover_media_id),
+            &ids,
+            &retained,
         )
         .await?;
+        revisions::prune(&mut tx, "post", snapshot.id).await?;
         audit_content(&mut tx, actor_id, "post.update", "post", snapshot.id, serde_json::json!({"version": expected_version+1, "previous_status": previous.status.as_str(), "status": snapshot.status.as_str(), "published_at": snapshot.published_at})).await?;
-        let record = self.record_in_transaction(&mut tx, snapshot.id).await?;
+        let outcome = self.outcome_in_transaction(&mut tx, snapshot.id).await?;
         tx.commit().await.map_err(map_sqlx_error)?;
-        Ok(PostCommitOutcome::Saved(Box::new(record)))
+        Ok(outcome)
     }
 }
 
@@ -203,6 +305,72 @@ fn post_from_row(row: &sqlx::postgres::PgRow) -> Result<PostSnapshot, UseCaseErr
 
 #[async_trait]
 impl PostRepository for PostgresPostRepository {
+    async fn find_editor(&self, id: Uuid) -> Result<Option<(PostRecord, bool)>, UseCaseError> {
+        let row = sqlx::query(&format!("SELECT {POST_COLUMNS}, {POST_TAG_IDS}, (SELECT data FROM content_revisions r WHERE r.id=posts.draft_revision_id AND r.post_id=posts.id) AS draft, (SELECT created_at FROM content_revisions r WHERE r.id=posts.draft_revision_id) AS draft_updated_at FROM posts WHERE id=$1"))
+            .bind(id).fetch_optional(&self.pool).await.map_err(map_sqlx_error)?;
+        row.map(|row| {
+            let mut record = post_record_from_row(&row)?;
+            let draft: Option<sqlx::types::Json<RevisionContent>> =
+                row.try_get("draft").map_err(map_row_error)?;
+            let pending = draft.is_some();
+            if let Some(draft) = draft {
+                draft.0.apply_post(&mut record)?;
+                record.snapshot.updated_at =
+                    row.try_get("draft_updated_at").map_err(map_row_error)?;
+            }
+            Ok((record, pending))
+        })
+        .transpose()
+    }
+    async fn commit_edit(
+        &self,
+        post: &Post,
+        expected: i64,
+        now: OffsetDateTime,
+        tags: Option<&[Uuid]>,
+        actor: application::audit::AuditContext,
+    ) -> Result<PostCommitOutcome, UseCaseError> {
+        self.save_record(
+            &post.snapshot(),
+            expected,
+            now,
+            tags,
+            actor,
+            WriteMode::Edit,
+        )
+        .await
+    }
+    async fn commit_publication(
+        &self,
+        post: &Post,
+        expected: i64,
+        now: OffsetDateTime,
+        tags: &[Uuid],
+        actor: application::audit::AuditContext,
+    ) -> Result<PostCommitOutcome, UseCaseError> {
+        self.save_record(
+            &post.snapshot(),
+            expected,
+            now,
+            Some(tags),
+            actor,
+            WriteMode::Publication,
+        )
+        .await
+    }
+    async fn revisions(
+        &self,
+        id: Uuid,
+    ) -> Result<Vec<application::revisions::RevisionSummary>, UseCaseError> {
+        revisions::list(&self.pool, "post", id).await
+    }
+    async fn revision(
+        &self,
+        id: Uuid,
+        revision: Uuid,
+    ) -> Result<Option<RevisionContent>, UseCaseError> {
+        revisions::find(&self.pool, "post", id, revision).await
+    }
     async fn batch(
         &self,
         actor: &application::identity::Actor,
@@ -242,8 +410,15 @@ impl PostRepository for PostgresPostRepository {
         tag_ids: Option<&[Uuid]>,
         actor_id: application::audit::AuditContext,
     ) -> Result<PostCommitOutcome, UseCaseError> {
-        self.save_record(&post.snapshot(), expected_version, now, tag_ids, actor_id)
-            .await
+        self.save_record(
+            &post.snapshot(),
+            expected_version,
+            now,
+            tag_ids,
+            actor_id,
+            WriteMode::Lifecycle,
+        )
+        .await
     }
 
     async fn commit_lifecycle(
@@ -286,9 +461,7 @@ impl PostRepository for PostgresPostRepository {
                 serde_json::json!({"version": expected_version+1}),
             )
             .await?;
-            PostCommitOutcome::Saved(Box::new(
-                self.record_in_transaction(&mut tx, snapshot.id).await?,
-            ))
+            self.outcome_in_transaction(&mut tx, snapshot.id).await?
         } else {
             let current: Option<(bool,)> =
                 sqlx::query_as("SELECT deleted_at IS NOT NULL FROM posts WHERE id = $1")
@@ -658,6 +831,113 @@ impl PostgresPageRepository {
         Self { pool, renderer }
     }
 
+    async fn save_record(
+        &self,
+        page: &Page,
+        expected_version: i64,
+        now: OffsetDateTime,
+        actor_id: application::audit::AuditContext,
+        mode: WriteMode,
+    ) -> Result<PageCommitOutcome, UseCaseError> {
+        let s = page.snapshot();
+        let rendered = render_content(&*self.renderer, &s.content).await?;
+        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        let prior: Option<(i64, String)> = sqlx::query_as(
+            "SELECT version, status FROM pages WHERE id=$1 AND deleted_at IS NULL FOR UPDATE",
+        )
+        .bind(s.id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(map_sqlx_error)?;
+        let Some((version, status)) = prior else {
+            return Ok(PageCommitOutcome::Gone);
+        };
+        if version != expected_version {
+            return Ok(PageCommitOutcome::StaleConflict);
+        }
+        let original = self.record_in_transaction(&mut tx, s.id).await?;
+        let retained = revisions::prior_media(&mut tx, "page", s.id).await?;
+        let live_media: Vec<Uuid> = sqlx::query_scalar(
+            "SELECT media_id FROM media_refs WHERE source_type='page' AND source_id=$1",
+        )
+        .bind(s.id)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(map_sqlx_error)?;
+        revisions::save(
+            &mut tx,
+            "page",
+            s.id,
+            expected_version,
+            &RevisionContent::page(&original),
+            &live_media,
+            &live_media,
+            application::audit::AuditContext::system(),
+            original.updated_at,
+        )
+        .await?;
+        let revision = revisions::save(
+            &mut tx,
+            "page",
+            s.id,
+            expected_version + 1,
+            &RevisionContent::page(&s),
+            &rendered.media_ids,
+            &retained,
+            actor_id,
+            now,
+        )
+        .await?;
+        if mode == WriteMode::Edit && status == "published" {
+            sqlx::query("UPDATE pages SET version=version+1,draft_revision_id=$2 WHERE id=$1")
+                .bind(s.id)
+                .bind(revision)
+                .execute(&mut *tx)
+                .await
+                .map_err(map_sqlx_error)?;
+            audit_content(
+                &mut tx,
+                actor_id,
+                "page.draft",
+                "page",
+                s.id,
+                serde_json::json!({"version":expected_version+1}),
+            )
+            .await?;
+            revisions::prune(&mut tx, "page", s.id).await?;
+            tx.commit().await.map_err(map_sqlx_error)?;
+            return Ok(PageCommitOutcome::SavedEditingDraft(PageSnapshot {
+                version: expected_version + 1,
+                updated_at: now,
+                ..s
+            }));
+        }
+        if mode != WriteMode::Lifecycle {
+            sqlx::query("UPDATE pages SET draft_revision_id=NULL WHERE id=$1")
+                .bind(s.id)
+                .execute(&mut *tx)
+                .await
+                .map_err(map_sqlx_error)?;
+        }
+        sqlx::query("UPDATE pages SET title=$3,slug=$4,content=$5,status=$6,visibility=$7,published_at=$8,updated_at=$9,version=version+1,content_html=$10,content_render_version=$11 WHERE id=$1 AND version=$2 AND deleted_at IS NULL")
+            .bind(s.id).bind(expected_version).bind(&s.title).bind(&s.slug).bind(&s.content).bind(s.status.as_str()).bind(s.visibility.as_str())
+            .bind(s.published_at).bind(now).bind(&rendered.content_html).bind(rendered.render_version)
+            .execute(&mut *tx).await.map_err(map_sqlx_error)?;
+        super::media::sync_rebuilt_media_refs(
+            &mut tx,
+            MediaContentKind::Page,
+            s.id,
+            &rendered.media_ids,
+            &retained,
+        )
+        .await?;
+        revisions::prune(&mut tx, "page", s.id).await?;
+        audit_content(&mut tx, actor_id, "page.update", "page", s.id, serde_json::json!({"version": expected_version+1, "previous_status": status, "status": s.status.as_str(), "published_at": s.published_at})).await?;
+        let outcome = self.outcome_in_transaction(&mut tx, s.id).await?;
+        tx.commit().await.map_err(map_sqlx_error)?;
+        Ok(outcome)
+    }
+
     async fn record_in_transaction(
         &self,
         tx: &mut sqlx::PgConnection,
@@ -669,6 +949,21 @@ impl PostgresPageRepository {
             .await
             .map_err(map_sqlx_error)?;
         page_from_row(&row)
+    }
+
+    async fn outcome_in_transaction(
+        &self,
+        tx: &mut sqlx::PgConnection,
+        id: Uuid,
+    ) -> Result<PageCommitOutcome, UseCaseError> {
+        let mut record = self.record_in_transaction(tx, id).await?;
+        if let Some((draft, updated_at)) = revisions::editing_copy(tx, "page", id).await? {
+            draft.apply_page(&mut record)?;
+            record.updated_at = updated_at;
+            Ok(PageCommitOutcome::SavedEditingDraft(record))
+        } else {
+            Ok(PageCommitOutcome::Saved(record))
+        }
     }
 }
 
@@ -720,6 +1015,19 @@ impl PageRepository for PostgresPageRepository {
         )
         .await?;
         let record = self.record_in_transaction(&mut tx, s.id).await?;
+        let ids = rendered.media_ids.clone();
+        revisions::save(
+            &mut tx,
+            "page",
+            s.id,
+            s.version,
+            &RevisionContent::page(&record),
+            &ids,
+            &ids,
+            actor_id,
+            s.updated_at,
+        )
+        .await?;
         tx.commit().await.map_err(map_sqlx_error)?;
         Ok(record)
     }
@@ -727,35 +1035,61 @@ impl PageRepository for PostgresPageRepository {
     async fn commit_page(
         &self,
         page: &Page,
-        expected_version: i64,
+        expected: i64,
         now: OffsetDateTime,
-        actor_id: application::audit::AuditContext,
+        actor: application::audit::AuditContext,
     ) -> Result<PageCommitOutcome, UseCaseError> {
-        let s = page.snapshot();
-        let rendered = render_content(&*self.renderer, &s.content).await?;
-        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
-        let prior: Option<(i64, String)> = sqlx::query_as(
-            "SELECT version, status FROM pages WHERE id=$1 AND deleted_at IS NULL FOR UPDATE",
-        )
-        .bind(s.id)
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(map_sqlx_error)?;
-        let Some((version, status)) = prior else {
-            return Ok(PageCommitOutcome::Gone);
-        };
-        if version != expected_version {
-            return Ok(PageCommitOutcome::StaleConflict);
-        }
-        sqlx::query("UPDATE pages SET title=$3,slug=$4,content=$5,status=$6,visibility=$7,published_at=$8,updated_at=$9,version=version+1,content_html=$10,content_render_version=$11 WHERE id=$1 AND version=$2 AND deleted_at IS NULL")
-            .bind(s.id).bind(expected_version).bind(&s.title).bind(&s.slug).bind(&s.content).bind(s.status.as_str()).bind(s.visibility.as_str())
-            .bind(s.published_at).bind(now).bind(&rendered.content_html).bind(rendered.render_version)
-            .execute(&mut *tx).await.map_err(map_sqlx_error)?;
-        sync_media_refs(&mut tx, MediaContentKind::Page, s.id, &rendered.media_ids).await?;
-        audit_content(&mut tx, actor_id, "page.update", "page", s.id, serde_json::json!({"version": expected_version+1, "previous_status": status, "status": s.status.as_str(), "published_at": s.published_at})).await?;
-        let record = self.record_in_transaction(&mut tx, s.id).await?;
-        tx.commit().await.map_err(map_sqlx_error)?;
-        Ok(PageCommitOutcome::Saved(record))
+        self.save_record(page, expected, now, actor, WriteMode::Lifecycle)
+            .await
+    }
+    async fn commit_edit(
+        &self,
+        page: &Page,
+        expected: i64,
+        now: OffsetDateTime,
+        actor: application::audit::AuditContext,
+    ) -> Result<PageCommitOutcome, UseCaseError> {
+        self.save_record(page, expected, now, actor, WriteMode::Edit)
+            .await
+    }
+    async fn commit_publication(
+        &self,
+        page: &Page,
+        expected: i64,
+        now: OffsetDateTime,
+        actor: application::audit::AuditContext,
+    ) -> Result<PageCommitOutcome, UseCaseError> {
+        self.save_record(page, expected, now, actor, WriteMode::Publication)
+            .await
+    }
+    async fn find_editor(&self, id: Uuid) -> Result<Option<(PageSnapshot, bool)>, UseCaseError> {
+        let row = sqlx::query(&format!("SELECT {PAGE_COLUMNS}, (SELECT data FROM content_revisions r WHERE r.id=pages.draft_revision_id AND r.page_id=pages.id) AS draft, (SELECT created_at FROM content_revisions r WHERE r.id=pages.draft_revision_id) AS draft_updated_at FROM pages WHERE id=$1"))
+            .bind(id).fetch_optional(&self.pool).await.map_err(map_sqlx_error)?;
+        row.map(|row| {
+            let mut record = page_from_row(&row)?;
+            let draft: Option<sqlx::types::Json<RevisionContent>> =
+                row.try_get("draft").map_err(map_row_error)?;
+            let pending = draft.is_some();
+            if let Some(draft) = draft {
+                draft.0.apply_page(&mut record)?;
+                record.updated_at = row.try_get("draft_updated_at").map_err(map_row_error)?;
+            }
+            Ok((record, pending))
+        })
+        .transpose()
+    }
+    async fn revisions(
+        &self,
+        id: Uuid,
+    ) -> Result<Vec<application::revisions::RevisionSummary>, UseCaseError> {
+        revisions::list(&self.pool, "page", id).await
+    }
+    async fn revision(
+        &self,
+        id: Uuid,
+        revision: Uuid,
+    ) -> Result<Option<RevisionContent>, UseCaseError> {
+        revisions::find(&self.pool, "page", id, revision).await
     }
 
     async fn commit_lifecycle(
@@ -796,9 +1130,9 @@ impl PageRepository for PostgresPageRepository {
             serde_json::json!({"version": expected_version+1}),
         )
         .await?;
-        let record = self.record_in_transaction(&mut tx, s.id).await?;
+        let outcome = self.outcome_in_transaction(&mut tx, s.id).await?;
         tx.commit().await.map_err(map_sqlx_error)?;
-        Ok(PageCommitOutcome::Saved(record))
+        Ok(outcome)
     }
 
     async fn find_by_id(&self, id: Uuid) -> Result<Option<PageSnapshot>, UseCaseError> {

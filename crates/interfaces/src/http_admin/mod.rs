@@ -11,6 +11,7 @@ mod auth;
 mod categories;
 mod pages;
 mod posts;
+mod revisions;
 mod series;
 mod settings;
 mod support;
@@ -31,6 +32,7 @@ pub const ADMIN_BODY_LIMIT: usize = 2 * 1024 * 1024;
 
 pub(crate) fn export_contract(out: &mut Vec<String>) {
     posts::export_contract(out);
+    revisions::export_contract(out);
     pages::export_contract(out);
     tags::export_contract(out);
     categories::export_contract(out);

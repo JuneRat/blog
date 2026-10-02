@@ -44,7 +44,7 @@ pub const PERMISSION_REGISTRY: &[PermissionDescriptor] = &[
     PermissionDescriptor {
         key: "post.update",
         name: "编辑本人文章",
-        description: "修改本人文章；保存已发布内容直接更新线上。",
+        description: "修改本人文章；已发布内容保存为修改草稿，发布后才更新线上。",
     },
     PermissionDescriptor {
         key: "post.update_any",
@@ -99,7 +99,7 @@ pub const PERMISSION_REGISTRY: &[PermissionDescriptor] = &[
     PermissionDescriptor {
         key: "page.update",
         name: "编辑页面",
-        description: "修改任意独立页面；保存已发布页面直接更新线上。",
+        description: "修改任意独立页面；已发布内容保存为修改草稿，发布后才更新线上。",
     },
     PermissionDescriptor {
         key: "page.publish",

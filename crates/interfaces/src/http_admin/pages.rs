@@ -61,7 +61,9 @@ impl From<AdminPageSummary> for PageJson {
 /// 页面详情：摘要 + Markdown 源文（后台编辑数据源）。
 #[derive(serde::Serialize, ts_rs::TS)]
 #[ts(rename = "PageDetail")]
-struct PageDetailJson {
+pub(super) struct PageDetailJson {
+    #[ts(as = "Option<bool>", optional)]
+    has_pending_changes: bool,
     #[serde(flatten)]
     summary: PageJson,
     content: String,
@@ -70,6 +72,7 @@ struct PageDetailJson {
 impl From<PageDto> for PageDetailJson {
     fn from(dto: PageDto) -> Self {
         Self {
+            has_pending_changes: dto.has_pending_changes,
             summary: PageJson::from(&dto),
             content: dto.content,
         }
@@ -115,6 +118,18 @@ pub fn pages_router(state: AdminState) -> Router {
         .route("/api/admin/v1/pages/{id}/restore", post(restore_page))
         .route("/api/admin/v1/pages/{id}/purge", post(purge_page))
         .route("/api/admin/v1/page-trash", get(list_page_trash))
+        .route(
+            "/api/admin/v1/pages/{id}/revisions",
+            get(super::revisions::pages_list),
+        )
+        .route(
+            "/api/admin/v1/pages/{id}/revisions/{revision}",
+            get(super::revisions::pages_detail),
+        )
+        .route(
+            "/api/admin/v1/pages/{id}/revisions/{revision}/restore",
+            post(super::revisions::pages_restore),
+        )
         .layer(axum::extract::DefaultBodyLimit::max(ADMIN_BODY_LIMIT))
         .layer(middleware::from_fn(no_store))
         .with_state(state)

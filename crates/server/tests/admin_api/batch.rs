@@ -281,8 +281,8 @@ async fn post_batch_purge_cleans_relations_and_audit_failure_restores_everything
     );
     assert_eq!(posts_state(&stack).await, before);
     assert_eq!(comments_state(&stack).await, comments);
-    let counts: (i64,i64,i64,i64) = sqlx::query_as("SELECT (SELECT count(*) FROM post_series),(SELECT count(*) FROM post_tags),(SELECT count(*) FROM media_refs),(SELECT version FROM series WHERE slug='batch-series')").fetch_one(&stack.pool).await.unwrap();
-    assert_eq!(counts, (2, 2, 2, 1));
+    let counts: (i64,i64,i64,i64,i64) = sqlx::query_as("SELECT (SELECT count(*) FROM post_series),(SELECT count(*) FROM post_tags),(SELECT count(*) FROM media_refs),(SELECT version FROM series WHERE slug='batch-series'),(SELECT count(*) FROM content_revisions)").fetch_one(&stack.pool).await.unwrap();
+    assert_eq!(counts, (2, 2, 4, 1, 4));
     sqlx::query("ALTER TABLE audit_logs DROP CONSTRAINT fail_batch_audit")
         .execute(&stack.pool)
         .await
@@ -293,8 +293,8 @@ async fn post_batch_purge_cleans_relations_and_audit_failure_restores_everything
     assert!(result["items"][0]["version"].is_null());
     assert_eq!(posts_state(&stack).await, json!([]));
     assert_eq!(comments_state(&stack).await, json!([]));
-    let counts: (i64,i64,i64,i64,i64) = sqlx::query_as("SELECT (SELECT count(*) FROM post_series),(SELECT count(*) FROM post_tags),(SELECT count(*) FROM media_refs),(SELECT version FROM series WHERE slug='batch-series'),(SELECT count(*) FROM media)").fetch_one(&stack.pool).await.unwrap();
-    assert_eq!(counts, (0, 0, 0, 2, 1));
+    let counts: (i64,i64,i64,i64,i64,i64) = sqlx::query_as("SELECT (SELECT count(*) FROM post_series),(SELECT count(*) FROM post_tags),(SELECT count(*) FROM media_refs),(SELECT version FROM series WHERE slug='batch-series'),(SELECT count(*) FROM media),(SELECT count(*) FROM content_revisions)").fetch_one(&stack.pool).await.unwrap();
+    assert_eq!(counts, (0, 0, 0, 2, 1, 0));
     assert_eq!(audit_count(&stack, "post.batch").await, 2);
 }
 

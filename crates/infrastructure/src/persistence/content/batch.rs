@@ -52,6 +52,23 @@ impl PostgresPostRepository {
             plans.push((previous, post.snapshot(), changed));
         }
 
+        if matches!(
+            action,
+            PostBatchAction::ChangeCategory(_)
+                | PostBatchAction::ChangeStatus(
+                    application::batch::BatchPostStatus::Published
+                        | application::batch::BatchPostStatus::Scheduled(_)
+                )
+        ) {
+            let pending: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM posts WHERE id=ANY($1::uuid[]) AND draft_revision_id IS NOT NULL)")
+                .bind(&ids).fetch_one(&mut *tx).await.map_err(map_sqlx_error)?;
+            if pending {
+                return Err(UseCaseError::Invalid(
+                    "包含待发布修改，请先在对应编辑页发布或处理草稿后再批量操作".into(),
+                ));
+            }
+        }
+
         let purge = matches!(action, PostBatchAction::Purge);
         if purge {
             // One membership change per series per batch; the content lock keeps reorder/save ordered.
@@ -98,6 +115,43 @@ impl PostgresPostRepository {
                 )
             };
             if changed && !purge {
+                // Record metadata history in the same transaction as batch changes.
+                let original = self.record_in_transaction(&mut tx, previous.id).await?;
+                let media: Vec<Uuid> = sqlx::query_scalar(
+                    "SELECT media_id FROM media_refs WHERE source_type='post' AND source_id=$1",
+                )
+                .bind(previous.id)
+                .fetch_all(&mut *tx)
+                .await
+                .map_err(map_sqlx_error)?;
+                revisions::save(
+                    &mut tx,
+                    "post",
+                    previous.id,
+                    previous.version,
+                    &RevisionContent::post(&original),
+                    &media,
+                    &media,
+                    actor.audit_context(),
+                    previous.updated_at,
+                )
+                .await?;
+                let edited = PostRecord {
+                    snapshot: next.clone(),
+                    tag_ids: original.tag_ids,
+                };
+                revisions::save(
+                    &mut tx,
+                    "post",
+                    previous.id,
+                    version.expect("non-purge version"),
+                    &RevisionContent::post(&edited),
+                    &media,
+                    &media,
+                    actor.audit_context(),
+                    now,
+                )
+                .await?;
                 // Source, HTML, tags, series and media references are unchanged by these actions.
                 let saved = sqlx::query("UPDATE posts SET status=$3,published_at=$4,deleted_at=$5,category_id=$6,updated_at=$7,version=version+1 WHERE id=$1 AND version=$2")
                     .bind(previous.id).bind(previous.version).bind(next.status.as_str()).bind(next.published_at)
@@ -105,6 +159,7 @@ impl PostgresPostRepository {
                 if saved.rows_affected() != 1 {
                     return Err(UseCaseError::VersionConflict);
                 }
+                revisions::prune(&mut tx, "post", previous.id).await?;
             }
             if changed {
                 result.affected += 1;

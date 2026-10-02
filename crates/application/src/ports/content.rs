@@ -20,6 +20,7 @@ pub struct PostRecord {
 #[derive(Debug, Clone, PartialEq)]
 pub enum PostCommitOutcome {
     Saved(Box<PostRecord>),
+    SavedEditingDraft(Box<PostRecord>),
     StaleConflict,
     Gone,
 }
@@ -27,12 +28,53 @@ pub enum PostCommitOutcome {
 #[derive(Debug, Clone, PartialEq)]
 pub enum PageCommitOutcome {
     Saved(PageSnapshot),
+    SavedEditingDraft(PageSnapshot),
     StaleConflict,
     Gone,
 }
 
 #[async_trait]
 pub trait PostRepository: Send + Sync {
+    async fn find_editor(&self, id: Uuid) -> Result<Option<(PostRecord, bool)>, UseCaseError> {
+        Ok(self
+            .find_record_by_id(id)
+            .await?
+            .map(|record| (record, false)))
+    }
+    async fn commit_edit(
+        &self,
+        post: &Post,
+        expected: i64,
+        now: OffsetDateTime,
+        tags: Option<&[Uuid]>,
+        actor: crate::audit::AuditContext,
+    ) -> Result<PostCommitOutcome, UseCaseError> {
+        self.commit_post(post, expected, now, tags, actor).await
+    }
+    async fn commit_publication(
+        &self,
+        post: &Post,
+        expected: i64,
+        now: OffsetDateTime,
+        tags: &[Uuid],
+        actor: crate::audit::AuditContext,
+    ) -> Result<PostCommitOutcome, UseCaseError> {
+        self.commit_post(post, expected, now, Some(tags), actor)
+            .await
+    }
+    async fn revisions(
+        &self,
+        _id: Uuid,
+    ) -> Result<Vec<crate::revisions::RevisionSummary>, UseCaseError> {
+        Ok(vec![])
+    }
+    async fn revision(
+        &self,
+        _id: Uuid,
+        _revision: Uuid,
+    ) -> Result<Option<crate::revisions::RevisionContent>, UseCaseError> {
+        Ok(None)
+    }
     /// Validate current locked ownership/version and aggregate rules for every target.
     /// Changes, relation cleanup and one aggregate audit must commit or roll back together.
     async fn batch(
@@ -94,6 +136,40 @@ pub enum PageDeleteOutcome {
 /// 站点级页面写侧端口；回收站独立于发布状态。
 #[async_trait]
 pub trait PageRepository: Send + Sync {
+    async fn find_editor(&self, id: Uuid) -> Result<Option<(PageSnapshot, bool)>, UseCaseError> {
+        Ok(self.find_by_id(id).await?.map(|record| (record, false)))
+    }
+    async fn commit_edit(
+        &self,
+        page: &Page,
+        expected: i64,
+        now: OffsetDateTime,
+        actor: crate::audit::AuditContext,
+    ) -> Result<PageCommitOutcome, UseCaseError> {
+        self.commit_page(page, expected, now, actor).await
+    }
+    async fn commit_publication(
+        &self,
+        page: &Page,
+        expected: i64,
+        now: OffsetDateTime,
+        actor: crate::audit::AuditContext,
+    ) -> Result<PageCommitOutcome, UseCaseError> {
+        self.commit_page(page, expected, now, actor).await
+    }
+    async fn revisions(
+        &self,
+        _id: Uuid,
+    ) -> Result<Vec<crate::revisions::RevisionSummary>, UseCaseError> {
+        Ok(vec![])
+    }
+    async fn revision(
+        &self,
+        _id: Uuid,
+        _revision: Uuid,
+    ) -> Result<Option<crate::revisions::RevisionContent>, UseCaseError> {
+        Ok(None)
+    }
     async fn insert_page(
         &self,
         page: &Page,

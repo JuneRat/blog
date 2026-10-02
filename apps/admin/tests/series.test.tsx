@@ -305,7 +305,7 @@ describe("文章编辑器系列校验", () => {
     fireEvent.change(title, { target: { value: "新篇" } });
     await selectOption("系列", "指南");
     fireEvent.change(await screen.findByLabelText("指南 · 排序权重"), { target: { value: "" } });
-    fireEvent.click(screen.getByRole("button", { name: /保存草稿|保存预约内容|更新已发布内容/ }));
+    fireEvent.click(screen.getByRole("button", { name: /保存草稿|保存预约内容|保存修改草稿/ }));
 
     // antd Form 的 onFinish 是异步的，校验错误要等文案出现。
     expect(
@@ -320,7 +320,7 @@ describe("文章编辑器系列校验", () => {
     fireEvent.change(await screen.findByLabelText("标题"), { target: { value: "新篇" } });
     await selectOption("系列", "指南");
     fireEvent.change(await screen.findByLabelText("指南 · 排序权重"), { target: { value: "1.5" } });
-    fireEvent.click(screen.getByRole("button", { name: /保存草稿|保存预约内容|更新已发布内容/ }));
+    fireEvent.click(screen.getByRole("button", { name: /保存草稿|保存预约内容|保存修改草稿/ }));
 
     expect(await screen.findByText(/非负整数/)).toBeTruthy();
     const apiAny = vi.mocked(postsApi);
@@ -332,7 +332,7 @@ describe("文章编辑器系列校验", () => {
     fireEvent.change(await screen.findByLabelText("标题"), { target: { value: "新篇" } });
     await selectOption("系列", "指南");
     fireEvent.change(await screen.findByLabelText("指南 · 排序权重"), { target: { value: "3" } });
-    fireEvent.click(screen.getByRole("button", { name: /保存草稿|保存预约内容|更新已发布内容/ }));
+    fireEvent.click(screen.getByRole("button", { name: /保存草稿|保存预约内容|保存修改草稿/ }));
 
     const apiAny = vi.mocked(postsApi);
     await waitFor(() =>
@@ -352,7 +352,7 @@ describe("文章编辑器系列校验", () => {
     await selectOption("系列", "指南");
     fireEvent.change(await screen.findByLabelText("指南 · 排序权重"), { target: { value: "7" } });
     await selectOption("系列", "笔记");
-    fireEvent.click(screen.getByRole("button", { name: /保存草稿|保存预约内容|更新已发布内容/ }));
+    fireEvent.click(screen.getByRole("button", { name: /保存草稿|保存预约内容|保存修改草稿/ }));
 
     await waitFor(() => expect(postsApi.createPost).toHaveBeenCalledWith(
       expect.objectContaining({ series: [

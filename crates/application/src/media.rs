@@ -395,6 +395,14 @@ fn can_see_reference(actor: &Actor, row: &MediaUsageRow) -> bool {
         return true;
     }
     match row.source.kind() {
+        crate::ports::MediaContentKind::Revision => match row.source {
+            crate::ports::MediaUsageSource::PostRevision => {
+                actor.has_permission("post.read_any")
+                    || actor.has_permission("post.read") && row.author_id == Some(actor.user_id.0)
+            }
+            crate::ports::MediaUsageSource::PageRevision => actor.has_permission("page.read"),
+            _ => false,
+        },
         crate::ports::MediaContentKind::Post => {
             if actor.has_permission("post.read_any") {
                 return true;

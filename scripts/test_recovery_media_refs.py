@@ -50,10 +50,11 @@ class MediaUrlTests(unittest.TestCase):
         query = "12345678-1234-5678-9abc-123456789abd"
         with self.assertRaisesRegex(inventory.RecoveryError, "1 missing"):
             self.relations(2, [canonical])
-        self.assertEqual(self.relations(2, [canonical, query]), 2)
+        for version in (2, 3, 1027):
+            self.assertEqual(self.relations(version, [canonical, query]), 2)
 
     def test_unknown_pipeline_versions_cannot_be_silently_verified(self):
-        for version in (-1, 3, 100):
+        for version in (-1, 4, 100):
             with self.subTest(version=version):
                 with self.assertRaisesRegex(inventory.RecoveryError, "unsupported content pipeline"):
                     self.relations(version, [])

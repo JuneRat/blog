@@ -45,6 +45,7 @@ pub struct DeletePageCmd {
 /// 面向 CLI/后台的页面视图（含非公开状态与正文源文）。
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct PageDto {
+    pub has_pending_changes: bool,
     pub id: Uuid,
     pub slug: String,
     pub title: String,
@@ -60,6 +61,7 @@ pub struct PageDto {
 impl PageDto {
     fn from_snapshot(s: &PageSnapshot) -> Self {
         Self {
+            has_pending_changes: false,
             id: s.id,
             slug: s.slug.clone(),
             title: s.title.clone(),
@@ -117,19 +119,21 @@ impl PageInteractor {
         actor: &crate::identity::Actor,
         id: Uuid,
     ) -> Result<PageDto, UseCaseError> {
-        let page = self.load_authorized(actor, id, "page.read").await?;
-        Ok(PageDto::from_snapshot(&page.snapshot()))
+        let (page, pending) = self.load_editor(actor, id, "page.read").await?;
+        let mut dto = PageDto::from_snapshot(&page.snapshot());
+        dto.has_pending_changes = pending;
+        Ok(dto)
     }
 
-    /// 编辑当前正文；保存已发布页面直接更新线上。
+    /// 已发布页面保存为服务端编辑稿，发布操作应用待发布修改。
     pub async fn edit(
         &self,
         actor: &crate::identity::Actor,
         cmd: EditPageCmd,
     ) -> Result<PageDto, UseCaseError> {
         actor.ensure_write_channel()?;
-        let (mut page, loaded) = self.load_versioned(actor, cmd.id, "page.update").await?;
-        let expected = checked_version(loaded, cmd.expected_version)?;
+        let (mut page, pending) = self.load_editor(actor, cmd.id, "page.update").await?;
+        let expected = checked_version(page.version(), cmd.expected_version)?;
 
         let changed = page
             .edit(PagePatch {
@@ -141,9 +145,18 @@ impl PageInteractor {
             .map_err(map_domain)?;
 
         if changed {
-            return self.commit(actor, page, expected).await;
+            let pending = page.snapshot().status == domain::content::PageStatus::Published;
+            let mut dto = Self::committed(
+                self.pages
+                    .commit_edit(&page, expected, self.clock.now(), actor.audit_context())
+                    .await?,
+            )?;
+            dto.has_pending_changes = pending;
+            return Ok(dto);
         }
-        Ok(PageDto::from_snapshot(&page.snapshot()))
+        let mut dto = PageDto::from_snapshot(&page.snapshot());
+        dto.has_pending_changes = pending;
+        Ok(dto)
     }
 
     /// 立即发布草稿或预约内容；保留过去的发布时间，未来预约改为当前时间。
@@ -154,11 +167,15 @@ impl PageInteractor {
         expected_version: Option<i64>,
     ) -> Result<PageDto, UseCaseError> {
         actor.ensure_write_channel()?;
-        let (mut page, loaded) = self.load_versioned(actor, id, "page.publish").await?;
-        let expected = checked_version(loaded, expected_version)?;
+        let (mut page, pending) = self.load_editor(actor, id, "page.publish").await?;
+        let expected = checked_version(page.version(), expected_version)?;
 
-        if page.publish(self.clock.now()).map_err(map_domain)? {
-            return self.commit(actor, page, expected).await;
+        if page.publish(self.clock.now()).map_err(map_domain)? || pending {
+            return Self::committed(
+                self.pages
+                    .commit_publication(&page, expected, self.clock.now(), actor.audit_context())
+                    .await?,
+            );
         }
         Ok(PageDto::from_snapshot(&page.snapshot()))
     }
@@ -177,7 +194,11 @@ impl PageInteractor {
         if page.withdraw() {
             return self.commit(actor, page, expected).await;
         }
-        Ok(PageDto::from_snapshot(&page.snapshot()))
+        let (page, pending) = self.load_editor(actor, id, "page.unpublish").await?;
+        checked_version(page.version(), Some(expected))?;
+        let mut dto = PageDto::from_snapshot(&page.snapshot());
+        dto.has_pending_changes = pending;
+        Ok(dto)
     }
 
     pub async fn schedule(
@@ -188,10 +209,14 @@ impl PageInteractor {
         version: Option<i64>,
     ) -> Result<PageDto, UseCaseError> {
         actor.ensure_write_channel()?;
-        let (mut page, loaded) = self.load_versioned(actor, id, "page.publish").await?;
-        let expected = checked_version(loaded, version)?;
-        if page.schedule(at, self.clock.now()).map_err(map_domain)? {
-            return self.commit(actor, page, expected).await;
+        let (mut page, pending) = self.load_editor(actor, id, "page.publish").await?;
+        let expected = checked_version(page.version(), version)?;
+        if page.schedule(at, self.clock.now()).map_err(map_domain)? || pending {
+            return Self::committed(
+                self.pages
+                    .commit_publication(&page, expected, self.clock.now(), actor.audit_context())
+                    .await?,
+            );
         }
         Ok(PageDto::from_snapshot(&page.snapshot()))
     }
@@ -208,7 +233,80 @@ impl PageInteractor {
         if page.archive().map_err(map_domain)? {
             return self.commit(actor, page, expected).await;
         }
-        Ok(PageDto::from_snapshot(&page.snapshot()))
+        let (page, pending) = self.load_editor(actor, id, "page.archive").await?;
+        checked_version(page.version(), Some(expected))?;
+        let mut dto = PageDto::from_snapshot(&page.snapshot());
+        dto.has_pending_changes = pending;
+        Ok(dto)
+    }
+
+    async fn load_editor(
+        &self,
+        actor: &crate::identity::Actor,
+        id: Uuid,
+        key: &str,
+    ) -> Result<(Page, bool), UseCaseError> {
+        if !actor.has_permission(key) {
+            return Err(UseCaseError::Forbidden);
+        }
+        let (snapshot, pending) = self
+            .pages
+            .find_editor(id)
+            .await?
+            .filter(|(s, _)| s.deleted_at.is_none())
+            .ok_or_else(|| UseCaseError::NotFound(format!("页面 {id}")))?;
+        Ok((
+            Page::reconstitute(snapshot).map_err(|e| UseCaseError::DataCorrupt(e.to_string()))?,
+            pending,
+        ))
+    }
+    pub async fn revisions(
+        &self,
+        actor: &crate::identity::Actor,
+        id: Uuid,
+    ) -> Result<Vec<crate::revisions::RevisionSummary>, UseCaseError> {
+        self.load_authorized(actor, id, "page.read").await?;
+        self.pages.revisions(id).await
+    }
+    pub async fn revision(
+        &self,
+        actor: &crate::identity::Actor,
+        id: Uuid,
+        revision: Uuid,
+    ) -> Result<crate::revisions::RevisionContent, UseCaseError> {
+        self.load_authorized(actor, id, "page.read").await?;
+        self.pages
+            .revision(id, revision)
+            .await?
+            .ok_or_else(|| UseCaseError::NotFound("历史版本".into()))
+    }
+    pub async fn restore_revision(
+        &self,
+        actor: &crate::identity::Actor,
+        id: Uuid,
+        revision: Uuid,
+        expected: i64,
+    ) -> Result<PageDto, UseCaseError> {
+        actor.ensure_write_channel()?;
+        let current = self.load_authorized(actor, id, "page.update").await?;
+        checked_version(current.version(), Some(expected))?;
+        let r = self.revision(actor, id, revision).await?;
+        self.edit(
+            actor,
+            EditPageCmd {
+                id,
+                new_slug: current
+                    .snapshot()
+                    .published_at
+                    .is_none()
+                    .then(|| r.slug.clone()),
+                title: Some(r.title.clone()),
+                content: Some(r.content.clone()),
+                visibility: Some(r.visibility()?),
+                expected_version: Some(expected),
+            },
+        )
+        .await
     }
 
     pub async fn trash(
@@ -285,6 +383,11 @@ impl PageInteractor {
     fn committed(outcome: PageCommitOutcome) -> Result<PageDto, UseCaseError> {
         match outcome {
             PageCommitOutcome::Saved(snapshot) => Ok(PageDto::from_snapshot(&snapshot)),
+            PageCommitOutcome::SavedEditingDraft(snapshot) => {
+                let mut dto = PageDto::from_snapshot(&snapshot);
+                dto.has_pending_changes = true;
+                Ok(dto)
+            }
             PageCommitOutcome::StaleConflict => Err(UseCaseError::VersionConflict),
             PageCommitOutcome::Gone => Err(UseCaseError::NotFound("页面（已被删除）".into())),
         }
@@ -297,15 +400,11 @@ impl PageInteractor {
         page: Page,
         expected: i64,
     ) -> Result<PageDto, UseCaseError> {
-        match self
-            .pages
-            .commit_page(&page, expected, self.clock.now(), actor.audit_context())
-            .await?
-        {
-            PageCommitOutcome::Saved(snapshot) => Ok(PageDto::from_snapshot(&snapshot)),
-            PageCommitOutcome::StaleConflict => Err(UseCaseError::VersionConflict),
-            PageCommitOutcome::Gone => Err(UseCaseError::NotFound("页面（已被删除）".into())),
-        }
+        Self::committed(
+            self.pages
+                .commit_page(&page, expected, self.clock.now(), actor.audit_context())
+                .await?,
+        )
     }
 
     async fn load_authorized(

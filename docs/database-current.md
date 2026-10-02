@@ -1,6 +1,6 @@
 # 当前数据库实现
 
-新建库以 **19 表基线**为起点，后台任务追加 `task_runs`、`task_schedules`，主题追加 `themes`，插件追加 `plugins`、`plugin_runtime` 后为 **24 张应用表**，不含 SQLx 迁移记录。身份、会话、媒体、内容、目录、评论、保留期维护、新库恢复与正式媒体显式清理已适配；已有业务写入口已补齐事务审计、来源 IP 和后台只读查询，生产验收仍待完成。完整设计见[数据库设计](database-design.md)，逐项状态见[路线图](product-roadmap.md#已采纳数据库设计的实施)。
+新建库以 **19 表基线**为起点，后台任务追加 `task_runs`、`task_schedules`，主题追加 `themes`，插件、账号邮件与修订历史追加 `plugins`、`plugin_runtime`、`account_links`、`content_revisions` 后为 **26 张应用表**，不含 SQLx 迁移记录。身份、会话、媒体、内容、目录、评论、保留期维护、新库恢复与正式媒体显式清理已适配；已有业务写入口已补齐事务审计、来源 IP 和后台只读查询，生产验收仍待完成。完整设计见[数据库设计](database-design.md)，逐项状态见[路线图](product-roadmap.md#已采纳数据库设计的实施)。
 
 ## 1. 权威来源与迁移
 
@@ -16,9 +16,9 @@ SQLx 为初始迁移包事务，因此该文件没有额外的 BEGIN/COMMIT。�
 
 | 范围 | 表 |
 |---|---|
-| 身份与会话 | users、oauth_accounts、sessions |
+| 身份与会话 | users、oauth_accounts、sessions、account_links |
 | 权限 | roles、permissions、user_roles、role_permissions |
-| 内容与目录 | posts、pages、categories、tags、series、post_tags、post_series |
+| 内容与目录 | posts、pages、content_revisions、categories、tags、series、post_tags、post_series |
 | 媒体 | media、media_refs |
 | 评论、设置、审计 | comments、settings、audit_logs |
 | 后台任务 | task_runs、task_schedules |
@@ -40,6 +40,8 @@ SQLx 为初始迁移包事务，因此该文件没有额外的 BEGIN/COMMIT。�
 [首次安装](installation.md)已接入：未配置数据库时跳转安装页，终端安装码保护提交。初始化权限、内置角色、首个用户/密码/Admin、完成标记与审计同事务创建，用户 version/auth_version 均从 1 起；本地连接配置先保存，崩溃后按完成标记恢复。受控 CLI 仍可分步引导，已有数据不允许重新安装。`settings.installation` 是部署完成标记，没有普通设置编辑入口；不新增数据库表。
 
 ## 4. 内容、目录与并发关系
+
+`content_revisions` 保存可编辑字段 JSON、渲染提取的媒体 ID、操作者、版本和时间；每条只属于一篇 Post 或 Page，内容/版本唯一。主表 `draft_revision_id` 指向待发布修改，公开查询只读主表。保存已发布内容仅推进版本和编辑稿；显式发布在一个事务内应用字段、关系、HTML、引用并清空指针。每篇最多 50 份历史，保护活动编辑稿；修剪或父记录永久删除通过触发器清除历史媒体引用。
 
 文章系列已切换至 `post_series(post_id, series_id, position)`，一篇文章可属于多个系列，非负 position 可重复，公开成员按 position、post_id 稳定排序。正文、HTML、标签/系列关系、媒体引用、相关版本与审计在同一事务提交；返回事务内读取的完整记录。
 

@@ -12,6 +12,9 @@ import type { CreatePostInput, EditPostInput } from "./generated";
 import { contentQuery } from "./contentQuery";
 
 export const postsApi = {
+  revisions: (id: string): Promise<Wire.ContentRevisionSummary[]> => request(s.revisionList, `/api/admin/v1/posts/${encodeURIComponent(id)}/revisions`),
+  revision: (id: string, revision: string): Promise<Wire.ContentRevisionDetail> => request(s.revisionDetail, `/api/admin/v1/posts/${encodeURIComponent(id)}/revisions/${encodeURIComponent(revision)}`),
+  restoreRevision: (id: string, revision: string, expectedVersion: number): Promise<PostDetail> => request(s.postDetail, `/api/admin/v1/posts/${encodeURIComponent(id)}/revisions/${encodeURIComponent(revision)}/restore`, { method: "POST", body: json<Wire.RestoreRevisionInput>({ expected_version: expectedVersion }) }),
   listPosts: (
     filter: Partial<ContentListFilter> & { author?: string } = {},
   ): Promise<ContentPage<PostSummary>> =>

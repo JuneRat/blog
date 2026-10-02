@@ -26,8 +26,8 @@ export function ContentLifecycleControls({ status, publishedAt, disabled, canPub
   const timestamp = instant ? Date.parse(instant) : NaN;
   return (
     <Space wrap>
-      {canPublish && status !== "published" && status !== "archived" && (
-        <Button disabled={disabled} onClick={() => void onAction("publish")}>发布</Button>
+      {canPublish && status !== "archived" && (
+        <Button disabled={disabled} onClick={() => void onAction("publish")}>{status === "published" ? "发布更新" : "发布"}</Button>
       )}
       {canUnpublish && status !== "draft" && (
         <Button disabled={disabled} onClick={() => void onAction("unpublish")}>

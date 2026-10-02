@@ -16,6 +16,7 @@ pub enum MediaContentKind {
     User,
     Site,
     Theme,
+    Revision,
 }
 
 /// 站点配置单例使用 nil UUID，其他来源使用实体 UUID。
@@ -30,6 +31,7 @@ impl MediaContentKind {
             Self::User => "user",
             Self::Site => "site",
             Self::Theme => "theme",
+            Self::Revision => "revision",
         }
     }
     pub fn parse(value: &str) -> Option<Self> {
@@ -40,6 +42,7 @@ impl MediaContentKind {
             "user" => Some(Self::User),
             "site" => Some(Self::Site),
             "theme" => Some(Self::Theme),
+            "revision" => Some(Self::Revision),
             _ => None,
         }
     }
@@ -63,6 +66,8 @@ pub enum MediaUsageSource {
     Series,
     Site,
     Theme,
+    PostRevision,
+    PageRevision,
 }
 
 impl MediaUsageSource {
@@ -74,6 +79,7 @@ impl MediaUsageSource {
             Self::Series => MediaContentKind::Series,
             Self::Site => MediaContentKind::Site,
             Self::Theme => MediaContentKind::Theme,
+            Self::PostRevision | Self::PageRevision => MediaContentKind::Revision,
         }
     }
 }

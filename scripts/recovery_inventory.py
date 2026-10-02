@@ -122,14 +122,14 @@ def normalized_root_path(source):
 def media_url_id(source, pipeline_version=2):
     # Pipeline 2 matches browser path normalization, then Axum Path<String>'s
     # single UTF-8 percent decode. Legacy 0/1 keep their original raw contract.
-    if pipeline_version not in (0, 1, 2):
+    if pipeline_version not in (0, 1, 2, 3):
         raise RecoveryError(f"unsupported content pipeline version: {pipeline_version}")
-    path = normalized_root_path(source) if pipeline_version == 2 else source
+    path = normalized_root_path(source) if pipeline_version >= 2 else source
     if path is None or not path.startswith("/media/"):
         return None
     try:
         value = path[len("/media/"):]
-        if pipeline_version == 2:
+        if pipeline_version >= 2:
             value = unquote(value, errors="strict")
         if not _MEDIA_UUID.fullmatch(value):
             return None
@@ -140,7 +140,7 @@ def media_url_id(source, pipeline_version=2):
 
 class Images(HTMLParser):
     def __init__(self, pipeline_version=2):
-        if pipeline_version not in (0, 1, 2):
+        if pipeline_version not in (0, 1, 2, 3):
             raise RecoveryError(f"unsupported content pipeline version: {pipeline_version}")
         super().__init__(convert_charrefs=True)
         self.pipeline_version = pipeline_version
@@ -166,7 +166,10 @@ def validate_relations(pg, database=None):
             # A stored derived result must be checked against the pipeline that
             # created it. Legacy backups can be released, then explicitly rebuilt;
             # the native purge guard refuses new deletion until that upgrade ends.
-            images = Images(row["pipeline_version"]); images.feed(row["html"]); images.close()
+            pipeline = row["pipeline_version"]
+            if not isinstance(pipeline, int) or pipeline < 0 or pipeline > 2147483647:
+                raise RecoveryError("unsupported content pipeline version")
+            images = Images(pipeline % 1024); images.feed(row["html"]); images.close()
             for mid in images.ids | ({row["cover"]} if row["cover"] else set()):
                 expected.add((mid,kind,row["id"]))
     rows = query_json(pg, "SELECT COALESCE(jsonb_agg(jsonb_build_array(mid,kind,sid)),'[]') FROM (SELECT avatar_media_id AS mid,'user' AS kind,id AS sid FROM users WHERE avatar_media_id IS NOT NULL UNION ALL SELECT cover_media_id,'series',id FROM series WHERE cover_media_id IS NOT NULL UNION ALL SELECT (value->>'logo_media_id')::uuid,'site','00000000-0000-0000-0000-000000000000'::uuid FROM settings WHERE key='site' AND value->>'logo_media_id' IS NOT NULL) refs", database)
@@ -188,6 +191,8 @@ def validate_relations(pg, database=None):
             except (ValueError, TypeError, AttributeError):
                 raise RecoveryError("invalid theme media ID") from None
             expected.add((mid, "theme", row["id"]))
+    revision_rows = query_json(pg, "SELECT COALESCE(jsonb_agg(jsonb_build_array(mid,'revision',id)),'[]') FROM content_revisions CROSS JOIN LATERAL unnest(media_ids) mid", database)
+    expected.update(tuple(row) for row in revision_rows)
     actual = {tuple(row) for row in query_json(pg, "SELECT COALESCE(jsonb_agg(jsonb_build_array(media_id,source_type,source_id)),'[]') FROM media_refs", database)}
     if actual != expected:
         raise RecoveryError(f"media references disagree with stored HTML/covers: {len(expected-actual)} missing, {len(actual-expected)} unexpected")

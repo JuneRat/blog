@@ -1,3 +1,4 @@
+import { RevisionHistory } from "../components/RevisionHistory";
 import { MEDIA_PUBLIC_NOTICE } from "../media";
 import { MarkdownEditor } from "../components/MarkdownEditor";
 import { PublicationPreview } from "../components/PublicationPreview";
@@ -17,6 +18,8 @@ export function PageEditScreen({ id }: { id: string | null }) {
 
 function PageEditor({ id }: { id: string | null }) {
   const {
+    hasPendingChanges,
+    restoreRevision,
     formApi,
     view,
     setView,
@@ -75,6 +78,8 @@ function PageEditor({ id }: { id: string | null }) {
       </Flex>
 
       {localDraft.panel}
+        {hasPendingChanges && <Alert type="info" showIcon title={pageStatus === "published" ? "有待发布修改，公开页面仍显示上次发布的内容。" : "服务端修改草稿已保留，当前内容尚未发布。"} style={{ marginBottom: 16 }} />}
+        {id !== null && <RevisionHistory key={id} kind="page" id={id} disabled={busy || formMismatch || localDraft.blocksEditing} canRestore={pageStatus !== "archived"} onRestore={restoreRevision} />}
       {conflict && <ContentConflict
         fields={conflictFields(view, comparison.snapshot === null ? null : toForm(comparison.snapshot))}
         version={comparison.snapshot?.version ?? null} busy={busy} loading={comparison.loading} error={comparison.error}
@@ -170,7 +175,7 @@ function PageEditor({ id }: { id: string | null }) {
                   disabled={busy || formMismatch || pageStatus === "archived" || localDraft.blocksEditing}
                   style={{ marginBottom: 12 }}
                 >
-                  {busy ? "处理中…" : pageStatus === "published" ? "更新已发布内容" : pageStatus === "scheduled" ? "保存预约内容" : "保存草稿"}
+                  {busy ? "处理中…" : pageStatus === "published" ? "保存修改草稿" : pageStatus === "scheduled" ? "保存预约内容" : "保存草稿"}
                 </Button>
                 {id !== null && (
                   <Flex justify="center" style={{ marginBottom: 12 }}>

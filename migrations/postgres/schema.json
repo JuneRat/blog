@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "id": "blog-postgres-0009-account-links",
+  "id": "blog-postgres-0010-content-revisions",
   "migrations": [
     {
       "version": 1,
@@ -46,6 +46,11 @@
       "version": 9,
       "file": "0009_account_links.sql",
       "checksum": "40a10bdec76dea2438df66b2e9a74896cf5856b768d062cd63631717f214081763d743787f53049877ad8eaae29247f2"
+    },
+    {
+      "version": 10,
+      "file": "0010_content_revisions.sql",
+      "checksum": "d800ad44574eef275454415331c2d43e165db08ef75381d8299cf3747c45aab471bf4b197e77f895866a8864b7718d18"
     }
   ],
   "tables": {
@@ -281,6 +286,15 @@
       "maintenance": []
     },
     "account_links": {
+      "app": [
+        "SELECT",
+        "INSERT",
+        "UPDATE",
+        "DELETE"
+      ],
+      "maintenance": []
+    },
+    "content_revisions": {
       "app": [
         "SELECT",
         "INSERT",

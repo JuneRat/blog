@@ -92,6 +92,7 @@ pub struct EditPostCmd {
 /// 面向 CLI/后台的文章视图，包含非公开状态与正文源文。
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct PostDto {
+    pub has_pending_changes: bool,
     pub id: Uuid,
     pub slug: String,
     pub title: String,
@@ -122,6 +123,7 @@ impl PostDto {
 
     fn from_snapshot(s: &PostSnapshot, tag_ids: Vec<Uuid>) -> Self {
         Self {
+            has_pending_changes: false,
             id: s.id,
             slug: s.slug.clone(),
             title: s.title.clone(),
@@ -216,12 +218,12 @@ impl PostInteractor {
         Ok(PostDto::from_record(record))
     }
 
-    /// 编辑当前正文；保存已发布内容直接更新线上。
+    /// 已发布文章保存为服务端编辑稿，显式发布后才更新公开内容。
     /// tag_ids = Some(set) 时与正文在同一事务整体替换标签关系。
     pub async fn edit(&self, actor: &Actor, cmd: EditPostCmd) -> Result<PostDto, UseCaseError> {
         actor.ensure_write_channel()?;
-        let (mut post, record) = self
-            .load_authorized(cmd.id, actor, "post.update", "post.update_any")
+        let (mut post, record, pending) = self
+            .load_editor(cmd.id, actor, "post.update", "post.update_any")
             .await?;
         let expected = checked_version(record.snapshot.version, cmd.expected_version)?;
         let series = match cmd.series {
@@ -270,9 +272,25 @@ impl PostInteractor {
 
         // 仅标签变化也要提交（version+1）；正文与标签都无变化则幂等返回。
         if changed || tags_changed {
-            return self.commit(actor, post, expected, new_tags).await;
+            let pending = post.status() == domain::content::PostStatus::Published;
+            let tags = new_tags.unwrap_or(record.tag_ids);
+            let mut dto = Self::committed(
+                self.posts
+                    .commit_edit(
+                        &post,
+                        expected,
+                        self.clock.now(),
+                        Some(&tags),
+                        actor.audit_context(),
+                    )
+                    .await?,
+            )?;
+            dto.has_pending_changes = pending;
+            return Ok(dto);
         }
-        Ok(PostDto::from_record(record))
+        let mut dto = PostDto::from_record(record);
+        dto.has_pending_changes = pending;
+        Ok(dto)
     }
 
     /// 立即发布草稿或预约内容；保留过去的发布时间，未来预约改为当前时间。
@@ -283,13 +301,29 @@ impl PostInteractor {
         expected_version: Option<i64>,
     ) -> Result<PostDto, UseCaseError> {
         actor.ensure_write_channel()?;
-        let (mut post, record) = self
-            .load_authorized(id, actor, "post.publish", "post.publish_any")
+        let (mut post, record, pending) = self
+            .load_editor(id, actor, "post.publish", "post.publish_any")
             .await?;
         let expected = checked_version(record.snapshot.version, expected_version)?;
 
-        if post.publish(self.clock.now()).map_err(map_domain)? {
-            return self.commit(actor, post, expected, None).await;
+        if post.publish(self.clock.now()).map_err(map_domain)? || pending {
+            // Directory references may have been removed since the draft was saved.
+            self.validate_tags(record.tag_ids.clone()).await?;
+            if let Some(id) = post.snapshot().category_id {
+                self.validate_category(id).await?;
+            }
+            self.validate_series_exists(&post.snapshot().series).await?;
+            return Self::committed(
+                self.posts
+                    .commit_publication(
+                        &post,
+                        expected,
+                        self.clock.now(),
+                        &record.tag_ids,
+                        actor.audit_context(),
+                    )
+                    .await?,
+            );
         }
         Ok(PostDto::from_record(record))
     }
@@ -310,7 +344,13 @@ impl PostInteractor {
         if post.withdraw() {
             return self.commit(actor, post, expected, None).await;
         }
-        Ok(PostDto::from_record(record))
+        let (_, record, pending) = self
+            .load_editor(id, actor, "post.unpublish", "post.unpublish_any")
+            .await?;
+        checked_version(record.snapshot.version, Some(expected))?;
+        let mut dto = PostDto::from_record(record);
+        dto.has_pending_changes = pending;
+        Ok(dto)
     }
 
     pub async fn schedule(
@@ -321,12 +361,27 @@ impl PostInteractor {
         version: Option<i64>,
     ) -> Result<PostDto, UseCaseError> {
         actor.ensure_write_channel()?;
-        let (mut post, record) = self
-            .load_authorized(id, actor, "post.publish", "post.publish_any")
+        let (mut post, record, pending) = self
+            .load_editor(id, actor, "post.publish", "post.publish_any")
             .await?;
         let expected = checked_version(record.snapshot.version, version)?;
-        if post.schedule(at, self.clock.now()).map_err(map_domain)? {
-            return self.commit(actor, post, expected, None).await;
+        if post.schedule(at, self.clock.now()).map_err(map_domain)? || pending {
+            self.validate_tags(record.tag_ids.clone()).await?;
+            if let Some(id) = post.snapshot().category_id {
+                self.validate_category(id).await?;
+            }
+            self.validate_series_exists(&post.snapshot().series).await?;
+            return Self::committed(
+                self.posts
+                    .commit_publication(
+                        &post,
+                        expected,
+                        self.clock.now(),
+                        &record.tag_ids,
+                        actor.audit_context(),
+                    )
+                    .await?,
+            );
         }
         Ok(PostDto::from_record(record))
     }
@@ -345,7 +400,13 @@ impl PostInteractor {
         if post.archive().map_err(map_domain)? {
             return self.commit(actor, post, expected, None).await;
         }
-        Ok(PostDto::from_record(record))
+        let (_, record, pending) = self
+            .load_editor(id, actor, "post.unpublish", "post.unpublish_any")
+            .await?;
+        checked_version(record.snapshot.version, Some(expected))?;
+        let mut dto = PostDto::from_record(record);
+        dto.has_pending_changes = pending;
+        Ok(dto)
     }
 
     /// 文章作者元数据（不含内容）；供 CLI 解析缺省操作身份。
@@ -364,10 +425,88 @@ impl PostInteractor {
 
     /// CLI/后台读取（任意状态）：own 需归属，any 放行；匿名 HTTP 不走此路径。
     pub async fn find(&self, actor: &Actor, id: Uuid) -> Result<PostDto, UseCaseError> {
-        let (_, record) = self
-            .load_authorized(id, actor, "post.read", "post.read_any")
+        let (_, record, pending) = self
+            .load_editor(id, actor, "post.read", "post.read_any")
             .await?;
-        Ok(PostDto::from_record(record))
+        let mut dto = PostDto::from_record(record);
+        dto.has_pending_changes = pending;
+        Ok(dto)
+    }
+
+    async fn load_editor(
+        &self,
+        id: Uuid,
+        actor: &Actor,
+        own: &str,
+        any: &str,
+    ) -> Result<(Post, PostRecord, bool), UseCaseError> {
+        let (record, pending) = self
+            .posts
+            .find_editor(id)
+            .await?
+            .filter(|(r, _)| r.snapshot.deleted_at.is_none())
+            .ok_or_else(|| UseCaseError::NotFound(format!("文章 {id}")))?;
+        authorize_own_or_any(actor, own, any, UserId(record.snapshot.author_id))?;
+        let post = Post::reconstitute(record.snapshot.clone())
+            .map_err(|e| UseCaseError::DataCorrupt(e.to_string()))?;
+        Ok((post, record, pending))
+    }
+    pub async fn revisions(
+        &self,
+        actor: &Actor,
+        id: Uuid,
+    ) -> Result<Vec<crate::revisions::RevisionSummary>, UseCaseError> {
+        self.load_authorized(id, actor, "post.read", "post.read_any")
+            .await?;
+        self.posts.revisions(id).await
+    }
+    pub async fn revision(
+        &self,
+        actor: &Actor,
+        id: Uuid,
+        revision: Uuid,
+    ) -> Result<crate::revisions::RevisionContent, UseCaseError> {
+        self.load_authorized(id, actor, "post.read", "post.read_any")
+            .await?;
+        self.posts
+            .revision(id, revision)
+            .await?
+            .ok_or_else(|| UseCaseError::NotFound("历史版本".into()))
+    }
+    pub async fn restore_revision(
+        &self,
+        actor: &Actor,
+        id: Uuid,
+        revision: Uuid,
+        expected: i64,
+    ) -> Result<PostDto, UseCaseError> {
+        actor.ensure_write_channel()?;
+        let (_, current) = self
+            .load_authorized(id, actor, "post.update", "post.update_any")
+            .await?;
+        checked_version(current.snapshot.version, Some(expected))?;
+        let r = self.revision(actor, id, revision).await?;
+        self.edit(
+            actor,
+            EditPostCmd {
+                id,
+                new_slug: current
+                    .snapshot
+                    .published_at
+                    .is_none()
+                    .then(|| r.slug.clone()),
+                title: Some(r.title.clone()),
+                excerpt: Some(r.excerpt.clone().unwrap_or_default()),
+                content: Some(r.content.clone()),
+                visibility: Some(r.visibility()?),
+                tag_ids: Some(r.tag_ids),
+                category_id: Some(r.category_id),
+                series: Some(r.series),
+                cover_media_id: Some(r.cover_media_id),
+                expected_version: Some(expected),
+            },
+        )
+        .await
     }
 
     pub async fn trash(
@@ -482,6 +621,11 @@ impl PostInteractor {
     fn committed(result: PostCommitOutcome) -> Result<PostDto, UseCaseError> {
         match result {
             PostCommitOutcome::Saved(record) => Ok(PostDto::from_record(*record)),
+            PostCommitOutcome::SavedEditingDraft(record) => {
+                let mut dto = PostDto::from_record(*record);
+                dto.has_pending_changes = true;
+                Ok(dto)
+            }
             PostCommitOutcome::StaleConflict => Err(UseCaseError::VersionConflict),
             PostCommitOutcome::Gone => Err(UseCaseError::NotFound("文章（已被删除）".into())),
         }

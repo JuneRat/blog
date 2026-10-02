@@ -112,7 +112,7 @@ async fn trash_keeps_existing_references_and_restore_allows_new_sources() {
     let pages = pages(&pool);
     let mut original = page("original", body(media.id()));
     pages.insert_page(&original, None.into()).await.unwrap();
-    assert_eq!(refs(&pool, media.id()).await, 1);
+    assert_eq!(refs(&pool, media.id()).await, 2);
     repo.set_deleted(
         media.id(),
         1,
@@ -122,7 +122,7 @@ async fn trash_keeps_existing_references_and_restore_allows_new_sources() {
     )
     .await
     .unwrap();
-    assert_eq!(refs(&pool, media.id()).await, 1);
+    assert_eq!(refs(&pool, media.id()).await, 2);
     original
         .edit(PagePatch {
             title: Some("Updated title".into()),
@@ -157,7 +157,7 @@ async fn trash_keeps_existing_references_and_restore_allows_new_sources() {
     .await
     .unwrap();
     pages.insert_page(&another, None.into()).await.unwrap();
-    assert_eq!(refs(&pool, media.id()).await, 2);
+    assert_eq!(refs(&pool, media.id()).await, 5);
     original
         .edit(PagePatch {
             content: Some("No image".into()),
@@ -168,7 +168,7 @@ async fn trash_keeps_existing_references_and_restore_allows_new_sources() {
         .commit_page(&original, 2, OffsetDateTime::now_utc(), None.into())
         .await
         .unwrap();
-    assert_eq!(refs(&pool, media.id()).await, 1);
+    assert_eq!(refs(&pool, media.id()).await, 4);
     pool.close().await;
 }
 
@@ -204,7 +204,7 @@ async fn invalid_new_reference_rolls_back_content_html_version_and_reference_cha
             .await
             .unwrap();
     assert_eq!(before, after);
-    assert_eq!(refs(&pool, media.id()).await, 1);
+    assert_eq!(refs(&pool, media.id()).await, 2);
     pool.close().await;
 }
 
@@ -472,7 +472,7 @@ async fn concurrent_trash_and_new_reference_never_lose_a_committed_reference() {
         );
         assert_eq!(trash.unwrap(), MediaChangeOutcome::Updated);
         match write {
-            Ok(_) => assert_eq!(refs(&pool, media.id()).await, 1),
+            Ok(_) => assert_eq!(refs(&pool, media.id()).await, 2),
             Err(UseCaseError::Invalid(_)) => {
                 assert_eq!(refs(&pool, media.id()).await, 0);
                 assert!(pages.find_by_id(page.id().0).await.unwrap().is_none());
@@ -509,7 +509,7 @@ async fn html_reference_extraction_tracks_rendered_images_without_code_or_commen
         .insert_page(&page("html-images", content), None.into())
         .await
         .unwrap();
-    assert_eq!(refs(&pool, media.id()).await, 1);
+    assert_eq!(refs(&pool, media.id()).await, 2);
     assert_eq!(refs(&pool, second.id()).await, 0);
     pool.close().await;
 }

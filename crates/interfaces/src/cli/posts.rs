@@ -31,7 +31,7 @@ pub enum PostAction {
         visibility: Option<String>,
     },
 
-    /// 编辑文章（保存已发布内容直接更新线上）
+    /// 编辑文章（已发布内容保存为修改草稿，需显式发布更新）
     Edit {
         #[arg(long)]
         id: uuid::Uuid,

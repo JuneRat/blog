@@ -80,7 +80,7 @@ class PostgresRecoveryTests(unittest.TestCase):
         shutil.copytree(PROJECT / "themes/default", self.theme_dir / ".theme-previous-default")
         (self.theme_dir / ".theme-previous-default/templates/index.html").write_text("previous release")
         (self.media_dir / "objects").mkdir(parents=True)
-        self.ids = {key: str(uuid.uuid4()) for key in ("media", "unused", "deleted", "root", "reply", "nested", "series1", "series2")}
+        self.ids = {key: str(uuid.uuid4()) for key in ("media", "unused", "deleted", "root", "reply", "nested", "series1", "series2", "post_revision", "page_revision")}
         self.cli(["migrate"])
         self.cli(["user", "create", "recovery-owner"])
         self.cli(["user", "passwd", "--user", "recovery-owner", "--password-stdin"], password="Recovery drill password 2026!\n")
@@ -152,6 +152,12 @@ class PostgresRecoveryTests(unittest.TestCase):
             self.query(f"INSERT INTO comments(id,post_id,parent_id,root_id,author_name,content,content_html,content_render_version,status,ip_address,created_at) VALUES('{self.ids[key]}','{post}',{parent_sql},{root_sql},'Guest','body','<p>body</p>',1,'{'trash' if key == 'root' else 'approved'}','192.0.2.1',now()-interval '200 days')")
         self.query(f"INSERT INTO sessions(token_hash,user_id,csrf_token,auth_version,expires_at) SELECT repeat('1',64),id,repeat('2',64),auth_version,now()+interval '1 day' FROM users WHERE id='{owner}'")
         self.query(f"INSERT INTO account_links(user_id,token_hash,email,auth_version,issued_at,expires_at) SELECT id,repeat('a',43),'owner@example.com',auth_version,now(),now()+interval '30 minutes' FROM users WHERE id='{owner}'")
+        # Keep pending editor copies separate from the live source across a full backup/restore.
+        for kind, slug, key in (("post", "drill-published", "post_revision"), ("page", "drill-page", "page_revision")):
+            rid = self.ids[key]
+            historical_image = self.ids["unused"]
+            data = json.dumps({"slug": slug, "title": "Pending revision", "content": f"![history](/media/{historical_image})", "visibility": "private", "excerpt": None, "tag_ids": [], "category_id": None, "series": [], "cover_media_id": None})
+            self.query(f"INSERT INTO content_revisions(id,{kind}_id,version,data,media_ids,actor_id,created_at) SELECT '{rid}',id,2,'{data}',ARRAY['{historical_image}']::uuid[],'{owner}',now() FROM {kind}s WHERE slug='{slug}'; INSERT INTO media_refs VALUES('{historical_image}','revision','{rid}'); UPDATE {kind}s SET version=2,draft_revision_id='{rid}' WHERE slug='{slug}'")
         self.query("INSERT INTO audit_logs(id,action,target_type,target_id,created_at) VALUES(gen_random_uuid(),'fixture','system','old',now()-interval '200 days')")
 
     def test_roundtrip_roles_isolation_and_media_integrity(self):
@@ -205,6 +211,11 @@ class PostgresRecoveryTests(unittest.TestCase):
             recovery.restore(argparse.Namespace(backup=backup,target_db=self.target,output=output,isolation_confirmed=True,docker_container=self.container))
         self.assertEqual(self.query("SELECT count(*) FROM sessions",self.target),"0")
         self.assertEqual(self.query("SELECT count(*) FROM account_links",self.target),"0")
+        self.assertEqual(self.query("SELECT count(*) FROM content_revisions",self.target),"2")
+        for kind, key in (("post", "post_revision"), ("page", "page_revision")):
+            self.assertEqual(self.query(f"SELECT draft_revision_id FROM {kind}s WHERE draft_revision_id IS NOT NULL",self.target),self.ids[key])
+            self.assertEqual(self.query(f"SELECT data->>'title' FROM content_revisions WHERE id='{self.ids[key]}'",self.target),"Pending revision")
+        self.assertEqual(self.query("SELECT count(*) FROM media_refs WHERE source_type='revision'",self.target),"2")
         self.assertEqual(self.query("SELECT config->>'footer_note' FROM themes WHERE slug='default'",self.target), "restore theme fixture")
         self.assertEqual(self.query("SELECT enabled||':'||config::text||':'||version FROM plugins WHERE id='markdown-enhance'",self.target), self.query("SELECT enabled||':'||config::text||':'||version FROM plugins WHERE id='markdown-enhance'"))
         self.assertEqual(self.query("SELECT schema_version||':'||render_revision||':'||version FROM plugin_runtime",self.target), "1:0:6")

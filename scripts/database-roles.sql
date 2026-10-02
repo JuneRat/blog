@@ -30,7 +30,7 @@ BEGIN
   IF (SELECT array_agg(table_name::text ORDER BY table_name)
       FROM information_schema.tables
       WHERE table_schema='public' AND table_type='BASE TABLE'
-        AND table_name<>'_sqlx_migrations') IS DISTINCT FROM ARRAY['account_links','audit_logs','categories','comments','media','media_refs','oauth_accounts','pages','permissions','plugin_runtime','plugins','post_series','post_tags','posts','role_permissions','roles','series','sessions','settings','tags','task_runs','task_schedules','themes','user_roles','users']::text[] THEN
+        AND table_name<>'_sqlx_migrations') IS DISTINCT FROM ARRAY['account_links','audit_logs','categories','comments','content_revisions','media','media_refs','oauth_accounts','pages','permissions','plugin_runtime','plugins','post_series','post_tags','posts','role_permissions','roles','series','sessions','settings','tags','task_runs','task_schedules','themes','user_roles','users']::text[] THEN
     RAISE EXCEPTION 'Database tables differ from schema.json; use the matching release';
   END IF;
 END $$;
@@ -60,6 +60,7 @@ GRANT SELECT(id,created_at),INSERT,DELETE ON public."audit_logs" TO :"maintenanc
 GRANT SELECT,INSERT,UPDATE,DELETE ON public."categories" TO :"app_role";
 GRANT SELECT,INSERT,UPDATE,DELETE ON public."comments" TO :"app_role";
 GRANT SELECT(id,created_at,ip_address),UPDATE(ip_address) ON public."comments" TO :"maintenance_role";
+GRANT SELECT,INSERT,UPDATE,DELETE ON public."content_revisions" TO :"app_role";
 GRANT SELECT,INSERT,UPDATE,DELETE ON public."media" TO :"app_role";
 GRANT SELECT,INSERT,UPDATE,DELETE ON public."media_refs" TO :"app_role";
 GRANT SELECT,INSERT,UPDATE,DELETE ON public."oauth_accounts" TO :"app_role";

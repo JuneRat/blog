@@ -43,6 +43,10 @@ function referenceTarget(
   contentId: string,
 ): { label: string; to: string } {
   switch (kind) {
+    case "post_revision":
+      return { label: "文章历史版本", to: paths.editPost(contentId) };
+    case "page_revision":
+      return { label: "页面历史版本", to: paths.editPage(contentId) };
     case "post":
       return { label: "文章", to: paths.editPost(contentId) };
     case "page":

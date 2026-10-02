@@ -97,8 +97,8 @@ GET 和 POST 都必须带启动终端显示的 `X-Install-Token`，并执行 Ori
 | `GET /posts` | 默认本人文章摘要分页；`scope=all` 或显式 `author=用户名` 需 `post.read_any` |
 | `POST /posts` | 创建草稿，返回 201 和详情 |
 | `GET /posts/{id}` | 详情，包含 Markdown `content` 和 `excerpt` |
-| `PATCH /posts/{id}` | 编辑并返回详情；编辑已发布文章会直接更新线上内容 |
-| `POST /posts/{id}/publish` | 立即发布，返回详情 |
+| `PATCH /posts/{id}` | 编辑并返回详情；已发布文章保存到服务端编辑稿，需显式发布更新 |
+| `POST /posts/{id}/publish` | 立即发布或应用修改草稿，返回详情 |
 | `POST /posts/{id}/schedule` | 预约或更新预约时间，返回详情；需发布权限 |
 | `POST /posts/{id}/unpublish` | 撤回、取消预约或解除归档，回到草稿；需撤回权限 |
 | `POST /posts/{id}/archive` | 归档，返回详情；沿用 `post.unpublish` / `post.unpublish_any` |
@@ -129,6 +129,20 @@ GET 和 POST 都必须带启动终端显示的 `X-Install-Token`，并执行 Ori
 
 Post/Page 的 schedule 请求为 `{ "published_at": "2026-10-01T10:00:00+08:00", "expected_version": 3 }`。时间必须为带时区的 RFC 3339 且晚于当前时间，只接受草稿或已预约状态；已发布或已归档内容须先退回草稿。内容 DTO 的 published_at 和 updated_at 同样使用 RFC 3339，后台输入按 `/me.time_zone` 指定的站点时区转换后提交。预约即锁定 slug，取消预约不解锁。
 
+## 服务端编辑稿与历史版本
+
+Post/Page 的 GET 与编辑详情包含 `has_pending_changes`，为 true 时源文和元数据来自服务端编辑稿，状态、作者和发布时间保持主记录。`PATCH` 已发布内容不会更新公开页面；发布接口在版本校验后应用编辑稿并清除标志。预约、撤回和回收站规则见[内容生命周期](content-lifecycle.md)。
+
+以下路径中的 `{kind}` 为 `posts` 或 `pages`；所有接口复用管理会话、no-store，写入另校验 CSRF 和 Origin。
+
+| 方法与路径 | 行为 |
+|---|---|
+| `GET /{kind}/{id}/revisions` | 原内容阅读权限；最多 50 条、版本倒序，返回 `id/version/title/created_at/actor_id` 数组 |
+| `GET /{kind}/{id}/revisions/{revision}` | 同上；只读取属于指定内容的版本，返回 `slug/title/content/visibility/excerpt/tag_ids/category_id/series/cover_media_id`；Page 的文章专属字段为空 |
+| `POST /{kind}/{id}/revisions/{revision}/restore` | 原内容读写权限；必填正整数 `expected_version`，返回编辑详情；已发布内容恢复为修改草稿 |
+
+历史不可改写，恢复是新的编辑提交，不恢复作者、状态、发布时间或已锁定的 slug。归档不可编辑，已在回收站的内容返回 404；不存在或属于其他内容的版本返回 404，版本过期返回 409。历史中的目录、媒体按当前规则校验，不复活已删除关联。仅有编辑权限的账号不能借恢复操作发布。迁移前记录在首次修改时补入，历史最多保留 50 份并保护活动编辑稿。
+
 ## 文章与评论批量操作
 
 `POST /api/admin/v1/posts/batch` 和 `POST /api/admin/v1/comments/batch` 沿用管理会话、CSRF、同源 Origin 和 no-store 契约。请求体最多 16 KiB，`items` 必须包含 1–100 项；每项必填 UUID `id` 和正整数 `expected_version`，不能重复 ID。直接使用列表条目的 `version` 作为该项的前提版本。未知动作、未知字段、缺少字段、错误类型或超预算均返回 400 `invalid_request`。
@@ -143,7 +157,7 @@ Post/Page 的 schedule 请求为 `{ "published_at": "2026-10-01T10:00:00+08:00",
 }
 ```
 
-文章动作及参数如下；`trash/restore/purge` 不接受 `params`。
+文章动作及参数如下；`trash/restore/purge` 不接受 `params`。包含服务端修改草稿时，批量发布、预约或修改分类返回 400，需先在对应编辑页处理；撤回、归档、回收站动作保留编辑稿。没有修改草稿的批量分类调整仍立即应用并写入历史。
 
 | action | params | 权限与行为 |
 |---|---|---|

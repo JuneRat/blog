@@ -66,6 +66,10 @@ export type ContentPreviewResult = { content_html: string,
  */
 head_html: string, };
 
+export type ContentRevisionDetail = { slug: string, title: string, content: string, visibility: string, excerpt: string | null, tag_ids: Array<string>, category_id: string | null, series: Array<SeriesPlacement>, cover_media_id: string | null, };
+
+export type ContentRevisionSummary = { id: string, version: number, title: string, created_at: string, actor_id: string | null, };
+
 export type CreateCategoryInput = { name: string, slug: string,
 /**
  * 父分类 slug；缺省为根分类。
@@ -169,7 +173,7 @@ export type NavigationItem = { label: string, page_slug: string, placement: Navi
 
 export type NavigationPlacement = "header" | "footer";
 
-export type PageDetail = { content: string, id: string, slug: string, title: string, status: string, visibility: string, version: number, published_at: string | null, updated_at: string, };
+export type PageDetail = { has_pending_changes?: boolean, content: string, id: string, slug: string, title: string, status: string, visibility: string, version: number, published_at: string | null, updated_at: string, };
 
 export type PageSummary = { id: string, slug: string, title: string, status: string, visibility: string, version: number, published_at: string | null, updated_at: string, };
 
@@ -191,7 +195,7 @@ export type PluginsView = { version: number, plugins: Array<PluginView>, };
 
 export type PostBatchInput = { "action": "trash", items: Array<BatchItemInput>, } | { "action": "restore", items: Array<BatchItemInput>, } | { "action": "purge", items: Array<BatchItemInput>, } | { "action": "change_status", items: Array<BatchItemInput>, params: BatchPostStatusInput, } | { "action": "change_category", items: Array<BatchItemInput>, params: BatchPostCategoryInput, };
 
-export type PostDetail = { excerpt: string | null, content: string, id: string, slug: string, title: string, status: string, visibility: string, version: number, published_at: string | null, updated_at: string, author_id: string,
+export type PostDetail = { has_pending_changes?: boolean, excerpt: string | null, content: string, id: string, slug: string, title: string, status: string, visibility: string, version: number, published_at: string | null, updated_at: string, author_id: string,
 /**
  * 当前关联标签 id（按 id 升序）；名称由前端结合标签目录解析。
  */
@@ -256,6 +260,8 @@ ordered_post_ids: Array<string>, expected_series_version?: number | null, };
 export type ReorderSeriesResult = { series_version: number, ordered_post_ids: Array<string>, };
 
 export type ResetPasswordInput = { token: string, password: string, };
+
+export type RestoreRevisionInput = { expected_version: number, };
 
 export type RetentionSettings = { comment_ip_days: number, comment_version: number, audit_days: number, audit_version: number, };
 

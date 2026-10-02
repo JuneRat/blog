@@ -12,6 +12,9 @@ import type { CreatePageInput, EditPageInput } from "./generated";
 import { contentQuery } from "./contentQuery";
 
 export const pagesApi = {
+  revisions: (id: string): Promise<Wire.ContentRevisionSummary[]> => request(s.revisionList, `/api/admin/v1/pages/${encodeURIComponent(id)}/revisions`),
+  revision: (id: string, revision: string): Promise<Wire.ContentRevisionDetail> => request(s.revisionDetail, `/api/admin/v1/pages/${encodeURIComponent(id)}/revisions/${encodeURIComponent(revision)}`),
+  restoreRevision: (id: string, revision: string, expectedVersion: number): Promise<PageDetail> => request(s.pageDetail, `/api/admin/v1/pages/${encodeURIComponent(id)}/revisions/${encodeURIComponent(revision)}/restore`, { method: "POST", body: json<Wire.RestoreRevisionInput>({ expected_version: expectedVersion }) }),
   listPages: (
     filter: Partial<ContentListFilter> = {},
   ): Promise<ContentPage<PageSummary>> =>

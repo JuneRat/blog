@@ -14,6 +14,7 @@ export const pageSummary = object<Wire.PageSummary>()({
   updated_at: string,
 });
 export const pageDetail = object<Wire.PageDetail>()({
+  has_pending_changes: z.boolean().optional(),
   ...pageSummary.shape,
   content: string,
 });
@@ -27,6 +28,7 @@ export const seriesPlacement = object<Wire.SeriesPlacement>()({
   position: count.max(2147483647),
 });
 export const postDetail = object<Wire.PostDetail>()({
+  has_pending_changes: z.boolean().optional(),
   ...pageSummary.shape,
   author_id: string,
   tag_ids: z.array(string),
@@ -49,3 +51,7 @@ export const pagePage = object<Wire.ContentPage<Wire.PageSummary>>()({
   page: count,
   per_page: count,
 });
+
+export const revisionSummary = object<Wire.ContentRevisionSummary>()({ id: string, version: count, title: string, created_at: string, actor_id: nullable });
+export const revisionList = z.array(revisionSummary);
+export const revisionDetail = object<Wire.ContentRevisionDetail>()({ slug: string, title: string, content: string, visibility: string, excerpt: nullable, tag_ids: z.array(string), category_id: nullable, series: z.array(seriesPlacement), cover_media_id: nullable });

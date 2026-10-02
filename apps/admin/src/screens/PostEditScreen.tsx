@@ -1,3 +1,4 @@
+import { RevisionHistory } from "../components/RevisionHistory";
 import { MEDIA_PUBLIC_NOTICE } from "../media";
 import { Alert, Button, Card, Col, Flex, Form, Input, Row, Tag, Typography } from "antd";
 import { useAuth } from "../auth";
@@ -20,6 +21,8 @@ export function PostEditScreen({ id }: { id: string | null }) {
 }
 function PostEditor({ id }: { id: string | null }) {
   const {
+    hasPendingChanges,
+    restoreRevision,
     formApi,
     view,
     version,
@@ -86,6 +89,8 @@ function PostEditor({ id }: { id: string | null }) {
         </Flex>
 
         {localDraft.panel}
+        {hasPendingChanges && <Alert type="info" showIcon title={postStatus === "published" ? "有待发布修改，公开页面仍显示上次发布的内容。" : "服务端修改草稿已保留，当前内容尚未发布。"} style={{ marginBottom: 16 }} />}
+        {id !== null && <RevisionHistory key={id} kind="post" id={id} disabled={busy || formMismatch || localDraft.blocksEditing} canRestore={postStatus !== "archived"} onRestore={restoreRevision} />}
         {conflict && (
           <ContentConflict
             fields={conflictFields(
@@ -220,7 +225,7 @@ function PostEditor({ id }: { id: string | null }) {
                     {busy
                       ? "处理中…"
                       : postStatus === "published"
-                        ? "更新已发布内容"
+                        ? "保存修改草稿"
                         : postStatus === "scheduled"
                           ? "保存预约内容"
                           : "保存草稿"}

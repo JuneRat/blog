@@ -1,6 +1,6 @@
 # 数据库设计
 
-本文记录已确认的 PostgreSQL 18 设计：原 **19 表基线**包含 18 张业务表和 `sessions`，固定后台任务追加两张运行表、主题配置追加 `themes`、插件配置追加 `plugins` 与 `plugin_runtime` 后共 **24 张应用表**。字段、外键、CHECK 与索引以 [migrations/postgres](../migrations/postgres) 的迁移链为准，[汇总 DDL](sql/postgres-core.sql) 是自动生成的 DDL 参考，选择理由见 [ADR-0016](adr/0016-confirmed-blog-schema.md) 与 [ADR-0020](adr/0020-persistent-admin-tasks.md)。
+本文记录已确认的 PostgreSQL 18 设计：原 **19 表基线**包含 18 张业务表和 `sessions`，固定后台任务追加两张运行表、主题配置追加 `themes`、插件配置追加 `plugins` 与 `plugin_runtime`，账号邮件和修订历史追加 `account_links`、`content_revisions` 后共 **26 张应用表**。字段、外键、CHECK 与索引以 [migrations/postgres](../migrations/postgres) 的迁移链为准，[汇总 DDL](sql/postgres-core.sql) 是自动生成的 DDL 参考，选择理由见 [ADR-0016](adr/0016-confirmed-blog-schema.md) 与 [ADR-0020](adr/0020-persistent-admin-tasks.md)。
 
 **新建库基线、身份会话、媒体、内容、目录与评论已接入。** `migrate` 现在执行新的 [0001_initial_schema.sql](../migrations/postgres/0001_initial_schema.sql)，原九个迁移已替换，仅支持空库或已应用新基线的库；检测到旧结构时退出，不自动清库。保留期任务、独立授权、新库恢复、正式媒体显式清理和已有业务写入口的事务审计已接入，生产上线验收仍待完成。实际适配边界见[当前数据库实现](database-current.md)，后续验收见[路线图](product-roadmap.md#已采纳数据库设计的实施)。
 
@@ -56,7 +56,7 @@ OAuth/OIDC 的 provider 固定到可信实例，subject 使用稳定外部账号
 
 ## 3. 内容、目录与提交
 
-Post 保留作者、可选分类、摘要、封面和单篇评论开关。Page 没有作者，按全站页面权限管理；页面也有 `deleted_at`。两者各存一份 Markdown，不引入修订历史或编辑副本，保存已发布内容仍直接更新当前正文。
+Post 保留作者、可选分类、摘要、封面和单篇评论开关。Page 没有作者，按全站页面权限管理；页面也有 `deleted_at`。两者主表保存正式 Markdown；`content_revisions` 追加有界历史，`draft_revision_id` 指向已发布内容的修改草稿。保存编辑稿不改公开内容，显式发布才应用新源文、关系和派生 HTML。
 
 文章至多一个分类，可以属于多个标签和多个系列：
 

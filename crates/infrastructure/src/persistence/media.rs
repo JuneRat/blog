@@ -241,16 +241,17 @@ impl MediaRepository for PostgresMediaRepository {
         ))
     }
     async fn usage_of(&self, id: Uuid) -> Result<Vec<MediaUsageRow>, UseCaseError> {
-        let rows = sqlx::query(&format!("SELECT refs.source_type, refs.source_id, mp.author_id, \
+        let rows = sqlx::query(&format!("SELECT refs.source_type, COALESCE(rv.post_id,rv.page_id,refs.source_id) AS source_id, mp.author_id, rv.post_id AS revision_post_id, \
             COALESCE(mp.slug,gp.slug,sp.slug,au.username,th.slug,'') AS slug, \
-            COALESCE(mp.title,gp.title,sp.name,NULLIF(au.display_name,''),au.username,CASE WHEN refs.source_type='theme' THEN '主题配置：' || th.slug END,CASE WHEN refs.source_type='site' THEN '站点设置' END,'') AS title, \
+            COALESCE(CASE WHEN refs.source_type='revision' THEN '历史版本 v' || rv.version || '：' || (rv.data->>'title') END,mp.title,gp.title,sp.name,NULLIF(au.display_name,''),au.username,CASE WHEN refs.source_type='theme' THEN '主题配置：' || th.slug END,CASE WHEN refs.source_type='site' THEN '站点设置' END,'') AS title, \
             COALESCE(mp.status,gp.status,au.status) AS content_status, \
             COALESCE(mp.visibility,gp.visibility,'public') AS content_visibility, \
-            CASE refs.source_type WHEN 'post' THEN mp.deleted_at IS NOT NULL WHEN 'page' THEN gp.deleted_at IS NOT NULL WHEN 'user' THEN au.deleted_at IS NOT NULL ELSE false END AS content_deleted, \
+            CASE refs.source_type WHEN 'post' THEN mp.deleted_at IS NOT NULL WHEN 'page' THEN gp.deleted_at IS NOT NULL WHEN 'user' THEN au.deleted_at IS NOT NULL WHEN 'revision' THEN COALESCE(mp.deleted_at,gp.deleted_at) IS NOT NULL ELSE false END AS content_deleted, \
             COALESCE({SOURCE_IS_PUBLIC},false) AS is_public \
             FROM media_refs refs \
-            LEFT JOIN posts mp ON refs.source_type='post' AND mp.id=refs.source_id \
-            LEFT JOIN pages gp ON refs.source_type='page' AND gp.id=refs.source_id \
+            LEFT JOIN content_revisions rv ON refs.source_type='revision' AND rv.id=refs.source_id \
+            LEFT JOIN posts mp ON (refs.source_type='post' AND mp.id=refs.source_id) OR mp.id=rv.post_id \
+            LEFT JOIN pages gp ON (refs.source_type='page' AND gp.id=refs.source_id) OR gp.id=rv.page_id \
             LEFT JOIN series sp ON refs.source_type='series' AND sp.id=refs.source_id \
             LEFT JOIN users au ON refs.source_type='user' AND au.id=refs.source_id \
             LEFT JOIN themes th ON refs.source_type='theme' AND th.id=refs.source_id \
@@ -259,8 +260,19 @@ impl MediaRepository for PostgresMediaRepository {
         rows.iter()
             .map(|row| {
                 let kind: &str = row.try_get("source_type").map_err(map_row_error)?;
-                let source =
-                    usage_source(kind, row.try_get("content_status").map_err(map_row_error)?)?;
+                let source = if kind == "revision" {
+                    if row
+                        .try_get::<Option<Uuid>, _>("revision_post_id")
+                        .map_err(map_row_error)?
+                        .is_some()
+                    {
+                        MediaUsageSource::PostRevision
+                    } else {
+                        MediaUsageSource::PageRevision
+                    }
+                } else {
+                    usage_source(kind, row.try_get("content_status").map_err(map_row_error)?)?
+                };
                 Ok(MediaUsageRow {
                     source,
                     content_id: row.try_get("source_id").map_err(map_row_error)?,
@@ -359,6 +371,7 @@ fn usage_source(kind: &str, status: Option<&str>) -> Result<MediaUsageSource, Us
         Some(MediaContentKind::Series) => Some(MediaUsageSource::Series),
         Some(MediaContentKind::Site) => Some(MediaUsageSource::Site),
         Some(MediaContentKind::Theme) => Some(MediaUsageSource::Theme),
+        Some(MediaContentKind::Revision) => None,
         None => None,
     };
     source.ok_or_else(|| UseCaseError::Repository("无效引用来源或状态".into()))

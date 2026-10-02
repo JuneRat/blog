@@ -108,7 +108,8 @@ async fn saves_track_query_fragment_and_encoded_local_urls_but_ignore_external_i
         )
         .unwrap();
         pages.insert_page(&page, None.into()).await.unwrap();
-        assert_eq!(refs(&pool, id).await, 2);
+        // Each content source also retains its initial revision's image reference.
+        assert_eq!(refs(&pool, id).await, 4);
         assert_eq!(refs(&pool, external).await, 0);
         post.edit(PostPatch {
             content: Some(format!("![updated](/media/{encoded}?v=3#new)")),
@@ -119,7 +120,7 @@ async fn saves_track_query_fragment_and_encoded_local_urls_but_ignore_external_i
             posts.commit_post(&post, 1, OffsetDateTime::now_utc(), None, None.into()).await.unwrap(),
             PostCommitOutcome::Saved(_)
         ));
-        assert_eq!(refs(&pool, id).await, 2);
+        assert_eq!(refs(&pool, id).await, 5);
         let versions: Vec<i32> = sqlx::query_scalar("SELECT content_render_version FROM posts UNION ALL SELECT content_render_version FROM pages")
             .fetch_all(&pool).await.unwrap();
         assert_eq!(versions, vec![CONTENT_RENDER_VERSION; 2]);
@@ -259,7 +260,7 @@ async fn each_normalized_url_protects_its_own_media_without_claiming_external_im
             .await
             .unwrap();
         for id in local {
-            assert_eq!(refs(&pool, id).await, 1);
+            assert_eq!(refs(&pool, id).await, 2);
         }
         let id = normalized_image.unwrap();
         sqlx::query("UPDATE media SET deleted_at=now() WHERE id=$1")

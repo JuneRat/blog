@@ -424,9 +424,10 @@ async fn page_is_public_only_while_published_and_public() {
     let (status, _) = get(&s.router, "/about").await;
     assert_eq!(status, StatusCode::NOT_FOUND, "撤回后不可访问");
 
-    // 重新发布再改 private：退出匿名读取，但后台仍可见。
+    // 保存 private 仅修改编辑稿；显式发布更新后才退出匿名读取。
     s.pages.publish(&s.editor, _created.id, None).await.unwrap();
-    s.pages
+    let edited = s
+        .pages
         .edit(
             &s.editor,
             application::page::EditPageCmd {
@@ -435,6 +436,12 @@ async fn page_is_public_only_while_published_and_public() {
                 ..Default::default()
             },
         )
+        .await
+        .unwrap();
+    assert!(edited.has_pending_changes);
+    assert_eq!(get(&s.router, "/about").await.0, StatusCode::OK);
+    s.pages
+        .publish(&s.editor, _created.id, Some(edited.version))
         .await
         .unwrap();
     let (status, _) = get(&s.router, "/about").await;

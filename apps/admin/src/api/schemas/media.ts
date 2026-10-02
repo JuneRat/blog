@@ -25,7 +25,7 @@ export const mediaPage = object<Wire.MediaPage>()({
   per_page: count,
 });
 export const mediaReference = object<Wire.MediaReference>()({
-  kind: z.enum(["post", "page", "series", "user", "site", "theme"]),
+  kind: z.enum(["post", "page", "series", "user", "site", "theme", "post_revision", "page_revision"]),
   content_id: string,
   slug: string,
   title: string,

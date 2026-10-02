@@ -169,7 +169,7 @@ describe("未保存离开保护", () => {
     act(() => navigate(paths.newPost));
     await screen.findByLabelText("标题");
     fireEvent.change(titleInput(), { target: { value: post.title } });
-    fireEvent.click(screen.getByRole("button", { name: /保存草稿|保存预约内容|更新已发布内容/ }));
+    fireEvent.click(screen.getByRole("button", { name: /保存草稿|保存预约内容|保存修改草稿/ }));
     await waitFor(() => expect(postsApi.createPost).toHaveBeenCalledTimes(1));
     fireEvent.change(screen.getByLabelText("正文（Markdown）"), { target: { value: "保存期间的新正文" } });
     act(() => window.history.back());
@@ -237,7 +237,7 @@ describe("未保存离开保护", () => {
     vi.mocked(postsApi.updatePost).mockResolvedValue({ ...post, title: "改过的标题", version: 2 });
     await openDirtyEditor();
 
-    fireEvent.click(screen.getByRole("button", { name: /保存草稿|保存预约内容|更新已发布内容/ }));
+    fireEvent.click(screen.getByRole("button", { name: /保存草稿|保存预约内容|保存修改草稿/ }));
     await waitFor(() => expect(postsApi.updatePost).toHaveBeenCalledTimes(1));
     await screen.findByText("已保存。");
 

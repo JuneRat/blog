@@ -4,6 +4,8 @@
 #[path = "admin_api/batch.rs"]
 mod batch;
 mod common;
+#[path = "admin_api/revisions.rs"]
+mod revisions;
 #[path = "admin_api/themes.rs"]
 mod themes;
 

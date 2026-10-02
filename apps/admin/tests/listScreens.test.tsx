@@ -496,7 +496,7 @@ describe("跨屏缓存一致性", () => {
     fireEvent.change(screen.getByLabelText("标题"), { target: { value: "关于我们" } });
     vi.mocked(pagesApi.updatePage).mockResolvedValue({ ...aboutDetail, title: "关于我们", version: 3 });
     vi.mocked(pagesApi.listPages).mockResolvedValue(contentPage([{ ...aboutPage, title: "关于我们", version: 3 }]));
-    fireEvent.click(screen.getByRole("button", { name: /保存草稿|保存预约内容|更新已发布内容/ }));
+    fireEvent.click(screen.getByRole("button", { name: /保存草稿|保存预约内容|保存修改草稿/ }));
     await waitFor(() => expect(pagesApi.updatePage).toHaveBeenCalled());
 
     fireEvent.click(screen.getByRole("menuitem", { name: "独立页面" }));

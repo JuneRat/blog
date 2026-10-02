@@ -84,7 +84,11 @@ struct MediaUsageJson {
 impl From<&MediaUsageDto> for MediaUsageJson {
     fn from(dto: &MediaUsageDto) -> Self {
         Self {
-            kind: dto.source.kind().as_str(),
+            kind: match dto.source {
+                application::ports::MediaUsageSource::PostRevision => "post_revision",
+                application::ports::MediaUsageSource::PageRevision => "page_revision",
+                _ => dto.source.kind().as_str(),
+            },
             content_id: dto.content_id,
             slug: dto.slug.clone(),
             title: dto.title.clone(),
@@ -96,6 +100,8 @@ impl From<&MediaUsageDto> for MediaUsageJson {
                 application::ports::MediaUsageSource::Series => "published",
                 application::ports::MediaUsageSource::Site => "active",
                 application::ports::MediaUsageSource::Theme => "configured",
+                application::ports::MediaUsageSource::PostRevision
+                | application::ports::MediaUsageSource::PageRevision => "revision",
             }
             .to_owned(),
             visibility: dto.visibility.as_str().to_owned(),

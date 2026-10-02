@@ -66,7 +66,9 @@ impl From<&PostDto> for PostJson {
 /// 列表通过独立的 PostListJson 输出展示字段。
 #[derive(serde::Serialize, ts_rs::TS)]
 #[ts(rename = "PostDetail")]
-struct PostDetailJson {
+pub(super) struct PostDetailJson {
+    #[ts(as = "Option<bool>", optional)]
+    has_pending_changes: bool,
     #[serde(flatten)]
     summary: PostJson,
     excerpt: Option<String>,
@@ -76,6 +78,7 @@ struct PostDetailJson {
 impl From<PostDto> for PostDetailJson {
     fn from(dto: PostDto) -> Self {
         Self {
+            has_pending_changes: dto.has_pending_changes,
             summary: PostJson::from(&dto),
             excerpt: dto.excerpt,
             content: dto.content,
@@ -185,6 +188,18 @@ pub fn posts_router(state: AdminState) -> Router {
         .route("/api/admin/v1/posts/{id}/unpublish", post(unpublish_post))
         .route("/api/admin/v1/posts/{id}/schedule", post(schedule_post))
         .route("/api/admin/v1/posts/{id}/archive", post(archive_post))
+        .route(
+            "/api/admin/v1/posts/{id}/revisions",
+            get(super::revisions::posts_list),
+        )
+        .route(
+            "/api/admin/v1/posts/{id}/revisions/{revision}",
+            get(super::revisions::posts_detail),
+        )
+        .route(
+            "/api/admin/v1/posts/{id}/revisions/{revision}/restore",
+            post(super::revisions::posts_restore),
+        )
         .layer(axum::extract::DefaultBodyLimit::max(ADMIN_BODY_LIMIT))
         .layer(middleware::from_fn(no_store))
         .with_state(state)

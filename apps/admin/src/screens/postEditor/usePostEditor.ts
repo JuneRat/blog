@@ -51,6 +51,7 @@ export function usePostEditor(id: string | null) {
     ...EMPTY_FORM,
     ...formApi.getFieldsValue(true),
   });
+  const [hasPendingChanges, setHasPendingChanges] = useState(false);
   const [version, setVersion] = useState<number | null>(null);
   const [postStatus, setPostStatus] = useState<string>("draft");
   const [publishedAt, setPublishedAt] = useState<string | null>(null);
@@ -122,6 +123,7 @@ export function usePostEditor(id: string | null) {
       loadedIdRef.current = post.id;
       writeForm(merged);
       setFormId(post.id);
+      setHasPendingChanges(post.has_pending_changes ?? false);
       setVersion(post.version);
       setPostStatus(post.status);
       setPublishedAt(post.published_at);
@@ -204,6 +206,7 @@ export function usePostEditor(id: string | null) {
       writeForm(EMPTY_FORM);
       setFormId(null);
       setVersion(null);
+      setHasPendingChanges(false);
       setPostStatus("draft");
       setPublishedAt(null);
       setBusy(false);
@@ -317,7 +320,7 @@ export function usePostEditor(id: string | null) {
       if (!isCurrent()) return;
       const stillDirty = applyServer(saved, sent);
 
-      setNotice(stillDirty ? "已保存；等待期间的新改动尚未保存。" : "已保存。");
+      setNotice(stillDirty ? "已保存；等待期间的新改动尚未保存。" : saved.has_pending_changes ? "修改已保存到服务端草稿；点击发布更新后公开页面才会改变。" : "已保存。");
     } catch (e) {
       if (!isCurrent()) return;
       if (isVersionConflict(e)) {
@@ -329,6 +332,26 @@ export function usePostEditor(id: string | null) {
     } finally {
       if (isCurrent()) setBusy(false);
     }
+  }
+
+  async function restoreRevision(revision: string): Promise<void> {
+    if (id === null || version === null || formMismatch) return;
+    const isCurrent = beginRequest();
+    const sent = readForm();
+    setBusy(true); setError(null);
+    try {
+      const restored = await postsApi.restoreRevision(id, revision, version);
+      invalidateRelated();
+      if (!isCurrent()) return;
+      const stillDirty = applyServer(restored, sent);
+      setNotice(`历史版本已恢复到编辑稿。${restored.has_pending_changes ? "公开内容未改变，请核对后发布更新。" : ""}${stillDirty ? "等待期间的新输入已保留，尚未保存。" : ""}`);
+    } catch (cause) {
+      if (isCurrent()) {
+        if (isVersionConflict(cause)) { setConflict(true); comparison.refresh(); }
+        else setError(permissionMessageOf(cause));
+      }
+      throw cause;
+    } finally { if (isCurrent()) setBusy(false); }
   }
 
   /** 冲突动作一：丢弃本地改动，重新加载服务器最新内容。 */
@@ -450,6 +473,7 @@ export function usePostEditor(id: string | null) {
       invalidateRelated();
       if (!isCurrent()) return;
       applyStatus(result);
+      if (savesContent) setHasPendingChanges(result.has_pending_changes ?? false);
       setNotice(
         `状态已更新为${statusLabel(result.status)}。${hasUnsaved() ? "还有未保存的改动。" : ""}`,
       );
@@ -478,7 +502,7 @@ export function usePostEditor(id: string | null) {
   const canUploadMedia = me?.permissions.includes("media.upload") ?? false;
   /**
    * 图片插入：拖入/粘贴上传与面板插入共用同一路径，插入只改本地表单。
-   * 已发布内容仍然要显式点「保存并更新线上」才生效。
+   * 已发布内容先保存服务端草稿，显式「发布更新」后生效。
    */
   const insertion = useImageInsertion(
     contentRef,
@@ -492,6 +516,8 @@ export function usePostEditor(id: string | null) {
       setVersion((current) => (current === previous ? next : current));
   }
   return {
+    hasPendingChanges,
+    restoreRevision,
     formApi,
     view,
     version,
