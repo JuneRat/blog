@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "id": "blog-21-v1",
+  "id": "blog-24-v1",
   "migrations": [
     {
       "version": 1,
@@ -36,6 +36,11 @@
       "version": 7,
       "file": "0007_themes.sql",
       "checksum": "7c65349eb430e7f1dd6a7f18c90364b77585778c4fcc81776ebfc2aa199a2a766b58a062598b269e3386f6b18d99d927"
+    },
+    {
+      "version": 8,
+      "file": "0008_plugins.sql",
+      "checksum": "cffd6913f7b66783e4a187f0b491a74dfece5ec648a73384250d61f56590d254d4fd43544359fc32accd0157a3aedfda"
     }
   ],
   "tables": {
@@ -115,6 +120,28 @@
         "DELETE"
       ],
       "maintenance": []
+    },
+    "plugin_runtime": {
+      "app": [
+        "SELECT",
+        "INSERT",
+        "UPDATE",
+        "DELETE"
+      ],
+      "maintenance": [
+        "SELECT"
+      ]
+    },
+    "plugins": {
+      "app": [
+        "SELECT",
+        "INSERT",
+        "UPDATE",
+        "DELETE"
+      ],
+      "maintenance": [
+        "SELECT"
+      ]
     },
     "post_series": {
       "app": [

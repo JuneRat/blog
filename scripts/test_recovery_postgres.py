@@ -139,6 +139,7 @@ class PostgresRecoveryTests(unittest.TestCase):
         theme_id = str(uuid.uuid4())
         release = theme_release(self.theme_dir / "default")
         self.query(f"INSERT INTO themes(id,slug,config,config_schema_version,release,media_fields,created_at,updated_at) VALUES('{theme_id}','default','{{\"header_image\":\"{mid}\",\"footer_note\":\"restore theme fixture\"}}',1,'{release}',ARRAY['header_image'],now(),now()); INSERT INTO media_refs VALUES('{mid}','theme','{theme_id}')")
+        self.query("INSERT INTO plugin_runtime(schema_version,render_revision,version,updated_at) VALUES(1,0,6,now()); INSERT INTO plugins(id,enabled,config,version,created_at,updated_at) VALUES('markdown-enhance',false,'{\"math\":true,\"mermaid\":false}',3,now(),now())")
         self.query(f"INSERT INTO pages(id,title,slug,content,content_html,content_render_version,status,published_at) VALUES(gen_random_uuid(),'Page','drill-page','![image](/media/{mid})','<p><img src=\"/media/{mid}\"></p>',1,'scheduled',now()-interval '1 day'); INSERT INTO media_refs SELECT '{mid}','page',id FROM pages")
         for key in ("series1", "series2"):
             sid = self.ids[key]
@@ -195,10 +196,14 @@ class PostgresRecoveryTests(unittest.TestCase):
             manifest=recovery.verify(backup)
             self.assertEqual(len(manifest["media"]),3)
             self.assertEqual(manifest["database_counts"]["sessions"],1)
+            self.assertEqual(manifest["database_counts"]["plugins"],1)
+            self.assertEqual(manifest["database_counts"]["plugin_runtime"],1)
             output=self.root / "restore"
             recovery.restore(argparse.Namespace(backup=backup,target_db=self.target,output=output,isolation_confirmed=True,docker_container=self.container))
         self.assertEqual(self.query("SELECT count(*) FROM sessions",self.target),"0")
         self.assertEqual(self.query("SELECT config->>'footer_note' FROM themes WHERE slug='default'",self.target), "restore theme fixture")
+        self.assertEqual(self.query("SELECT enabled||':'||config::text||':'||version FROM plugins WHERE id='markdown-enhance'",self.target), self.query("SELECT enabled||':'||config::text||':'||version FROM plugins WHERE id='markdown-enhance'"))
+        self.assertEqual(self.query("SELECT schema_version||':'||render_revision||':'||version FROM plugin_runtime",self.target), "1:0:6")
         self.assertTrue((output / "resources/media/objects/unregistered.png").is_file())
         self.cli(["serve","--addr","127.0.0.1:0"],database=self.target,success=False)
         self.cli(["publish-due"],database=self.target,success=False)

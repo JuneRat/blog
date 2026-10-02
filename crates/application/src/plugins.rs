@@ -222,7 +222,7 @@ impl PluginSettings {
 #[derive(Debug, Clone, Default)]
 pub struct PluginSettingsRecord {
     pub value: PluginSettings,
-    /// Zero means no settings row has been written yet.
+    /// Zero means no plugin runtime record has been written yet.
     pub version: i64,
 }
 

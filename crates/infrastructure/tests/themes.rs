@@ -615,9 +615,9 @@ async fn forward_upgrade_from_previous_chain_keeps_selection_and_plugin_settings
         .await
         .unwrap();
     sqlx::query("INSERT INTO settings(key,value,version) VALUES('theme',$1,9),('plugins',$2,4)")
-        .bind(serde_json::json!({"schema_version":1,"slug":"paper"})).bind(serde_json::json!({"schema_version":1,"plugins":{"sample":{"enabled":true,"config":{"label":"unchanged"}}}})).execute(&pool).await.unwrap();
+        .bind(serde_json::json!({"schema_version":1,"slug":"paper"})).bind(serde_json::json!({"schema_version":1,"render_revision":3,"plugins":{"sample":{"enabled":true,"config":{"label":"unchanged"}}}})).execute(&pool).await.unwrap();
     let before: Vec<(String, serde_json::Value, i64)> =
-        sqlx::query_as("SELECT key,value,version FROM settings ORDER BY key")
+        sqlx::query_as("SELECT key,value,version FROM settings WHERE key<>'plugins' ORDER BY key")
             .fetch_all(&pool)
             .await
             .unwrap();
@@ -630,6 +630,17 @@ async fn forward_upgrade_from_previous_chain_keeps_selection_and_plugin_settings
             .await
             .unwrap();
     assert_eq!(before, after);
+    let plugin: (bool, serde_json::Value, i64) =
+        sqlx::query_as("SELECT enabled,config,version FROM plugins WHERE id='sample'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(plugin, (true, serde_json::json!({"label":"unchanged"}), 4));
+    let runtime: (i32, i64) = sqlx::query_as("SELECT render_revision,version FROM plugin_runtime")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(runtime, (3, 4));
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT count(*) FROM themes")
             .fetch_one(&pool)

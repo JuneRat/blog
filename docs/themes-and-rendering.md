@@ -183,7 +183,7 @@ sitemap 的 50,000 条限制是整个文件的预算：首页、文章、Page、
 
 ## 执行策略与实际预算
 
-正文插件的启停和配置通过全站 `settings.plugins.render_revision` 合入现有渲染版本，具体编码、旧文章重建和资源钩子见[插件机制](plugins.md)。主题预检关闭运行期插件快照读取，保持固定数据和无数据库依赖；实际页面请求使用当前启用状态。
+正文插件的启停和配置通过全站 `plugin_runtime.render_revision` 合入现有渲染版本，各插件状态与配置独立存入 `plugins`，具体编码、旧文章重建和资源钩子见[插件机制](plugins.md)。主题预检关闭运行期插件快照读取，保持固定数据和无数据库依赖；实际页面请求使用当前启用状态。
 
 [`RenderingRuntime`](../crates/infrastructure/src/render_executor.rs) 为正文写入、评论与公开主题分配独立的许可池：正文和评论各默认 4 个，全部主题共用 16 个。评论预览和主题查询等待不会占用正文许可。三者仍共用 Tokio 阻塞线程池，许可隔离并非独立 CPU 或线程池。应用只调用异步端口，不持有 Tokio 信号量，也不自行使用 `spawn_blocking` 或超时。
 

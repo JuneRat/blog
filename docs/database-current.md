@@ -1,6 +1,6 @@
 # 当前数据库实现
 
-新建库以 **19 表基线**为起点，后台任务追加 `task_runs`、`task_schedules` 后为 **21 张应用表**，不含 SQLx 迁移记录。身份、会话、媒体、内容、目录、评论、保留期维护、新库恢复与正式媒体显式清理已适配；已有业务写入口已补齐事务审计、来源 IP 和后台只读查询，生产验收仍待完成。完整设计见[数据库设计](database-design.md)，逐项状态见[路线图](product-roadmap.md#已采纳数据库设计的实施)。
+新建库以 **19 表基线**为起点，后台任务追加 `task_runs`、`task_schedules`，主题追加 `themes`，插件追加 `plugins`、`plugin_runtime` 后为 **24 张应用表**，不含 SQLx 迁移记录。身份、会话、媒体、内容、目录、评论、保留期维护、新库恢复与正式媒体显式清理已适配；已有业务写入口已补齐事务审计、来源 IP 和后台只读查询，生产验收仍待完成。完整设计见[数据库设计](database-design.md)，逐项状态见[路线图](product-roadmap.md#已采纳数据库设计的实施)。
 
 ## 1. 权威来源与迁移
 
@@ -22,8 +22,9 @@ SQLx 为初始迁移包事务，因此该文件没有额外的 BEGIN/COMMIT。�
 | 媒体 | media、media_refs |
 | 评论、设置、审计 | comments、settings、audit_logs |
 | 后台任务 | task_runs、task_schedules |
+| 主题与插件 | themes、plugins、plugin_runtime |
 
-实体 UUID 由应用生成；关联表采用复合主键，settings 以 key 为主键，sessions 以令牌摘要为主键。时间使用 timestamptz；状态使用 text 与 CHECK。可编辑实体的 version 初值 1；updated_at 由应用维护。字段、外键、CHECK 与索引统一查阅初始迁移，避免重复维护另一份结构表。
+实体 UUID 由应用生成；关联表采用复合主键，settings 以 key 为主键，sessions 以令牌摘要为主键，plugins 以稳定文本 ID 为主键，plugin_runtime 使用单例键。时间使用 timestamptz；状态使用 text 与 CHECK。可编辑实体的 version 初值 1；updated_at 由应用维护。字段、外键、CHECK 与索引统一查阅初始迁移，避免重复维护另一份结构表。
 
 ## 3. 身份与 RBAC
 

@@ -1,6 +1,6 @@
 # 数据库设计
 
-本文记录已确认的 PostgreSQL 18 设计：原 **19 表基线**包含 18 张业务表和 `sessions`，固定后台任务追加两张运行表、主题配置追加 `themes` 后共 **22 张应用表**。字段、外键、CHECK 与索引以 [migrations/postgres](../migrations/postgres) 的迁移链为准，[汇总 DDL](sql/postgres-core.sql) 是自动生成的 DDL 参考，选择理由见 [ADR-0016](adr/0016-confirmed-blog-schema.md) 与 [ADR-0020](adr/0020-persistent-admin-tasks.md)。
+本文记录已确认的 PostgreSQL 18 设计：原 **19 表基线**包含 18 张业务表和 `sessions`，固定后台任务追加两张运行表、主题配置追加 `themes`、插件配置追加 `plugins` 与 `plugin_runtime` 后共 **24 张应用表**。字段、外键、CHECK 与索引以 [migrations/postgres](../migrations/postgres) 的迁移链为准，[汇总 DDL](sql/postgres-core.sql) 是自动生成的 DDL 参考，选择理由见 [ADR-0016](adr/0016-confirmed-blog-schema.md) 与 [ADR-0020](adr/0020-persistent-admin-tasks.md)。
 
 **新建库基线、身份会话、媒体、内容、目录与评论已接入。** `migrate` 现在执行新的 [0001_initial_schema.sql](../migrations/postgres/0001_initial_schema.sql)，原九个迁移已替换，仅支持空库或已应用新基线的库；检测到旧结构时退出，不自动清库。保留期任务、独立授权、新库恢复、正式媒体显式清理和已有业务写入口的事务审计已接入，生产上线验收仍待完成。实际适配边界见[当前数据库实现](database-current.md)，后续验收见[路线图](product-roadmap.md#已采纳数据库设计的实施)。
 
@@ -14,13 +14,14 @@
 | 目录 | `categories`、`tags`、`series` | 分类树、标签、系列 |
 | 内容关联 | `post_tags`、`post_series` | 文章与标签、系列均为多对多 |
 | 主题 | `themes` | 独立配置覆盖、发布/结构版本、媒体字段与并发身份 |
+| 插件 | `plugins`、`plugin_runtime` | 逐插件启停与配置、全局编辑版本和正文渲染版本 |
 | 媒体 | `media`、`media_refs` | 媒体元数据、使用位置与删除保护 |
 | 评论 | `comments` | 多级回复、根评论、审核与回收站 |
 | 系统 | `settings`、`audit_logs` | 分组配置与成功业务变更审计 |
 | 会话 | `sessions` | 令牌摘要、认证版本快照与期限 |
 | 后台任务 | `task_runs`、`task_schedules` | 三种固定任务的执行、报告、租约及受控计划 |
 
-实体 UUIDv7 由应用生成；关系表使用复合主键。`permissions.code`、`settings.key` 与 `sessions.token_hash` 直接作主键，不额外添加 UUID。时间使用 `timestamptz`，状态使用文本加 CHECK。`updated_at` 由实际写入维护，默认值不代替更新逻辑。
+实体 UUIDv7 由应用生成；关系表使用复合主键。`permissions.code`、`settings.key`、`plugins.id` 与 `sessions.token_hash` 直接作主键，不额外添加 UUID；`plugin_runtime` 使用单例键。时间使用 `timestamptz`，状态使用文本加 CHECK。`updated_at` 由实际写入维护，默认值不代替更新逻辑。
 
 既有业务版本字段分别存储，不放入 metadata：
 

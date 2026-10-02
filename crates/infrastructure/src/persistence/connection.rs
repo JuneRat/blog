@@ -40,8 +40,15 @@ pub async fn migrate_schema(
     if !can_create {
         return verify_applied(pool, &migrator).await;
     }
+    // SQLx leaves its session advisory lock held when a migration fails. Close
+    // the session on every exit so failed upgrades can be retried safely.
+    let mut connection = pool
+        .acquire()
+        .await
+        .map_err(|e| UseCaseError::Repository(e.to_string()))?;
+    connection.close_on_drop();
     migrator
-        .run(pool)
+        .run_direct(&mut *connection)
         .await
         .map_err(|e| UseCaseError::Repository(format!("数据库迁移失败：{e}")))?;
     Ok(())

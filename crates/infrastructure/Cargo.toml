@@ -51,6 +51,10 @@ name = "plugins"
 required-features = ["sqlx-test-support"]
 
 [[test]]
+name = "plugins_persistence"
+required-features = ["sqlx-test-support"]
+
+[[test]]
 name = "admin_content_queries"
 required-features = ["sqlx-test-support"]
 
