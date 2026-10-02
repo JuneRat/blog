@@ -291,6 +291,7 @@ async fn fresh_stack_with_themes(with_themes: bool) -> Stack {
         },
         common::media_guard(pool.clone()),
     );
+    let mut theme_preview_site = None;
     let mut theme_root = None;
     let mut public = axum::Router::new();
     if with_themes {
@@ -380,9 +381,11 @@ async fn fresh_stack_with_themes(with_themes: bool) -> Stack {
         )
         .with_themes(store, registry.clone())
         .with_theme_configs(theme_configs);
+        let site = Arc::new(site);
+        theme_preview_site = Some(site.clone());
         public = interfaces::http::mount_live_theme_assets(
             interfaces::http::public_router(interfaces::http::PublicSiteState {
-                site: Arc::new(site),
+                site,
                 health: None,
             }),
             registry,
@@ -434,6 +437,14 @@ async fn fresh_stack_with_themes(with_themes: bool) -> Stack {
         secure_cookies: false,
     };
 
+    if let Some(site) = theme_preview_site {
+        public = public.merge(interfaces::http_themes::preview_router(
+            interfaces::http_themes::ThemePreviewState {
+                site,
+                admin: admin_state.clone(),
+            },
+        ));
+    }
     let access_router =
         interfaces::http_registration::admin_router(interfaces::http_registration::AccessState {
             registration: auth_state.registration.clone(),

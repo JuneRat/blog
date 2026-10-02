@@ -34,7 +34,7 @@
 | 站点设置 | 已实现 site/theme（含有序页头/页脚独立页面导航）、评论开关与评论 IP/审计保留期，包含分组版本冲突处理；固定维护任务在独立任务页面管理，CLI/外部调度仍可使用 | [配置](configuration.md) |
 | 后台任务 | 已实现三种固定任务的持久运行/计划、跨进程租约、取消 queued 请求与新 ID 重试；HTML 手动或未来一次性计划、retention 默认关闭的每日周期、publish_due 固定 30 秒启用；每类历史最多 500 条。应用、数据库、HTTP、真实浏览器与本地 Docker 验证通过，不提供通用 cron 或命令执行器 | [ADR-0020](adr/0020-persistent-admin-tasks.md)、[任务操作](operations-and-recovery.md#后台任务管理) |
 | 公开发现 | 已实现可配置每页数量的首页分页、RSS、sitemap、robots 与基础 SEO；使用统一公开条件，不收录草稿、私密或回收站内容 | [内容生命周期](content-lifecycle.md)、[主题与渲染](themes-and-rendering.md) |
-| 主题 | 已实现受控只读函数、请求级预算、第三方主题包 `paper` 与后台 ZIP 安装、验证、激活、卸载；桥接原型验证完成。已实现 `site.navigation` 上下文及两套主题导航；cursor 与公开作者函数未实现 | [主题与渲染](themes-and-rendering.md)、[原型报告](template-bridge-experiment.md) |
+| 主题 | 已实现受控只读函数、请求级预算、第三方主题包 `paper` 与后台 ZIP 安装、验证、首页预览、保留配置升级、上一版回退、激活和卸载；桥接原型验证完成。已实现 `site.navigation` 上下文及两套主题导航；cursor 与公开作者函数未实现 | [主题与渲染](themes-and-rendering.md)、[原型报告](template-bridge-experiment.md) |
 | 原生评论 | 已适配游客/账号提交、受限 Markdown/预览、HTML 持久化、多级两级展示、删除占位、审核恢复、设置中的全站开关和四种审核策略（含待审原因）；IP 保留期已接入独立维护任务 | [评论](comments.md) |
 | 插件机制 | 已实现独立插件管理、启停配置、正文钩子、前台 CSS/defer JS、提供商配置校验、外部脚本声明、权限与审计、现有 HTML 重建对接；内置 Markdown 增强提供公式与图表，Umami 插件提供公开页面统计采集和外部报表链接。Umami 默认关闭，启停不要求正文重建；不提供报表 API、文章扩展清单或动态加载器 | [插件机制](plugins.md) |
 | 媒体 | 已实现正文图片、Post/Series 封面、用户头像和站点 logo，以及上传、引用保护、独立公开链接和回收站；编辑器插图与封面选择、媒体库均支持文件名搜索和分页，直接上传/粘贴/拖入入口说明链接立即公开；正式文件可按明确计划在维护窗口清理，失败后原计划重试 | [内容生命周期](content-lifecycle.md) |

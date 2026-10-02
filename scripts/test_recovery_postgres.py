@@ -77,6 +77,8 @@ class PostgresRecoveryTests(unittest.TestCase):
         self.theme_dir = self.root / "themes"
         shutil.copytree(PROJECT / "themes/default", self.theme_dir / "default")
         shutil.copytree(PROJECT / "theme-packages/paper", self.theme_dir / "paper")
+        shutil.copytree(PROJECT / "themes/default", self.theme_dir / ".theme-previous-default")
+        (self.theme_dir / ".theme-previous-default/templates/index.html").write_text("previous release")
         (self.media_dir / "objects").mkdir(parents=True)
         self.ids = {key: str(uuid.uuid4()) for key in ("media", "unused", "deleted", "root", "reply", "nested", "series1", "series2")}
         self.cli(["migrate"])
@@ -319,6 +321,7 @@ class PostgresRecoveryTests(unittest.TestCase):
         tool(new, ["release", "--output", output, "--verification-confirmed", *docker])
 
     def check_isolated_server(self, output):
+        self.assertEqual((output / "resources/installed-themes/.theme-previous-default/templates/index.html").read_text(), "previous release")
         with socket.socket() as sock:
             sock.bind(("127.0.0.1",0)); port=sock.getsockname()[1]
         base=f"http://127.0.0.1:{port}"

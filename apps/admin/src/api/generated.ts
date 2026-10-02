@@ -231,6 +231,8 @@ export type PostSummary = { author_username: string, id: string, slug: string, t
 
 export type PreviewResult = { content_html: string, };
 
+export type PreviousTheme = { previous: ThemePackageReport | null, };
+
 export type Profile = { user_id: string, username: string, display_name: string | null, bio: string | null, version: number, avatar_media_id: string | null, avatar_url: string | null, };
 
 export type ProviderSummary = { id: string, name: string, kind: string, };
@@ -361,6 +363,10 @@ export type ThemeOption = { slug: string, name: string, release: string, id?: st
 
 export type ThemePackageReport = { slug: string, name: string, release: string, template_count: number, asset_count: number, };
 
+export type ThemePreview = { html: string, };
+
+export type ThemePreviewInput = { expected_release: string, };
+
 export type ThemeSettings = { slug: string, effective_slug: string, fallback_slug: string, source: SiteSettingsSource, version: number, available: Array<ThemeOption>, };
 
 export type UninstallThemeInput = { expected_version: number, expected_release: string, id: string, config_schema_version: number, expected_config_version: number, };
@@ -378,6 +384,8 @@ export type UpdateSeriesInput = { name: string, description?: string | null,
  * 封面三态：缺省不修改；null 移除封面；id 设置封面。
  */
 cover_media_id?: string | null, expected_version?: number | null, };
+
+export type UpdateThemeInput = { id: string, expected_version: number, expected_release: string, };
 
 export type UserPage = { items: Array<AdminUser>, total: number, page: number, per_page: number, };
 

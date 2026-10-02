@@ -68,6 +68,10 @@ pub trait CommentRenderer: Send + Sync {
 /// 按可信站点地址计算，模板只负责输出，避免同一规则在多个模板里各写一遍。
 #[async_trait]
 pub trait ThemeRenderer: Send + Sync {
+    /// Preview must not emit analytics or other live-page plugin hooks.
+    fn for_preview(&self) -> Option<std::sync::Arc<dyn ThemeRenderer>> {
+        None
+    }
     fn with_config(
         &self,
         _config: crate::theme_config::ThemeConfig,

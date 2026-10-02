@@ -458,6 +458,12 @@ impl ThemeExecutor {
 
 #[async_trait]
 impl ThemeRenderer for ThemeExecutor {
+    fn for_preview(&self) -> Option<Arc<dyn ThemeRenderer>> {
+        Some(Arc::new(Self {
+            runtime: self.runtime.for_theme_validation(),
+            renderer: self.renderer.clone(),
+        }))
+    }
     fn with_config(
         &self,
         config: application::theme_config::ThemeConfig,

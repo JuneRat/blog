@@ -55,6 +55,10 @@ pub fn app_router(state: AppState, assets: HttpAssets, config: HttpConfig) -> Ro
         plugins: state.plugins,
         admin: state.admin.clone(),
     });
+    let theme_preview = crate::http_themes::preview_router(crate::http_themes::ThemePreviewState {
+        site: state.public.site.clone(),
+        admin: state.admin.clone(),
+    });
     let https = config.public_origin.starts_with("https://");
     let content_preview = crate::http_content_preview::content_preview_router(
         crate::http_content_preview::ContentPreviewState {
@@ -116,6 +120,7 @@ pub fn app_router(state: AppState, assets: HttpAssets, config: HttpConfig) -> Ro
         .merge(crate::http_media::media_read_router(media_read))
         .merge(comments)
         .merge(content_preview)
+        .merge(theme_preview)
         .merge(retention)
         .merge(audit)
         .merge(html_rebuild)

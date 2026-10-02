@@ -41,6 +41,7 @@ type ThemeRenderers = BTreeMap<String, (String, Arc<dyn ThemeRenderer>)>;
 pub struct ThemeRegistry {
     themes: RwLock<ThemeRenderers>,
     assets: RwLock<BTreeMap<String, ThemeAssets>>,
+    previous_assets: RwLock<BTreeMap<String, ThemeAssets>>,
     fallback: String,
     schemas: RwLock<BTreeMap<String, Arc<crate::theme_config::ThemeSchema>>>,
 }
@@ -50,6 +51,7 @@ impl ThemeRegistry {
         Self {
             themes: RwLock::default(),
             assets: RwLock::default(),
+            previous_assets: RwLock::default(),
             fallback,
             schemas: RwLock::default(),
         }
@@ -92,7 +94,7 @@ impl ThemeRegistry {
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if themes.contains_key(&slug) {
-            return Err(UseCaseError::Invalid("主题已安装，请先卸载同名主题".into()));
+            return Err(UseCaseError::Invalid("主题已安装，请使用升级".into()));
         }
         self.assets
             .write()
@@ -115,7 +117,7 @@ impl ThemeRegistry {
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if themes.contains_key(&slug) {
-            return Err(UseCaseError::Invalid("主题已安装，请先卸载同名主题".into()));
+            return Err(UseCaseError::Invalid("主题已安装，请使用升级".into()));
         }
         self.assets
             .write()
@@ -136,6 +138,45 @@ impl ThemeRegistry {
             .get(slug)
             .cloned()
             .unwrap_or_default()
+    }
+
+    /// Keep the previous release's assets available for already rendered pages.
+    pub fn retain_previous_assets(&self, assets: ThemeAssets) {
+        self.previous_assets
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(assets.slug.clone(), assets);
+    }
+
+    pub fn replace_configured_release(
+        &self,
+        name: String,
+        renderer: Arc<dyn ThemeRenderer>,
+        assets: ThemeAssets,
+        schema: Arc<crate::theme_config::ThemeSchema>,
+    ) -> Result<(), UseCaseError> {
+        let slug = assets.slug.clone();
+        let mut themes = self
+            .themes
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !themes.contains_key(&slug) {
+            return Err(UseCaseError::VersionConflict);
+        }
+        if let Some(old) = self
+            .assets
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(slug.clone(), assets)
+        {
+            self.retain_previous_assets(old);
+        }
+        self.schemas
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(slug.clone(), schema);
+        themes.insert(slug, (name, renderer));
+        Ok(())
     }
 
     /// Select renderer, release and contract under one registry read lock.
@@ -185,6 +226,10 @@ impl ThemeRegistry {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(slug);
         themes.remove(slug);
+        self.previous_assets
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(slug);
         Ok(())
     }
 
@@ -195,6 +240,14 @@ impl ThemeRegistry {
             .get(slug)
             .filter(|assets| assets.version == release)
             .cloned()
+            .or_else(|| {
+                self.previous_assets
+                    .read()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .get(slug)
+                    .filter(|assets| assets.version == release)
+                    .cloned()
+            })
     }
 
     pub fn validate(&self) -> Result<(), UseCaseError> {
@@ -263,6 +316,28 @@ pub trait ThemeOperationGuard: Send + 'static {}
 
 #[async_trait::async_trait]
 pub trait ThemePackages: Send + Sync {
+    async fn previous(&self, _slug: &str) -> Result<Option<ThemePackageReport>, UseCaseError> {
+        Ok(None)
+    }
+    async fn upgrade(
+        &self,
+        _slug: &str,
+        _bytes: Vec<u8>,
+        _actor: crate::audit::AuditContext,
+        _identity: ThemeUpdateIdentity,
+        _guard: Box<dyn ThemeOperationGuard>,
+    ) -> Result<ThemePackageReport, UseCaseError> {
+        Err(UseCaseError::Invalid("主题升级未装配".into()))
+    }
+    async fn rollback(
+        &self,
+        _slug: &str,
+        _actor: crate::audit::AuditContext,
+        _identity: ThemeUpdateIdentity,
+        _guard: Box<dyn ThemeOperationGuard>,
+    ) -> Result<ThemePackageReport, UseCaseError> {
+        Err(UseCaseError::Invalid("主题回退未装配".into()))
+    }
     async fn lock(&self) -> Box<dyn ThemeOperationGuard>;
     async fn validate_package(&self, bytes: Vec<u8>) -> Result<ThemePackageReport, UseCaseError>;
     async fn install(
@@ -279,6 +354,13 @@ pub trait ThemePackages: Send + Sync {
         identity: ThemeUninstallIdentity,
         guard: Box<dyn ThemeOperationGuard>,
     ) -> Result<(), UseCaseError>;
+}
+
+#[derive(Debug, Clone)]
+pub struct ThemeUpdateIdentity {
+    pub id: uuid::Uuid,
+    pub version: i64,
+    pub release: String,
 }
 
 #[derive(Debug, Clone)]

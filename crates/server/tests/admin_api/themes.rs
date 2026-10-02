@@ -865,3 +865,172 @@ async fn theme_settings_http_defaults_independent_configs_validation_refs_and_ol
         StatusCode::CONFLICT
     );
 }
+
+#[tokio::test]
+async fn theme_upgrade_preview_and_rollback_http_keep_live_selection() {
+    let _serial = SERIAL.lock().await;
+    let stack = fresh_stack_with_themes(true).await;
+    let (owner, csrf) = login_as(&stack.router, &stack.idp, "owner").await;
+    let (author, author_csrf) = login_as(&stack.router, &stack.idp, "author").await;
+    let (status, first) = theme_request(
+        &stack,
+        Some(&owner),
+        Some(&csrf),
+        "POST",
+        "/api/admin/v1/themes",
+        custom_theme_zip("first {{ site.title }}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, settings) = theme_request(
+        &stack,
+        Some(&owner),
+        Some(&csrf),
+        "GET",
+        "/api/admin/v1/themes/custom/settings",
+        vec![],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let input = serde_json::json!({"id":settings["id"],"expected_version":settings["version"],"expected_release":first["release"]});
+    let query = format!(
+        "/api/admin/v1/themes/custom/upgrade?id={}&expected_version={}&expected_release={}",
+        settings["id"].as_str().unwrap(),
+        settings["version"],
+        first["release"].as_str().unwrap()
+    );
+    let preview_input =
+        serde_json::to_vec(&serde_json::json!({"expected_release":first["release"]})).unwrap();
+    assert_eq!(
+        theme_request(
+            &stack,
+            Some(&author),
+            Some(&author_csrf),
+            "POST",
+            "/api/admin/v1/themes/custom/preview",
+            preview_input.clone()
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        theme_request(
+            &stack,
+            Some(&author),
+            Some(&author_csrf),
+            "POST",
+            &query,
+            custom_theme_zip("second")
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        theme_request(
+            &stack,
+            Some(&owner),
+            None,
+            "POST",
+            &query,
+            custom_theme_zip("second")
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    let (status, preview) = theme_request(
+        &stack,
+        Some(&owner),
+        Some(&csrf),
+        "POST",
+        "/api/admin/v1/themes/custom/preview",
+        preview_input.clone(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(preview["html"].as_str().unwrap().contains("first 测试站点"));
+    let (_, selection) = theme_request(
+        &stack,
+        Some(&owner),
+        Some(&csrf),
+        "GET",
+        "/api/admin/v1/settings/theme",
+        vec![],
+    )
+    .await;
+    assert_eq!(selection["effective_slug"], "default");
+    let (status, second) = theme_request(
+        &stack,
+        Some(&owner),
+        Some(&csrf),
+        "POST",
+        &query,
+        custom_theme_zip("second"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{second}");
+    assert_ne!(first["release"], second["release"]);
+    assert_eq!(
+        theme_request(
+            &stack,
+            Some(&owner),
+            Some(&csrf),
+            "POST",
+            &query,
+            custom_theme_zip("third")
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        theme_request(
+            &stack,
+            Some(&owner),
+            Some(&csrf),
+            "POST",
+            "/api/admin/v1/themes/custom/preview",
+            preview_input
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        theme_request(
+            &stack,
+            Some(&owner),
+            Some(&csrf),
+            "POST",
+            "/api/admin/v1/themes/custom/rollback",
+            serde_json::to_vec(&input).unwrap()
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    let (_, previous) = theme_request(
+        &stack,
+        Some(&owner),
+        Some(&csrf),
+        "GET",
+        "/api/admin/v1/themes/custom/previous",
+        vec![],
+    )
+    .await;
+    assert_eq!(previous["previous"]["release"], first["release"]);
+    let (_, current) = theme_request(
+        &stack,
+        Some(&owner),
+        Some(&csrf),
+        "GET",
+        "/api/admin/v1/themes/custom/settings",
+        vec![],
+    )
+    .await;
+    let (status, rolled) = theme_request(&stack, Some(&owner), Some(&csrf), "POST", "/api/admin/v1/themes/custom/rollback", serde_json::to_vec(&serde_json::json!({"id":current["id"],"expected_version":current["version"],"expected_release":current["release"]})).unwrap()).await;
+    assert_eq!(status, StatusCode::OK, "{rolled}");
+    assert_eq!(rolled["release"], first["release"]);
+}

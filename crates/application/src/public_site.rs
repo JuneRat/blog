@@ -317,6 +317,57 @@ impl PublicSiteInteractor {
         }
     }
 
+    pub async fn preview_theme(
+        &self,
+        actor: &crate::identity::Actor,
+        slug: &str,
+        release: &str,
+    ) -> Result<String, UseCaseError> {
+        if !actor.has_permission("settings.manage") {
+            return Err(UseCaseError::Forbidden);
+        }
+        let (_, registry) = self
+            .themes
+            .as_ref()
+            .ok_or_else(|| UseCaseError::NotFound("主题未装配".into()))?;
+        let snapshot = registry.snapshot(slug)?;
+        if snapshot.slug != slug {
+            return Err(UseCaseError::NotFound("主题未安装".into()));
+        }
+        if snapshot.release != release {
+            return Err(UseCaseError::VersionConflict);
+        }
+        let renderer = snapshot
+            .renderer
+            .for_preview()
+            .ok_or_else(|| UseCaseError::Invalid("主题不支持预览".into()))?;
+        let config = match &self.theme_configs {
+            Some(store) => match store.find(slug).await? {
+                Some(record) => record.effective(release, &snapshot.schema)?,
+                None => snapshot.schema.defaults(),
+            },
+            None => snapshot.schema.defaults(),
+        };
+        let renderer = renderer.with_config(config).unwrap_or(renderer);
+        let site = self.render_site_info().await?;
+        let dates = self.time_zones.resolve(&site.time_zone)?;
+        let posts = self
+            .posts
+            .list_public(site.home_page_size, 0)
+            .await?
+            .into_iter()
+            .map(|post| PostCard::in_time_zone(post, dates.as_ref()))
+            .collect::<Vec<_>>();
+        renderer
+            .render_index(
+                &site,
+                &SeoMeta::home_page(&site, &self.base_url, 1),
+                &posts,
+                &IndexPagination::default(),
+            )
+            .await
+    }
+
     /// 本次渲染的生效站点信息：**每次请求解析**，不缓存。
     ///
     /// - 行存在：按字段生效（缺字段回退，见 [`effective_site`]）；

@@ -3,7 +3,7 @@ mod common;
 use application::{
     audit::AuditContext,
     theme_config::*,
-    themes::{ThemePackages, ThemeUninstallIdentity},
+    themes::{ThemePackages, ThemeUninstallIdentity, ThemeUpdateIdentity},
 };
 use infrastructure::{
     RenderingRuntime, theme_packages::LocalThemePackages, themes::PostgresThemesStore,
@@ -51,13 +51,28 @@ fn files(slug: &str, configured: bool) -> Vec<(String, String)> {
     files
 }
 fn package() -> Vec<u8> {
+    package_files(files("custom", true))
+}
+fn package_files(files: Vec<(String, String)>) -> Vec<u8> {
     let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
-    for (name, body) in files("custom", true) {
+    for (name, body) in files {
         zip.start_file(name, zip::write::SimpleFileOptions::default())
             .unwrap();
         zip.write_all(body.as_bytes()).unwrap();
     }
     zip.finish().unwrap().into_inner()
+}
+fn upgraded_package() -> Vec<u8> {
+    let mut files = files("custom", true);
+    files.push(("assets/new.css".into(), "body { color: blue; }".into()));
+    package_files(files)
+}
+fn update_identity(record: &ThemeRecord) -> ThemeUpdateIdentity {
+    ThemeUpdateIdentity {
+        id: record.id,
+        version: record.version,
+        release: record.release.clone(),
+    }
 }
 async fn load(root: &Path, pool: &sqlx::PgPool, enabled: bool) -> LocalThemePackages {
     let db = common::database(pool.clone());
@@ -449,6 +464,25 @@ async fn theme_crash_child() {
             .install(package(), AuditContext::system(), service.lock().await)
             .await
             .unwrap();
+    } else if std::env::var("BLOG_THEME_CRASH_STAGE")
+        .unwrap()
+        .starts_with("upgrade")
+    {
+        let record = PostgresThemesStore::new(common::database(pool.clone()))
+            .find("custom")
+            .await
+            .unwrap()
+            .unwrap();
+        service
+            .upgrade(
+                "custom",
+                upgraded_package(),
+                AuditContext::system(),
+                update_identity(&record),
+                service.lock().await,
+            )
+            .await
+            .unwrap();
     } else {
         let store = PostgresThemesStore::new(common::database(pool.clone()));
         let record = store.find("custom").await.unwrap().unwrap();
@@ -476,13 +510,17 @@ async fn abrupt_process_exit_recovers_each_install_and_uninstall_boundary() {
         "uninstall.prepared",
         "uninstall.quarantined",
         "uninstall.committed",
+        "upgrade.prepared",
+        "upgrade.quarantined",
+        "upgrade.published",
+        "upgrade.committed",
     ] {
         sqlx::query("DELETE FROM themes")
             .execute(&pool)
             .await
             .unwrap();
         let root = Root::new();
-        if stage.starts_with("uninstall") {
+        if stage.starts_with("uninstall") || stage.starts_with("upgrade") {
             let service = load(&root.0, &pool, true).await;
             service
                 .install(package(), AuditContext::system(), service.lock().await)
@@ -516,7 +554,8 @@ async fn abrupt_process_exit_recovers_each_install_and_uninstall_boundary() {
         let service = load(&root.0, &pool, true).await;
         let store = PostgresThemesStore::new(common::database(pool.clone()));
         let record = store.find("custom").await.unwrap();
-        let expected = stage == "install.committed"
+        let expected = stage.starts_with("upgrade")
+            || stage == "install.committed"
             || stage.starts_with("uninstall") && stage != "uninstall.committed";
         assert_eq!(record.is_some(), expected, "{stage}");
         assert_eq!(service.registry().contains("custom"), expected, "{stage}");
@@ -530,7 +569,17 @@ async fn abrupt_process_exit_recovers_each_install_and_uninstall_boundary() {
                 .starts_with(".staging-")),
             "{stage}"
         );
-        if stage.starts_with("uninstall") && expected {
+        if stage.starts_with("upgrade") {
+            assert_eq!(
+                service.previous("custom").await.unwrap().is_some(),
+                stage == "upgrade.committed"
+            );
+            assert_eq!(
+                root.0.join("custom/assets/new.css").exists(),
+                stage == "upgrade.committed"
+            );
+        }
+        if (stage.starts_with("uninstall") || stage.starts_with("upgrade")) && expected {
             assert_eq!(
                 record.unwrap().config["title"],
                 ThemeValue::Text("retained".into())
@@ -648,4 +697,162 @@ async fn forward_upgrade_from_previous_chain_keeps_selection_and_plugin_settings
             .unwrap(),
         0
     );
+}
+
+#[tokio::test]
+async fn upgrade_and_rollback_preserve_identity_config_refs_and_selection() {
+    let pool = common::fresh_database("blog_test_theme_upgrade").await;
+    let root = Root::new();
+    let service = load(&root.0, &pool, true).await;
+    let store = PostgresThemesStore::new(common::database(pool.clone()));
+    service
+        .install(package(), AuditContext::system(), service.lock().await)
+        .await
+        .unwrap();
+    let original = store.find("custom").await.unwrap().unwrap();
+    let image = media(&pool).await;
+    let config = std::collections::BTreeMap::from([
+        ("title".into(), ThemeValue::Text("retained".into())),
+        ("image".into(), ThemeValue::Text(image.to_string())),
+    ]);
+    let original = store
+        .save(
+            &original,
+            &config,
+            &service.registry().schema("custom"),
+            AuditContext::system(),
+        )
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO settings(key,value,version) VALUES ('theme','{\"slug\":\"custom\"}',4)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    // Failure at COMMIT must restore disk and preserve the original configuration.
+    sqlx::raw_sql("CREATE FUNCTION reject_upgrade() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'injected commit failure'; END $$; CREATE CONSTRAINT TRIGGER reject_upgrade AFTER UPDATE ON themes DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION reject_upgrade()").execute(&pool).await.unwrap();
+    assert!(
+        service
+            .upgrade(
+                "custom",
+                upgraded_package(),
+                AuditContext::system(),
+                update_identity(&original),
+                service.lock().await
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(store.find("custom").await.unwrap().unwrap(), original);
+    assert!(!root.0.join("custom/assets/new.css").exists());
+    assert_eq!(journals(&root.0), 0);
+    sqlx::query("DROP TRIGGER reject_upgrade ON themes")
+        .execute(&pool)
+        .await
+        .unwrap();
+    // Removing a configured field is rejected before touching the current release.
+    assert!(
+        service
+            .upgrade(
+                "custom",
+                package_files(files("custom", false)),
+                AuditContext::system(),
+                update_identity(&original),
+                service.lock().await
+            )
+            .await
+            .is_err()
+    );
+    assert!(service.previous("custom").await.unwrap().is_none());
+    let upgraded = service
+        .upgrade(
+            "custom",
+            upgraded_package(),
+            AuditContext::system(),
+            update_identity(&original),
+            service.lock().await,
+        )
+        .await
+        .unwrap();
+    let current = store.find("custom").await.unwrap().unwrap();
+    assert_eq!(current.id, original.id);
+    assert_eq!(current.config, config);
+    assert_eq!(current.version, original.version + 1);
+    assert_eq!(current.release, upgraded.release);
+    assert_eq!(
+        service.previous("custom").await.unwrap().unwrap().release,
+        original.release
+    );
+    assert!(
+        service
+            .registry()
+            .assets("custom", &original.release)
+            .is_some()
+    );
+    assert!(matches!(
+        service
+            .rollback(
+                "custom",
+                AuditContext::system(),
+                update_identity(&original),
+                service.lock().await
+            )
+            .await,
+        Err(application::UseCaseError::VersionConflict)
+    ));
+    drop(service);
+    let service = load(&root.0, &pool, true).await;
+    assert!(
+        service
+            .registry()
+            .assets("custom", &original.release)
+            .is_some()
+    );
+    service
+        .rollback(
+            "custom",
+            AuditContext::system(),
+            update_identity(&current),
+            service.lock().await,
+        )
+        .await
+        .unwrap();
+    let rolled = store.find("custom").await.unwrap().unwrap();
+    assert_eq!(rolled.release, original.release);
+    assert_eq!(rolled.config, config);
+    assert_eq!(rolled.id, original.id);
+    assert_eq!(rolled.version, current.version + 1);
+    assert_eq!(
+        service.previous("custom").await.unwrap().unwrap().release,
+        upgraded.release
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, String>("SELECT value->>'slug' FROM settings WHERE key='theme'")
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        "custom"
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, Uuid>("SELECT media_id FROM media_refs WHERE source_type='theme'")
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        image
+    );
+    sqlx::query("DELETE FROM settings WHERE key='theme'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    service
+        .uninstall(
+            "custom",
+            AuditContext::system(),
+            identity(&rolled),
+            service.lock().await,
+        )
+        .await
+        .unwrap();
+    assert!(!root.0.join(".theme-previous-custom").exists());
 }

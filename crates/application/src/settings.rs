@@ -393,6 +393,39 @@ impl SettingsInteractor {
         packages.install(bytes, actor.audit_context(), guard).await
     }
 
+    pub async fn previous_theme(
+        &self,
+        actor: &Actor,
+        slug: &str,
+    ) -> Result<Option<crate::themes::ThemePackageReport>, UseCaseError> {
+        let packages = self.theme_packages(actor)?;
+        let _guard = packages.lock().await;
+        packages.previous(slug).await
+    }
+
+    pub async fn upgrade_theme(
+        &self,
+        actor: &Actor,
+        slug: &str,
+        bytes: Option<Vec<u8>>,
+        identity: crate::themes::ThemeUpdateIdentity,
+    ) -> Result<crate::themes::ThemePackageReport, UseCaseError> {
+        let packages = self.theme_packages(actor)?;
+        let guard = packages.lock().await;
+        match bytes {
+            Some(bytes) => {
+                packages
+                    .upgrade(slug, bytes, actor.audit_context(), identity, guard)
+                    .await
+            }
+            None => {
+                packages
+                    .rollback(slug, actor.audit_context(), identity, guard)
+                    .await
+            }
+        }
+    }
+
     pub async fn validate_installed_theme(
         &self,
         actor: &Actor,

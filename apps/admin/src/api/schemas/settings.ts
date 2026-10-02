@@ -39,6 +39,8 @@ export const themePackageReport = object<Wire.ThemePackageReport>()({
   template_count: count,
   asset_count: count,
 });
+export const previousTheme = object<Wire.PreviousTheme>()({ previous: themePackageReport.nullable() });
+export const themePreview = object<Wire.ThemePreview>()({ html: string });
 export const retentionSettings = object<Wire.RetentionSettings>()({
   comment_ip_days: count,
   comment_version: count,

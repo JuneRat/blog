@@ -8,6 +8,7 @@ import { useAuth } from "../auth";
 import { invalidateAfterWrite } from "../queryEffects";
 import { queryKeys } from "../queryClient";
 import type { ThemeSettings } from "../types";
+import { ThemePreviewDialog } from "../components/ThemePreviewDialog";
 import { ThemeConfigDialog } from "../components/ThemeConfigDialog";
 import type { ThemeConfigSettings, ThemePackageReport } from "../api/generated";
 import { useUnsavedGuard } from "../unsaved";
@@ -26,6 +27,7 @@ export function ThemeManagementScreen() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [configTarget, setConfigTarget] = useState<{ slug: string; name: string } | null>(null);
+  const [previewTarget, setPreviewTarget] = useState<ThemeSettings["available"][number] | null>(null);
   const [configDirty, setConfigDirty] = useState(false);
   const [busy, setBusy] = useState(false);
   const [packageFile, setPackageFile] = useState<File | null>(null);
@@ -43,7 +45,8 @@ export function ThemeManagementScreen() {
     actionError ?? (themeQuery.error === null ? null : permissionMessageOf(themeQuery.error));
   const setError = setActionError;
 
-  const controlsBusy = busy || configTarget !== null;
+  const controlsBusy = busy || configTarget !== null || previewTarget !== null;
+  const upgradeTarget = view?.available.find(item => item.slug === packageReport?.slug);
   const dirty = configDirty || packageFile !== null || (view !== null && slug !== view.effective_slug);
   useUnsavedGuard(dirty, "主题管理有未保存的选择或待安装的主题包，离开会丢失。");
 
@@ -114,28 +117,62 @@ export function ThemeManagementScreen() {
 
   async function processPackage(install: boolean) {
     if (packageFile === null) return;
+    const target = install ? upgradeTarget : undefined;
+    if (target && (target.id === undefined || target.config_version === undefined)) { setError("请刷新主题列表后重试。"); return; }
     setBusy(true);
     setError(null);
     setNotice(null);
-    setPackageReport(null);
     try {
-      const report = await (install ? themeSettingsApi.install(packageFile) : themeSettingsApi.validatePackage(packageFile));
+      const report = await (install
+        ? target ? themeSettingsApi.upgrade(target.slug, packageFile, { id: target.id!, expected_version: target.config_version!, expected_release: target.release }) : themeSettingsApi.install(packageFile)
+        : themeSettingsApi.validatePackage(packageFile));
       if (install) {
         void invalidateAfterWrite(queryClient, "theme");
         clearPackage();
-        setNotice(`主题「${report.name}」已安装，选择后激活即可生效。`);
+        setNotice(target ? `主题「${report.name}」已升级，配置和启用状态已保留，可回退上一版。` : `主题「${report.name}」已安装，选择后激活即可生效。`);
         try {
           const next = await themeSettingsApi.get();
           applyView(next);
-          if (next.effective_slug === report.slug) setNotice(`主题「${report.name}」已安装，并按原有活动选择生效。`);
+          if (!target && next.effective_slug === report.slug) setNotice(`主题「${report.name}」已安装，并按原有活动选择生效。`);
         }
-        catch (cause) { setError(`安装已完成，但刷新主题列表失败：${permissionMessageOf(cause)}`); }
+        catch (cause) { setError(`主题变更已完成，但刷新主题列表失败：${permissionMessageOf(cause)}`); }
       } else {
         setPackageReport(report);
-        setNotice(`主题包「${report.name}」验证通过，尚未安装。`);
+        setNotice(`主题包「${report.name}」验证通过，可${view?.available.some(item => item.slug === report.slug) ? "保留配置升级" : "安装"}。`);
       }
     } catch (cause) { setError(permissionMessageOf(cause)); }
     finally { setBusy(false); }
+  }
+
+  async function rollback(item: ThemeSettings["available"][number]) {
+    if (item.id === undefined || item.config_version === undefined) { setError("请刷新主题列表后重试。"); return; }
+    setBusy(true); setError(null); setNotice(null);
+    try {
+      await themeSettingsApi.rollback(item.slug, { id: item.id, expected_version: item.config_version, expected_release: item.release });
+      void invalidateAfterWrite(queryClient, "theme");
+      setNotice(`主题「${item.name}」已回退，现有配置和启用状态已保留。`);
+      try { applyView(await themeSettingsApi.get()); }
+      catch (cause) { setError(`回退已完成，但刷新主题列表失败：${permissionMessageOf(cause)}`); }
+    } catch (cause) { setError(permissionMessageOf(cause)); }
+    finally { setBusy(false); }
+  }
+
+  async function showPrevious(item: ThemeSettings["available"][number]) {
+    setBusy(true); setError(null);
+    try {
+      const { previous } = await themeSettingsApi.previous(item.slug);
+      if (previous === null) { setNotice(`主题「${item.name}」尚无可回退的版本。`); return; }
+      modal.confirm({ title: `回退主题「${item.name}」？`,
+        content: `当前 ${item.release.slice(0, 12)} → 上一版 ${previous.release.slice(0, 12)}。保留当前配置；如配置不兼容则拒绝回退。启用中的主题会立即生效。`,
+        okText: "回退上一版", onOk: () => rollback(item) });
+    } catch (cause) { setError(permissionMessageOf(cause)); }
+    finally { setBusy(false); }
+  }
+
+  function confirmPackage() {
+    if (upgradeTarget) {
+      modal.confirm({ title: `升级主题「${upgradeTarget.name}」？`, content: "保留现有配置与启用状态，并保存上一版供回退。启用中的主题会立即更新。", okText: "保留配置升级", onOk: () => processPackage(true) });
+    } else { void processPackage(true); }
   }
 
   async function validateInstalled(selected: string) {
@@ -199,7 +236,7 @@ export function ThemeManagementScreen() {
         主题管理
       </Typography.Title>
       <Typography.Paragraph type="secondary">
-        上传 ZIP 主题包，可先验证再安装。激活后公开页面和样式资源立即生效。
+        上传 ZIP 主题包，验证后可安装或升级同名主题。启用前可预览，升级保留配置并支持回退上一版。
       </Typography.Paragraph>
       {errorText !== null && (
         <Alert type="error" showIcon title={errorText} style={{ marginBottom: 16 }} />
@@ -214,7 +251,7 @@ export function ThemeManagementScreen() {
 
       {view !== null && (
         <div style={{ marginBottom: 24 }}>
-          <Card title="安装主题" style={{ marginBottom: 16 }}>
+          <Card title="安装或升级主题" style={{ marginBottom: 16 }}>
             <Typography.Paragraph type="secondary">
               ZIP 根目录包含 theme.json、templates 和 assets，也可以放在一个顶层主题目录内。最大 10 MiB。
             </Typography.Paragraph>
@@ -238,7 +275,7 @@ export function ThemeManagementScreen() {
                 }} />
               <Space wrap>
                 <Button disabled={controlsBusy || packageFile === null} onClick={() => void processPackage(false)}>验证主题包</Button>
-                <Button type="primary" disabled={controlsBusy || packageFile === null} onClick={() => void processPackage(true)}>安装主题</Button>
+                <Button type="primary" disabled={controlsBusy || packageFile === null} onClick={confirmPackage}>{upgradeTarget ? "保留配置升级" : "安装主题"}</Button>
                 {packageFile !== null && <Button disabled={controlsBusy} onClick={clearPackage}>取消选择</Button>}
                 <Button disabled={controlsBusy} onClick={() => void refresh()}>刷新主题列表</Button>
               </Space>
@@ -320,7 +357,9 @@ export function ThemeManagementScreen() {
                         )}
                       </Flex>
                     </div>
-                    <Space style={{ marginTop: 12 }}>
+                    <Space wrap style={{ marginTop: 12 }}>
+                      <Button size="small" aria-label={`预览主题 ${item.name}`} disabled={controlsBusy} onClick={() => setPreviewTarget(item)}>预览</Button>
+                      <Button size="small" aria-label={`回退主题 ${item.name}`} disabled={controlsBusy} onClick={() => void showPrevious(item)}>上一版</Button>
                       <Button size="small" aria-label={`配置主题 ${item.name}`} disabled={controlsBusy} onClick={() => { setConfigTarget({ slug: item.slug, name: item.name }); setError(null); }}>配置</Button>
                       <Button size="small" aria-label={`验证主题 ${item.name}`} disabled={controlsBusy}
                         onClick={() => void validateInstalled(item.slug)}>验证</Button>
@@ -407,6 +446,7 @@ export function ThemeManagementScreen() {
           )}
         </>
       )}
+      {previewTarget && <ThemePreviewDialog key={previewTarget.slug + previewTarget.release} theme={previewTarget} onClose={() => setPreviewTarget(null)} />}
       {configTarget && <ThemeConfigDialog key={configTarget.slug} {...configTarget} onDirty={setConfigDirty}
         onClose={() => { if (configDirty) modal.confirm({ title: "放弃未保存的主题配置？", onOk: () => { setConfigTarget(null); setConfigDirty(false); } }); else setConfigTarget(null); }}
         onSaved={saved => {

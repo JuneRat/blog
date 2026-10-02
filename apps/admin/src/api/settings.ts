@@ -36,6 +36,16 @@ export const themeSettingsApi = {
     requestBinary(s.themePackageReport, "/api/admin/v1/themes", {
       method: "POST", headers: { "Content-Type": "application/zip" }, body: file,
     }),
+  upgrade: (slug: string, file: File, input: Wire.UpdateThemeInput): Promise<Wire.ThemePackageReport> =>
+    requestBinary(s.themePackageReport, `/api/admin/v1/themes/${encodeURIComponent(slug)}/upgrade?${new URLSearchParams({ id: input.id, expected_version: String(input.expected_version), expected_release: input.expected_release })}`, {
+      method: "POST", headers: { "Content-Type": "application/zip" }, body: file,
+    }),
+  previous: (slug: string): Promise<Wire.PreviousTheme> =>
+    request(s.previousTheme, `/api/admin/v1/themes/${encodeURIComponent(slug)}/previous`),
+  rollback: (slug: string, input: Wire.UpdateThemeInput): Promise<Wire.ThemePackageReport> =>
+    request(s.themePackageReport, `/api/admin/v1/themes/${encodeURIComponent(slug)}/rollback`, { method: "POST", body: json<Wire.UpdateThemeInput>(input) }),
+  preview: (slug: string, release: string): Promise<Wire.ThemePreview> =>
+    request(s.themePreview, `/api/admin/v1/themes/${encodeURIComponent(slug)}/preview`, { method: "POST", body: json<Wire.ThemePreviewInput>({ expected_release: release }) }),
   validateInstalled: (slug: string): Promise<Wire.ThemePackageReport> =>
     request(s.themePackageReport, `/api/admin/v1/themes/${encodeURIComponent(slug)}/validate`, { method: "POST" }),
   getConfig: (slug: string): Promise<Wire.ThemeConfigSettings> =>

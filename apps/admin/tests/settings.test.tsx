@@ -30,7 +30,7 @@ vi.mock("../src/api/comments", async (load) => {
 });
 vi.mock("../src/api/settings", async (load) => {
   const original = await load<typeof import("../src/api/settings")>();
-  return { ...original, settingsApi: { get: vi.fn(), save: vi.fn() }, themeSettingsApi: { get: vi.fn(), save: vi.fn(), install: vi.fn(), validatePackage: vi.fn(), validateInstalled: vi.fn(), uninstall: vi.fn(), getConfig: vi.fn(), saveConfig: vi.fn() }, retentionApi: { get: vi.fn(), save: vi.fn() } };
+  return { ...original, settingsApi: { get: vi.fn(), save: vi.fn() }, themeSettingsApi: { get: vi.fn(), save: vi.fn(), install: vi.fn(), upgrade: vi.fn(), previous: vi.fn(), rollback: vi.fn(), preview: vi.fn(), validatePackage: vi.fn(), validateInstalled: vi.fn(), uninstall: vi.fn(), getConfig: vi.fn(), saveConfig: vi.fn() }, retentionApi: { get: vi.fn(), save: vi.fn() } };
 });
 vi.mock("../src/api/media", async (load) => {
   const original = await load<typeof import("../src/api/media")>();
@@ -91,7 +91,7 @@ describe("站点设置与主题管理", () => {
     const file = new File(["zip"], "custom.zip", { type: "application/zip" });
     fireEvent.change(screen.getByLabelText("主题 ZIP 包"), { target: { files: [file] } });
     fireEvent.click(screen.getByRole("button", { name: "验证主题包" }));
-    await screen.findByText(/验证通过，尚未安装/);
+    await screen.findByText(/验证通过，可安装/);
     expect(themeSettingsApi.validatePackage).toHaveBeenCalledWith(file);
     expect(themeSettingsApi.install).not.toHaveBeenCalled();
     expect(themeSettingsApi.save).not.toHaveBeenCalled();
@@ -100,6 +100,46 @@ describe("站点设置与主题管理", () => {
     expect(themeSettingsApi.install).toHaveBeenCalledWith(file);
     expect(paper.getAttribute("aria-pressed")).toBe("true");
     expect(screen.getByRole("button", { name: "安装主题" }).hasAttribute("disabled")).toBe(true);
+  });
+
+  it("同名包升级携带配置版本并保留配置，冲突时保留文件", async () => {
+    const report = { slug: "paper", name: "Paper", release: "new-release", template_count: 6, asset_count: 1 };
+    vi.mocked(themeSettingsApi.validatePackage).mockResolvedValue(report);
+    vi.mocked(themeSettingsApi.upgrade).mockRejectedValue(new ApiError(409, "版本冲突", "version_conflict"));
+    render(<App />);
+    fireEvent.click(await screen.findByRole("menuitem", { name: "主题管理" }));
+    const file = new File(["zip"], "paper.zip");
+    fireEvent.change(await screen.findByLabelText("主题 ZIP 包"), { target: { files: [file] } });
+    fireEvent.click(screen.getByRole("button", { name: "验证主题包" }));
+    fireEvent.click(await screen.findByRole("button", { name: "保留配置升级" }));
+    expect(themeSettingsApi.upgrade).not.toHaveBeenCalled();
+    fireEvent.click((await screen.findAllByRole("button", { name: "保留配置升级" }))[1]);
+    await waitFor(() => expect(themeSettingsApi.upgrade).toHaveBeenCalledWith("paper", file, { id: "paper-id", expected_version: 1, expected_release: "paper-release" }));
+    await screen.findByText(/版本冲突/);
+    expect(screen.getByText("paper.zip")).toBeTruthy();
+    expect(themeSettingsApi.install).not.toHaveBeenCalled();
+    expect(themeSettingsApi.save).not.toHaveBeenCalled();
+  });
+
+  it("预览使用隔离 iframe 且不激活，回退先展示上一版再确认", async () => {
+    vi.mocked(themeSettingsApi.preview).mockResolvedValue({ html: '<html><head><script>bad()</script><meta http-equiv="refresh" content="0;url=https://outside.test"></head><body><p>preview</p></body></html>' });
+    vi.mocked(themeSettingsApi.previous).mockResolvedValue({ previous: { slug: "paper", name: "Paper", release: "old-release", template_count: 6, asset_count: 1 } });
+    vi.mocked(themeSettingsApi.rollback).mockResolvedValue({ slug: "paper", name: "Paper", release: "old-release", template_count: 6, asset_count: 1 });
+    render(<App />);
+    fireEvent.click(await screen.findByRole("menuitem", { name: "主题管理" }));
+    fireEvent.click(await screen.findByRole("button", { name: "预览主题 Paper" }));
+    const frame = await screen.findByTitle("主题首页预览");
+    expect(frame.getAttribute("sandbox")).toBe("");
+    expect(frame.getAttribute("srcdoc")).toContain("default-src 'none'");
+    expect(frame.getAttribute("srcdoc")).not.toContain("bad()");
+    expect(frame.getAttribute("srcdoc")).not.toContain("outside.test");
+    expect(themeSettingsApi.save).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "关闭" }));
+    fireEvent.click(screen.getByRole("button", { name: "回退主题 Paper" }));
+    await screen.findByText(/old-release/);
+    expect(themeSettingsApi.rollback).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "回退上一版" }));
+    await waitFor(() => expect(themeSettingsApi.rollback).toHaveBeenCalledWith("paper", { id: "paper-id", expected_version: 1, expected_release: "paper-release" }));
   });
 
   it("验证已安装快照不改变选择，默认和活动主题禁止卸载", async () => {

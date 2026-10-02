@@ -20,6 +20,8 @@ use tokio::sync::{Mutex, OwnedMutexGuard, Semaphore};
 
 use crate::{MiniJinjaThemeRenderer, RenderingRuntime};
 
+mod upgrade;
+
 #[cfg(feature = "sqlx-test-support")]
 type FailureHook = Arc<dyn Fn(&str) + Send + Sync>;
 
@@ -95,6 +97,16 @@ impl LocalThemePackages {
                 }
                 Ok(_) => tracing::warn!(theme = slug, "跳过目录名与清单不一致的主题"),
                 Err(error) => tracing::warn!(theme = slug, %error, "跳过无效主题"),
+            }
+        }
+        for option in service.registry.options() {
+            let path = service.previous_path(&option.slug);
+            if path.try_exists().map_err(repo)? {
+                let previous = load_checked(path, &service.runtime).await?;
+                if previous.slug() != option.slug {
+                    return Err(invalid("上一版主题目录与清单不一致"));
+                }
+                service.registry.retain_previous_assets(previous.assets());
             }
         }
         service.registry.validate()?;
@@ -321,6 +333,58 @@ impl ThemeOperationGuard for OperationGuard {}
 
 #[async_trait]
 impl ThemePackages for LocalThemePackages {
+    async fn previous(&self, slug: &str) -> Result<Option<ThemePackageReport>, UseCaseError> {
+        if !valid_slug(slug) || !self.registry.contains(slug) {
+            return Err(UseCaseError::NotFound("主题未安装".into()));
+        }
+        let path = self.previous_path(slug);
+        if !path.try_exists().map_err(repo)? {
+            return Ok(None);
+        }
+        let renderer = load_checked(path, &self.runtime).await?;
+        if renderer.slug() != slug {
+            return Err(invalid("上一版主题与目录不一致"));
+        }
+        Ok(Some(renderer.report()))
+    }
+
+    async fn upgrade(
+        &self,
+        slug: &str,
+        bytes: Vec<u8>,
+        actor: AuditContext,
+        identity: application::themes::ThemeUpdateIdentity,
+        guard: Box<dyn ThemeOperationGuard>,
+    ) -> Result<ThemePackageReport, UseCaseError> {
+        let service = self.clone();
+        let slug = slug.to_string();
+        tokio::spawn(async move {
+            let _guard = guard;
+            service
+                .replace_owned(&slug, Some(bytes), actor, identity)
+                .await
+        })
+        .await
+        .map_err(repo)?
+    }
+
+    async fn rollback(
+        &self,
+        slug: &str,
+        actor: AuditContext,
+        identity: application::themes::ThemeUpdateIdentity,
+        guard: Box<dyn ThemeOperationGuard>,
+    ) -> Result<ThemePackageReport, UseCaseError> {
+        let service = self.clone();
+        let slug = slug.to_string();
+        tokio::spawn(async move {
+            let _guard = guard;
+            service.replace_owned(&slug, None, actor, identity).await
+        })
+        .await
+        .map_err(repo)?
+    }
+
     async fn lock(&self) -> Box<dyn ThemeOperationGuard> {
         Box::new(OperationGuard {
             _guard: self.mutations.clone().lock_owned().await,
@@ -396,7 +460,9 @@ impl LocalThemePackages {
             || destination.try_exists().map_err(repo)?
             || std::fs::symlink_metadata(&destination).is_ok()
         {
-            return Err(invalid("主题已安装或同名目录已存在，请先卸载同名主题"));
+            return Err(invalid(
+                "主题已安装或同名目录已存在，请验证主题包后使用升级",
+            ));
         }
         if self.registry.options().len() >= MAX_INSTALLED {
             return Err(invalid("已安装主题数量达到 32 个上限"));
@@ -1000,6 +1066,8 @@ struct JournalEntry {
     slug: String,
     id: uuid::Uuid,
     release: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    previous_release: Option<String>,
 }
 struct Journal {
     path: PathBuf,
@@ -1013,14 +1081,20 @@ impl Journal {
         id: uuid::Uuid,
         release: &str,
     ) -> Result<Self, UseCaseError> {
+        Self::prepare_entry(
+            root,
+            JournalEntry {
+                kind: kind.into(),
+                slug: slug.into(),
+                id,
+                release: release.into(),
+                previous_release: None,
+            },
+        )
+    }
+    fn prepare_entry(root: &Path, entry: JournalEntry) -> Result<Self, UseCaseError> {
         let path = root.join(format!(".theme-op-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&path).map_err(repo)?;
-        let entry = JournalEntry {
-            kind: kind.into(),
-            slug: slug.into(),
-            id,
-            release: release.into(),
-        };
         let mut file = std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -1049,6 +1123,12 @@ impl Journal {
         crate::themes::lock(&mut decision).await?;
         let record =
             crate::themes::PostgresThemesStore::find_on(&mut decision, &self.entry.slug).await?;
+        if self.entry.kind == "upgrade" {
+            let committed = self.resolve_upgrade(root, record.as_ref())?;
+            std::fs::remove_dir_all(&self.path).map_err(repo)?;
+            sync_dir(root)?;
+            return Ok(committed);
+        }
         if record
             .as_ref()
             .is_some_and(|r| r.id != self.entry.id || r.release != self.entry.release)
@@ -1093,6 +1173,13 @@ impl Journal {
             sync_dir(&self.path)?;
             sync_dir(root)?;
         }
+        if committed && self.entry.kind == "uninstall" {
+            let previous = root.join(format!(".theme-previous-{}", self.entry.slug));
+            if previous.try_exists().map_err(repo)? {
+                upgrade::check_release(&previous, &self.entry.slug, None)?;
+                std::fs::remove_dir_all(previous).map_err(repo)?;
+            }
+        }
         std::fs::remove_dir_all(&self.path).map_err(repo)?;
         sync_dir(root)?;
         Ok(committed)
@@ -1117,7 +1204,9 @@ async fn recover_operations(
         let path = entry.path();
         let manifest = path.join("operation.json");
         if !manifest.try_exists().map_err(repo)? {
-            if path.join("payload").try_exists().map_err(repo)? {
+            if path.join("payload").try_exists().map_err(repo)?
+                || path.join("old").try_exists().map_err(repo)?
+            {
                 return Err(invalid("主题操作缺少日志但存在隔离文件，请人工核验"));
             }
             std::fs::remove_dir_all(&path).map_err(repo)?;
@@ -1131,9 +1220,15 @@ async fn recover_operations(
         let operation: JournalEntry =
             serde_json::from_slice(&std::fs::read(manifest).map_err(repo)?).map_err(repo)?;
         if !valid_slug(&operation.slug)
-            || !matches!(operation.kind.as_str(), "install" | "uninstall")
+            || !matches!(operation.kind.as_str(), "install" | "uninstall" | "upgrade")
             || operation.release.len() != 64
             || !operation.release.bytes().all(|b| b.is_ascii_hexdigit())
+            || (operation.kind == "upgrade") != operation.previous_release.is_some()
+            || operation.previous_release.as_ref().is_some_and(|s| {
+                s.len() != 64
+                    || !s.bytes().all(|b| b.is_ascii_hexdigit())
+                    || *s == operation.release
+            })
         {
             return Err(invalid("主题操作日志内容无效"));
         }
