@@ -1,0 +1,52 @@
+Frontend unit tests (summary excerpt)
+ Test Files  45 passed (45)
+      Tests  440 passed (440)
+   Start at  17:02:12
+   Duration  211.60s (tests 79%, import 12%, environment 9%)
+
+Edge editor regression
+Running 5 tests using 1 worker
+
+(node:87685) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓  1 e2e/markdown-editor.spec.ts:38:3 › posts: split view, local rendering, mobile switching and source retention (12.3s)
+  ✓  2 e2e/markdown-editor.spec.ts:38:3 › pages: split view, local rendering, mobile switching and source retention (12.7s)
+  ✓  3 e2e/markdown-editor.spec.ts:256:1 › local editor keeps strict diagrams, isolates malformed blocks and preserves unsupported fences (3.0s)
+  ✓  4 e2e/markdown-editor.spec.ts:287:1 › runtime loading failure keeps source editable and retries without losing input (1.9s)
+  ✓  5 e2e/markdown-editor.spec.ts:298:1 › invalid math keeps its source and a friendly hint in split and IR, and recovers after correction (2.3s)
+
+  5 passed (34.0s)
+
+Python unit tests (summary excerpt)
+Ran 130 tests in 7.023s
+OK (skipped=3)
+
+PostgreSQL TLS (test output excerpt)
+running 1 test
+test database_tls_verifies_the_server_when_requested ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.10s
+running 2 tests
+test cancelled_tls_transaction_rolls_back_before_connection_reuse ... ok
+test cancelled_tls_sql_and_lock_wait_release_the_only_pool_connection ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 2.10s
+
+Final Compose release acceptance
+==> Compose: fresh installation
+==> Compose: bundled assets, migration paths and persistent content
+==> Compose: SMTP invitation, recovery and revoked credentials
+==> Compose: editing drafts, revision history and theme releases
+==> Compose: telemetry, JSON logs and dependency failure
+==> Compose: persistent task queue, retry, periodic retention and publication
+==> Compose: default and optional dedicated retention connections
+==> Compose: automatic startup migration and persistent content
+==> Compose: complete backup and encrypted repository round trip
+==> Compose: backup failure restarts the source and preserves previous backups
+==> Compose: fresh deployment restore, isolation, login/media verification and release
+==> Compose: optional restricted accounts survive a second recovery
+Compose installation, SMTP, publishing, themes, persistence, backup and isolated recovery passed.
+
+Final previous-release upgrade
+==> Upgrade: install the older release
+==> Upgrade: create published content, drafts and media on the old schema
+==> Upgrade: replace the stopped writer and migrate the same volumes
+==> Upgrade: edit, publish and restore history of pre-upgrade content

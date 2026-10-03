@@ -1,0 +1,16 @@
+{
+  "fixture": "disposable PostgreSQL with a private CA",
+  "status": "passed",
+  "tests": [
+    {
+      "command": "cargo test -p infrastructure --features sqlx-test-support --test pool_policy database_tls_verifies_the_server_when_requested -- --ignored --exact",
+      "status": "passed"
+    },
+    {
+      "command": "cargo test -p server --test request_deadlines cancelled_tls -- --ignored",
+      "status": "passed"
+    }
+  ],
+  "cleanup": "passed",
+  "seconds": 78.725
+}
