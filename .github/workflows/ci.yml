@@ -215,7 +215,7 @@ jobs:
           path: apps/admin/dist
 
       - name: Build server
-        run: cargo build -p server --bin blog
+        run: BLOG_BUILD_REVISION="$GITHUB_SHA" cargo build -p server --bin blog
 
       - uses: pnpm/action-setup@v4
         with:
@@ -237,6 +237,11 @@ jobs:
           BLOG_TEST_PG_CONTAINER: ${{ job.services.postgres.id }}
         run: python3 -B scripts/acceptance.py --browser --report acceptance-report.json
 
+      - name: SMTP TLS, STARTTLS, authentication, certificate rejection and delivery deadlines
+        env:
+          BLOG_TEST_PG_CONTAINER: ${{ job.services.postgres.id }}
+        run: python3 -B scripts/acceptance_smtp_tls.py --expected-revision "$GITHUB_SHA" --report smtp-tls-report.json
+
       - name: Save browser failure evidence
         if: failure()
         uses: actions/upload-artifact@v4
@@ -252,6 +257,15 @@ jobs:
         with:
           name: acceptance-report
           path: acceptance-report.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Save SMTP acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smtp-tls-report
+          path: smtp-tls-report.json
           if-no-files-found: ignore
           retention-days: 14
 
