@@ -6,11 +6,15 @@ Compose project and an isolated copy of the deployment files own every resource
 removed by this test. Server logs (including installation tokens) stay private.
 """
 import argparse
+from contextlib import contextmanager
+import datetime as dt
+import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import secrets
+import select
 import shutil
 import subprocess
 import sys
@@ -40,7 +44,60 @@ def wait_for(action, message, timeout=90):
     raise AcceptanceError(message)
 
 
-def exercise(image, root, ops_image):
+@contextmanager
+def smtp_sink(image, container, name, scripts, env):
+    """Share only the owned application's loopback; tokens use private pipes."""
+    process = subprocess.Popen([
+        "docker", "run", "--rm", "-i", "--name", name, "--log-driver", "none",
+        "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true",
+        "--user", "10001:10001", "--network", "container:" + container,
+        "--mount", f"type=bind,src={scripts},dst=/fixtures,readonly",
+        "--entrypoint", "python3", image, "-B", "/fixtures/acceptance_smtp.py", "--port", "2525",
+    ], env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+
+    def response():
+        require(bool(select.select([process.stdout], [], [], 30)[0]), "SMTP fixture response timed out")
+        line = process.stdout.readline(4097)
+        require(bool(line) and len(line) <= 4096, "SMTP fixture closed or sent an oversized response")
+        try:
+            result = json.loads(line)
+        except ValueError:
+            raise AcceptanceError("invalid SMTP fixture response") from None
+        require(isinstance(result, dict) and "error" not in result, "SMTP fixture delivery failed")
+        return result
+
+    def token(recipient, origin):
+        process.stdin.write(json.dumps({"recipient": recipient, "origin": origin}) + "\n")
+        process.stdin.flush()
+        value = response().get("token", "")
+        require(isinstance(value, str) and bool(re.fullmatch(r"[a-f0-9]{64}", value)), "invalid SMTP token response")
+        return value
+
+    try:
+        require(response() == {"port": 2525}, "SMTP fixture did not bind its loopback port")
+        yield token
+    finally:
+        process.stdin.close()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            subprocess.run(["docker", "rm", "--force", name], env=env, capture_output=True, timeout=30, check=True)
+            process.wait(timeout=5)
+        process.stdout.close()
+
+
+def exercise(image, root, ops_image, report):
+    last_stage = time.monotonic()
+
+    def stage(name):
+        nonlocal last_stage
+        current = time.monotonic()
+        if report["steps"]:
+            report["steps"][-1].update(status="passed", seconds=round(current - last_stage, 3))
+        report["steps"].append({"name": name, "status": "running"})
+        last_stage = current
+        print("==> Compose: " + name, flush=True)
+
     project = "blog-compose-test-" + uuid.uuid4().hex[:12]
     password = "Compose-" + secrets.token_hex(16)
     special_secret = "literal-$MISSING-'quoted'-\\line\nsecond"
@@ -48,6 +105,8 @@ def exercise(image, root, ops_image):
     (root / "scripts").mkdir()
     shutil.copyfile(PROJECT / "scripts/compose-init.sh", root / "scripts/compose-init.sh")
     shutil.copyfile(PROJECT / "scripts/compose-backup.sh", root / "scripts/compose-backup.sh")
+    for filename in ("acceptance_smtp.py", "acceptance_support.py"):
+        shutil.copyfile(PROJECT / "scripts" / filename, root / "scripts" / filename)
     shutil.copyfile(PROJECT / ".env.example", root / ".env.example")
     initialized = subprocess.run(["sh", str(root / "scripts/compose-init.sh")], cwd=root,
                                  capture_output=True, text=True, timeout=10)
@@ -56,6 +115,8 @@ def exercise(image, root, ops_image):
     with env_file.open("a") as stream:
         stream.write(f"\nBLOG_IMAGE={image}\nBLOG_OPS_IMAGE={ops_image}\nCOMPOSE_PROJECT_NAME={project}\nBLOG_HTTP_HOST=127.0.0.1\nBLOG_HTTP_PORT=0\nBLOG_METRICS_PORT=0\nRUST_LOG=info,sqlx=warn\n")
         stream.write(dotenv({"GH_SECRET": special_secret, "BLOG_DB_MAX_CONNECTIONS": "9", "BLOG_DB_STATEMENT_TIMEOUT_MS": "20000"}))
+        stream.write(dotenv({"BLOG_SMTP_HOST": "127.0.0.1", "BLOG_SMTP_PORT": "2525",
+                             "BLOG_SMTP_SECURITY": "local", "BLOG_SMTP_FROM": "blog@acceptance.invalid"}))
     shutil.copyfile(PROJECT / "compose.yaml", root / "compose.yaml")
     (root / "ops").mkdir()
     shutil.copyfile(PROJECT / "ops/postgres-init.sh", root / "ops/postgres-init.sh")
@@ -94,7 +155,7 @@ def exercise(image, root, ops_image):
         result = subprocess.run(["sh", str(directory / "scripts/compose-backup.sh"), *args],
                                 cwd=directory, env=env, input=data, capture_output=True, text=True, timeout=240)
         require((result.returncode == 0) == success,
-                f"Compose recovery {args[0]} unexpected exit {result.returncode}: {result.stderr[-1500:]}")
+                f"Compose recovery {args[0]} unexpected exit {result.returncode}")
         return result.stdout
 
     def restored_compose(*args, data=None):
@@ -120,7 +181,7 @@ def exercise(image, root, ops_image):
         ports = model["services"]["blog"]["ports"]
         require(any(port["target"] == 9090 and port["host_ip"] == "127.0.0.1" for port in ports),
                 "metrics must only publish on loopback")
-        print("==> Compose: fresh installation", flush=True)
+        stage("fresh installation")
         compose("up", "-d", "--no-build", "--pull", "never")
         guest = client()
         token = wait_for(
@@ -131,6 +192,7 @@ def exercise(image, root, ops_image):
         guest.request("GET", "/readyz", status=503)
         guest.request("GET", "/livez")
         build = guest.json("GET", "/version")
+        report["build"] = build
         require(build["version"] and build["revision"], "build information missing")
         expected_revision = os.environ.get("BLOG_EXPECT_REVISION")
         if expected_revision:
@@ -167,7 +229,7 @@ def exercise(image, root, ops_image):
         require(sql("SELECT rolsuper OR rolcreatedb OR rolcreaterole FROM pg_roles WHERE rolname='blog_owner'") == "f",
                 "schema owner must not be a cluster administrator")
 
-        print("==> Compose: bundled assets, migration paths and persistent content", flush=True)
+        stage("bundled assets, migration paths and persistent content")
         scenario = SiteScenario(guest, Client(guest.origin), sql)
         scenario.assert_installed()
         require(compose("exec", "-T", "blog", "id", "-u") == "10001", "server must run as non-root")
@@ -175,13 +237,19 @@ def exercise(image, root, ops_image):
         require(compose("exec", "-T", "blog", "stat", "-c", "%a", "/var/lib/blog/config/config.toml") == "600",
                 "persisted configuration must be private")
         guest.login(password)
+        stage("SMTP invitation, recovery and revoked credentials")
+        with smtp_sink(ops_image, compose("ps", "-q", "blog"), project + "-smtp", root / "scripts", env) as receive_token:
+            report["smtp"] = scenario.account_emails(receive_token)
+        stage("editing drafts, revision history and theme releases")
         scenario.media_and_content()
+        scenario.editing_revisions()
+        scenario.theme_releases()
         scenario.lifecycles()
         scenario.comments()
         media = scenario.media
         installation_id = sql("SELECT value->>'id' FROM settings WHERE key='installation'")
 
-        print("==> Compose: telemetry, JSON logs and dependency failure", flush=True)
+        stage("telemetry, JSON logs and dependency failure")
         _, headers = guest.request("GET", "/readyz?token=not-a-log-field")
         request_id = headers["x-request-id"]
         body, _ = metrics.request("GET", "/metrics")
@@ -218,7 +286,7 @@ def exercise(image, root, ops_image):
         require(not any(secret in logs for secret in (password, owner_password, "not-a-log-field")),
                 "request logs leaked credentials or query parameters")
 
-        print("==> Compose: persistent task queue, retry, periodic retention and publication", flush=True)
+        stage("persistent task queue, retry, periodic retention and publication")
         def restart_tasks(before_start):
             compose("stop", "blog")
             before_start()
@@ -229,7 +297,7 @@ def exercise(image, root, ops_image):
             scenario.admin, scenario.guest = guest, Client(guest.origin)
         scenario.tasks(restart_tasks)
 
-        print("==> Compose: default and optional dedicated retention connections", flush=True)
+        stage("default and optional dedicated retention connections")
         # No extra role or environment variable is needed after installation.
         retention = json.loads(operation("maintenance"))
         require(not retention["dry_run"], "default retention must execute with the saved site connection")
@@ -282,7 +350,7 @@ def exercise(image, root, ops_image):
         scenario.admin, scenario.guest = guest, Client(guest.origin)
         metrics = client("9090")
 
-        print("==> Compose: automatic startup migration and persistent content", flush=True)
+        stage("automatic startup migration and persistent content")
         compose("stop", "blog")
         # Recreate the pre-0002 state only in this disposable fixture, with data
         # already present. Starting the owner-backed service must apply 0002.
@@ -304,13 +372,15 @@ def exercise(image, root, ops_image):
         scenario.admin, scenario.guest = guest, Client(guest.origin)
         scenario.assert_public_content()
         scenario.assert_comments()
+        scenario.assert_pending_content()
+        scenario.assert_theme_recovery()
         body, _ = guest.request("GET", media["url"])
         require(body == PNG, "media object did not survive replacement")
         require(sql("SELECT value->>'id' FROM settings WHERE key='installation'") == installation_id,
                 "installation was unexpectedly repeated")
         # Exercise the Docker healthcheck itself, not just a request from the host.
         require(healthy("blog"), "Docker readiness check did not pass")
-        print("==> Compose: complete backup and encrypted repository round trip", flush=True)
+        stage("complete backup and encrypted repository round trip")
         # A configured application secret is preserved; unrelated backup credentials are not.
         compose("exec", "-T", "blog", "blog", "oauth", "add-github", "--client-id", "recovery-test", "--secret-ref", "GH_SECRET")
         identity_file = root / "test-age-key"
@@ -344,6 +414,7 @@ with unpack(sys.argv[1]) as (_, _, deployment, _):
     assert not (deployment / 'source.env').exists()
     env = json.loads((deployment / 'environment.json').read_text())
     assert env['GH_SECRET']
+    assert env['BLOG_SMTP_HOST'] == '127.0.0.1' and env['BLOG_SMTP_SECURITY'] == 'local'
     assert not any(k.startswith(('RESTIC_', 'AWS_')) or k in ('DATABASE_URL', 'BLOG_POSTGRES_PASSWORD', 'BLOG_OWNER_PASSWORD') for k in env)
     config = tomllib.loads((deployment / 'config.toml').read_text())
     assert 'url' not in config['database'] and 'maintenance' not in config
@@ -373,7 +444,7 @@ with unpack(sys.argv[1]) as (_, _, deployment, _):
         shutil.copyfile(str(archive) + ".json", str(damaged) + ".json")
         operation("verify", str(damaged), str(identity_file), success=False)
 
-        print("==> Compose: backup failure restarts the source and preserves previous backups", flush=True)
+        stage("backup failure restarts the source and preserves previous backups")
         media_path = "/var/lib/blog/media/" + sql(f"SELECT path FROM media WHERE id='{media['id']}'")
         compose("exec", "-T", "blog", "mv", media_path, media_path + ".saved")
         try:
@@ -387,13 +458,16 @@ with unpack(sys.argv[1]) as (_, _, deployment, _):
                 "failed backup status missing")
         require((root / "backups/last-successful-backup.json").is_file(), "last successful backup was lost")
 
-        print("==> Compose: fresh deployment restore, isolation, login/media verification and release", flush=True)
+        stage("fresh deployment restore, isolation, login/media verification and release")
         operation("restore", str(archive), str(restored), str(identity_file))
         restored_model = json.loads(restored_compose("config", "--format", "json"))
         restored_database = urlsplit(restored_model["services"]["blog"]["environment"]["DATABASE_URL"]).path.lstrip("/")
         for key, value in (("BLOG_DB_MAX_CONNECTIONS", "9"), ("BLOG_DB_STATEMENT_TIMEOUT_MS", "20000")):
             require(restored_model["services"]["blog"]["environment"].get(key) == value,
                     "restored deployment lost database policy: " + key)
+        for key in ("BLOG_SMTP_HOST", "BLOG_SMTP_PORT", "BLOG_SMTP_SECURITY", "BLOG_SMTP_FROM"):
+            require(restored_model["services"]["blog"]["environment"].get(key) == application_env[key],
+                    "restored deployment lost mail configuration: " + key)
         require(restored_model["services"]["blog"]["environment"].get("GH_SECRET", "").replace("$$", "$") == special_secret,
                 "restore changed a secret containing quotes, dollars, backslashes or newlines")
         require(restored_compose("ps", "--services", "--status", "running") == "db",
@@ -406,8 +480,11 @@ with unpack(sys.argv[1]) as (_, _, deployment, _):
                 "restore lost the site identity")
         operation("release", directory=restored, success=False)
         operation("check", "acceptance-owner", "--password-stdin", directory=restored, data="wrong-password\n", success=False)
-        operation("check", "acceptance-owner", "--password-stdin", directory=restored, data=password + "\n")
+        checked = json.loads(operation("check", "acceptance-owner", "--password-stdin", directory=restored, data=password + "\n"))
+        require(checked["mail_disabled"], "isolation check must verify mail is disabled")
+        report["recovery_check"] = checked
         require(restored_sql("SELECT count(*) FROM sessions") == "0", "verification left a reusable session")
+        require(restored_sql("SELECT count(*) FROM account_links") == "0", "restored account links were not revoked")
         operation("release", directory=restored)
         restored_compose("exec", "-T", "blog", "test", "!", "-e",
                          "/var/lib/blog/config/recovered/resources/deployment")
@@ -419,6 +496,17 @@ with unpack(sys.argv[1]) as (_, _, deployment, _):
         body, _ = target.request("GET", media["url"])
         require(body == PNG, "restored media differs")
         require(restored_sql("SELECT count(*) FROM sessions") == "0", "release retained verification sessions")
+        require(target.json("GET", "/auth/password/recovery")["enabled"], "release lost SMTP configuration")
+        target.login(password)
+        scenario.assert_pending_content()
+        scenario.assert_theme_recovery()
+        scenario.assert_media_references(target.json("GET", API + "/media/" + media["id"]))
+        # A restored site must still be able to edit and publish its pending draft.
+        pending_path, public_path = scenario.pending_content[0]
+        pending = target.json("GET", pending_path)
+        target.json("POST", pending_path + "/publish", {"expected_version": pending["version"]})
+        require(b"Pending after recovery" in scenario.guest.request("GET", public_path)[0],
+                "restored editing draft could not be published")
         require(urlsplit(restored_model["services"]["blog"]["environment"]["DATABASE_URL"]).username == "blog_owner",
                 "default recovery changed the site's account mode")
         require(restored_sql("SELECT rolsuper OR rolcreatedb OR rolcreaterole FROM pg_roles WHERE rolname='blog_owner'") == "f",
@@ -432,7 +520,7 @@ with unpack(sys.argv[1]) as (_, _, deployment, _):
                 "restore modified the source deployment")
         restored_compose("--profile", "ops", "run", "--rm", "--no-deps", "--entrypoint", "python3", "ops", "-c",
                          "import toml; assert toml.load('/var/lib/blog/config/config.toml')['database']['max_lifetime_secs'] == 777")
-        print("==> Compose: optional restricted accounts survive a second recovery", flush=True)
+        stage("optional restricted accounts survive a second recovery")
         app_password, maintenance_password = secrets.token_hex(32), secrets.token_hex(32)
         restored_sql(f"CREATE ROLE blog_app LOGIN PASSWORD '{app_password}'; "
                      f"CREATE ROLE blog_maintenance LOGIN PASSWORD '{maintenance_password}';")
@@ -460,7 +548,8 @@ with unpack(sys.argv[1]) as (_, _, deployment, _):
                 and 'BLOG_MAINTENANCE_DATABASE_URL="postgres://blog_maintenance:' in again_env,
                 "separate database accounts were not preserved")
         operation("check", "acceptance-owner", "--password-stdin", directory=restored_again, data=password + "\n")
-        print("Compose installation, telemetry, persistence, backup, encrypted copy and isolated recovery passed.", flush=True)
+        report["steps"][-1].update(status="passed", seconds=round(time.monotonic() - last_stage, 3))
+        print("Compose installation, SMTP, publishing, themes, persistence, backup and isolated recovery passed.", flush=True)
     finally:
         if (restored_again / ".env").is_file():
             subprocess.run(["docker", "compose", "--project-directory", str(restored_again), "down",
@@ -472,19 +561,45 @@ with unpack(sys.argv[1]) as (_, _, deployment, _):
         compose("run", "--rm", "--no-deps", "--entrypoint", "sh", "ops", "-c",
                 f"chown -R {os.getuid()}:{os.getgid()} /backups")
         compose("down", "--volumes", "--remove-orphans", "--timeout", "30")
+        report["cleanup"] = "passed"
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--image", default="blog:local", help="already-built local image")
     parser.add_argument("--ops-image", default="blog-ops:local", help="matching already-built ops image")
+    parser.add_argument("--report", type=Path, help="write a secret-free JSON verification report")
     args = parser.parse_args()
+    started = time.monotonic()
+    report = {"started_at": dt.datetime.now(dt.timezone.utc).isoformat(), "status": "running", "steps": [], "images": {}}
+    report["scripts_sha256"] = {name: hashlib.sha256((PROJECT / "scripts" / name).read_bytes()).hexdigest()
+                                for name in ("test_compose.py", "acceptance_support.py", "acceptance_smtp.py", "compose_recovery.py")}
     try:
+        for kind, name in (("application", args.image), ("ops", args.ops_image)):
+            result = subprocess.run(["docker", "image", "inspect", name], capture_output=True, text=True, timeout=30)
+            require(result.returncode == 0, "release image not available: " + kind)
+            info = json.loads(result.stdout)[0]
+            report["images"][kind] = {"name": name, "id": info["Id"], "architecture": info["Architecture"],
+                                      "revision": info["Config"].get("Labels", {}).get("org.opencontainers.image.revision")}
+        expected = os.environ.get("BLOG_EXPECT_REVISION")
+        if expected:
+            require(all(info["revision"] == expected for info in report["images"].values()),
+                    "image label differs from expected release")
         with tempfile.TemporaryDirectory(prefix="blog-compose-test-") as directory:
-            exercise(args.image, Path(directory), args.ops_image)
+            # Resolve tags once; every subsequent deployment uses immutable image IDs.
+            exercise(report["images"]["application"]["id"], Path(directory), report["images"]["ops"]["id"], report)
+        report["status"] = "passed"
     except (AcceptanceError, OSError, subprocess.SubprocessError) as error:
+        report["status"] = "failed"
+        if report["steps"] and report["steps"][-1]["status"] == "running":
+            report["steps"][-1]["status"] = "failed"
         print(f"Compose verification failed: {error}", file=sys.stderr)
         return 1
+    finally:
+        report["seconds"] = round(time.monotonic() - started, 3)
+        if args.report:
+            args.report.parent.mkdir(parents=True, exist_ok=True)
+            args.report.write_text(json.dumps(report, indent=2) + "\n")
     return 0
 
 

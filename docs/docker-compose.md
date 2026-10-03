@@ -31,7 +31,7 @@ postgres://blog_owner:<BLOG_OWNER_PASSWORD 的值>@db:5432/blog
 
 ## 镜像交付与验证
 
-`container` workflow 构建匹配的应用与 ops 镜像，再验证安装、媒体/页面持久化、备份、加密仓库存取、失败恢复和独立项目恢复。`v*` 标签或手动触发产出 `blog-compose-linux-amd64-<commit>` artifact，包含应用、ops 和 PostgreSQL 镜像归档、部署脚本、定时任务单元、`IMAGE` / `OPS_IMAGE` 和 `SHA256SUMS`。迁移与恢复工具随匹配镜像交付，宿主机无需再保留重复副本。当前不自动推送镜像仓库，也不创建 GitHub Release；artifact 保留 90 天，正式发布应将它与对应备份保存到长期存储。
+`container` workflow 构建匹配的应用与 ops 镜像，再验证安装、SMTP 邀请和密码找回、修改草稿与历史发布、主题升级回滚、媒体/页面持久化、备份、加密仓库存取、失败恢复和独立项目恢复。每次运行保存 `compose-verification-<commit>` 报告，记录镜像 ID、编译提交、脚本指纹和各阶段结果。`v*` 标签或手动触发另产出 `blog-compose-linux-amd64-<commit>` artifact，包含应用、ops 和 PostgreSQL 镜像归档、部署脚本、定时任务单元、`IMAGE` / `OPS_IMAGE` 和 `SHA256SUMS`。迁移与恢复工具随匹配镜像交付，宿主机无需再保留重复副本。当前不自动推送镜像仓库，也不创建 GitHub Release；发布 artifact 保留 90 天，正式发布应将它与对应备份保存到长期存储。
 
 下载并解压 artifact 后，在解压目录执行：
 
@@ -50,13 +50,18 @@ Dependabot 每周检查 Docker 基础镜像更新并提出 PR；合入前运行 
 本地验证同一镜像：
 
 ```sh
-docker build -t blog:local .
-docker build --target ops -t blog-ops:local .
+release_revision=$(git rev-parse HEAD)
+release_source=$(mktemp -d)
+git archive "$release_revision" | tar -x -C "$release_source"
+docker build --build-arg VCS_REF="$release_revision" -t blog:local "$release_source"
+docker build --target ops --build-arg VCS_REF="$release_revision" -t blog-ops:local "$release_source"
 docker pull "$(sed -n 's/^    image: \(postgres:.*\)$/\1/p' compose.yaml)"
-python3 -B scripts/test_compose.py --image blog:local --ops-image blog-ops:local
+BLOG_EXPECT_REVISION="$release_revision" python3 -B "$release_source/scripts/test_compose.py" \
+  --image blog:local --ops-image blog-ops:local --report compose-verification.json
+rm -rf "$release_source"
 ```
 
-验证脚本使用随机 Compose 项目、端口、密码和独立卷，不读取部署目录的 `.env`，完成后只删除它创建的容器与卷。除安装、资源、权限与持久化外，还执行文末备份恢复流程。加密仓库测试使用临时本地 restic 仓库；真实 S3 权限、网络、容量及生产 RPO/RTO 仍需在部署环境验收。
+验证脚本将镜像标签解析为不可变 ID，使用随机 Compose 项目、端口、密码和独立卷，不读取部署目录的 `.env`，完成后只删除它创建的容器与卷。SMTP 收件器只监听测试应用容器的回环地址，不转发邮件；一次性链接通过私有管道读取，收件容器禁用日志。备份保留 SMTP 配置，恢复核验明确验证隔离期间关闭邮件；重新开放后核验修改草稿、历史、主题配置及上一版本，并发布恢复的草稿。加密仓库测试使用临时本地 restic 仓库；真实 SMTP TLS/认证与外部邮箱送达、S3 权限、网络、容量及生产 RPO/RTO 仍需在部署环境验收。
 
 ## 持久化与生命周期
 
@@ -102,7 +107,7 @@ docker compose logs --tail 100 -f blog
 
 ## 升级、维护与备份边界
 
-当前迁移链截至 `0006_tasks.sql`，包括后台查询索引、读者注册、评论审核、内容搜索索引和后台任务的后续结构演进；`0006` 新增 `task_runs`、`task_schedules`，用于保存运行报告、一次性请求和周期计划。升级时须停止旧版 server、外部调度和会修改数据库的旧版 CLI，不混跑不同版本的写入进程。默认 `blog_owner` 模式由新服务在监听 HTTP 前自动迁移；受限账号模式按下文先停写迁移、重新授权，再启动。HTTP 关闭默认总预算 25 秒，须小于此文件配置的 30 秒容器退出宽限期。
+当前迁移链截至 `0010_content_revisions.sql`，涵盖后台查询索引、读者注册、评论审核、内容搜索、持久任务、主题和插件、账号邮件链接、内容修改草稿及修订历史。升级时须停止旧版 server、外部调度和会修改数据库的旧版 CLI，不混跑不同版本的写入进程。默认 `blog_owner` 模式由新服务在监听 HTTP 前自动迁移；受限账号模式按下文先停写迁移、重新授权，再启动。HTTP 关闭默认总预算 25 秒，须小于此文件配置的 30 秒容器退出宽限期。
 
 升级前先完成匹配版本的备份恢复演练并保存旧镜像标识。停止外部 CLI 与定时维护任务后，源码部署执行下列命令；发布包部署跳过 `build`，先加载匹配镜像并更新 `.env` 的镜像标识：
 

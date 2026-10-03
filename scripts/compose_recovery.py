@@ -47,6 +47,8 @@ APPLICATION_ENV = frozenset((
     "BLOG_DB_IDLE_TIMEOUT_SECS", "BLOG_DB_MAX_LIFETIME_SECS", "BLOG_DB_STATEMENT_TIMEOUT_MS",
     "BLOG_DB_LOCK_TIMEOUT_MS", "BLOG_DB_IDLE_IN_TRANSACTION_TIMEOUT_MS",
     "BLOG_DB_CONNECT_RETRIES", "BLOG_DB_CONNECT_RETRY_BACKOFF_MS",
+    "BLOG_SMTP_HOST", "BLOG_SMTP_PORT", "BLOG_SMTP_SECURITY", "BLOG_SMTP_USERNAME",
+    "BLOG_SMTP_PASSWORD", "BLOG_SMTP_FROM",
 ))
 RESERVED_SECRETS = frozenset(("DATABASE_URL", "PATH", "HOME", "TZ", "RUST_LOG"))
 DATABASE = os.environ.get("BLOG_RESTORE_DATABASE", "blog_restore_site")
@@ -500,6 +502,8 @@ def check(username, password_stdin=False):
                 require(time.monotonic() < deadline, "isolated application startup timed out")
                 time.sleep(0.25)
         request("/auth/login/password", {"username": username, "password": password})
+        require(json.loads(request("/auth/password/recovery")) == {"enabled": False},
+                "isolated recovery must disable account email delivery")
         me = json.loads(request("/api/admin/v1/me"))
         require(bool(me.get("csrf_token")) and "settings.manage" in me.get("permissions", []),
                 "login must use an administrator with settings.manage")
@@ -514,7 +518,7 @@ def check(username, password_stdin=False):
                 require(hashlib.sha256(request("/media/" + item["id"])).hexdigest() == item["sha256"],
                         "HTTP media checksum differs")
                 checked_media += 1
-        verification = {"verified_at": now(), "isolation_tag": result["isolation_tag"],
+        verification = {"verified_at": now(), "isolation_tag": result["isolation_tag"], "mail_disabled": True,
                         "pages": len(pages), "media": checked_media}
     except (HTTPError, URLError, TimeoutError):
         raise RecoveryError("isolated HTTP/login verification failed") from None
@@ -531,7 +535,7 @@ def check(username, password_stdin=False):
     # are revoked. A failed cleanup must never authorize a later release.
     private_write(STATE / "VERIFIED", json.dumps(verification))
     print(json.dumps({"login": True, "pages": verification["pages"],
-                      "media": verification["media"], "isolated": True}))
+                      "media": verification["media"], "isolated": True, "mail_disabled": True}))
 
 
 def release():

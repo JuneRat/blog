@@ -122,6 +122,15 @@ class ArchiveTests(unittest.TestCase):
         with self.assertRaises(tool.RecoveryError):
             tool.recovery_environment({}, ["CUSTOM_SECRET"])
 
+    def test_smtp_environment_survives_encrypted_backup_with_literal_credentials(self):
+        mail = {"BLOG_SMTP_HOST": "smtp.example.test", "BLOG_SMTP_PORT": "465",
+                "BLOG_SMTP_SECURITY": "tls", "BLOG_SMTP_USERNAME": "mailer",
+                "BLOG_SMTP_PASSWORD": "literal-$VALUE-'quote'-\\line\nsecond",
+                "BLOG_SMTP_FROM": "Blog <sender@example.test>"}
+        self.assertEqual(tool.recovery_environment({**mail, "RESTIC_PASSWORD": "backup-only"}, []), mail)
+        configured = {"mail": {"host": "file.example.test", "password": "file-secret"}}
+        self.assertEqual(tool.recovery_config(configured), configured)
+
     def test_transport_detects_damage_missing_marker_and_symlinks(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "blog-20260928T000000Z-123456abcdef.tar.gz.age"

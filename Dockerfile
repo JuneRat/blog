@@ -53,6 +53,9 @@ CMD ["serve"]
 
 # Opt-in maintenance image; no Docker socket or host Python/PG installation needed.
 FROM postgres:18@sha256:5a5a84b19854a9ffaa54082c166ff4ec27473a361e496e5ea167f298f2da9722 AS ops
+ARG VCS_REF=unknown
+LABEL org.opencontainers.image.title="blog-ops" \
+      org.opencontainers.image.revision=$VCS_REF
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends python3 python3-toml restic age ca-certificates \
     && rm -rf /var/lib/apt/lists/* \

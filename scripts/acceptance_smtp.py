@@ -1,10 +1,13 @@
 """Bounded loopback-only SMTP sink for acceptance; never relays or persists mail."""
 from email import policy
 from email.parser import BytesParser
+import argparse
+import json
 import queue
 import re
 import socketserver
 import threading
+import sys
 
 from acceptance_support import AcceptanceError, require
 
@@ -57,8 +60,8 @@ class Server(socketserver.ThreadingTCPServer):
 
 
 class SmtpSink:
-    def __init__(self):
-        self.server = Server(("127.0.0.1", 0), Handler)
+    def __init__(self, port=0):
+        self.server = Server(("127.0.0.1", port), Handler)
         self.server.messages = queue.Queue(maxsize=10)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
@@ -85,3 +88,36 @@ class SmtpSink:
         self.thread.join(timeout=2)
         while not self.server.messages.empty():
             self.server.messages.get_nowait()
+
+
+def serve_stdio(port):
+    """Private pipe protocol; run containers with --log-driver=none.
+
+    SMTP only binds loopback. The parent consumes each token directly through
+    stdout; no HTTP control port, mail files or container logs are created.
+    """
+    sink = SmtpSink(port)
+    try:
+        print(json.dumps({"port": sink.port}), flush=True)
+        while True:
+            line = sys.stdin.readline(4097)
+            if not line:
+                break
+            if len(line) > 4096:
+                break
+            try:
+                command = json.loads(line)
+                require(isinstance(command, dict) and set(command) == {"recipient", "origin"}
+                        and all(isinstance(value, str) for value in command.values()), "invalid mail request")
+                response = {"token": sink.token(command["recipient"], command["origin"])}
+            except (ValueError, TypeError, AcceptanceError):
+                response = {"error": "SMTP acceptance delivery failed"}
+            print(json.dumps(response), flush=True)
+    finally:
+        sink.close()
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--port", type=int, required=True)
+    serve_stdio(parser.parse_args().port)

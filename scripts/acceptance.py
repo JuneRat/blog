@@ -256,42 +256,7 @@ class Acceptance(SiteScenario):
         require(result.returncode == 0, "production browser acceptance failed; inspect Playwright results")
 
     def account_emails(self):
-        require(self.guest.json("GET", "/auth/password/recovery")["enabled"], "test SMTP must be enabled")
-        email = "invited@acceptance.invalid"
-        username = "acceptance-invited"
-        user = self.admin.json("POST", API + "/users", {"username": username, "email": email}, status=201)
-        self.admin.request("PUT", API + f"/users/{username}/roles/author", status=204)
-        self.admin.json("POST", API + f"/users/{user['id']}/invitation")
-        token = self.smtp.token(email, self.origin)
-        password = "Invite-" + secrets.token_hex(16) + "!"
-        self.guest.json("POST", "/auth/password/reset", {"token": token, "password": password})
-        for _ in range(2):
-            self.guest.json("POST", "/auth/password/reset", {"token": token, "password": password}, status=400)
-        invited = Client(self.origin)
-        invited.login(password, username)
-        stale = invited.clone()
-        # Reset and recovery share three admissions per minute. Verify the
-        # production limit, then wait for both the client budget and the
-        # account's one-minute issuance cooldown (retained after consumption).
-        _, limited = self.guest.request("POST", "/auth/password/recovery", {"email": "missing@acceptance.invalid"}, status=429)
-        retry_after = int(limited.get("Retry-After", "0"))
-        require(1 <= retry_after <= 60, "recovery admission must include a bounded Retry-After")
-        deadline = time.monotonic() + max(retry_after, 60) + 0.1
-        while time.monotonic() < deadline:
-            time.sleep(max(0, min(1, deadline - time.monotonic())))
-        public_response = self.guest.json("POST", "/auth/password/recovery", {"email": email}, status=202)
-        token = self.smtp.token(email, self.origin)
-        unknown = self.guest.json("POST", "/auth/password/recovery", {"email": "missing@acceptance.invalid"}, status=202)
-        require(public_response == unknown, "recovery response must not enumerate accounts")
-        password = "Recovered-" + secrets.token_hex(16) + "!"
-        self.guest.json("POST", "/auth/password/reset", {"token": token, "password": password})
-        stale.request("GET", API + "/me", status=401)
-        invited.login(password, username)
-        self.admin.request("DELETE", API + f"/users/{username}/roles/author", status=204)
-        invited.json("POST", API + "/posts", {"slug": "revoked-write", "title": "Rejected", "content": "Rejected"}, status=403)
-        require("post.create" not in invited.me()["permissions"], "role revocation must keep the session but remove write permission")
-        self.evidence["smtp"] = {"transport": "loopback SMTP sink", "deliveries": 2,
-                                 "invitation_replay_rejected": True, "old_session_revoked": True}
+        self.evidence["smtp"] = super().account_emails(self.smtp.token)
 
     def task_lifecycle(self):
         def restart(before_start):
