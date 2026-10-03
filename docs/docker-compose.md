@@ -31,7 +31,7 @@ postgres://blog_owner:<BLOG_OWNER_PASSWORD 的值>@db:5432/blog
 
 ## 镜像交付与验证
 
-`container` workflow 构建匹配的应用与 ops 镜像，再验证安装、SMTP 邀请和密码找回、修改草稿与历史发布、主题升级回滚、媒体/页面持久化、备份、加密仓库存取、失败恢复和独立项目恢复。每次运行保存 `compose-verification-<commit>` 报告，记录镜像 ID、编译提交、脚本指纹和各阶段结果。`v*` 标签或手动触发另产出 `blog-compose-linux-amd64-<commit>` artifact，包含应用、ops 和 PostgreSQL 镜像归档、部署脚本、定时任务单元、`IMAGE` / `OPS_IMAGE` 和 `SHA256SUMS`。迁移与恢复工具随匹配镜像交付，宿主机无需再保留重复副本。当前不自动推送镜像仓库，也不创建 GitHub Release；发布 artifact 保留 90 天，正式发布应将它与对应备份保存到长期存储。
+`container` workflow 构建匹配的应用与 ops 镜像，分别以 STARTTLS 和隐式 TLS 验证安装、SMTP 邀请和密码找回、修改草稿与历史发布、主题升级回滚、媒体/页面持久化、备份、加密仓库存取、失败恢复和独立项目恢复。每种模式在恢复开放后再次实际投递邀请和找回邮件。每次运行保存 `compose-verification-<commit>` artifact 内的两份报告，记录镜像 ID、编译提交、脚本指纹、协议计数和各阶段结果。`v*` 标签或手动触发另产出 `blog-compose-linux-amd64-<commit>` artifact，包含应用、ops 和 PostgreSQL 镜像归档、部署脚本、定时任务单元、`IMAGE` / `OPS_IMAGE` 和 `SHA256SUMS`。迁移与恢复工具随匹配镜像交付，宿主机无需再保留重复副本。当前不自动推送镜像仓库，也不创建 GitHub Release；发布 artifact 保留 90 天，正式发布应将它与对应备份保存到长期存储。
 
 下载并解压 artifact 后，在解压目录执行：
 
@@ -47,7 +47,7 @@ sh scripts/compose-init.sh
 
 Dependabot 每周检查 Docker 基础镜像更新并提出 PR；合入前运行 Compose 验收。更新 PostgreSQL Alpine 镜像时须同步 `compose.yaml`、CI 服务和 `scripts/dev-db.sh` 的引用。镜像 digest 固定后，安全修复通过显式更新进入发布，不能只靠重复构建。
 
-本地验证同一镜像：
+本地验证同一镜像需主机 Python 3 与 OpenSSL 命令（生成临时测试证书）；无需主机 Rust、Node 或 PostgreSQL 工具：
 
 ```sh
 release_revision=$(git rev-parse HEAD)
@@ -57,11 +57,15 @@ docker build --build-arg VCS_REF="$release_revision" -t blog:local "$release_sou
 docker build --target ops --build-arg VCS_REF="$release_revision" -t blog-ops:local "$release_source"
 docker pull "$(sed -n 's/^    image: \(postgres:.*\)$/\1/p' compose.yaml)"
 BLOG_EXPECT_REVISION="$release_revision" python3 -B "$release_source/scripts/test_compose.py" \
-  --image blog:local --ops-image blog-ops:local --report compose-verification.json
+  --image blog:local --ops-image blog-ops:local --smtp-security starttls --report compose-verification-starttls.json
+BLOG_EXPECT_REVISION="$release_revision" python3 -B "$release_source/scripts/test_compose.py" \
+  --image blog:local --ops-image blog-ops:local --smtp-security tls --report compose-verification-tls.json
 rm -rf "$release_source"
 ```
 
-验证脚本将镜像标签解析为不可变 ID，使用随机 Compose 项目、端口、密码和独立卷，不读取部署目录的 `.env`，完成后只删除它创建的容器与卷。SMTP 收件器只监听测试应用容器的回环地址，不转发邮件；一次性链接通过私有管道读取，收件容器禁用日志。备份保留 SMTP 配置，恢复核验明确验证隔离期间关闭邮件；重新开放后核验修改草稿、历史、主题配置及上一版本，并发布恢复的草稿。加密仓库测试使用临时本地 restic 仓库；真实 SMTP TLS/认证与外部邮箱送达、S3 权限、网络、容量及生产 RPO/RTO 仍需在部署环境验收。
+验证脚本将镜像标签解析为不可变 ID，使用随机 Compose 项目、端口、密码和独立卷，不读取部署目录的 `.env`，完成后只删除它创建的容器与卷。`--smtp-security` 默认为 `starttls`。收件器只监听测试应用容器的回环地址，不转发邮件；临时服务器私钥、认证凭据及一次性链接通过私有管道传递，容器内私钥仅写入其 tmpfs，宿主机临时证书目录在结束后清理。收件容器禁用日志并以非 root 运行。应用通过 SMTP 专用 CA 信任测试证书；报告记录握手、认证和两封邮件的确认计数，日志检查不输出凭据或 token。
+
+加密归档及恢复配置逐项核对 SMTP 凭据和多行 CA 原文，其中测试密码包含换行、美元符号、引号和反斜杠。恢复核验确认隔离期间关闭邮件，重新开放后实际投递邀请与找回、验证旧会话撤销，并确认邮件链接仍使用备份中的站点地址。恢复后还核验修改草稿、历史、主题配置及上一版本，并发布恢复的草稿。加密仓库使用临时本地 restic 仓库；外部邮件供应商和真实邮箱送达、S3 权限、网络、容量及生产 RPO/RTO 仍需在部署环境验收。
 
 另可用两个已加载的本地镜像验证真实版本升级：
 

@@ -9,10 +9,14 @@ import ssl
 import tempfile
 import unittest
 from unittest.mock import patch
+from unittest.mock import Mock
 
 import acceptance_smtp_tls as runner
 from acceptance_smtp_tls_support import TlsSmtpSink, certificates, server_context
+import acceptance_smtp_tls_support as fixtures
+import test_compose as compose_runner
 from acceptance_support import AcceptanceError
+from test_compose import verify_smtp_counters
 
 
 class TlsFixtureTests(unittest.TestCase):
@@ -128,6 +132,68 @@ class SmtpRunnerTests(unittest.TestCase):
         for counts in ({}, {"connections": 2}, {"connections": 2, "received_messages": 2, "accepted_messages": 1}):
             with self.subTest(counts=counts), self.assertRaises(AcceptanceError):
                 runner.verify_counters(case, counts)
+
+
+class ContainerPipeTests(unittest.TestCase):
+    config = {"security": "starttls", "username": "private-user", "password": "private-password",
+              "certificate": "private-certificate", "key": "private-key"}
+
+    def run_pipe(self, incoming, sink):
+        output = io.StringIO()
+        with patch.object(fixtures.sys, "stdin", io.StringIO(incoming)), \
+                patch.object(fixtures.sys, "stdout", output), patch.object(fixtures, "server_context"), \
+                patch.object(fixtures, "TlsSmtpSink", return_value=sink) as factory:
+            result = fixtures.serve_stdio(2525)
+        return result, output.getvalue(), factory
+
+    def test_private_setup_tokens_and_protocol_counts_use_only_the_pipe(self):
+        sink = Mock(port=2525)
+        sink.token.side_effect = ["e" * 64, AcceptanceError("private response")]
+        sink.snapshot.return_value = {"TLSv1.3": 2, "authenticated": 2}
+        command = json.dumps({"recipient": "invited@acceptance.invalid", "origin": "http://127.0.0.1:8080"})
+        incoming = "\n".join([json.dumps(self.config), command, command, '{"snapshot": true}', '"private bad command"', ''])
+        result, output, factory = self.run_pipe(incoming, sink)
+        self.assertEqual(result, 0)
+        replies = [json.loads(line) for line in output.splitlines()]
+        self.assertEqual(replies, [{"port": 2525}, {"token": "e" * 64},
+                                  {"error": "SMTP acceptance delivery failed"},
+                                  {"smtp": {"TLSv1.3": 2, "authenticated": 2}},
+                                  {"error": "SMTP acceptance delivery failed"}])
+        self.assertNotIn("private", output)
+        self.assertEqual(factory.call_args.kwargs["port"], 2525)
+        sink.close.assert_called_once_with()
+
+    def test_missing_or_oversized_configuration_cannot_start_smtp(self):
+        for incoming in ('{"password": "private-password"}\n', "x" * 32769):
+            with self.subTest(length=len(incoming)):
+                result, output, factory = self.run_pipe(incoming, Mock())
+                self.assertEqual(result, 1)
+                self.assertEqual(json.loads(output), {"error": "SMTP fixture failed"})
+                factory.assert_not_called()
+
+    def test_compose_mail_success_needs_tls_auth_and_both_deliveries(self):
+        counts = {key: 2 for key in ("accepted_messages", "received_messages", "authenticated",
+                                    "tls_handshakes", "ehlo_tls", "starttls_commands")}
+        verify_smtp_counters(counts, "starttls")
+        for change in ({"authenticated": 0}, {"tls_handshakes": 0}, {"accepted_messages": 1},
+                       {"starttls_commands": 1}, {"cleartext_auth": 1}, {"cleartext_mail": 1}):
+            with self.subTest(change=change), self.assertRaises(AcceptanceError):
+                verify_smtp_counters({**counts, **change}, "starttls")
+
+    def test_compose_unexpected_failure_records_failure_without_secret_exception_text(self):
+        image = [{"Id": "sha256:fixture", "Architecture": "arm64", "Config": {"Labels": {}}}]
+        with tempfile.TemporaryDirectory() as temporary:
+            report = Path(temporary) / "report.json"
+            with patch("sys.argv", ["compose", "--report", str(report)]), \
+                    patch.object(compose_runner.os, "environ", {}), \
+                    patch.object(compose_runner.subprocess, "run", return_value=Mock(returncode=0, stdout=json.dumps(image))), \
+                    patch.object(compose_runner, "exercise", side_effect=RuntimeError("private-password")), \
+                    contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(compose_runner.main(), 1)
+            result = json.loads(report.read_text())
+            self.assertEqual(result["status"], "failed")
+            self.assertEqual(result["error"], "unexpected RuntimeError")
+            self.assertNotIn("private-password", report.read_text())
 
 
 if __name__ == "__main__":

@@ -128,14 +128,14 @@ class SiteScenario:
         _, headers = self.guest.request("GET", "/install", status=303)
         require(headers.get("Location") == "/admin/", "completed install must redirect to admin")
 
-    def account_emails(self, receive_token):
+    def account_emails(self, receive_token, *, username="acceptance-invited",
+                       email="invited@acceptance.invalid", link_origin=None):
         require(self.guest.json("GET", "/auth/password/recovery")["enabled"], "test SMTP must be enabled")
-        email = "invited@acceptance.invalid"
-        username = "acceptance-invited"
+        link_origin = link_origin or self.guest.origin
         user = self.admin.json("POST", API + "/users", {"username": username, "email": email}, status=201)
         self.admin.request("PUT", API + f"/users/{username}/roles/author", status=204)
         self.admin.json("POST", API + f"/users/{user['id']}/invitation")
-        token = receive_token(email, self.guest.origin)
+        token = receive_token(email, link_origin)
         password = "Invite-" + secrets.token_hex(16) + "!"
         self.guest.json("POST", "/auth/password/reset", {"token": token, "password": password})
         for _ in range(2):
@@ -153,7 +153,7 @@ class SiteScenario:
         while time.monotonic() < deadline:
             time.sleep(max(0, min(1, deadline - time.monotonic())))
         public_response = self.guest.json("POST", "/auth/password/recovery", {"email": email}, status=202)
-        token = receive_token(email, self.guest.origin)
+        token = receive_token(email, link_origin)
         unknown = self.guest.json("POST", "/auth/password/recovery", {"email": "missing@acceptance.invalid"}, status=202)
         require(public_response == unknown, "recovery response must not enumerate accounts")
         password = "Recovered-" + secrets.token_hex(16) + "!"

@@ -6,6 +6,7 @@ Compose project and an isolated copy of the deployment files own every resource
 removed by this test. Server logs (including installation tokens) stay private.
 """
 import argparse
+import base64
 from contextlib import contextmanager
 import datetime as dt
 import hashlib
@@ -26,6 +27,7 @@ from urllib.parse import urlsplit
 import uuid
 
 from acceptance_support import API, PNG, AcceptanceError, Client, SiteScenario, require
+from acceptance_smtp_tls_support import certificates
 from compose_recovery import dotenv
 
 PROJECT = Path(__file__).resolve().parents[1]
@@ -45,15 +47,18 @@ def wait_for(action, message, timeout=90):
 
 
 @contextmanager
-def smtp_sink(image, container, name, scripts, env):
+def smtp_sink(image, container, name, scripts, env, config, evidence, logs):
     """Share only the owned application's loopback; tokens use private pipes."""
     process = subprocess.Popen([
         "docker", "run", "--rm", "-i", "--name", name, "--log-driver", "none",
         "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true",
+        "--tmpfs", "/tmp:rw,noexec,nosuid,size=1m,mode=1777",
         "--user", "10001:10001", "--network", "container:" + container,
         "--mount", f"type=bind,src={scripts},dst=/fixtures,readonly",
-        "--entrypoint", "python3", image, "-B", "/fixtures/acceptance_smtp.py", "--port", "2525",
+        "--entrypoint", "python3", image, "-B", "/fixtures/acceptance_smtp_tls_support.py", "--port", "2525",
     ], env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    private_values = [config["username"], config["password"], config["key"],
+                      base64.b64encode(("\0" + config["username"] + "\0" + config["password"]).encode()).decode()]
 
     def response():
         require(bool(select.select([process.stdout], [], [], 30)[0]), "SMTP fixture response timed out")
@@ -71,11 +76,22 @@ def smtp_sink(image, container, name, scripts, env):
         process.stdin.flush()
         value = response().get("token", "")
         require(isinstance(value, str) and bool(re.fullmatch(r"[a-f0-9]{64}", value)), "invalid SMTP token response")
+        private_values.extend((value, recipient))
         return value
 
     try:
+        process.stdin.write(json.dumps(config) + "\n")
+        process.stdin.flush()
         require(response() == {"port": 2525}, "SMTP fixture did not bind its loopback port")
         yield token
+        process.stdin.write(json.dumps({"snapshot": True}) + "\n")
+        process.stdin.flush()
+        counters = response().get("smtp", {})
+        verify_smtp_counters(counters, config["security"])
+        application_logs = logs()
+        require(not any(value in application_logs for value in private_values), "SMTP private data appeared in application logs")
+        evidence.update(transport=config["security"] + " authenticated container-loopback SMTP",
+                        smtp=counters, private_logs_verified=True)
     finally:
         process.stdin.close()
         try:
@@ -86,7 +102,18 @@ def smtp_sink(image, container, name, scripts, env):
         process.stdout.close()
 
 
-def exercise(image, root, ops_image, report):
+def verify_smtp_counters(counters, security):
+    require(isinstance(counters, dict) and security in ("tls", "starttls"), "invalid SMTP evidence")
+    require(all(counters.get(key) == 2 for key in
+                ("accepted_messages", "received_messages", "authenticated", "tls_handshakes", "ehlo_tls")),
+            "both account emails must use authenticated TLS")
+    require(not counters.get("cleartext_auth") and not counters.get("cleartext_mail"),
+            "credentials or mail were sent without TLS")
+    if security == "starttls":
+        require(counters.get("starttls_commands") == 2, "both emails must upgrade STARTTLS")
+
+
+def exercise(image, root, ops_image, report, smtp_security="starttls"):
     last_stage = time.monotonic()
 
     def stage(name):
@@ -105,8 +132,18 @@ def exercise(image, root, ops_image, report):
     (root / "scripts").mkdir()
     shutil.copyfile(PROJECT / "scripts/compose-init.sh", root / "scripts/compose-init.sh")
     shutil.copyfile(PROJECT / "scripts/compose-backup.sh", root / "scripts/compose-backup.sh")
-    for filename in ("acceptance_smtp.py", "acceptance_support.py"):
+    for filename in ("acceptance_smtp.py", "acceptance_support.py", "acceptance_smtp_tls_support.py"):
         shutil.copyfile(PROJECT / "scripts" / filename, root / "scripts" / filename)
+    certs = certificates(root / "certificates")
+    smtp_config = {"security": smtp_security, "username": "smtp-" + secrets.token_hex(8),
+                   "password": secrets.token_hex(24) + "-$MISSING-'quoted'-\\line\nsecond",
+                   "certificate": (certs / "valid.crt").read_text(), "key": (certs / "valid.key").read_text()}
+    smtp_environment = {"BLOG_SMTP_HOST": "127.0.0.1", "BLOG_SMTP_PORT": "2525",
+                        "BLOG_SMTP_SECURITY": smtp_security, "BLOG_SMTP_FROM": "blog@acceptance.invalid",
+                        "BLOG_SMTP_USERNAME": smtp_config["username"], "BLOG_SMTP_PASSWORD": smtp_config["password"],
+                        "BLOG_SMTP_CA_PEM": (certs / "ca.crt").read_text()}
+    report["smtp_security"] = smtp_security
+    report["smtp_ca_sha256"] = hashlib.sha256(smtp_environment["BLOG_SMTP_CA_PEM"].encode()).hexdigest()
     shutil.copyfile(PROJECT / ".env.example", root / ".env.example")
     initialized = subprocess.run(["sh", str(root / "scripts/compose-init.sh")], cwd=root,
                                  capture_output=True, text=True, timeout=10)
@@ -115,8 +152,7 @@ def exercise(image, root, ops_image, report):
     with env_file.open("a") as stream:
         stream.write(f"\nBLOG_IMAGE={image}\nBLOG_OPS_IMAGE={ops_image}\nCOMPOSE_PROJECT_NAME={project}\nBLOG_HTTP_HOST=127.0.0.1\nBLOG_HTTP_PORT=0\nBLOG_METRICS_PORT=0\nRUST_LOG=info,sqlx=warn\n")
         stream.write(dotenv({"GH_SECRET": special_secret, "BLOG_DB_MAX_CONNECTIONS": "9", "BLOG_DB_STATEMENT_TIMEOUT_MS": "20000"}))
-        stream.write(dotenv({"BLOG_SMTP_HOST": "127.0.0.1", "BLOG_SMTP_PORT": "2525",
-                             "BLOG_SMTP_SECURITY": "local", "BLOG_SMTP_FROM": "blog@acceptance.invalid"}))
+        stream.write(dotenv(smtp_environment))
     shutil.copyfile(PROJECT / "compose.yaml", root / "compose.yaml")
     (root / "ops").mkdir()
     shutil.copyfile(PROJECT / "ops/postgres-init.sh", root / "ops/postgres-init.sh")
@@ -169,6 +205,9 @@ def exercise(image, root, ops_image, report):
         # .env is auto-discovered, but cluster/owner passwords stay out of blog.
         model = json.loads(compose("config", "--format", "json"))
         application_env = model["services"]["blog"]["environment"]
+        for key, value in smtp_environment.items():
+            require(application_env.get(key, "").replace("$$", "$") == value,
+                    "initial Compose model changed SMTP configuration: " + key)
         volume_init = model["services"]["theme-volume-init"]
         require(volume_init["network_mode"] == "none" and volume_init["read_only"]
                 and volume_init["cap_add"] == ["CHOWN"] and not volume_init.get("environment")
@@ -242,9 +281,12 @@ def exercise(image, root, ops_image, report):
         require(compose("exec", "-T", "blog", "stat", "-c", "%a", "/var/lib/blog/config/config.toml") == "600",
                 "persisted configuration must be private")
         guest.login(password)
+        mail_origin = guest.origin
         stage("SMTP invitation, recovery and revoked credentials")
-        with smtp_sink(ops_image, compose("ps", "-q", "blog"), project + "-smtp", root / "scripts", env) as receive_token:
-            report["smtp"] = scenario.account_emails(receive_token)
+        report["smtp"] = {}
+        with smtp_sink(ops_image, compose("ps", "-q", "blog"), project + "-smtp", root / "scripts", env,
+                       smtp_config, report["smtp"], lambda: compose("logs", "--no-color", "blog")) as receive_token:
+            report["smtp"].update(scenario.account_emails(receive_token))
         stage("editing drafts, revision history and theme releases")
         scenario.media_and_content()
         scenario.editing_revisions()
@@ -415,20 +457,22 @@ def exercise(image, root, ops_image, report):
         operation("verify", str(archive), str(identity_file))
         require(not (root / "backups/.context").exists(), "plaintext deployment context was left on disk")
         require(not list((root / "backups").glob(".backup-*")), "plaintext backup staging was left on disk")
-        compose("run", "--rm", "--no-deps", "-v", f"{identity_file}:/run/secrets/backup-identity:ro",
+        compose("run", "--rm", "--no-deps", "-T", "-v", f"{identity_file}:/run/secrets/backup-identity:ro",
                 "--entrypoint", "python3", "ops", "-c", """
 import json, sys, tomllib
 sys.path.insert(0, '/opt/blog/scripts')
 from compose_recovery import unpack
+expected = json.load(sys.stdin)
 with unpack(sys.argv[1]) as (_, _, deployment, _):
     assert not (deployment / 'source.env').exists()
     env = json.loads((deployment / 'environment.json').read_text())
     assert env['GH_SECRET']
-    assert env['BLOG_SMTP_HOST'] == '127.0.0.1' and env['BLOG_SMTP_SECURITY'] == 'local'
+    assert all(env.get(key) == value for key, value in expected.items())
     assert not any(k.startswith(('RESTIC_', 'AWS_')) or k in ('DATABASE_URL', 'BLOG_POSTGRES_PASSWORD', 'BLOG_OWNER_PASSWORD') for k in env)
     config = tomllib.loads((deployment / 'config.toml').read_text())
     assert 'url' not in config['database'] and 'maintenance' not in config
-""", "/backups/" + archive.name)
+""", "/backups/" + archive.name, data=json.dumps(smtp_environment))
+        report["smtp_archive_preserved"] = True
         guest = client()
         wait_for(lambda: guest.request("GET", "/readyz"), "backup did not restart source")
         snapshots = json.loads(operation("remote-list"))
@@ -444,7 +488,6 @@ with unpack(sys.argv[1]) as (_, _, deployment, _):
         require(any(path.endswith(archive.name) for path in snapshots[0]["paths"]),
                 "remote snapshot does not contain the latest local archive")
         operation("fetch", snapshots[0]["id"])
-        import hashlib
         require(hashlib.sha256(archive.read_bytes()).digest() == hashlib.sha256(saved.read_bytes()).digest(),
                 "encrypted fetch changed backup bytes")
         damaged_dir = root / "backups/damaged"
@@ -475,9 +518,10 @@ with unpack(sys.argv[1]) as (_, _, deployment, _):
         for key, value in (("BLOG_DB_MAX_CONNECTIONS", "9"), ("BLOG_DB_STATEMENT_TIMEOUT_MS", "20000")):
             require(restored_model["services"]["blog"]["environment"].get(key) == value,
                     "restored deployment lost database policy: " + key)
-        for key in ("BLOG_SMTP_HOST", "BLOG_SMTP_PORT", "BLOG_SMTP_SECURITY", "BLOG_SMTP_FROM"):
+        for key in smtp_environment:
             require(restored_model["services"]["blog"]["environment"].get(key) == application_env[key],
                     "restored deployment lost mail configuration: " + key)
+        report["smtp_restored_config_preserved"] = True
         require(restored_model["services"]["blog"]["environment"].get("GH_SECRET", "").replace("$$", "$") == special_secret,
                 "restore changed a secret containing quotes, dollars, backslashes or newlines")
         require(restored_compose("ps", "--services", "--status", "running") == "db",
@@ -508,6 +552,7 @@ with unpack(sys.argv[1]) as (_, _, deployment, _):
         require(restored_sql("SELECT count(*) FROM sessions") == "0", "release retained verification sessions")
         require(target.json("GET", "/auth/password/recovery")["enabled"], "release lost SMTP configuration")
         target.login(password)
+        require(target.json("GET", "/version") == build, "restored binary identity changed")
         scenario.assert_pending_content()
         scenario.assert_theme_recovery()
         scenario.assert_media_references(target.json("GET", API + "/media/" + media["id"]))
@@ -530,6 +575,14 @@ with unpack(sys.argv[1]) as (_, _, deployment, _):
                 "restore modified the source deployment")
         restored_compose("--profile", "ops", "run", "--rm", "--no-deps", "--entrypoint", "python3", "ops", "-c",
                          "import toml; assert toml.load('/var/lib/blog/config/config.toml')['database']['max_lifetime_secs'] == 777")
+        stage("authenticated SMTP invitation and recovery after release")
+        report["restored_smtp"] = {}
+        with smtp_sink(ops_image, restored_compose("ps", "-q", "blog"), project + "-restored-smtp",
+                       root / "scripts", env, smtp_config, report["restored_smtp"],
+                       lambda: restored_compose("logs", "--no-color", "blog")) as receive_token:
+            report["restored_smtp"].update(scenario.account_emails(
+                receive_token, username="acceptance-restored", email="restored@acceptance.invalid", link_origin=mail_origin))
+        report["restored_smtp"]["configured_link_origin_preserved"] = True
         stage("optional restricted accounts survive a second recovery")
         app_password, maintenance_password = secrets.token_hex(32), secrets.token_hex(32)
         restored_sql(f"CREATE ROLE blog_app LOGIN PASSWORD '{app_password}'; "
@@ -578,12 +631,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--image", default="blog:local", help="already-built local image")
     parser.add_argument("--ops-image", default="blog-ops:local", help="matching already-built ops image")
+    parser.add_argument("--smtp-security", choices=("tls", "starttls"), default="starttls")
     parser.add_argument("--report", type=Path, help="write a secret-free JSON verification report")
     args = parser.parse_args()
     started = time.monotonic()
     report = {"started_at": dt.datetime.now(dt.timezone.utc).isoformat(), "status": "running", "steps": [], "images": {}}
     report["scripts_sha256"] = {name: hashlib.sha256((PROJECT / "scripts" / name).read_bytes()).hexdigest()
-                                for name in ("test_compose.py", "acceptance_support.py", "acceptance_smtp.py", "compose_recovery.py")}
+                                for name in ("test_compose.py", "acceptance_support.py", "acceptance_smtp.py",
+                                             "acceptance_smtp_tls_support.py", "compose_recovery.py")}
     try:
         for kind, name in (("application", args.image), ("ops", args.ops_image)):
             result = subprocess.run(["docker", "image", "inspect", name], capture_output=True, text=True, timeout=30)
@@ -597,13 +652,14 @@ def main():
                     "image label differs from expected release")
         with tempfile.TemporaryDirectory(prefix="blog-compose-test-") as directory:
             # Resolve tags once; every subsequent deployment uses immutable image IDs.
-            exercise(report["images"]["application"]["id"], Path(directory), report["images"]["ops"]["id"], report)
+            exercise(report["images"]["application"]["id"], Path(directory), report["images"]["ops"]["id"], report, args.smtp_security)
         report["status"] = "passed"
-    except (AcceptanceError, OSError, subprocess.SubprocessError) as error:
+    except Exception as error:
         report["status"] = "failed"
+        report["error"] = str(error) if isinstance(error, AcceptanceError) else "unexpected " + type(error).__name__
         if report["steps"] and report["steps"][-1]["status"] == "running":
             report["steps"][-1]["status"] = "failed"
-        print(f"Compose verification failed: {error}", file=sys.stderr)
+        print("Compose verification failed: " + report["error"], file=sys.stderr)
         return 1
     finally:
         report["seconds"] = round(time.monotonic() - started, 3)

@@ -1,12 +1,16 @@
 """Private, bounded TLS SMTP fixtures. Never relay, persist mail or log commands."""
+import argparse
 import base64
 from collections import Counter
 import hmac
+import json
 from pathlib import Path
 import queue
 import socketserver
 import ssl
 import subprocess
+import sys
+import tempfile
 import threading
 
 from acceptance_smtp import SmtpSink, Server
@@ -186,10 +190,10 @@ class TlsServer(Server):
 
 
 class TlsSmtpSink(SmtpSink):
-    def __init__(self, security, context, username, password, private_response, fault=None):
+    def __init__(self, security, context, username, password, private_response, fault=None, port=0):
         require(security in ("tls", "starttls") and fault in FAULTS, "invalid SMTP fixture mode")
         require(bool(username) and bool(password), "SMTP fixture needs explicit credentials")
-        self.server = TlsServer(("127.0.0.1", 0), TlsHandler)
+        self.server = TlsServer(("127.0.0.1", port), TlsHandler)
         self.server.security, self.server.context = security, context
         self.server.username, self.server.password = username, password
         self.server.private_response = private_response.encode()
@@ -207,3 +211,58 @@ class TlsSmtpSink(SmtpSink):
     def close(self):
         self.server.stop.set()
         super().close()
+
+
+def serve_stdio(port):
+    """Receive private TLS material and commands over pipes, never container logs.
+
+    Containers mount /tmp as tmpfs. Keys are private to this process's temporary
+    directory; SMTP binds only the application's shared loopback namespace.
+    """
+    sink = None
+    try:
+        line = sys.stdin.readline(32769)
+        require(0 < len(line) <= 32768, "invalid SMTP fixture configuration")
+        config = json.loads(line)
+        require(isinstance(config, dict)
+                and set(config) == {"security", "username", "password", "certificate", "key"}
+                and all(isinstance(value, str) and value for value in config.values()),
+                "invalid SMTP fixture configuration")
+        with tempfile.TemporaryDirectory(prefix="smtp-keys-") as directory:
+            root = Path(directory)
+            (root / "valid.crt").write_text(config["certificate"])
+            key = root / "valid.key"
+            key.touch(mode=0o600)
+            key.write_text(config["key"])
+            sink = TlsSmtpSink(config["security"], server_context(root), config["username"],
+                               config["password"], "PrivateContainerSmtpResponse", port=port)
+            print(json.dumps({"port": sink.port}), flush=True)
+            while True:
+                line = sys.stdin.readline(4097)
+                if not line or len(line) > 4096:
+                    break
+                try:
+                    command = json.loads(line)
+                    if command == {"snapshot": True}:
+                        response = {"smtp": sink.snapshot()}
+                    else:
+                        require(isinstance(command, dict) and set(command) == {"recipient", "origin"}
+                                and all(isinstance(value, str) for value in command.values()), "invalid mail request")
+                        response = {"token": sink.token(command["recipient"], command["origin"])}
+                except (ValueError, TypeError, AcceptanceError):
+                    response = {"error": "SMTP acceptance delivery failed"}
+                print(json.dumps(response), flush=True)
+    except Exception:
+        # Parsing, SSL and filesystem exceptions may contain key material.
+        print(json.dumps({"error": "SMTP fixture failed"}), flush=True)
+        return 1
+    finally:
+        if sink is not None:
+            sink.close()
+    return 0
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--port", type=int, required=True)
+    raise SystemExit(serve_stdio(parser.parse_args().port))

@@ -36,17 +36,22 @@ jobs:
           test -n "$db_image"
           docker pull "$db_image"
 
-      - name: Verify installation, SMTP, publishing, themes and isolated restore with Compose
+      - name: Verify installation, STARTTLS mail, publishing, themes and isolated restore with Compose
         env:
           BLOG_EXPECT_REVISION: ${{ github.sha }}
-        run: python3 -B scripts/test_compose.py --image blog:ci --ops-image blog-ops:ci --report compose-verification.json
+        run: python3 -B scripts/test_compose.py --image blog:ci --ops-image blog-ops:ci --smtp-security starttls --report compose-verification-starttls.json
+
+      - name: Verify implicit TLS mail before and after a complete Compose restore
+        env:
+          BLOG_EXPECT_REVISION: ${{ github.sha }}
+        run: python3 -B scripts/test_compose.py --image blog:ci --ops-image blog-ops:ci --smtp-security tls --report compose-verification-tls.json
 
       - name: Save Compose verification report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: compose-verification-${{ github.sha }}
-          path: compose-verification.json
+          path: compose-verification-*.json
           if-no-files-found: warn
 
       - name: Package the verified image and deployment files
