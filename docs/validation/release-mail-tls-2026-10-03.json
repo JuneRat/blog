@@ -1,0 +1,144 @@
+{
+  "started_at": "2026-10-03T15:39:14.540963+00:00",
+  "status": "passed",
+  "steps": [
+    {
+      "name": "fresh installation",
+      "status": "passed",
+      "seconds": 6.606
+    },
+    {
+      "name": "bundled assets, migration paths and persistent content",
+      "status": "passed",
+      "seconds": 0.259
+    },
+    {
+      "name": "SMTP invitation, recovery and revoked credentials",
+      "status": "passed",
+      "seconds": 61.217
+    },
+    {
+      "name": "editing drafts, revision history and theme releases",
+      "status": "passed",
+      "seconds": 0.922
+    },
+    {
+      "name": "telemetry, JSON logs and dependency failure",
+      "status": "passed",
+      "seconds": 9.513
+    },
+    {
+      "name": "persistent task queue, retry, periodic retention and publication",
+      "status": "passed",
+      "seconds": 11.817
+    },
+    {
+      "name": "default and optional dedicated retention connections",
+      "status": "passed",
+      "seconds": 15.986
+    },
+    {
+      "name": "automatic startup migration and persistent content",
+      "status": "passed",
+      "seconds": 13.926
+    },
+    {
+      "name": "complete backup and encrypted repository round trip",
+      "status": "passed",
+      "seconds": 30.458
+    },
+    {
+      "name": "backup failure restarts the source and preserves previous backups",
+      "status": "passed",
+      "seconds": 8.256
+    },
+    {
+      "name": "fresh deployment restore, isolation, login/media verification and release",
+      "status": "passed",
+      "seconds": 19.015
+    },
+    {
+      "name": "authenticated SMTP invitation and recovery after release",
+      "status": "passed",
+      "seconds": 61.164
+    },
+    {
+      "name": "optional restricted accounts survive a second recovery",
+      "status": "passed",
+      "seconds": 25.792
+    }
+  ],
+  "images": {
+    "application": {
+      "name": "codex-blog-release:e610be9625a2",
+      "id": "sha256:d6eab006dbc274da91aecd76bdcf1b88e5ce1dc1676214929f6762164384cd7c",
+      "architecture": "arm64",
+      "revision": "e610be9625a276b11885ea73b4e202de5b9d575c"
+    },
+    "ops": {
+      "name": "codex-blog-release:e610be9625a2-ops",
+      "id": "sha256:5e16d6ec081a436c43f6169283a0d1a4479958fdf293f47dbbb63b569fdee704",
+      "architecture": "arm64",
+      "revision": "e610be9625a276b11885ea73b4e202de5b9d575c"
+    }
+  },
+  "scripts_sha256": {
+    "test_compose.py": "702005daa4dbf1d66e8de75be0af7ce6dd4d29f5437e7b84925a5962cffdf818",
+    "acceptance_support.py": "8211fa2b8feece493cd87c43d33c8bb2c8fba6eb77a336b8aeaa0c0f814aab05",
+    "acceptance_smtp.py": "36466061e8b157aeddd0076828dd6f7f53226a5cfbc113e0ab805743514149f8",
+    "acceptance_smtp_tls_support.py": "2d7b0fe3503ce741167d53095f8a6afa931c6819607cc81dd7f3229854896033",
+    "compose_recovery.py": "2a7017069e16669a87d7428290e16d894a34d0c41da12b808c681d4f86f4c6fc"
+  },
+  "smtp_security": "tls",
+  "smtp_ca_sha256": "583a18cae4ca35be96bd0fbd030799aeb462d62cde84e0c47056332e701ed218",
+  "build": {
+    "version": "0.1.0",
+    "revision": "e610be9625a276b11885ea73b4e202de5b9d575c"
+  },
+  "smtp": {
+    "transport": "tls authenticated container-loopback SMTP",
+    "deliveries": 2,
+    "invitation_replay_rejected": true,
+    "old_session_revoked": true,
+    "smtp": {
+      "connections": 2,
+      "tls_handshakes": 2,
+      "TLSv1.3": 2,
+      "ehlo_tls": 2,
+      "auth_attempts": 2,
+      "authenticated": 2,
+      "received_messages": 2,
+      "accepted_messages": 2
+    },
+    "private_logs_verified": true
+  },
+  "smtp_archive_preserved": true,
+  "smtp_restored_config_preserved": true,
+  "recovery_check": {
+    "login": true,
+    "pages": 3,
+    "media": 0,
+    "isolated": true,
+    "mail_disabled": true
+  },
+  "restored_smtp": {
+    "transport": "tls authenticated container-loopback SMTP",
+    "deliveries": 2,
+    "invitation_replay_rejected": true,
+    "old_session_revoked": true,
+    "smtp": {
+      "connections": 2,
+      "tls_handshakes": 2,
+      "TLSv1.3": 2,
+      "ehlo_tls": 2,
+      "auth_attempts": 2,
+      "authenticated": 2,
+      "received_messages": 2,
+      "accepted_messages": 2
+    },
+    "private_logs_verified": true,
+    "configured_link_origin_preserved": true
+  },
+  "cleanup": "passed",
+  "seconds": 268.316
+}

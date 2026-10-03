@@ -1,0 +1,25 @@
+{
+  "checked_at": "2026-10-03T15:45:05.997319+00:00",
+  "status": "passed",
+  "remaining_test_resources": {
+    "containers": [],
+    "volumes": [],
+    "networks": []
+  },
+  "original_containers": [
+    {
+      "name": "/blog-postgres",
+      "id": "cdc3bb6dcb4be31ab85d3f0020f9243e712a37a0d3939ff444ea7d831b226e4e",
+      "started_at": "2026-10-01T05:00:52.799659181Z",
+      "status": "running",
+      "unchanged": true
+    },
+    {
+      "name": "/amis-local-postgres-1",
+      "id": "2bbea9cf5c067c7013b6412bdb094af44dbc58c89ffcffab461eab7039753931",
+      "started_at": "2026-10-02T16:50:42.915107613Z",
+      "status": "running",
+      "unchanged": true
+    }
+  ]
+}
