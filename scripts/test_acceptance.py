@@ -61,6 +61,26 @@ class AcceptanceSafetyTests(unittest.TestCase):
         self.assertEqual(env["BLOG_CONFIG_FILE"], str(self.root / "config.toml"))
         self.assertEqual(env["PATH"], "/safe/bin")
 
+    def test_mail_delivery_uses_only_the_owned_sink_and_is_disabled_during_recovery(self):
+        self.suite.smtp = Mock(port=25252)
+        with patch.dict(os.environ, {"BLOG_SMTP_HOST": "real.example", "BLOG_SMTP_PASSWORD": "private"}):
+            env = self.suite.env()
+            restored = self.suite.env(restored=True)
+            isolated = self.suite.env(isolated=True)
+        self.assertEqual(env["BLOG_SMTP_HOST"], "127.0.0.1")
+        self.assertEqual(env["BLOG_SMTP_PORT"], "25252")
+        self.assertEqual(env["BLOG_SMTP_SECURITY"], "local")
+        self.assertNotIn("BLOG_SMTP_PASSWORD", env)
+        self.assertFalse(any(key.startswith("BLOG_SMTP_") for key in restored))
+        self.assertFalse(any(key.startswith("BLOG_SMTP_") for key in isolated))
+
+    def test_cleanup_closes_the_owned_mail_sink(self):
+        sink = Mock()
+        self.suite.smtp = sink
+        self.suite.cleanup()
+        sink.close.assert_called_once_with()
+        self.assertIsNone(self.suite.smtp)
+
     def test_database_collision_never_creates_or_drops_any_database(self):
         self.pg.query.return_value = "1"
         with self.assertRaisesRegex(acceptance.AcceptanceError, "refusing to reuse"):

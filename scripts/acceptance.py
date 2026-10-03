@@ -25,6 +25,7 @@ import uuid
 
 import recovery
 from acceptance_support import API, Client, AcceptanceError, SiteScenario, require
+from acceptance_smtp import SmtpSink
 
 PROJECT = Path(__file__).resolve().parent.parent
 
@@ -103,6 +104,7 @@ class Acceptance(SiteScenario):
         self.backup_dir = root / "backup"
         self.steps = []
         self.evidence = {}
+        self.smtp = None
 
     def env(self, database=None, restored=False, isolated=False):
         env = clean_env()
@@ -114,6 +116,9 @@ class Acceptance(SiteScenario):
                    BLOG_RECOVERY_MODE="1" if isolated else "0", RUST_LOG="warn")
         if database:
             env["DATABASE_URL"] = database_url(self.args.admin_url, database)
+        if self.smtp is not None and not restored and not isolated:
+            env.update(BLOG_SMTP_HOST="127.0.0.1", BLOG_SMTP_PORT=str(self.smtp.port),
+                       BLOG_SMTP_SECURITY="local", BLOG_SMTP_FROM="blog@acceptance.invalid")
         return env
 
     def stage(self, name, action):
@@ -137,6 +142,7 @@ class Acceptance(SiteScenario):
         self.evidence.update(server_sha256=recovery.digest(self.args.binary),
                              admin_entry_sha256=recovery.digest(self.args.admin_dist / "index.html"),
                              scenarios_sha256=recovery.digest(PROJECT / "scripts/acceptance_support.py"),
+                             smtp_runner_sha256=recovery.digest(PROJECT / "scripts/acceptance_smtp.py"),
                              runner_sha256=recovery.digest(Path(__file__)))
         for name in (self.source, self.target):
             require(not self.pg.query(f"SELECT 1 FROM pg_database WHERE datname='{name}'", "postgres"),
@@ -144,6 +150,7 @@ class Acceptance(SiteScenario):
         self.pg.execute("createdb", ["--template=template0", self.source])
         self.owned.add(self.source)
         shutil.copytree(PROJECT / "themes/default", self.theme_dir / "default")
+        self.smtp = SmtpSink()
 
     def start(self, database=None, restored=False, isolated=False, installer=False):
         require(self.process is None, "previous server must stop before starting another")
@@ -248,6 +255,44 @@ class Acceptance(SiteScenario):
         )
         require(result.returncode == 0, "production browser acceptance failed; inspect Playwright results")
 
+    def account_emails(self):
+        require(self.guest.json("GET", "/auth/password/recovery")["enabled"], "test SMTP must be enabled")
+        email = "invited@acceptance.invalid"
+        username = "acceptance-invited"
+        user = self.admin.json("POST", API + "/users", {"username": username, "email": email}, status=201)
+        self.admin.request("PUT", API + f"/users/{username}/roles/author", status=204)
+        self.admin.json("POST", API + f"/users/{user['id']}/invitation")
+        token = self.smtp.token(email, self.origin)
+        password = "Invite-" + secrets.token_hex(16) + "!"
+        self.guest.json("POST", "/auth/password/reset", {"token": token, "password": password})
+        for _ in range(2):
+            self.guest.json("POST", "/auth/password/reset", {"token": token, "password": password}, status=400)
+        invited = Client(self.origin)
+        invited.login(password, username)
+        stale = invited.clone()
+        # Reset and recovery share three admissions per minute. Verify the
+        # production limit, then wait for both the client budget and the
+        # account's one-minute issuance cooldown (retained after consumption).
+        _, limited = self.guest.request("POST", "/auth/password/recovery", {"email": "missing@acceptance.invalid"}, status=429)
+        retry_after = int(limited.get("Retry-After", "0"))
+        require(1 <= retry_after <= 60, "recovery admission must include a bounded Retry-After")
+        deadline = time.monotonic() + max(retry_after, 60) + 0.1
+        while time.monotonic() < deadline:
+            time.sleep(max(0, min(1, deadline - time.monotonic())))
+        public_response = self.guest.json("POST", "/auth/password/recovery", {"email": email}, status=202)
+        token = self.smtp.token(email, self.origin)
+        unknown = self.guest.json("POST", "/auth/password/recovery", {"email": "missing@acceptance.invalid"}, status=202)
+        require(public_response == unknown, "recovery response must not enumerate accounts")
+        password = "Recovered-" + secrets.token_hex(16) + "!"
+        self.guest.json("POST", "/auth/password/reset", {"token": token, "password": password})
+        stale.request("GET", API + "/me", status=401)
+        invited.login(password, username)
+        self.admin.request("DELETE", API + f"/users/{username}/roles/author", status=204)
+        invited.json("POST", API + "/posts", {"slug": "revoked-write", "title": "Rejected", "content": "Rejected"}, status=403)
+        require("post.create" not in invited.me()["permissions"], "role revocation must keep the session but remove write permission")
+        self.evidence["smtp"] = {"transport": "loopback SMTP sink", "deliveries": 2,
+                                 "invitation_replay_rejected": True, "old_session_revoked": True}
+
     def task_lifecycle(self):
         def restart(before_start):
             self.stop()
@@ -290,7 +335,7 @@ class Acceptance(SiteScenario):
         self.owned.add(self.target)
         require(result["counts"] == {**manifest["database_counts"], "sessions": 0, "account_links": 0},
                 "all business row counts must survive restore; sessions must be revoked")
-        require(result["verified_media"] == 1 and result["verified_references"] == 7,
+        require(result["verified_media"] == 1 and result["verified_references"] == manifest["database_counts"]["media_refs"],
                 "restore must verify original media and all references")
         require(self.query("SELECT value->>'id' FROM settings WHERE key='installation'", True) == self.installation_id,
                 "restore must retain the installation completion marker")
@@ -311,11 +356,15 @@ class Acceptance(SiteScenario):
             time.sleep(0.05)
         self.start(self.target, restored=True, isolated=True)
         self.assert_installed()
+        require(not self.guest.json("GET", "/auth/password/recovery")["enabled"],
+                "isolated recovery must not enable SMTP")
         self.old_session.request("GET", API + "/me", status=401)
         self.admin = Client(self.origin)
         self.admin.login(self.password)
         self.assert_public_content()
         self.assert_comments()
+        self.assert_pending_content()
+        self.assert_theme_recovery()
         for kind, prefix in (("posts", "/posts/"), ("pages", "/")):
             require(self.query(f"SELECT status FROM {kind} WHERE slug='acceptance-scheduled-{kind}'", True) == "scheduled",
                     "recovery verification must not run scheduled publication")
@@ -340,6 +389,8 @@ class Acceptance(SiteScenario):
         self.admin.login(self.password)
         self.assert_public_content()
         self.assert_comments()
+        self.assert_pending_content()
+        self.assert_theme_recovery()
         # The restored persistent publisher keeps its next 30s check time.
         # A short recovery can finish before that time; allow one full cadence.
         deadline = time.monotonic() + 45
@@ -361,6 +412,9 @@ class Acceptance(SiteScenario):
 
     def cleanup(self):
         self.stop()
+        if self.smtp is not None:
+            self.smtp.close()
+            self.smtp = None
         # A failed pg_restore still belongs to this run only if its database
         # guard matches the random tag written into our private restore output.
         marker = self.restore_dir / "ISOLATED"
@@ -387,7 +441,10 @@ class Acceptance(SiteScenario):
     def run(self):
         for name, action in (
             ("fresh database", self.prepare), ("first-run installation", self.install),
-            ("identity and persistent sessions", self.identity), ("media, taxonomy and writing", self.media_and_content),
+            ("identity and persistent sessions", self.identity), ("SMTP invitation, recovery and revocation", self.account_emails),
+            ("media, taxonomy and writing", self.media_and_content),
+            ("published editing drafts and revision restoration", self.editing_revisions),
+            ("theme preview, upgrade and rollback", self.theme_releases),
             ("content and media trash", self.lifecycles), ("nested comments and moderation", self.comments),
             ("persistent tasks, retry, periodic retention and publication", self.task_lifecycle),
             ("scheduled publication and writer shutdown", self.schedule_and_stop), ("backup and isolated restore", self.backup_restore),

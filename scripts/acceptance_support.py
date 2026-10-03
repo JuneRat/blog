@@ -12,6 +12,7 @@ import time
 import uuid
 import zipfile
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
 from urllib.request import HTTPRedirectHandler, HTTPCookieProcessor, ProxyHandler, Request, build_opener
 
 API = "/api/admin/v1"
@@ -100,8 +101,8 @@ class Client:
         self.csrf = result["csrf_token"]
         return result
 
-    def login(self, password):
-        self.json("POST", "/auth/login/password", {"username": "acceptance-owner", "password": password})
+    def login(self, password, username="acceptance-owner"):
+        self.json("POST", "/auth/login/password", {"username": username, "password": password})
         return self.me()
 
 
@@ -312,9 +313,7 @@ class SiteScenario:
         })
         self.assert_public_content()
         detail = self.admin.json("GET", API + "/media/" + self.media["id"])
-        require(detail["media"]["reference_count"] == 7, "cover/body references must deduplicate per source")
-        require({row["kind"] for row in detail["references"]} == {"post", "page", "series", "user", "site"},
-                "all five media reference kinds must be observable")
+        self.assert_media_references(detail)
         require("<strong>HTTP acceptance</strong>" in self.query(
             "SELECT content_html FROM posts WHERE slug='acceptance-post'"), "post HTML must be persisted")
         theme = self.admin.json("GET", API + "/settings/theme")
@@ -340,13 +339,139 @@ class SiteScenario:
         raw, headers = self.guest.request("GET", self.media_url)
         require(raw == PNG and headers.get_content_type() == "image/png", "original image bytes must remain public")
 
+    def assert_media_references(self, detail):
+        live = [row for row in detail["references"] if row["kind"] not in ("post_revision", "page_revision")]
+        history = [row for row in detail["references"] if row["kind"] in ("post_revision", "page_revision")]
+        require(len(live) == 7 and {row["kind"] for row in live} == {"post", "page", "series", "user", "site"},
+                "cover/body references must deduplicate per live source")
+        require(len(history) >= 3 and detail["media"]["reference_count"] == len(live) + len(history),
+                "media protection must include all retained revision references")
+
+    def editing_revisions(self):
+        self.pending_content = []
+        for kind, item, public in (("posts", self.post, "/posts/acceptance-post"),
+                                   ("pages", self.page, "/acceptance-page")):
+            path = f"{API}/{kind}/{item['id']}"
+            original = self.admin.json("GET", path + "/revisions")[-1]
+            marker = "UnpublishedAcceptance" + kind
+            edited = self.admin.json("PATCH", path, {"content": self.body + "\n\n" + marker,
+                                                        "expected_version": item["version"]})
+            require(edited["has_pending_changes"], "published edits must become server drafts")
+            require(marker.encode() not in self.guest.request("GET", public)[0], "editing draft leaked into public HTML")
+            require(marker.encode() not in self.guest.request("GET", "/search/?q=HTTP")[0], "editing draft leaked into search")
+            self.admin.json("PATCH", path, {"title": "Stale", "expected_version": item["version"]}, status=409)
+            published = self.action(kind, edited, "publish")
+            require(not published["has_pending_changes"] and marker.encode() in self.guest.request("GET", public)[0],
+                    "explicit publish must expose the saved editing draft")
+            restored = self.admin.json("POST", path + f"/revisions/{original['id']}/restore",
+                                       {"expected_version": published["version"]})
+            require(restored["has_pending_changes"] and restored["content"] == self.body,
+                    "history restore must create new editing content")
+            require(marker.encode() in self.guest.request("GET", public)[0], "history restore must preserve the current publication")
+            self.admin.json("POST", path + f"/revisions/{original['id']}/restore",
+                            {"expected_version": published["version"]}, status=409)
+            result = self.action(kind, restored, "publish")
+            require(marker.encode() not in self.guest.request("GET", public)[0], "publishing restored history must update public content")
+            if kind == "posts":
+                self.post = result
+            else:
+                self.page = result
+            # Keep a real pending edit through backup/restore, without altering
+            # the media fixture's seven live reference sources.
+            slug = "acceptance-pending-" + kind
+            pending = self.action(kind, self.create(kind, slug, content="Public before recovery"), "publish")
+            pending_path = f"{API}/{kind}/{pending['id']}"
+            self.admin.json("PATCH", pending_path, {"content": "Pending after recovery", "expected_version": pending["version"]})
+            self.pending_content.append((pending_path, ("/posts/" if kind == "posts" else "/") + slug))
+        self.assert_pending_content()
+        self.assert_media_references(self.admin.json("GET", API + "/media/" + self.media["id"]))
+
+    def assert_pending_content(self):
+        for path, public in self.pending_content:
+            item = self.admin.json("GET", path)
+            require(item["has_pending_changes"] and item["content"] == "Pending after recovery",
+                    "pending server edit must survive recovery")
+            body = self.guest.request("GET", public)[0]
+            require(b"Public before recovery" in body and b"Pending after recovery" not in body,
+                    "restored publication must remain isolated from the editing draft")
+            require(len(self.admin.json("GET", path + "/revisions")) == 3, "revision history must survive recovery")
+
+    def theme_releases(self):
+        source = Path(__file__).resolve().parent.parent / "theme-packages/paper"
+        slug = "acceptance-theme"
+
+        def package(release):
+            archive = io.BytesIO()
+            with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as output:
+                for item in sorted(source.rglob("*")):
+                    if not item.is_file():
+                        continue
+                    name = item.relative_to(source).as_posix()
+                    body = item.read_bytes()
+                    if name == "theme.json":
+                        manifest = json.loads(body)
+                        manifest.update(slug=slug, name="Acceptance Theme")
+                        body = json.dumps(manifest).encode()
+                    if name == "templates/index.html":
+                        body = body.replace(b"{% block content %}",
+                            b"{% block content %}<p>{{ theme.config.note }}</p><p>AcceptanceRelease" + release.encode() + b"</p>")
+                    output.writestr(slug + "/" + name, body)
+                output.writestr(slug + "/settings.schema.json", json.dumps({"config_schema_version": 1,
+                    "fields": [{"key": "note", "type": "text", "label": "Note", "default": "Default", "max_length": 100}]}))
+            return archive.getvalue()
+
+        headers = {"Content-Type": "application/zip"}
+        self.admin.json("POST", API + "/themes", package("One"), status=201, headers=headers)
+        path = API + f"/themes/{slug}"
+        config = self.admin.json("GET", path + "/settings")
+        config = self.admin.json("PUT", path + "/settings", {"id": config["id"], "expected_release": config["release"],
+            "config_schema_version": config["config_schema_version"], "expected_version": config["version"],
+            "config": {"note": "PreservedAcceptanceConfig"}})
+        selection = self.admin.json("GET", API + "/settings/theme")
+        preview = self.admin.json("POST", path + "/preview", {"expected_release": config["release"]})
+        require("PreservedAcceptanceConfig" in preview["html"] and "AcceptanceReleaseOne" in preview["html"],
+                "preview must render the configured installed release")
+        require(self.admin.json("GET", API + "/settings/theme") == selection, "preview must not activate a theme")
+        selected = self.admin.json("PUT", API + "/settings/theme", {"slug": slug, "expected_version": selection["version"]})
+        identity = {"id": config["id"], "expected_release": config["release"], "expected_version": config["version"]}
+        upgraded = self.admin.json("POST", path + "/upgrade?" + urlencode(identity), package("Two"), headers=headers)
+        current = self.admin.json("GET", path + "/settings")
+        require(current["config"] == config["config"] and current["id"] == config["id"]
+                and current["release"] != config["release"], "upgrade must retain identity and settings")
+        require(self.admin.json("GET", API + "/settings/theme")["version"] == selected["version"],
+                "upgrade must retain activation version")
+        require(b"AcceptanceReleaseTwo" in self.guest.request("GET", "/")[0], "upgraded release must be active")
+        previous = self.admin.json("GET", path + "/previous")["previous"]
+        require(previous["release"] == config["release"], "upgrade must retain the previous release")
+        self.admin.json("POST", path + "/rollback", identity, status=409)
+        rolled = self.admin.json("POST", path + "/rollback", {"id": current["id"],
+            "expected_release": current["release"], "expected_version": current["version"]})
+        require(rolled["release"] == config["release"] and b"AcceptanceReleaseOne" in self.guest.request("GET", "/")[0],
+                "rollback must reactivate the previous release")
+        require(self.admin.json("GET", path + "/settings")["config"] == config["config"], "rollback must preserve settings")
+        require(self.admin.json("GET", path + "/previous")["previous"]["release"] == upgraded["release"],
+                "rollback must retain the replaced release for recovery")
+        self.theme_checkpoint = {"path": path, "id": config["id"], "config": config["config"],
+                                 "release": config["release"], "previous": upgraded["release"]}
+        self.admin.json("PUT", API + "/settings/theme", {"slug": selection["slug"], "expected_version": selected["version"]})
+        self.assert_public_content()
+
+    def assert_theme_recovery(self):
+        expected = self.theme_checkpoint
+        current = self.admin.json("GET", expected["path"] + "/settings")
+        require(all(current[key] == expected[key] for key in ("id", "config", "release")),
+                "restored theme must preserve identity, configuration and current release")
+        previous = self.admin.json("GET", expected["path"] + "/previous")["previous"]
+        require(previous["release"] == expected["previous"], "restored theme must retain its rollback release")
+
     def assert_public_content(self):
         for path in ("/posts/acceptance-post", "/acceptance-page"):
             body, _ = self.guest.request("GET", path)
             require(b"<strong>HTTP acceptance</strong>" in body and self.media_url.encode() in body,
                     "public SSR must contain rendered content and media")
         for path in ("/", "/tags/acceptance-tag", "/categories/acceptance-category",
-                     "/series/acceptance-series-a", "/series/acceptance-series-b", "/feed.xml", "/sitemap.xml"):
+                     "/series/acceptance-series-a", "/series/acceptance-series-b", "/feed.xml", "/sitemap.xml",
+                     "/search/?q=acceptance", "/archive/", "/authors/acceptance-owner"):
             body, _ = self.guest.request("GET", path)
             require(b"/posts/acceptance-post" in body, f"{path}: published post missing")
             require(b"/posts/acceptance-private" not in body, f"{path}: private post leaked")
@@ -372,12 +497,13 @@ class SiteScenario:
             else:
                 self.page = published
         detail = self.admin.json("GET", API + "/media/" + self.media["id"])
-        require(detail["media"]["reference_count"] == 7, "trash and restore must preserve references")
+        self.assert_media_references(detail)
+        expected_references = detail["media"]["reference_count"]
         self.admin.json("DELETE", API + "/media/" + self.media["id"],
                         {"expected_version": detail["media"]["version"]}, status=204)
         self.assert_image()
         deleted = self.admin.json("GET", API + "/media/" + self.media["id"])["media"]
-        require(deleted["deleted_at"] is not None and deleted["reference_count"] == 7,
+        require(deleted["deleted_at"] is not None and deleted["reference_count"] == expected_references,
                 "soft deletion must retain media references")
         self.admin.json("POST", API + "/posts", {
             "slug": "acceptance-invalid-reference", "title": "Invalid reference", "content": self.body,

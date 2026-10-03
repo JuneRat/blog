@@ -1,0 +1,37 @@
+==> fresh database
+==> first-run installation
+==> identity and persistent sessions
+==> production browser writing and tasks
+
+Running 12 tests using 1 worker
+
+(node:82342) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓   1 e2e/markdown-editor.spec.ts:38:3 › posts: split view, local rendering, mobile switching and source retention (10.7s)
+  ✓   2 e2e/markdown-editor.spec.ts:38:3 › pages: split view, local rendering, mobile switching and source retention (10.7s)
+  ✓   3 e2e/markdown-editor.spec.ts:239:1 › local editor keeps strict diagrams, isolates malformed blocks and preserves unsupported fences (2.4s)
+  ✓   4 e2e/markdown-editor.spec.ts:270:1 › runtime loading failure keeps source editable and retries without losing input (1.7s)
+  ✓   5 e2e/markdown-editor.spec.ts:281:1 › invalid math keeps its source and a friendly hint in split and IR, and recovers after correction (2.1s)
+  ✓   6 e2e/markdown-enhance.spec.ts:58:3 › default: renders locally, isolates errors, and preserves ordinary code (1.1s)
+  ✓   7 e2e/markdown-enhance.spec.ts:58:3 › paper: renders locally, isolates errors, and preserves ordinary code (1.1s)
+  ✓   8 e2e/markdown-enhance.spec.ts:79:1 › admin preview renders the same assets with fonts and without access to admin (864ms)
+  ✓   9 e2e/tasks.spec.ts:23:1 › real future plan cancellation, failed rebuild, refresh and a new retry identity (25.2s)
+  ✓  10 e2e/writing.spec.ts:22:1 › production login, preview, publication and editor deep link (3.8s)
+  ✓  11 e2e/writing.spec.ts:37:1 › navigation cancellation and local draft survive a real reload (3.8s)
+  ✓  12 e2e/writing.spec.ts:53:1 › typing while a real save response is pending preserves the newer input (2.7s)
+
+  12 passed (1.1m)
+==> SMTP invitation, recovery and revocation
+==> media, taxonomy and writing
+==> published editing drafts and revision restoration
+==> theme preview, upgrade and rollback
+==> content and media trash
+==> nested comments and moderation
+==> persistent tasks, retry, periodic retention and publication
+==> scheduled publication and writer shutdown
+==> backup and isolated restore
+==> isolated HTTP verification
+==> release and recovered site
+==> cleanup
+Acceptance passed in 177.858s; temporary databases and files removed.
+Immutable server snapshot matched the report before and after acceptance.
