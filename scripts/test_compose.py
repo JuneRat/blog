@@ -169,6 +169,11 @@ def exercise(image, root, ops_image, report):
         # .env is auto-discovered, but cluster/owner passwords stay out of blog.
         model = json.loads(compose("config", "--format", "json"))
         application_env = model["services"]["blog"]["environment"]
+        volume_init = model["services"]["theme-volume-init"]
+        require(volume_init["network_mode"] == "none" and volume_init["read_only"]
+                and volume_init["cap_add"] == ["CHOWN"] and not volume_init.get("environment")
+                and [mount["target"] for mount in volume_init["volumes"]] == ["/opt/blog/themes"],
+                "theme volume initialization must have no network, credentials or other writable volumes")
         require("BLOG_POSTGRES_PASSWORD" not in application_env and "BLOG_OWNER_PASSWORD" not in application_env,
                 "database administration secrets must not enter the HTTP service")
         require(application_env.get("DATABASE_URL") is None,
@@ -352,6 +357,9 @@ def exercise(image, root, ops_image, report):
 
         stage("automatic startup migration and persistent content")
         compose("stop", "blog")
+        # CI also exercises the root-owned theme volume left by older images.
+        compose("run", "--rm", "--no-deps", "--user", "0:0", "--cap-add", "CHOWN", "--entrypoint", "chown",
+                "blog", "0:0", "/opt/blog/themes")
         # Recreate the pre-0002 state only in this disposable fixture, with data
         # already present. Starting the owner-backed service must apply 0002.
         sql("DROP INDEX media_trash_idx; DROP INDEX audit_logs_actor_time_idx; "
@@ -362,6 +370,8 @@ def exercise(image, root, ops_image, report):
         guest.request("GET", "/healthz")
         guest.request("GET", "/livez")
         require(guest.json("GET", "/version") == build, "build identity changed after restart")
+        require(compose("exec", "-T", "blog", "stat", "-c", "%u:%g", "/opt/blog/themes") == "10001:10001",
+                "startup did not migrate legacy theme volume ownership")
         guest.request("GET", "/api/install", status=404)
         require(sql("SELECT count(*) FROM _sqlx_migrations WHERE version=2 AND success") == "1",
                 "startup did not apply the pending migration")

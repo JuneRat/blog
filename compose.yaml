@@ -1,6 +1,21 @@
 name: blog
 
 services:
+  # Existing pre-theme-management volumes belong to root. Repair only the mount
+  # root; keep every theme file intact and the HTTP process unprivileged.
+  theme-volume-init:
+    image: ${BLOG_IMAGE:-blog:local}
+    user: "0:0"
+    entrypoint: [chown, "10001:10001", /opt/blog/themes]
+    command: []
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN]
+    security_opt: [no-new-privileges:true]
+    volumes:
+      - blog-themes:/opt/blog/themes
+
   db:
     image: postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873
     restart: unless-stopped
@@ -36,6 +51,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      theme-volume-init:
+        condition: service_completed_successfully
     # Compose reads .env; the site account is stored in config or DATABASE_URL.
     # Never pass the PostgreSQL cluster administrator password to the application.
     # A key without a value stays unset when absent from .env/the shell.

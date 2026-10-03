@@ -63,6 +63,15 @@ rm -rf "$release_source"
 
 验证脚本将镜像标签解析为不可变 ID，使用随机 Compose 项目、端口、密码和独立卷，不读取部署目录的 `.env`，完成后只删除它创建的容器与卷。SMTP 收件器只监听测试应用容器的回环地址，不转发邮件；一次性链接通过私有管道读取，收件容器禁用日志。备份保留 SMTP 配置，恢复核验明确验证隔离期间关闭邮件；重新开放后核验修改草稿、历史、主题配置及上一版本，并发布恢复的草稿。加密仓库测试使用临时本地 restic 仓库；真实 SMTP TLS/认证与外部邮箱送达、S3 权限、网络、容量及生产 RPO/RTO 仍需在部署环境验收。
 
+另可用两个已加载的本地镜像验证真实版本升级：
+
+```sh
+python3 -B scripts/test_release_upgrade.py --from-image blog:previous --image blog:local \
+  --report upgrade-verification.json
+```
+
+此测试要求旧镜像尚未应用 `0009`、`0010`。先在旧版创建已发布文章、页面、草稿和媒体，再停止旧进程并用候选镜像迁移原测试卷；验证旧会话、站点身份和内容保留，以及旧文章/页面首次编辑、历史记录、发布与恢复。它不会升级任何现有部署。
+
 ## 持久化与生命周期
 
 | Compose 卷 | 容器路径 | 内容 |
@@ -76,13 +85,15 @@ rm -rf "$release_source"
 
 首次创建命名卷时，Docker 复制镜像目录的 UID/GID 和权限，博客以 `10001:10001` 写入配置、媒体与主题。若改成宿主机 bind mount，须提前创建目录并授予该 UID 写权限；配置目录应为 700。主题卷首次创建时复制镜像内的主题；已有卷不会随镜像替换自动更新内置主题，升级主题需显式维护卷内容。备份应包含实际使用的主题卷。根文件系统只读，临时文件使用 `/tmp` 的 tmpfs。
 
+`blog` 启动前，一次性 `theme-volume-init` 服务将主题卷根目录设为 `10001:10001`。这兼容早期归属 root 的主题卷，允许新版创建主题管理锁文件；只调整卷根目录所有权，不递归修改或替换主题文件。该初始化进程使用 root 和单项 `CHOWN` 能力，无网络、配置或媒体卷访问，执行完即退出；HTTP 服务保持非 root。
+
 PostgreSQL 初始化脚本只对新卷执行；修改 `.env` 的密码不会修改已有数据库角色密码。已有密码需用 `psql` 的 `\password` 修改，并同步实际连接配置。[官方镜像说明](https://hub.docker.com/_/postgres)
 
 ## 运行配置、账号与公网访问
 
 统一在根目录 `.env` 中配置。Compose 自动读取它，用于服务配置插值，并只将 `blog.environment` 明确列出的应用变量传入博客；集群管理员密码和独立维护连接覆盖项不传入 HTTP 服务。Rust 程序自身仍不直接加载 `.env`，应用配置默认来自配置卷中的 TOML。
 
-运行连接 `DATABASE_URL`、连接池 `BLOG_DB_*`、站点地址、可信代理、Cookie、恢复模式、`RUST_LOG`、`IDP_SECRET` 和 `GH_SECRET` 已列入传递清单。需要覆盖时直接编辑 `.env` 并重新创建 `blog` 容器。其他 OAuth secret_ref 名称需要同时加入 `compose.yaml` 的 `blog.environment`。`BLOG_THEME_DIR` 在 Compose 中须为容器内路径，恢复脚本用它选择恢复的主题。不要设置空的 `DATABASE_URL`；未配置时应完全省略该项。
+运行连接 `DATABASE_URL`、连接池 `BLOG_DB_*`、邮件 `BLOG_SMTP_*`、站点地址、可信代理、Cookie、恢复模式、`RUST_LOG`、`IDP_SECRET` 和 `GH_SECRET` 已列入传递清单。需要覆盖时直接编辑 `.env` 并重新创建 `blog` 容器。其他 OAuth secret_ref 名称需要同时加入 `compose.yaml` 的 `blog.environment`。`BLOG_THEME_DIR` 在 Compose 中须为容器内路径，恢复脚本用它选择恢复的主题。不要设置空的 `DATABASE_URL`；未配置时应完全省略该项。
 
 安装完成后默认继续使用保存的 `blog_owner` 连接，无需再创建运行或维护账号。服务启动时自动执行未应用的迁移，失败则退出，不接受 HTTP 请求。维护容器以只读方式挂载同一配置卷，复用 `DATABASE_URL` 或安装保存的 `database.url`。
 
