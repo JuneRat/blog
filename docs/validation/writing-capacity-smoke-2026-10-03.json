@@ -1,0 +1,1889 @@
+{
+  "format": 2,
+  "status": "passed",
+  "started_at": "2026-10-03T13:59:10.542073+00:00",
+  "cpu_count": 10,
+  "image": "codex-blog-release:9fb6c2425fa5",
+  "workload": {
+    "expected_revision": "9fb6c2425fa5dea132faa9e52bf061054a312788",
+    "pool_sizes": [
+      5
+    ],
+    "concurrency": 8,
+    "posts": 200,
+    "writers": 4,
+    "duration": 30.0,
+    "write_interval_ms": 250,
+    "minimum_writing_cycles": 30,
+    "connection_lifetime_seconds": 60,
+    "task_interval": 15,
+    "scheduled_per_cycle": 8,
+    "read_p95_ms": 500,
+    "write_p95_ms": 2000,
+    "publication_delay_seconds": 45
+  },
+  "measurements": [
+    {
+      "pool_size": 5,
+      "background_tasks": false,
+      "build": {
+        "version": "0.1.0",
+        "revision": "9fb6c2425fa5dea132faa9e52bf061054a312788"
+      },
+      "concurrency": 8,
+      "requests": 77639,
+      "errors": 0,
+      "failed_operations": 0,
+      "conflicts": 0,
+      "error_types": {},
+      "status_counts": {
+        "200": 77639
+      },
+      "p50_ms": 2.904,
+      "p95_ms": 5.156,
+      "p99_ms": 6.94,
+      "requests_per_second": 2587.77,
+      "seconds": 30.002,
+      "readyz": {
+        "requests": 565,
+        "errors": 0,
+        "failed_operations": 0,
+        "conflicts": 0,
+        "error_types": {},
+        "status_counts": {
+          "200": 565
+        },
+        "p50_ms": 1.037,
+        "p95_ms": 2.115,
+        "p99_ms": 3.402
+      },
+      "connection_lifetime_seconds": 60,
+      "connection_rotations": {
+        "reads": 0,
+        "readyz": 0
+      },
+      "writers": 4,
+      "writes": {
+        "save": {
+          "requests": 383,
+          "errors": 0,
+          "failed_operations": 0,
+          "conflicts": 0,
+          "error_types": {},
+          "status_counts": {
+            "200": 383
+          },
+          "p50_ms": 57.753,
+          "p95_ms": 106.704,
+          "p99_ms": 127.521
+        },
+        "series_reorder": {
+          "requests": 0,
+          "errors": 0,
+          "failed_operations": 0,
+          "conflicts": 0,
+          "error_types": {},
+          "status_counts": {},
+          "p50_ms": null,
+          "p95_ms": null,
+          "p99_ms": null
+        }
+      },
+      "foreground_window": [
+        "2026-10-03T13:59:19.046016+00:00",
+        "2026-10-03T13:59:49.177428+00:00"
+      ],
+      "writing": {
+        "mode": "draft_publish_history_cycle",
+        "revision_limit": 50,
+        "completed_cycles_per_writer": [
+          96,
+          96,
+          96,
+          95
+        ],
+        "phases": {
+          "draft_save": {
+            "requests": 383,
+            "errors": 0,
+            "failed_operations": 0,
+            "conflicts": 0,
+            "error_types": {},
+            "status_counts": {
+              "200": 383
+            },
+            "p50_ms": 19.823,
+            "p95_ms": 38.104,
+            "p99_ms": 55.51
+          },
+          "draft_visibility": {
+            "requests": 383,
+            "errors": 0,
+            "failed_operations": 0,
+            "conflicts": 0,
+            "error_types": {},
+            "status_counts": {
+              "200": 383
+            },
+            "p50_ms": 4.489,
+            "p95_ms": 7.972,
+            "p99_ms": 10.944
+          },
+          "publish": {
+            "requests": 383,
+            "errors": 0,
+            "failed_operations": 0,
+            "conflicts": 0,
+            "error_types": {},
+            "status_counts": {
+              "200": 383
+            },
+            "p50_ms": 15.63,
+            "p95_ms": 30.646,
+            "p99_ms": 38.104
+          },
+          "published_visibility": {
+            "requests": 383,
+            "errors": 0,
+            "failed_operations": 0,
+            "conflicts": 0,
+            "error_types": {},
+            "status_counts": {
+              "200": 383
+            },
+            "p50_ms": 4.67,
+            "p95_ms": 7.365,
+            "p99_ms": 10.312
+          },
+          "history": {
+            "requests": 383,
+            "errors": 0,
+            "failed_operations": 0,
+            "conflicts": 0,
+            "error_types": {},
+            "status_counts": {
+              "200": 383
+            },
+            "p50_ms": 12.822,
+            "p95_ms": 22.324,
+            "p99_ms": 31.884
+          }
+        },
+        "verification": [
+          {
+            "completed_cycles": 96,
+            "newest_version": 195,
+            "oldest_version": 146,
+            "retained_revisions": 50,
+            "active_draft_retained": true,
+            "active_draft_differs_from_publication": true,
+            "pending_draft_private": true,
+            "original_revision_pruned": true
+          },
+          {
+            "completed_cycles": 96,
+            "newest_version": 194,
+            "oldest_version": 145,
+            "retained_revisions": 50,
+            "active_draft_retained": true,
+            "active_draft_differs_from_publication": true,
+            "pending_draft_private": true,
+            "original_revision_pruned": true
+          },
+          {
+            "completed_cycles": 96,
+            "newest_version": 194,
+            "oldest_version": 145,
+            "retained_revisions": 50,
+            "active_draft_retained": true,
+            "active_draft_differs_from_publication": true,
+            "pending_draft_private": true,
+            "original_revision_pruned": true
+          },
+          {
+            "completed_cycles": 95,
+            "newest_version": 192,
+            "oldest_version": 143,
+            "retained_revisions": 50,
+            "active_draft_retained": true,
+            "active_draft_differs_from_publication": true,
+            "pending_draft_private": true,
+            "original_revision_pruned": true
+          }
+        ]
+      },
+      "monitor": {
+        "metrics": {
+          "blog_database_pool_connections{state=\"idle\"}": {
+            "first": 5.0,
+            "min": 0.0,
+            "max": 5.0,
+            "last": 5.0
+          },
+          "blog_database_pool_connections{state=\"in_use\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 5.0,
+            "last": 0.0
+          },
+          "blog_database_pool_connections{state=\"max\"}": {
+            "first": 5.0,
+            "min": 5.0,
+            "max": 5.0,
+            "last": 5.0
+          },
+          "blog_database_pool_connections{state=\"size\"}": {
+            "first": 5.0,
+            "min": 5.0,
+            "max": 5.0,
+            "last": 5.0
+          },
+          "blog_render_active{kind=\"comment\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_active{kind=\"content\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_active{kind=\"theme\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 1.0,
+            "last": 0.0
+          },
+          "blog_render_completed_total{kind=\"comment\",result=\"success\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "last": 1.0
+          },
+          "blog_render_completed_total{kind=\"content\",result=\"success\"}": {
+            "first": 2.0,
+            "min": 2.0,
+            "max": 389.0,
+            "last": 389.0
+          },
+          "blog_render_completed_total{kind=\"theme\",result=\"success\"}": {
+            "first": 84.0,
+            "min": 84.0,
+            "max": 78493.0,
+            "last": 78493.0
+          },
+          "blog_render_execution_duration_seconds_sum{kind=\"comment\"}": {
+            "first": 7.5625e-05,
+            "min": 7.5625e-05,
+            "max": 7.5625e-05,
+            "last": 7.5625e-05
+          },
+          "blog_render_execution_duration_seconds_count{kind=\"comment\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "last": 1.0
+          },
+          "blog_render_execution_duration_seconds_sum{kind=\"content\"}": {
+            "first": 0.000771,
+            "min": 0.000771,
+            "max": 0.22748986899999984,
+            "last": 0.22748986899999984
+          },
+          "blog_render_execution_duration_seconds_count{kind=\"content\"}": {
+            "first": 2.0,
+            "min": 2.0,
+            "max": 389.0,
+            "last": 389.0
+          },
+          "blog_render_execution_duration_seconds_sum{kind=\"theme\"}": {
+            "first": 0.006650705000000001,
+            "min": 0.006650705000000001,
+            "max": 4.041863747999972,
+            "last": 4.041863747999972
+          },
+          "blog_render_execution_duration_seconds_count{kind=\"theme\"}": {
+            "first": 84.0,
+            "min": 84.0,
+            "max": 78493.0,
+            "last": 78493.0
+          },
+          "blog_render_execution_timeouts_total{kind=\"comment\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_execution_timeouts_total{kind=\"content\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_execution_timeouts_total{kind=\"theme\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_queue_duration_seconds_sum{kind=\"comment\"}": {
+            "first": 4.125e-06,
+            "min": 4.125e-06,
+            "max": 4.125e-06,
+            "last": 4.125e-06
+          },
+          "blog_render_queue_duration_seconds_count{kind=\"comment\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "last": 1.0
+          },
+          "blog_render_queue_duration_seconds_sum{kind=\"content\"}": {
+            "first": 5.791e-06,
+            "min": 5.791e-06,
+            "max": 0.00039558700000000003,
+            "last": 0.00039558700000000003
+          },
+          "blog_render_queue_duration_seconds_count{kind=\"content\"}": {
+            "first": 2.0,
+            "min": 2.0,
+            "max": 389.0,
+            "last": 389.0
+          },
+          "blog_render_queue_duration_seconds_sum{kind=\"theme\"}": {
+            "first": 7.242499999999999e-05,
+            "min": 7.242499999999999e-05,
+            "max": 0.04719794899999739,
+            "last": 0.04719794899999739
+          },
+          "blog_render_queue_duration_seconds_count{kind=\"theme\"}": {
+            "first": 84.0,
+            "min": 84.0,
+            "max": 78493.0,
+            "last": 78493.0
+          },
+          "blog_render_queue_total{kind=\"comment\",result=\"admitted\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "last": 1.0
+          },
+          "blog_render_queue_total{kind=\"content\",result=\"admitted\"}": {
+            "first": 2.0,
+            "min": 2.0,
+            "max": 389.0,
+            "last": 389.0
+          },
+          "blog_render_queue_total{kind=\"theme\",result=\"admitted\"}": {
+            "first": 84.0,
+            "min": 84.0,
+            "max": 78493.0,
+            "last": 78493.0
+          },
+          "blog_render_waiting{kind=\"comment\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_waiting{kind=\"content\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_waiting{kind=\"theme\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_consecutive_failures{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_consecutive_failures{kind=\"publish_due\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_consecutive_failures{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_due_wait_seconds{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_due_wait_seconds{kind=\"publish_due\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_due_wait_seconds{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"html_rebuild\",status=\"completed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"html_rebuild\",status=\"completed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"html_rebuild\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"html_rebuild\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"html_rebuild\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"html_rebuild\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"publish_due\",status=\"completed\"}": {
+            "first": 0.012415709,
+            "min": 0.012415709,
+            "max": 0.020554333,
+            "last": 0.020554333
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"publish_due\",status=\"completed\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 2.0,
+            "last": 2.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"publish_due\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"publish_due\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"publish_due\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"publish_due\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"retention\",status=\"completed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"retention\",status=\"completed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"retention\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"retention\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"retention\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"retention\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"html_rebuild\",status=\"cancelled\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"html_rebuild\",status=\"completed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"html_rebuild\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"html_rebuild\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"publish_due\",status=\"cancelled\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"publish_due\",status=\"completed\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 2.0,
+            "last": 2.0
+          },
+          "blog_task_finished_total{kind=\"publish_due\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"publish_due\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"retention\",status=\"cancelled\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"retention\",status=\"completed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"retention\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"retention\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_health_snapshot_last_success_timestamp_seconds": {
+            "first": 1791035958.0,
+            "min": 1791035958.0,
+            "max": 1791035987.0,
+            "last": 1791035987.0
+          },
+          "blog_task_last_success_timestamp_seconds{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_last_success_timestamp_seconds{kind=\"publish_due\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 1791035958.0,
+            "last": 1791035958.0
+          },
+          "blog_task_last_success_timestamp_seconds{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_lease_expirations_total{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_lease_expirations_total{kind=\"publish_due\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_lease_expirations_total{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_queue_duration_seconds_sum{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_queue_duration_seconds_count{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_queue_duration_seconds_sum{kind=\"publish_due\"}": {
+            "first": 0.007421,
+            "min": 0.007421,
+            "max": 0.014936999999999999,
+            "last": 0.014936999999999999
+          },
+          "blog_task_queue_duration_seconds_count{kind=\"publish_due\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 2.0,
+            "last": 2.0
+          },
+          "blog_task_queue_duration_seconds_sum{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_queue_duration_seconds_count{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"html_rebuild\",status=\"expired\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"html_rebuild\",status=\"queued\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"html_rebuild\",status=\"running\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"publish_due\",status=\"expired\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"publish_due\",status=\"queued\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"publish_due\",status=\"running\"}": {
+            "first": 1.0,
+            "min": 0.0,
+            "max": 1.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"retention\",status=\"expired\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"retention\",status=\"queued\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"retention\",status=\"running\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_schedule_enabled{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_schedule_enabled{kind=\"publish_due\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "last": 1.0
+          },
+          "blog_task_schedule_enabled{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_schedule_interval_seconds{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_schedule_interval_seconds{kind=\"publish_due\"}": {
+            "first": 30.0,
+            "min": 30.0,
+            "max": 30.0,
+            "last": 30.0
+          },
+          "blog_task_schedule_interval_seconds{kind=\"retention\"}": {
+            "first": 86400.0,
+            "min": 86400.0,
+            "max": 86400.0,
+            "last": 86400.0
+          },
+          "blog_task_schedule_next_run_timestamp_seconds{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_schedule_next_run_timestamp_seconds{kind=\"publish_due\"}": {
+            "first": 1791035988.0,
+            "min": 1791035988.0,
+            "max": 1791035988.0,
+            "last": 1791035988.0
+          },
+          "blog_task_schedule_next_run_timestamp_seconds{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_scheduler_available": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "last": 1.0
+          },
+          "blog_task_scheduler_checks_total{result=\"error\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_scheduler_checks_total{result=\"success\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 33.0,
+            "last": 33.0
+          },
+          "blog_task_scheduler_checks_total{result=\"unavailable\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_scheduler_last_success_timestamp_seconds": {
+            "first": 1791035958.0,
+            "min": 1791035958.0,
+            "max": 1791035990.0,
+            "last": 1791035990.0
+          },
+          "blog_task_started_total{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_started_total{kind=\"publish_due\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 2.0,
+            "last": 2.0
+          },
+          "blog_task_started_total{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          }
+        },
+        "resources": {
+          "blog": {
+            "peak_memory_bytes": 96626278,
+            "peak_cpu_percent": 121.36
+          },
+          "db": {
+            "peak_memory_bytes": 94613012,
+            "peak_cpu_percent": 144.85
+          }
+        },
+        "errors": 0
+      },
+      "passed": true,
+      "failed_checks": []
+    },
+    {
+      "pool_size": 5,
+      "background_tasks": true,
+      "build": {
+        "version": "0.1.0",
+        "revision": "9fb6c2425fa5dea132faa9e52bf061054a312788"
+      },
+      "concurrency": 8,
+      "requests": 69458,
+      "errors": 0,
+      "failed_operations": 0,
+      "conflicts": 0,
+      "error_types": {},
+      "status_counts": {
+        "200": 69458
+      },
+      "p50_ms": 3.143,
+      "p95_ms": 6.162,
+      "p99_ms": 8.978,
+      "requests_per_second": 2315.07,
+      "seconds": 30.003,
+      "readyz": {
+        "requests": 560,
+        "errors": 0,
+        "failed_operations": 0,
+        "conflicts": 0,
+        "error_types": {},
+        "status_counts": {
+          "200": 560
+        },
+        "p50_ms": 1.145,
+        "p95_ms": 2.683,
+        "p99_ms": 5.156
+      },
+      "connection_lifetime_seconds": 60,
+      "connection_rotations": {
+        "reads": 0,
+        "readyz": 0
+      },
+      "writers": 4,
+      "writes": {
+        "save": {
+          "requests": 377,
+          "errors": 0,
+          "failed_operations": 0,
+          "conflicts": 0,
+          "error_types": {},
+          "status_counts": {
+            "200": 377
+          },
+          "p50_ms": 61.288,
+          "p95_ms": 117.81,
+          "p99_ms": 146.482
+        },
+        "series_reorder": {
+          "requests": 0,
+          "errors": 0,
+          "failed_operations": 0,
+          "conflicts": 0,
+          "error_types": {},
+          "status_counts": {},
+          "p50_ms": null,
+          "p95_ms": null,
+          "p99_ms": null
+        }
+      },
+      "foreground_window": [
+        "2026-10-03T14:00:00.995205+00:00",
+        "2026-10-03T14:00:31.130223+00:00"
+      ],
+      "background": {
+        "cycles": 2,
+        "submissions": {
+          "requests": 4,
+          "errors": 0,
+          "failed_operations": 0,
+          "conflicts": 0,
+          "error_types": {},
+          "status_counts": {
+            "200": 4
+          },
+          "p50_ms": 12.822,
+          "p95_ms": 17.257,
+          "p99_ms": 17.257
+        },
+        "runs": [
+          {
+            "kind": "html_rebuild",
+            "report": {
+              "html": {
+                "batches": 2,
+                "dry_run": false,
+                "failure": null,
+                "pending": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "rebuilt": {
+                  "pages": 0,
+                  "posts": 196,
+                  "comments": 0
+                },
+                "skipped": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "has_more": false
+              },
+              "error": null,
+              "retention": null,
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.476961,
+            "execution_seconds": 1.556413,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.553511,
+            "execution_seconds": 0.017669,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "html_rebuild",
+            "report": {
+              "html": {
+                "batches": 2,
+                "dry_run": false,
+                "failure": null,
+                "pending": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "rebuilt": {
+                  "pages": 0,
+                  "posts": 196,
+                  "comments": 0
+                },
+                "skipped": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "has_more": false
+              },
+              "error": null,
+              "retention": null,
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.567396,
+            "execution_seconds": 0.931486,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.452191,
+            "execution_seconds": 0.011965,
+            "finished_during_foreground": true
+          }
+        ],
+        "requested_unique_runs": 4,
+        "publication": {
+          "expected": 16,
+          "observed": 16,
+          "published": 16,
+          "max_delay_seconds": 25.041971,
+          "p95_delay_seconds": 25.041584,
+          "business_max_delay_seconds": 24.585596
+        },
+        "cleanup": {
+          "seed_ip_preserved": true,
+          "remaining_audit_rows": 0,
+          "remaining_comment_ips": 0,
+          "expired_comments_preserved": 200
+        },
+        "pending_html": {
+          "posts": 0,
+          "pages": 0,
+          "comments": 0
+        },
+        "skipped_rebuild_fixture_cycles": 0,
+        "fixture_sql": {
+          "requests": 2,
+          "errors": 0,
+          "failed_operations": 0,
+          "conflicts": 0,
+          "error_types": {},
+          "status_counts": {
+            "200": 2
+          },
+          "p50_ms": 510.028,
+          "p95_ms": 728.446,
+          "p99_ms": 728.446
+        },
+        "publication_observations": 6,
+        "publication_observation_interval_seconds": 5
+      },
+      "writing": {
+        "mode": "draft_publish_history_cycle",
+        "revision_limit": 50,
+        "completed_cycles_per_writer": [
+          94,
+          94,
+          95,
+          94
+        ],
+        "phases": {
+          "draft_save": {
+            "requests": 377,
+            "errors": 0,
+            "failed_operations": 0,
+            "conflicts": 0,
+            "error_types": {},
+            "status_counts": {
+              "200": 377
+            },
+            "p50_ms": 21.036,
+            "p95_ms": 42.911,
+            "p99_ms": 60.086
+          },
+          "draft_visibility": {
+            "requests": 377,
+            "errors": 0,
+            "failed_operations": 0,
+            "conflicts": 0,
+            "error_types": {},
+            "status_counts": {
+              "200": 377
+            },
+            "p50_ms": 5.055,
+            "p95_ms": 9.527,
+            "p99_ms": 13.34
+          },
+          "publish": {
+            "requests": 377,
+            "errors": 0,
+            "failed_operations": 0,
+            "conflicts": 0,
+            "error_types": {},
+            "status_counts": {
+              "200": 377
+            },
+            "p50_ms": 16.587,
+            "p95_ms": 30.646,
+            "p99_ms": 41.245
+          },
+          "published_visibility": {
+            "requests": 377,
+            "errors": 0,
+            "failed_operations": 0,
+            "conflicts": 0,
+            "error_types": {},
+            "status_counts": {
+              "200": 377
+            },
+            "p50_ms": 4.956,
+            "p95_ms": 9.527,
+            "p99_ms": 12.083
+          },
+          "history": {
+            "requests": 377,
+            "errors": 0,
+            "failed_operations": 0,
+            "conflicts": 0,
+            "error_types": {},
+            "status_counts": {
+              "200": 377
+            },
+            "p50_ms": 13.607,
+            "p95_ms": 26.156,
+            "p99_ms": 35.906
+          }
+        },
+        "verification": [
+          {
+            "completed_cycles": 94,
+            "newest_version": 191,
+            "oldest_version": 142,
+            "retained_revisions": 50,
+            "active_draft_retained": true,
+            "active_draft_differs_from_publication": true,
+            "pending_draft_private": true,
+            "original_revision_pruned": true
+          },
+          {
+            "completed_cycles": 94,
+            "newest_version": 190,
+            "oldest_version": 141,
+            "retained_revisions": 50,
+            "active_draft_retained": true,
+            "active_draft_differs_from_publication": true,
+            "pending_draft_private": true,
+            "original_revision_pruned": true
+          },
+          {
+            "completed_cycles": 95,
+            "newest_version": 192,
+            "oldest_version": 143,
+            "retained_revisions": 50,
+            "active_draft_retained": true,
+            "active_draft_differs_from_publication": true,
+            "pending_draft_private": true,
+            "original_revision_pruned": true
+          },
+          {
+            "completed_cycles": 94,
+            "newest_version": 190,
+            "oldest_version": 141,
+            "retained_revisions": 50,
+            "active_draft_retained": true,
+            "active_draft_differs_from_publication": true,
+            "pending_draft_private": true,
+            "original_revision_pruned": true
+          }
+        ]
+      },
+      "monitor": {
+        "metrics": {
+          "blog_database_pool_connections{state=\"idle\"}": {
+            "first": 5.0,
+            "min": 0.0,
+            "max": 5.0,
+            "last": 5.0
+          },
+          "blog_database_pool_connections{state=\"in_use\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 5.0,
+            "last": 0.0
+          },
+          "blog_database_pool_connections{state=\"max\"}": {
+            "first": 5.0,
+            "min": 5.0,
+            "max": 5.0,
+            "last": 5.0
+          },
+          "blog_database_pool_connections{state=\"size\"}": {
+            "first": 5.0,
+            "min": 5.0,
+            "max": 5.0,
+            "last": 5.0
+          },
+          "blog_render_active{kind=\"comment\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_active{kind=\"content\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_active{kind=\"theme\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 1.0,
+            "last": 0.0
+          },
+          "blog_render_completed_total{kind=\"comment\",result=\"success\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "last": 1.0
+          },
+          "blog_render_completed_total{kind=\"content\",result=\"success\"}": {
+            "first": 2.0,
+            "min": 2.0,
+            "max": 384.0,
+            "last": 384.0
+          },
+          "blog_render_completed_total{kind=\"theme\",result=\"success\"}": {
+            "first": 84.0,
+            "min": 84.0,
+            "max": 70300.0,
+            "last": 70300.0
+          },
+          "blog_render_execution_duration_seconds_sum{kind=\"comment\"}": {
+            "first": 8.2583e-05,
+            "min": 8.2583e-05,
+            "max": 8.2583e-05,
+            "last": 8.2583e-05
+          },
+          "blog_render_execution_duration_seconds_count{kind=\"comment\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "last": 1.0
+          },
+          "blog_render_execution_duration_seconds_sum{kind=\"content\"}": {
+            "first": 0.000520291,
+            "min": 0.000520291,
+            "max": 0.23288844700000005,
+            "last": 0.23288844700000005
+          },
+          "blog_render_execution_duration_seconds_count{kind=\"content\"}": {
+            "first": 2.0,
+            "min": 2.0,
+            "max": 384.0,
+            "last": 384.0
+          },
+          "blog_render_execution_duration_seconds_sum{kind=\"theme\"}": {
+            "first": 0.006346292,
+            "min": 0.006346292,
+            "max": 3.9299321090000086,
+            "last": 3.9299321090000086
+          },
+          "blog_render_execution_duration_seconds_count{kind=\"theme\"}": {
+            "first": 84.0,
+            "min": 84.0,
+            "max": 70300.0,
+            "last": 70300.0
+          },
+          "blog_render_execution_timeouts_total{kind=\"comment\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_execution_timeouts_total{kind=\"content\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_execution_timeouts_total{kind=\"theme\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_queue_duration_seconds_sum{kind=\"comment\"}": {
+            "first": 3.625e-06,
+            "min": 3.625e-06,
+            "max": 3.625e-06,
+            "last": 3.625e-06
+          },
+          "blog_render_queue_duration_seconds_count{kind=\"comment\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "last": 1.0
+          },
+          "blog_render_queue_duration_seconds_sum{kind=\"content\"}": {
+            "first": 5.208e-06,
+            "min": 5.208e-06,
+            "max": 0.00040822600000000003,
+            "last": 0.00040822600000000003
+          },
+          "blog_render_queue_duration_seconds_count{kind=\"content\"}": {
+            "first": 2.0,
+            "min": 2.0,
+            "max": 384.0,
+            "last": 384.0
+          },
+          "blog_render_queue_duration_seconds_sum{kind=\"theme\"}": {
+            "first": 6.204099999999997e-05,
+            "min": 6.204099999999997e-05,
+            "max": 0.04970448999999774,
+            "last": 0.04970448999999774
+          },
+          "blog_render_queue_duration_seconds_count{kind=\"theme\"}": {
+            "first": 84.0,
+            "min": 84.0,
+            "max": 70300.0,
+            "last": 70300.0
+          },
+          "blog_render_queue_total{kind=\"comment\",result=\"admitted\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "last": 1.0
+          },
+          "blog_render_queue_total{kind=\"content\",result=\"admitted\"}": {
+            "first": 2.0,
+            "min": 2.0,
+            "max": 384.0,
+            "last": 384.0
+          },
+          "blog_render_queue_total{kind=\"theme\",result=\"admitted\"}": {
+            "first": 84.0,
+            "min": 84.0,
+            "max": 70300.0,
+            "last": 70300.0
+          },
+          "blog_render_waiting{kind=\"comment\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_waiting{kind=\"content\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_waiting{kind=\"theme\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_consecutive_failures{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_consecutive_failures{kind=\"publish_due\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_consecutive_failures{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_due_wait_seconds{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_due_wait_seconds{kind=\"publish_due\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_due_wait_seconds{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"html_rebuild\",status=\"completed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 2.489945502,
+            "last": 2.489945502
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"html_rebuild\",status=\"completed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 2.0,
+            "last": 2.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"html_rebuild\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"html_rebuild\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"html_rebuild\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"html_rebuild\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"publish_due\",status=\"completed\"}": {
+            "first": 0.01472925,
+            "min": 0.01472925,
+            "max": 0.022695374999999997,
+            "last": 0.022695374999999997
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"publish_due\",status=\"completed\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 2.0,
+            "last": 2.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"publish_due\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"publish_due\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"publish_due\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"publish_due\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"retention\",status=\"completed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.029079542,
+            "last": 0.029079542
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"retention\",status=\"completed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 2.0,
+            "last": 2.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"retention\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"retention\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"retention\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"retention\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"html_rebuild\",status=\"cancelled\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"html_rebuild\",status=\"completed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 2.0,
+            "last": 2.0
+          },
+          "blog_task_finished_total{kind=\"html_rebuild\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"html_rebuild\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"publish_due\",status=\"cancelled\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"publish_due\",status=\"completed\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 2.0,
+            "last": 2.0
+          },
+          "blog_task_finished_total{kind=\"publish_due\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"publish_due\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"retention\",status=\"cancelled\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"retention\",status=\"completed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 2.0,
+            "last": 2.0
+          },
+          "blog_task_finished_total{kind=\"retention\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"retention\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_health_snapshot_last_success_timestamp_seconds": {
+            "first": 1791036000.0,
+            "min": 1791036000.0,
+            "max": 1791036029.0,
+            "last": 1791036029.0
+          },
+          "blog_task_last_success_timestamp_seconds{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 1791036022.0,
+            "last": 1791036022.0
+          },
+          "blog_task_last_success_timestamp_seconds{kind=\"publish_due\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 1791036000.0,
+            "last": 1791036000.0
+          },
+          "blog_task_last_success_timestamp_seconds{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 1791036018.0,
+            "last": 1791036018.0
+          },
+          "blog_task_lease_expirations_total{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_lease_expirations_total{kind=\"publish_due\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_lease_expirations_total{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_queue_duration_seconds_sum{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 1.044357,
+            "last": 1.044357
+          },
+          "blog_task_queue_duration_seconds_count{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 2.0,
+            "last": 2.0
+          },
+          "blog_task_queue_duration_seconds_sum{kind=\"publish_due\"}": {
+            "first": 0.00721,
+            "min": 0.00721,
+            "max": 0.011431,
+            "last": 0.011431
+          },
+          "blog_task_queue_duration_seconds_count{kind=\"publish_due\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 2.0,
+            "last": 2.0
+          },
+          "blog_task_queue_duration_seconds_sum{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 1.002299,
+            "last": 1.002299
+          },
+          "blog_task_queue_duration_seconds_count{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 2.0,
+            "last": 2.0
+          },
+          "blog_task_runs{kind=\"html_rebuild\",status=\"expired\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"html_rebuild\",status=\"queued\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"html_rebuild\",status=\"running\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"publish_due\",status=\"expired\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"publish_due\",status=\"queued\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"publish_due\",status=\"running\"}": {
+            "first": 1.0,
+            "min": 0.0,
+            "max": 1.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"retention\",status=\"expired\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"retention\",status=\"queued\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"retention\",status=\"running\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_schedule_enabled{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_schedule_enabled{kind=\"publish_due\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "last": 1.0
+          },
+          "blog_task_schedule_enabled{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_schedule_interval_seconds{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_schedule_interval_seconds{kind=\"publish_due\"}": {
+            "first": 30.0,
+            "min": 30.0,
+            "max": 30.0,
+            "last": 30.0
+          },
+          "blog_task_schedule_interval_seconds{kind=\"retention\"}": {
+            "first": 86400.0,
+            "min": 86400.0,
+            "max": 86400.0,
+            "last": 86400.0
+          },
+          "blog_task_schedule_next_run_timestamp_seconds{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_schedule_next_run_timestamp_seconds{kind=\"publish_due\"}": {
+            "first": 1791036030.0,
+            "min": 1791036030.0,
+            "max": 1791036030.0,
+            "last": 1791036030.0
+          },
+          "blog_task_schedule_next_run_timestamp_seconds{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_scheduler_available": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "last": 1.0
+          },
+          "blog_task_scheduler_checks_total{result=\"error\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_scheduler_checks_total{result=\"success\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 33.0,
+            "last": 33.0
+          },
+          "blog_task_scheduler_checks_total{result=\"unavailable\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_scheduler_last_success_timestamp_seconds": {
+            "first": 1791036000.0,
+            "min": 1791036000.0,
+            "max": 1791036032.0,
+            "last": 1791036032.0
+          },
+          "blog_task_started_total{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 2.0,
+            "last": 2.0
+          },
+          "blog_task_started_total{kind=\"publish_due\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 2.0,
+            "last": 2.0
+          },
+          "blog_task_started_total{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 2.0,
+            "last": 2.0
+          }
+        },
+        "resources": {
+          "blog": {
+            "peak_memory_bytes": 54871982,
+            "peak_cpu_percent": 119.24
+          },
+          "db": {
+            "peak_memory_bytes": 62086185,
+            "peak_cpu_percent": 147.41
+          }
+        },
+        "errors": 0
+      },
+      "passed": true,
+      "failed_checks": []
+    }
+  ],
+  "runner_sha256": "f8c2407ba7de1ccad376e0dfb4197aa05ea83a06a2531a975b968baf487cf55d",
+  "load_runner_sha256": "c01b5bdf08535c7f5bd7b7a91902e523b8dc8cf391eee049dfe216772e0b6bc8",
+  "support_sha256": {
+    "scripts/benchmark_writing.py": "94c9b3001ad0f9234e3d14c30d410ed7708734dc0c66abcaaeed8768e2c52cbf",
+    "scripts/acceptance_support.py": "b880b34011345e114f1803e2a079b8597a6ab3c7f44f2aa9e2a3894ab94f6789",
+    "scripts/compose_recovery.py": "00e75388983127e51e04936f9eeacb0e89fb53bedf84170d7b6276730c23efe9",
+    "compose.yaml": "61dbd0152dfce978006e973037eab08f51f4b9727d8937975845cfc493f1e841",
+    "ops/postgres-init.sh": "54e45149ae534995b93f578787784852393ed2de122bc59cd28e7dd30b4b55eb"
+  },
+  "threshold_scope": "local regression gates, not production SLA; CAS conflicts counted separately",
+  "platform": "macOS-27.0.1-arm64-arm-64bit",
+  "image_metadata": {
+    "id": "sha256:e7cbc8b96fa511d181f533a318f76316d526ba13374952dcc913e4f20cbe2445",
+    "os": "linux",
+    "architecture": "arm64",
+    "revision": "9fb6c2425fa5dea132faa9e52bf061054a312788"
+  },
+  "finished_at": "2026-10-03T14:00:35.662654+00:00"
+}
