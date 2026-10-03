@@ -184,7 +184,10 @@ Secure 模式使用 `__Host-blog_session`（`Secure; HttpOnly; SameSite=Lax; Pat
 | `mail.from` | `BLOG_SMTP_FROM` | 必填发件地址，可写 `博客 <noreply@example.com>` |
 | `mail.username` | `BLOG_SMTP_USERNAME` | 可选认证用户名，必须与密码成对配置 |
 | `mail.password` | `BLOG_SMTP_PASSWORD` | SMTP 密码；推荐从受保护环境注入 |
+| `mail.ca_pem` | `BLOG_SMTP_CA_PEM` | 可选的私有 CA PEM 文本或证书链，最大 64 KiB；不是文件路径，仅适用于 `tls` / `starttls` |
 
 TLS 校验证书且不自动降级为明文。`local` 仅用于回环地址的开发 SMTP，不允许认证。每次投递总期限 12 秒，错误日志不打印 SMTP 返回、收件地址或邮件内容。`config show` 对用户名、密码脱敏。请确保 `server.public_base_url` 为用户可访问的正式 HTTPS 根地址，邮件链接只从该配置生成，不信任请求 Host。
+
+默认使用内置公共 CA。私有邮件服务可在 `mail.ca_pem` 中提供 PEM 证书（建议使用 TOML 多行字符串），为该 SMTP 连接额外增加信任；仍验证服务器主机名和有效期，不修改系统、数据库或其他 HTTP 客户端的信任。不要填写私钥，格式无效、超长或明文模式中的 CA 配置会阻止启动。CA 文本随配置／Compose 环境一起进入加密备份，恢复不依赖原主机的证书文件路径。
 
 SMTP 配置、凭据与发件域名验证由部署方提供；可先使用测试邮箱验证收件。此功能没有自动重试队列，失败或服务中断时重新申请即可。恢复核验模式不会发送邮件。

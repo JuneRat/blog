@@ -327,7 +327,7 @@ impl DeploymentConfig {
 
     pub fn mail(&self) -> Result<Option<infrastructure::mail::SmtpConfig>, String> {
         let Some(host) = self.optional_string("mail.host")? else {
-            for key in ["mail.username", "mail.password", "mail.from"] {
+            for key in ["mail.username", "mail.password", "mail.from", "mail.ca_pem"] {
                 if self.optional_string(key)?.is_some() {
                     return Err("配置 SMTP 时必须提供 mail.host / BLOG_SMTP_HOST".into());
                 }
@@ -341,6 +341,7 @@ impl DeploymentConfig {
             security: self.string("mail.security")?,
             username: self.optional_string("mail.username")?,
             password: self.optional_string("mail.password")?,
+            ca_pem: self.optional_string("mail.ca_pem")?,
             from: self
                 .optional_string("mail.from")?
                 .ok_or("请配置 mail.from / BLOG_SMTP_FROM")?,

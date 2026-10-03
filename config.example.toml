@@ -73,4 +73,8 @@ enabled = false
 # from = "我的博客 <noreply@example.com>"
 # username = "smtp-user"
 # password = "smtp-password"
+# 可选私有 CA 的完整 PEM 文本，可用 TOML 多行字符串；不是证书路径。
+# ca_pem = """-----BEGIN CERTIFICATE-----
+# ...
+# -----END CERTIFICATE-----"""
 # 本地开发可用 security="local"，仅允许回环地址且不发送认证凭据。

@@ -628,16 +628,24 @@ fn smtp_config_is_optional_scoped_and_redacted() {
     let mail = cfg.site(None).unwrap().mail.unwrap();
     assert_eq!(mail.port, 465);
     assert_eq!(mail.security, "tls");
+    assert!(mail.ca_pem.is_none());
     let shown = cfg.show(ConfigScope::Serve, true).unwrap().to_string();
     assert!(!shown.contains("smtp-secret"));
     assert!(!shown.contains("smtp-user"));
     for bad in [
         "[mail]\nhost='smtp.test'",
         "[mail]\npassword='secret'",
+        "[mail]\nca_pem='invalid'",
+        "[mail]\nhost='smtp.test'\nfrom='a@example.com'\nca_pem='invalid'",
         "[mail]\nhost='smtp.test'\nfrom='a@example.com'\nport=0",
         "[mail]\nhost='smtp.test'\nfrom='a@example.com'\nsecurity='local'",
     ] {
         assert!(config(bad, &[]).site(None).is_err());
         assert!(config(bad, &[]).check(ConfigScope::Resources).is_ok());
     }
+    assert!(
+        config(source, &[("BLOG_SMTP_CA_PEM", "invalid")])
+            .mail()
+            .is_err()
+    );
 }

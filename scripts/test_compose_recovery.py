@@ -126,7 +126,8 @@ class ArchiveTests(unittest.TestCase):
         mail = {"BLOG_SMTP_HOST": "smtp.example.test", "BLOG_SMTP_PORT": "465",
                 "BLOG_SMTP_SECURITY": "tls", "BLOG_SMTP_USERNAME": "mailer",
                 "BLOG_SMTP_PASSWORD": "literal-$VALUE-'quote'-\\line\nsecond",
-                "BLOG_SMTP_FROM": "Blog <sender@example.test>"}
+                "BLOG_SMTP_FROM": "Blog <sender@example.test>",
+                "BLOG_SMTP_CA_PEM": "-----BEGIN CERTIFICATE-----\npublic-root\n-----END CERTIFICATE-----"}
         self.assertEqual(tool.recovery_environment({**mail, "RESTIC_PASSWORD": "backup-only"}, []), mail)
         configured = {"mail": {"host": "file.example.test", "password": "file-secret"}}
         self.assertEqual(tool.recovery_config(configured), configured)

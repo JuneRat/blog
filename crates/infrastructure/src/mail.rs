@@ -4,7 +4,10 @@ use async_trait::async_trait;
 use lettre::{
     AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor,
     message::{Mailbox, header::ContentType},
-    transport::smtp::authentication::Credentials,
+    transport::smtp::{
+        authentication::Credentials,
+        client::{Certificate, Tls, TlsParameters},
+    },
 };
 use std::time::Duration;
 
@@ -14,6 +17,8 @@ pub struct SmtpConfig {
     pub security: String,
     pub username: Option<String>,
     pub password: Option<String>,
+    /// Additional PEM trust anchors scoped to this SMTP transport only.
+    pub ca_pem: Option<String>,
     pub from: String,
 }
 pub struct SmtpMailer {
@@ -48,6 +53,28 @@ impl SmtpMailer {
         }
         .port(config.port)
         .timeout(Some(Duration::from_secs(10)));
+        if let Some(pem) = &config.ca_pem {
+            if config.security == "local"
+                || pem.len() > 65_536
+                || !pem.contains("-----BEGIN CERTIFICATE-----")
+                || pem.contains("PRIVATE KEY")
+            {
+                return Err(
+                    "mail.ca_pem 须为不超过 64 KiB 的 PEM CA 证书，且仅用于加密 SMTP".into(),
+                );
+            }
+            let certificate =
+                Certificate::from_pem(pem.as_bytes()).map_err(|_| "mail.ca_pem 证书无效")?;
+            let tls = TlsParameters::builder(config.host.clone())
+                .add_root_certificate(certificate)
+                .build()
+                .map_err(|_| "mail.ca_pem 证书无效")?;
+            builder = builder.tls(if config.security == "tls" {
+                Tls::Wrapper(tls)
+            } else {
+                Tls::Required(tls)
+            });
+        }
         match (&config.username, &config.password) {
             (Some(user), Some(password))
                 if !user.is_empty() && !password.is_empty() && config.security != "local" =>
@@ -101,12 +128,38 @@ mod tests {
             security: "local".into(),
             username: None,
             password: None,
+            ca_pem: None,
             from: "Blog <blog@example.com>".into(),
         };
         assert!(SmtpMailer::new(&config).is_err());
         config.security = "starttls".into();
         assert!(SmtpMailer::new(&config).is_ok());
         config.password = Some("secret".into());
+        assert!(SmtpMailer::new(&config).is_err());
+    }
+    #[test]
+    fn rejects_invalid_or_cleartext_ca_configuration_without_echoing_pem() {
+        let mut config = SmtpConfig {
+            host: "localhost".into(),
+            port: 587,
+            security: "starttls".into(),
+            username: None,
+            password: None,
+            ca_pem: None,
+            from: "blog@example.com".into(),
+        };
+        for pem in [
+            "private-invalid-input".to_owned(),
+            "-----BEGIN CERTIFICATE-----\ninvalid\n-----END CERTIFICATE-----".to_owned(),
+            "-----BEGIN CERTIFICATE-----\n-----END CERTIFICATE-----".to_owned(),
+            "-----BEGIN PRIVATE KEY-----\nprivate-key\n-----END PRIVATE KEY-----".to_owned(),
+            "x".repeat(65_537),
+        ] {
+            config.ca_pem = Some(pem.clone());
+            let error = SmtpMailer::new(&config).err().expect("invalid CA rejected");
+            assert!(!error.contains(&pem));
+        }
+        config.security = "local".into();
         assert!(SmtpMailer::new(&config).is_err());
     }
     #[tokio::test]
@@ -158,6 +211,7 @@ mod tests {
             security: "local".into(),
             username: None,
             password: None,
+            ca_pem: None,
             from: "Blog <noreply@example.com>".into(),
         })
         .unwrap();

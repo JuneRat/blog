@@ -349,6 +349,7 @@ pub(super) const FIELDS: &[Field] = &[
         true
     ),
     field!("mail.from", Some("BLOG_SMTP_FROM"), String, None, false),
+    field!("mail.ca_pem", Some("BLOG_SMTP_CA_PEM"), String, None, false),
     field!("bootstrap.title", None, String, None, false),
     field!("bootstrap.description", None, String, None, false),
 ];
