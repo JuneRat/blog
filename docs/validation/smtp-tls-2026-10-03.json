@@ -1,0 +1,456 @@
+{
+  "status": "passed",
+  "started_at": "2026-10-03T14:58:55.080032+00:00",
+  "cases": [
+    {
+      "case": "tls_success",
+      "security": "tls",
+      "status": "passed",
+      "build": {
+        "version": "0.1.0",
+        "revision": "435e9bfa5e125cb64f87e7dab571db1c06aaebc0"
+      },
+      "server_sha256": "3af4bb631703bc42d373e01be770ba5b826b5b550b00c2a8262959da491a182f",
+      "flow": {
+        "transport": "tls authenticated loopback SMTP",
+        "deliveries": 2,
+        "invitation_replay_rejected": true,
+        "old_session_revoked": true
+      },
+      "smtp": {
+        "connections": 2,
+        "tls_handshakes": 2,
+        "TLSv1.2": 2,
+        "ehlo_tls": 2,
+        "auth_attempts": 2,
+        "authenticated": 2,
+        "received_messages": 2,
+        "accepted_messages": 2
+      },
+      "private_logs_verified": true,
+      "cleanup": true,
+      "seconds": 62.958
+    },
+    {
+      "case": "starttls_success",
+      "security": "starttls",
+      "status": "passed",
+      "build": {
+        "version": "0.1.0",
+        "revision": "435e9bfa5e125cb64f87e7dab571db1c06aaebc0"
+      },
+      "server_sha256": "3af4bb631703bc42d373e01be770ba5b826b5b550b00c2a8262959da491a182f",
+      "flow": {
+        "transport": "starttls authenticated loopback SMTP",
+        "deliveries": 2,
+        "invitation_replay_rejected": true,
+        "old_session_revoked": true
+      },
+      "smtp": {
+        "connections": 2,
+        "ehlo_cleartext": 2,
+        "starttls_commands": 2,
+        "tls_handshakes": 2,
+        "TLSv1.2": 2,
+        "ehlo_tls": 2,
+        "auth_attempts": 2,
+        "authenticated": 2,
+        "received_messages": 2,
+        "accepted_messages": 2
+      },
+      "private_logs_verified": true,
+      "cleanup": true,
+      "seconds": 62.021
+    },
+    {
+      "case": "tls_untrusted_ca",
+      "security": "tls",
+      "status": "passed",
+      "build": {
+        "version": "0.1.0",
+        "revision": "435e9bfa5e125cb64f87e7dab571db1c06aaebc0"
+      },
+      "server_sha256": "3af4bb631703bc42d373e01be770ba5b826b5b550b00c2a8262959da491a182f",
+      "flow": {
+        "invitation_error_generic": true,
+        "invitation_seconds": 0.008,
+        "recovery_response_seconds": 0.001,
+        "recovery_response_generic": true,
+        "failed_tokens_cancelled": 2,
+        "received_invitation_token_rejected": null,
+        "password_and_admin_session_preserved": true
+      },
+      "smtp": {
+        "connections": 2,
+        "closed_connections": 2
+      },
+      "private_logs_verified": true,
+      "cleanup": true,
+      "seconds": 1.818
+    },
+    {
+      "case": "starttls_untrusted_ca",
+      "security": "starttls",
+      "status": "passed",
+      "build": {
+        "version": "0.1.0",
+        "revision": "435e9bfa5e125cb64f87e7dab571db1c06aaebc0"
+      },
+      "server_sha256": "3af4bb631703bc42d373e01be770ba5b826b5b550b00c2a8262959da491a182f",
+      "flow": {
+        "invitation_error_generic": true,
+        "invitation_seconds": 0.009,
+        "recovery_response_seconds": 0.001,
+        "recovery_response_generic": true,
+        "failed_tokens_cancelled": 2,
+        "received_invitation_token_rejected": null,
+        "password_and_admin_session_preserved": true
+      },
+      "smtp": {
+        "connections": 2,
+        "ehlo_cleartext": 2,
+        "starttls_commands": 2,
+        "closed_connections": 2
+      },
+      "private_logs_verified": true,
+      "cleanup": true,
+      "seconds": 1.792
+    },
+    {
+      "case": "tls_wrong_hostname",
+      "security": "tls",
+      "status": "passed",
+      "build": {
+        "version": "0.1.0",
+        "revision": "435e9bfa5e125cb64f87e7dab571db1c06aaebc0"
+      },
+      "server_sha256": "3af4bb631703bc42d373e01be770ba5b826b5b550b00c2a8262959da491a182f",
+      "flow": {
+        "invitation_error_generic": true,
+        "invitation_seconds": 0.008,
+        "recovery_response_seconds": 0.001,
+        "recovery_response_generic": true,
+        "failed_tokens_cancelled": 2,
+        "received_invitation_token_rejected": null,
+        "password_and_admin_session_preserved": true
+      },
+      "smtp": {
+        "connections": 2,
+        "closed_connections": 2
+      },
+      "private_logs_verified": true,
+      "cleanup": true,
+      "seconds": 1.834
+    },
+    {
+      "case": "starttls_wrong_hostname",
+      "security": "starttls",
+      "status": "passed",
+      "build": {
+        "version": "0.1.0",
+        "revision": "435e9bfa5e125cb64f87e7dab571db1c06aaebc0"
+      },
+      "server_sha256": "3af4bb631703bc42d373e01be770ba5b826b5b550b00c2a8262959da491a182f",
+      "flow": {
+        "invitation_error_generic": true,
+        "invitation_seconds": 0.01,
+        "recovery_response_seconds": 0.001,
+        "recovery_response_generic": true,
+        "failed_tokens_cancelled": 2,
+        "received_invitation_token_rejected": null,
+        "password_and_admin_session_preserved": true
+      },
+      "smtp": {
+        "connections": 2,
+        "ehlo_cleartext": 2,
+        "starttls_commands": 2,
+        "closed_connections": 2
+      },
+      "private_logs_verified": true,
+      "cleanup": true,
+      "seconds": 1.971
+    },
+    {
+      "case": "tls_expired_certificate",
+      "security": "tls",
+      "status": "passed",
+      "build": {
+        "version": "0.1.0",
+        "revision": "435e9bfa5e125cb64f87e7dab571db1c06aaebc0"
+      },
+      "server_sha256": "3af4bb631703bc42d373e01be770ba5b826b5b550b00c2a8262959da491a182f",
+      "flow": {
+        "invitation_error_generic": true,
+        "invitation_seconds": 0.008,
+        "recovery_response_seconds": 0.001,
+        "recovery_response_generic": true,
+        "failed_tokens_cancelled": 2,
+        "received_invitation_token_rejected": null,
+        "password_and_admin_session_preserved": true
+      },
+      "smtp": {
+        "connections": 2,
+        "closed_connections": 2
+      },
+      "private_logs_verified": true,
+      "cleanup": true,
+      "seconds": 2.054
+    },
+    {
+      "case": "tls_bad_credentials",
+      "security": "tls",
+      "status": "passed",
+      "build": {
+        "version": "0.1.0",
+        "revision": "435e9bfa5e125cb64f87e7dab571db1c06aaebc0"
+      },
+      "server_sha256": "3af4bb631703bc42d373e01be770ba5b826b5b550b00c2a8262959da491a182f",
+      "flow": {
+        "invitation_error_generic": true,
+        "invitation_seconds": 0.009,
+        "recovery_response_seconds": 0.001,
+        "recovery_response_generic": true,
+        "failed_tokens_cancelled": 2,
+        "received_invitation_token_rejected": null,
+        "password_and_admin_session_preserved": true
+      },
+      "smtp": {
+        "connections": 2,
+        "tls_handshakes": 2,
+        "TLSv1.2": 2,
+        "ehlo_tls": 2,
+        "auth_attempts": 2,
+        "auth_rejected": 2
+      },
+      "private_logs_verified": true,
+      "cleanup": true,
+      "seconds": 1.892
+    },
+    {
+      "case": "starttls_bad_credentials",
+      "security": "starttls",
+      "status": "passed",
+      "build": {
+        "version": "0.1.0",
+        "revision": "435e9bfa5e125cb64f87e7dab571db1c06aaebc0"
+      },
+      "server_sha256": "3af4bb631703bc42d373e01be770ba5b826b5b550b00c2a8262959da491a182f",
+      "flow": {
+        "invitation_error_generic": true,
+        "invitation_seconds": 0.009,
+        "recovery_response_seconds": 0.001,
+        "recovery_response_generic": true,
+        "failed_tokens_cancelled": 2,
+        "received_invitation_token_rejected": null,
+        "password_and_admin_session_preserved": true
+      },
+      "smtp": {
+        "connections": 2,
+        "ehlo_cleartext": 2,
+        "starttls_commands": 2,
+        "tls_handshakes": 2,
+        "TLSv1.2": 2,
+        "ehlo_tls": 2,
+        "auth_attempts": 2,
+        "auth_rejected": 2
+      },
+      "private_logs_verified": true,
+      "cleanup": true,
+      "seconds": 1.89
+    },
+    {
+      "case": "starttls_not_offered",
+      "security": "starttls",
+      "status": "passed",
+      "build": {
+        "version": "0.1.0",
+        "revision": "435e9bfa5e125cb64f87e7dab571db1c06aaebc0"
+      },
+      "server_sha256": "3af4bb631703bc42d373e01be770ba5b826b5b550b00c2a8262959da491a182f",
+      "flow": {
+        "invitation_error_generic": true,
+        "invitation_seconds": 0.007,
+        "recovery_response_seconds": 0.001,
+        "recovery_response_generic": true,
+        "failed_tokens_cancelled": 2,
+        "received_invitation_token_rejected": null,
+        "password_and_admin_session_preserved": true
+      },
+      "smtp": {
+        "connections": 2,
+        "ehlo_cleartext": 2
+      },
+      "private_logs_verified": true,
+      "cleanup": true,
+      "seconds": 1.926
+    },
+    {
+      "case": "starttls_rejected",
+      "security": "starttls",
+      "status": "passed",
+      "build": {
+        "version": "0.1.0",
+        "revision": "435e9bfa5e125cb64f87e7dab571db1c06aaebc0"
+      },
+      "server_sha256": "3af4bb631703bc42d373e01be770ba5b826b5b550b00c2a8262959da491a182f",
+      "flow": {
+        "invitation_error_generic": true,
+        "invitation_seconds": 0.006,
+        "recovery_response_seconds": 0.001,
+        "recovery_response_generic": true,
+        "failed_tokens_cancelled": 2,
+        "received_invitation_token_rejected": null,
+        "password_and_admin_session_preserved": true
+      },
+      "smtp": {
+        "connections": 2,
+        "ehlo_cleartext": 2,
+        "starttls_commands": 2
+      },
+      "private_logs_verified": true,
+      "cleanup": true,
+      "seconds": 1.829
+    },
+    {
+      "case": "recipient_rejected",
+      "security": "starttls",
+      "status": "passed",
+      "build": {
+        "version": "0.1.0",
+        "revision": "435e9bfa5e125cb64f87e7dab571db1c06aaebc0"
+      },
+      "server_sha256": "3af4bb631703bc42d373e01be770ba5b826b5b550b00c2a8262959da491a182f",
+      "flow": {
+        "invitation_error_generic": true,
+        "invitation_seconds": 0.009,
+        "recovery_response_seconds": 0.001,
+        "recovery_response_generic": true,
+        "failed_tokens_cancelled": 2,
+        "received_invitation_token_rejected": null,
+        "password_and_admin_session_preserved": true
+      },
+      "smtp": {
+        "connections": 2,
+        "ehlo_cleartext": 2,
+        "starttls_commands": 2,
+        "tls_handshakes": 2,
+        "TLSv1.2": 2,
+        "ehlo_tls": 2,
+        "auth_attempts": 2,
+        "authenticated": 2,
+        "recipient_rejected": 2
+      },
+      "private_logs_verified": true,
+      "cleanup": true,
+      "seconds": 1.869
+    },
+    {
+      "case": "data_rejected",
+      "security": "tls",
+      "status": "passed",
+      "build": {
+        "version": "0.1.0",
+        "revision": "435e9bfa5e125cb64f87e7dab571db1c06aaebc0"
+      },
+      "server_sha256": "3af4bb631703bc42d373e01be770ba5b826b5b550b00c2a8262959da491a182f",
+      "flow": {
+        "invitation_error_generic": true,
+        "invitation_seconds": 0.009,
+        "recovery_response_seconds": 0.0,
+        "recovery_response_generic": true,
+        "failed_tokens_cancelled": 2,
+        "received_invitation_token_rejected": true,
+        "password_and_admin_session_preserved": true
+      },
+      "smtp": {
+        "connections": 2,
+        "tls_handshakes": 2,
+        "TLSv1.2": 2,
+        "ehlo_tls": 2,
+        "auth_attempts": 2,
+        "authenticated": 2,
+        "received_messages": 2,
+        "data_rejected": 2
+      },
+      "private_logs_verified": true,
+      "cleanup": true,
+      "seconds": 1.814
+    },
+    {
+      "case": "data_ack_timeout",
+      "security": "tls",
+      "status": "passed",
+      "build": {
+        "version": "0.1.0",
+        "revision": "435e9bfa5e125cb64f87e7dab571db1c06aaebc0"
+      },
+      "server_sha256": "3af4bb631703bc42d373e01be770ba5b826b5b550b00c2a8262959da491a182f",
+      "flow": {
+        "invitation_error_generic": true,
+        "invitation_seconds": 12.014,
+        "recovery_response_seconds": 0.001,
+        "recovery_response_generic": true,
+        "failed_tokens_cancelled": 2,
+        "received_invitation_token_rejected": true,
+        "password_and_admin_session_preserved": true
+      },
+      "smtp": {
+        "connections": 2,
+        "tls_handshakes": 2,
+        "TLSv1.2": 2,
+        "ehlo_tls": 2,
+        "auth_attempts": 2,
+        "authenticated": 2,
+        "received_messages": 2
+      },
+      "private_logs_verified": true,
+      "cleanup": true,
+      "seconds": 26.092
+    },
+    {
+      "case": "total_delivery_deadline",
+      "security": "starttls",
+      "status": "passed",
+      "build": {
+        "version": "0.1.0",
+        "revision": "435e9bfa5e125cb64f87e7dab571db1c06aaebc0"
+      },
+      "server_sha256": "3af4bb631703bc42d373e01be770ba5b826b5b550b00c2a8262959da491a182f",
+      "flow": {
+        "invitation_error_generic": true,
+        "invitation_seconds": 12.013,
+        "recovery_response_seconds": 0.001,
+        "recovery_response_generic": true,
+        "failed_tokens_cancelled": 2,
+        "received_invitation_token_rejected": null,
+        "password_and_admin_session_preserved": true
+      },
+      "smtp": {
+        "connections": 2,
+        "ehlo_cleartext": 2,
+        "starttls_commands": 2,
+        "closed_connections": 2
+      },
+      "private_logs_verified": true,
+      "cleanup": true,
+      "seconds": 26.073
+    }
+  ],
+  "expected_revision": "435e9bfa5e125cb64f87e7dab571db1c06aaebc0",
+  "platform": "macOS-27.0.1-arm64-arm-64bit",
+  "python_tls": "LibreSSL 2.8.3",
+  "scripts_sha256": {
+    "acceptance_smtp_tls.py": "1c9142086696fbd429ae9427a392d94d8a821d2b8f13b20e0d6020ca0af55c79",
+    "acceptance_smtp_tls_support.py": "30b390d45995e66a6db26d9d71ccc49f4751e7955216094341fbb9ec3fc8dd1e",
+    "acceptance_smtp.py": "36466061e8b157aeddd0076828dd6f7f53226a5cfbc113e0ab805743514149f8",
+    "acceptance.py": "bcfd245dc5702b82d75c6263a465cc5fd5327c0f1497bd3a4d351e35b8a47a96",
+    "acceptance_support.py": "b880b34011345e114f1803e2a079b8597a6ab3c7f44f2aa9e2a3894ab94f6789"
+  },
+  "certificates_sha256": {
+    "ca.crt": "0749cc34e37c307bd16b714b64ac67fbb253f6cf4f958e8971eb95bdef235e5a",
+    "expired.crt": "c76533f6e9fa8cce5ef8a0acb41f33f378228ceb44da6256c43ebe484303c9a6",
+    "valid.crt": "a961fbe66c2226a41d900be1975a5fd170773dc1de7c1a7539fda391401c1e90",
+    "wrong_host.crt": "3f11c31d6d4cd9550b02de7feaf72ba13b08fb312d1f3ee781b425b142cd6fbe"
+  },
+  "finished_at": "2026-10-03T15:02:13.120700+00:00"
+}

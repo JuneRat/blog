@@ -1,0 +1,8 @@
+{
+  "database_container": "blog-smtp-test-0986bd80b13c",
+  "started_at": "2026-10-03T14:58:53.958516+00:00",
+  "container_id": "aea6dcb5c46e6f8e3cfcc840d878738662c83612386acf77b163badcd74e509b",
+  "cleanup_verified": true,
+  "finished_at": "2026-10-03T15:02:13.438435+00:00",
+  "runner_exit_code": 0
+}

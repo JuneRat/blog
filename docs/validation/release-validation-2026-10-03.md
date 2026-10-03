@@ -45,4 +45,4 @@ python3 -B scripts/test_release_upgrade.py \
   --report upgrade-verification.json
 ```
 
-该记录是本地功能与恢复证据，不包含真实 SMTP 的 TLS/认证和外部邮箱送达。新增身份锁与历史写入后的持续混合容量已由后续[新版写作压测](writing-capacity-2026-10-03.md)补充，使用同一 release 镜像，四组均通过。目标部署的域名、资源限制、生产阈值及 RPO/RTO 仍按[路线图 M5](../product-roadmap.md#3-里程碑与验收入口)单独验收；此前的 debug 服务端报告保留为历史记录。
+该记录是本地功能与恢复证据，邮件部分使用回环明文 SMTP。后续 [SMTP 加密与故障验收](smtp-tls-2026-10-03.md)已补充 TLS/STARTTLS、认证和失败撤销的 15 项本地证据，使用新增 CA 配置后的 `435e9bf` 原生 release 构建，未连接外部邮箱。新增身份锁与历史写入后的持续混合容量已由后续[新版写作压测](writing-capacity-2026-10-03.md)补充，使用本记录的 `9fb6c24` release 镜像，四组均通过。目标部署的域名、SMTP 供应商、资源限制、生产阈值及 RPO/RTO 仍按[路线图 M5](../product-roadmap.md#3-里程碑与验收入口)单独验收；此前的 debug 服务端报告保留为历史记录。
