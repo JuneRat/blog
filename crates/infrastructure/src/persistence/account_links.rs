@@ -30,7 +30,7 @@ impl AccountLinkStore for PostgresAccountLinkStore {
         now: OffsetDateTime,
     ) -> Result<Option<String>, UseCaseError> {
         let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
-        acquire_identity_lock(&mut *tx)
+        acquire_identity_lock(&mut tx)
             .await
             .map_err(map_sqlx_error)?;
         let (row, actor, invitation) = match target {
@@ -41,6 +41,7 @@ impl AccountLinkStore for PostgresAccountLinkStore {
             }
             LinkTarget::Invitation { user_id, actor } => {
                 actor.ensure_write_channel()?;
+                super::revalidate_write(&mut tx, &actor.audit_context()).await?;
                 let permissions = if actor.channel
                     == application::identity::ActorChannel::ControlledCli
                     && actor.user_id.0.is_nil()
@@ -126,7 +127,7 @@ impl AccountLinkStore for PostgresAccountLinkStore {
         ip: Option<std::net::IpAddr>,
     ) -> Result<(), UseCaseError> {
         let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
-        acquire_identity_lock(&mut *tx)
+        acquire_identity_lock(&mut tx)
             .await
             .map_err(map_sqlx_error)?;
         let id: uuid::Uuid = sqlx::query_scalar(&format!("SELECT u.id FROM account_links l JOIN users u ON u.id=l.user_id WHERE {VALID} FOR NO KEY UPDATE OF u"))

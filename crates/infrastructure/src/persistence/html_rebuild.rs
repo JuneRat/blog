@@ -49,7 +49,7 @@ impl PostgresHtmlRebuildStore {
     }
 
     pub fn with_task_lease(mut self, lease: application::tasks::TaskLease) -> Self {
-        self.audit = lease.audit;
+        self.audit = lease.audit.clone();
         self.task_lease = Some(lease);
         self
     }
@@ -194,7 +194,8 @@ impl HtmlRebuildStore for PostgresHtmlRebuildStore {
                 } else {
                     vec![]
                 };
-                let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+                let mut tx =
+                    crate::persistence::begin_authorized_write(&self.pool, &self.audit).await?;
                 if let Some(lease) = &self.task_lease {
                     if lease.run.kind != application::tasks::TaskKind::HtmlRebuild {
                         return Err(UseCaseError::Invalid("任务租约类型不匹配".into()));
@@ -227,7 +228,7 @@ impl HtmlRebuildStore for PostgresHtmlRebuildStore {
                     }
                     crate::audit::record_change(
                         &mut tx,
-                        self.audit,
+                        self.audit.clone(),
                         &format!("{kind}.html.rebuild"),
                         &kind.to_string(),
                         &id.to_string(),

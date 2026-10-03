@@ -53,7 +53,7 @@ impl LocalThemePackages {
         if report.slug != slug {
             return Err(invalid("升级包必须与已安装主题的 slug 一致"));
         }
-        let mut tx = store.pool.begin().await.map_err(repo)?;
+        let mut tx = crate::persistence::begin_authorized_write(&store.pool, &actor).await?;
         crate::themes::lock(&mut tx).await?;
         let current = crate::themes::PostgresThemesStore::find_on(&mut tx, slug)
             .await?

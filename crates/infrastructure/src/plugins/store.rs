@@ -61,7 +61,8 @@ impl PluginStore for PostgresPluginStore {
         if self.database.is_recovery_isolated().await? {
             return Err(UseCaseError::Invalid("恢复隔离期间禁止修改插件".into()));
         }
-        let mut tx = self.database.pool.begin().await.map_err(db)?;
+        let mut tx =
+            crate::persistence::begin_authorized_write(&self.database.pool, &audit).await?;
         // Coordinates revision changes with media purge's reference check.
         crate::locks::acquire(&mut *tx, crate::locks::CONTENT_RELATIONS, false)
             .await

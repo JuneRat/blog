@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use sqlx::{Executor, PgPool, Row};
+use sqlx::{PgConnection, PgPool, Row};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -23,13 +23,16 @@ use crate::locks::IDENTITY as IDENTITY_LOCK;
 /// 账号启停、角色分配/移除、外部身份绑定解绑、密码清除共用同一把锁：这些操作的
 /// 「检查 + 写入」必须在锁内完成，否则跨表不变量（例如「至少保留一种登录方式」）
 /// 会被并发写穿——两条路径各自看到「对方还在」，结果一起把它清空。
-pub(crate) async fn acquire_identity_lock(
-    executor: impl Executor<'_, Database = sqlx::Postgres>,
-) -> Result<(), sqlx::Error> {
+pub(crate) async fn acquire_identity_lock(conn: &mut PgConnection) -> Result<(), sqlx::Error> {
+    // Waiting for an advisory lock must not pin a pre-revocation snapshot,
+    // including when a deployment changed its default transaction isolation.
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
+        .execute(&mut *conn)
+        .await?;
     sqlx::query("SELECT pg_advisory_xact_lock($1::int, $2::int)")
         .bind(IDENTITY_LOCK.0)
         .bind(IDENTITY_LOCK.1)
-        .execute(executor)
+        .execute(conn)
         .await?;
     Ok(())
 }
@@ -152,7 +155,7 @@ impl UserProfileStore for PostgresUserRepository {
         audit: application::audit::AuditContext,
     ) -> Result<UserSnapshot, UseCaseError> {
         let snapshot = user.snapshot();
-        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        let mut tx = crate::persistence::begin_authorized_write(&self.pool, &audit).await?;
         let row = sqlx::query(&format!(
             "UPDATE users SET display_name=$2, bio=$3, version=version+1, updated_at=$4 \
              WHERE id=$1 AND version=$5 AND status='active' AND deleted_at IS NULL RETURNING {USER_COLUMNS}"
@@ -185,7 +188,7 @@ impl UserProfileStore for PostgresUserRepository {
         now: OffsetDateTime,
         audit: application::audit::AuditContext,
     ) -> Result<UserSnapshot, UseCaseError> {
-        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        let mut tx = crate::persistence::begin_authorized_write(&self.pool, &audit).await?;
         let row = sqlx::query(&format!(
             "UPDATE users SET avatar_media_id=$2, version=version+1, updated_at=$3 \
              WHERE id=$1 AND version=$4 AND status='active' AND deleted_at IS NULL RETURNING {USER_COLUMNS}",
@@ -231,7 +234,7 @@ impl AccountAdministration for PostgresUserRepository {
         audit_actor: application::audit::AuditContext,
     ) -> Result<(), UseCaseError> {
         let snapshot = aggregate.snapshot();
-        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        let mut tx = crate::persistence::begin_authorized_write(&self.pool, &audit_actor).await?;
         sqlx::query(
             r#"
             INSERT INTO users (id, username, email, display_name, version, created_at, updated_at)
@@ -272,9 +275,10 @@ impl AccountAdministration for PostgresUserRepository {
         use crate::rbac::PostgresRbacStore;
 
         let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
-        acquire_identity_lock(&mut *tx)
+        acquire_identity_lock(&mut tx)
             .await
             .map_err(map_sqlx_error)?;
+        crate::persistence::revalidate_write(&mut tx, &actor.audit_context()).await?;
         let permissions = if actor.channel == application::identity::ActorChannel::ControlledCli
             && actor.user_id.0.is_nil()
         {
@@ -351,9 +355,10 @@ impl AccountAdministration for PostgresUserRepository {
         audit_actor: application::audit::AuditContext,
     ) -> Result<(), UseCaseError> {
         let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
-        acquire_identity_lock(&mut *tx)
+        acquire_identity_lock(&mut tx)
             .await
             .map_err(map_sqlx_error)?;
+        crate::persistence::revalidate_write(&mut tx, &audit_actor).await?;
         let changed: Option<i64> = sqlx::query_scalar(
             "UPDATE users SET auth_version=auth_version+1 WHERE id=$1 RETURNING auth_version",
         )
@@ -423,9 +428,10 @@ impl PasswordCredentialStore for PostgresUserRepository {
     ) -> Result<ClearPasswordOutcome, UseCaseError> {
         let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
         // 与解绑外部身份同一把排他锁：检查与清除在锁内完成，两条路径不可能同时通过。
-        acquire_identity_lock(&mut *tx)
+        acquire_identity_lock(&mut tx)
             .await
             .map_err(map_sqlx_error)?;
+        crate::persistence::revalidate_write(&mut tx, &audit_actor).await?;
 
         // Preserve FK KEY SHARE compatibility: session creation may already own
         // session rows that the revocation below needs to delete.
@@ -537,9 +543,10 @@ impl PostgresUserRepository {
         audit_actor: application::audit::AuditContext,
     ) -> Result<Option<i64>, UseCaseError> {
         let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
-        acquire_identity_lock(&mut *tx)
+        acquire_identity_lock(&mut tx)
             .await
             .map_err(map_sqlx_error)?;
+        crate::persistence::revalidate_write(&mut tx, &audit_actor).await?;
         let revision = sqlx::query_scalar(
             "UPDATE users SET password_hash=$4, version=version+1, auth_version=auth_version+1, updated_at=now() \
              WHERE id=$1 AND status='active' AND deleted_at IS NULL \

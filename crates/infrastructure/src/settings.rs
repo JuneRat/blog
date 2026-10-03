@@ -116,7 +116,7 @@ impl SettingsStore for PostgresSettingsStore {
             "description": value.description,
             "logo_media_id": value.logo_media_id,
         });
-        let mut tx = self.pool.begin().await.map_err(map_repo_error)?;
+        let mut tx = crate::persistence::begin_authorized_write(&self.pool, &audit_actor).await?;
         let new_version: Option<i64> = sqlx::query_scalar(
             r#"
             INSERT INTO settings (key, value, version, updated_at)
@@ -187,7 +187,7 @@ impl ThemeSettingsStore for PostgresSettingsStore {
         audit_actor: application::audit::AuditContext,
     ) -> Result<SaveOutcome, UseCaseError> {
         let value = serde_json::json!({ "schema_version": 1, "slug": slug });
-        let mut tx = self.pool.begin().await.map_err(map_repo_error)?;
+        let mut tx = crate::persistence::begin_authorized_write(&self.pool, &audit_actor).await?;
         crate::themes::lock(&mut tx).await?;
         let new_version: Option<i64> = sqlx::query_scalar(
             r#"

@@ -849,7 +849,7 @@ async fn competing_bootstraps_commit_exactly_one_owner_and_marker() {
             &first_id,
             &first,
             &site,
-            audit
+            audit.clone()
         ),
         infrastructure::installation::initialize(
             &database,

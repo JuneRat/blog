@@ -7,16 +7,27 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use uuid::Uuid;
 
 /// Supplied by a trusted inbound adapter, never deserialized from a request body.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AuditContext {
     pub actor_id: Option<Uuid>,
     pub ip_address: Option<IpAddr>,
+    /// Captured by identity resolution, never supplied by an HTTP payload.
+    /// Trusted system/bootstrap operations have no user authorization snapshot.
+    pub authorization: Option<Arc<WriteAuthorization>>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct WriteAuthorization {
+    pub auth_version: i64,
+    pub permissions: domain::identity::PermissionSet,
+    pub channel: crate::identity::ActorChannel,
 }
 impl AuditContext {
     pub const fn system() -> Self {
         Self {
             actor_id: None,
             ip_address: None,
+            authorization: None,
         }
     }
 }
@@ -25,6 +36,7 @@ impl From<Option<Uuid>> for AuditContext {
         Self {
             actor_id,
             ip_address: None,
+            authorization: None,
         }
     }
 }

@@ -390,6 +390,7 @@ impl PasswordInteractor {
                 crate::audit::AuditContext {
                     actor_id: Some(credential.user_id),
                     ip_address,
+                    ..Default::default()
                 },
             )
             .await

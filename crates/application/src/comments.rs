@@ -85,18 +85,20 @@ pub struct NewComment {
     pub body: CommentBody,
     pub parent_id: Option<Uuid>,
     pub email: Option<domain::identity::Email>,
+    pub audit: crate::audit::AuditContext,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct CommentScope {
     pub user_id: Uuid,
     pub all: bool,
     pub ip_address: Option<IpAddr>,
+    pub audit: crate::audit::AuditContext,
 }
 impl CommentScope {
     /// Authorize against the current post owner. Write adapters must read this
     /// fact and keep it stable through commit; a pre-transaction lookup is not enough.
-    pub fn authorize_post(self, author: Uuid) -> Result<(), UseCaseError> {
+    pub fn authorize_post(&self, author: Uuid) -> Result<(), UseCaseError> {
         if self.all || self.user_id == author {
             Ok(())
         } else {
@@ -158,6 +160,7 @@ impl CommentInteractor {
                     body,
                     parent_id: cmd.parent_id,
                     email,
+                    audit: actor.map(Actor::audit_context).unwrap_or_default(),
                 },
             )
             .await
@@ -237,6 +240,7 @@ impl CommentInteractor {
                 user_id: actor.user_id.0,
                 all: true,
                 ip_address,
+                audit: actor.audit_context(),
             }
         } else {
             scope(actor)?
@@ -254,6 +258,7 @@ fn scope(actor: &Actor) -> Result<CommentScope, UseCaseError> {
         user_id: actor.user_id.0,
         all,
         ip_address: None,
+        audit: actor.audit_context(),
     })
 }
 fn checked_page(page: i64) -> Result<i64, UseCaseError> {
@@ -271,6 +276,7 @@ mod tests {
         let user = Uuid::now_v7();
         let other = Uuid::now_v7();
         let own = CommentScope {
+            audit: Default::default(),
             user_id: user,
             all: false,
             ip_address: None,

@@ -106,6 +106,7 @@ impl RegistrationInteractor {
                 AuditContext {
                     actor_id: None,
                     ip_address,
+                    ..Default::default()
                 },
             )
             .await

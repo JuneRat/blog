@@ -176,7 +176,7 @@ impl CommentRepository for PostgresCommentRepository {
         action: application::batch::CommentBatchAction,
     ) -> Result<application::batch::BatchResult, UseCaseError> {
         use application::batch::{BatchItemResult, BatchResult};
-        let mut tx = self.pool.begin().await.map_err(db)?;
+        let mut tx = crate::persistence::begin_authorized_write(&self.pool, &scope.audit).await?;
         // Submissions may hold a parent and then an unrelated manual-approval proof.
         // Serialize bounded batch moderation with those submissions before locking multiple rows.
         crate::locks::acquire(&mut *tx, crate::locks::COMMENT_POLICY, false)
@@ -303,7 +303,7 @@ impl CommentRepository for PostgresCommentRepository {
         cmd: NewComment,
     ) -> Result<CommentStatus, UseCaseError> {
         let html = self.renderer.render_comment(cmd.body.as_str()).await?;
-        let mut tx = self.pool.begin().await.map_err(db)?;
+        let mut tx = crate::persistence::begin_authorized_write(&self.pool, &cmd.audit).await?;
         // Shared lock also protects the default policy when no settings row exists.
         crate::locks::acquire(&mut *tx, crate::locks::COMMENT_POLICY, true)
             .await
@@ -440,7 +440,7 @@ impl CommentRepository for PostgresCommentRepository {
         version: i64,
         action: ModerationAction,
     ) -> Result<(), UseCaseError> {
-        let mut tx = self.pool.begin().await.map_err(db)?;
+        let mut tx = crate::persistence::begin_authorized_write(&self.pool, &scope.audit).await?;
         let post = sqlx::query("SELECT p.author_id FROM posts p JOIN comments c ON c.post_id=p.id WHERE c.id=$1 FOR SHARE OF p")
             .bind(id).fetch_optional(&mut *tx).await.map_err(db)?.ok_or_else(missing)?;
         scope.authorize_post(post.get("author_id"))?;
@@ -478,7 +478,7 @@ impl CommentRepository for PostgresCommentRepository {
         post: Option<Uuid>,
         update: Option<CommentPolicy>,
     ) -> Result<CommentPolicy, UseCaseError> {
-        let mut tx = self.pool.begin().await.map_err(db)?;
+        let mut tx = crate::persistence::begin_authorized_write(&self.pool, &scope.audit).await?;
         let (current, mut value) = if let Some(post) = post {
             let row = sqlx::query("SELECT author_id,comments_enabled,version FROM posts WHERE id=$1 AND deleted_at IS NULL FOR UPDATE")
                 .bind(post).fetch_optional(&mut *tx).await.map_err(db)?.ok_or_else(missing)?;

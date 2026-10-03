@@ -141,12 +141,14 @@ async fn concurrent_enqueue_and_claim_are_atomic_with_single_source_audit() {
         let audit = AuditContext {
             actor_id: Some(actor),
             ip_address: Some("2001:db8::17".parse().unwrap()),
+            ..Default::default()
         };
         let store = Arc::new(store(&pool));
         let due = now(&pool).await;
         let mut requests = tokio::task::JoinSet::new();
         for _ in 0..16 {
             let store = store.clone();
+            let audit = audit.clone();
             requests.spawn(async move {
                 store
                     .enqueue(TaskKind::HtmlRebuild, due, TaskTrigger::Manual, None, audit)
@@ -590,7 +592,7 @@ async fn lease_is_checked_after_row_lock_wait_before_business_or_report_writes()
 async fn business_adapters_fence_stale_workers_and_preserve_trusted_audit_source() {
     isolated(|pool|async move {
         let actor=common::seed_user(&pool,"task-business-owner").await;
-        let audit=AuditContext{actor_id:Some(actor),ip_address:Some("192.0.2.17".parse().unwrap())};
+        let audit=AuditContext{actor_id:Some(actor),ip_address:Some("192.0.2.17".parse().unwrap()), ..Default::default()};
         let post=Uuid::now_v7();
         sqlx::query("INSERT INTO posts(id,author_id,slug,title,content,content_html,content_render_version,status,published_at) VALUES($1,$2,'task-fence','Task fence','**source**','stale',$3,'scheduled',clock_timestamp()-interval '1 minute')")
             .bind(post).bind(actor).bind(infrastructure::CONTENT_RENDER_VERSION+1).execute(&pool).await.unwrap();
@@ -599,7 +601,7 @@ async fn business_adapters_fence_stale_workers_and_preserve_trusted_audit_source
         sqlx::query("INSERT INTO audit_logs(id,action,target_type,target_id,created_at) VALUES(gen_random_uuid(),'old_fixture','system','fixture',clock_timestamp()-interval '400 days')").execute(&pool).await.unwrap();
         let store=store(&pool);
         for kind in [TaskKind::HtmlRebuild,TaskKind::Retention,TaskKind::PublishDue] {
-            let lease=lease(&pool,kind,audit).await;
+            let lease=lease(&pool,kind,audit.clone()).await;
             let mut wrong=lease.clone();wrong.token=Uuid::now_v7();
             match kind {
                 TaskKind::HtmlRebuild=>{

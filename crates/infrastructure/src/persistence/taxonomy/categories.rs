@@ -103,7 +103,7 @@ impl CategoryRepository for PostgresCategoryRepository {
     ) -> Result<(), UseCaseError> {
         let snapshot = aggregate.snapshot();
         // 树锁内确认父节点仍存在且祖先链完好，避免新节点接入历史环。
-        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        let mut tx = crate::persistence::begin_authorized_write(&self.pool, &audit_actor).await?;
         sqlx::query("SELECT pg_advisory_xact_lock($1::int, $2::int)")
             .bind(CATEGORY_TREE_LOCK.0)
             .bind(CATEGORY_TREE_LOCK.1)
@@ -175,7 +175,7 @@ impl CategoryRepository for PostgresCategoryRepository {
         expected_version: i64,
         audit_actor: application::audit::AuditContext,
     ) -> Result<Option<CategoryWithUsage>, UseCaseError> {
-        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        let mut tx = crate::persistence::begin_authorized_write(&self.pool, &audit_actor).await?;
         // 树锁内完成「环检查 + 写入」：锁外的检查结果可能被并发移动作废。
         sqlx::query("SELECT pg_advisory_xact_lock($1::int, $2::int)")
             .bind(CATEGORY_TREE_LOCK.0)
@@ -247,7 +247,7 @@ impl CategoryRepository for PostgresCategoryRepository {
         expected_version: i64,
         audit_actor: application::audit::AuditContext,
     ) -> Result<CategoryDeleteOutcome, UseCaseError> {
-        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        let mut tx = crate::persistence::begin_authorized_write(&self.pool, &audit_actor).await?;
         sqlx::query("SELECT pg_advisory_xact_lock($1::int, $2::int)")
             .bind(CATEGORY_TREE_LOCK.0)
             .bind(CATEGORY_TREE_LOCK.1)

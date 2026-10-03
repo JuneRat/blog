@@ -162,7 +162,7 @@ impl MediaRepository for PostgresMediaRepository {
         if s.deleted_at.is_some() {
             return Err(UseCaseError::Invalid("不能登记已删除媒体".into()));
         }
-        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        let mut tx = crate::persistence::begin_authorized_write(&self.pool, &actor_id).await?;
         sqlx::query("INSERT INTO media (id,uploaded_by,path,filename,mime_type,size,width,height,checksum_sha256,version,created_at,updated_at) \
             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)")
             .bind(s.id).bind(s.owner_id).bind(&s.storage_key).bind(&s.original_name).bind(&s.mime).bind(s.byte_size)
@@ -297,7 +297,7 @@ impl MediaRepository for PostgresMediaRepository {
         now: OffsetDateTime,
         actor_id: application::audit::AuditContext,
     ) -> Result<MediaChangeOutcome, UseCaseError> {
-        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        let mut tx = crate::persistence::begin_authorized_write(&self.pool, &actor_id).await?;
         let row = sqlx::query(&format!(
             "SELECT {MEDIA_COLUMNS} FROM media m WHERE id=$1 FOR UPDATE"
         ))

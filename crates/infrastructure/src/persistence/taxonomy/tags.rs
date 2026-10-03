@@ -56,7 +56,7 @@ impl TagRepository for PostgresTagRepository {
         actor_id: application::audit::AuditContext,
     ) -> Result<(), UseCaseError> {
         let snapshot = aggregate.snapshot();
-        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        let mut tx = crate::persistence::begin_authorized_write(&self.pool, &actor_id).await?;
         sqlx::query(
             "INSERT INTO tags (id, name, slug, version, created_at) \
              VALUES ($1, $2, $3, $4, $5)",
@@ -113,7 +113,7 @@ impl TagRepository for PostgresTagRepository {
         expected_version: i64,
         actor_id: application::audit::AuditContext,
     ) -> Result<Option<TagWithUsage>, UseCaseError> {
-        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        let mut tx = crate::persistence::begin_authorized_write(&self.pool, &actor_id).await?;
         let row = sqlx::query(&format!(
             "UPDATE tags t SET name = $3, \
              version = CASE WHEN name IS DISTINCT FROM $3 THEN version + 1 ELSE version END, \
@@ -152,7 +152,7 @@ impl TagRepository for PostgresTagRepository {
         expected_version: i64,
         actor_id: application::audit::AuditContext,
     ) -> Result<TagDeleteOutcome, UseCaseError> {
-        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        let mut tx = crate::persistence::begin_authorized_write(&self.pool, &actor_id).await?;
         lock_content_relations(&mut tx).await?;
         let locked: Option<(i64,)> =
             sqlx::query_as("SELECT version FROM tags WHERE id = $1 FOR UPDATE")

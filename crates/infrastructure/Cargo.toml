@@ -154,3 +154,7 @@ required-features = ["sqlx-test-support"]
 [[test]]
 name = "account_links"
 required-features = ["sqlx-test-support"]
+
+[[test]]
+name = "write_authorization"
+required-features = ["sqlx-test-support"]

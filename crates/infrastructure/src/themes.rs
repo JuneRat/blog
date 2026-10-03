@@ -109,7 +109,7 @@ impl ThemeConfigStore for PostgresThemesStore {
         actor: AuditContext,
     ) -> Result<ThemeRecord, UseCaseError> {
         schema.validate_config(config)?;
-        let mut tx = self.pool.begin().await.map_err(db)?;
+        let mut tx = crate::persistence::begin_authorized_write(&self.pool, &actor).await?;
         lock(&mut tx).await?;
         let mut actual = Self::find_on(&mut tx, &current.slug)
             .await?

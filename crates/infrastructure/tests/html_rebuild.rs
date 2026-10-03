@@ -63,6 +63,7 @@ async fn administrator_rebuild_audits_all_sources_and_cli_default_stays_system()
         .with_audit(AuditContext {
             actor_id: Some(administrator),
             ip_address: Some("2001:db8::17".parse().unwrap()),
+            ..Default::default()
         });
         for kind in [HtmlKind::Post, HtmlKind::Page, HtmlKind::Comment] {
             assert_eq!(
@@ -153,7 +154,7 @@ async fn failed_actor_audit_rolls_back_its_record_and_refs_but_preserves_prior_c
             .execute(&pool).await.unwrap();
         let runtime = Arc::new(RenderingRuntime::default());
         let store = PostgresHtmlRebuildStore::new(common::database(pool.clone()), runtime.clone(), runtime)
-            .with_audit(AuditContext {actor_id: Some(administrator), ip_address: Some("192.0.2.17".parse().unwrap())});
+            .with_audit(AuditContext {actor_id: Some(administrator), ip_address: Some("192.0.2.17".parse().unwrap()), ..Default::default()});
         let error = store.rebuild_batch(HtmlKind::Post, None, 100).await.unwrap_err();
         assert_eq!(error.id, Some(Uuid::from_u128(2)));
         assert_eq!((error.progress.rebuilt, error.progress.skipped), (1, 0));

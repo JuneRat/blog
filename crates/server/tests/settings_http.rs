@@ -973,7 +973,15 @@ async fn html_rebuild_wire_view_and_admission_use_only_the_authenticated_actor_a
                 view,
                 json!({"pending":null,"job":admitted,"available":true})
             );
-            let audit = *stack.html_rebuild.0.lock().unwrap().starts.last().unwrap();
+            let audit = stack
+                .html_rebuild
+                .0
+                .lock()
+                .unwrap()
+                .starts
+                .last()
+                .unwrap()
+                .clone();
             assert_eq!(audit.actor_id, Some(actor_id));
             assert_eq!(
                 audit.ip_address.map(|ip| ip.to_string()).as_deref(),
@@ -1297,19 +1305,14 @@ async fn tasks_http_wire_times_whitelist_and_trusted_audit_are_preserved() {
             assert_eq!(status, StatusCode::CONFLICT);
             assert_eq!(conflict["code"], "conflict");
         }
+        let auth_version: i64 = sqlx::query_scalar("SELECT auth_version FROM users WHERE id=$1")
+            .bind(actor)
+            .fetch_one(&stack.pool)
+            .await
+            .unwrap();
         let state = stack.tasks.0.lock().unwrap();
         assert_eq!(state.calls[0], TaskCall::View(None, None, None));
-        assert_eq!(
-            state.calls[1],
-            TaskCall::Enqueue(
-                TaskKind::HtmlRebuild,
-                Some(input_due),
-                application::audit::AuditContext {
-                    actor_id: Some(actor),
-                    ip_address: Some("2001:db8::17".parse().unwrap())
-                }
-            )
-        );
+        assert!(matches!(&state.calls[1], TaskCall::Enqueue(TaskKind::HtmlRebuild, Some(due), _) if due == &input_due));
         assert_eq!(
             state.calls[2],
             TaskCall::View(Some(TaskKind::HtmlRebuild), None, Some(100))
@@ -1324,6 +1327,10 @@ async fn tasks_http_wire_times_whitelist_and_trusted_audit_are_preserved() {
             };
             assert_eq!(audit.actor_id, Some(actor));
             assert_eq!(audit.ip_address, Some("2001:db8::17".parse().unwrap()));
+            let authorization = audit.authorization.as_ref().expect("validated session snapshot");
+            assert_eq!(authorization.auth_version, auth_version);
+            assert_eq!(authorization.channel, application::identity::ActorChannel::Session);
+            assert!(authorization.permissions.has("settings.manage"));
         }
     })
     .await;

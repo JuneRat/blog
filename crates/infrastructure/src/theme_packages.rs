@@ -469,7 +469,7 @@ impl LocalThemePackages {
         }
         sync_tree(&staging.0)?;
         if let Some(store) = &self.store {
-            let mut tx = store.pool.begin().await.map_err(repo)?;
+            let mut tx = crate::persistence::begin_authorized_write(&store.pool, &actor).await?;
             crate::themes::lock(&mut tx).await?;
             if crate::themes::PostgresThemesStore::find_on(&mut tx, &report.slug)
                 .await?
@@ -565,7 +565,7 @@ impl LocalThemePackages {
             return Err(invalid("主题目录必须为普通目录"));
         }
         if let Some(store) = &self.store {
-            let mut tx = store.pool.begin().await.map_err(repo)?;
+            let mut tx = crate::persistence::begin_authorized_write(&store.pool, &actor).await?;
             crate::themes::lock(&mut tx).await?;
             let current = crate::themes::PostgresThemesStore::find_on(&mut tx, slug)
                 .await?
@@ -603,7 +603,7 @@ impl LocalThemePackages {
                 self.checkpoint("uninstall.quarantined");
                 sqlx::query("DELETE FROM media_refs WHERE source_type='theme' AND source_id=$1").bind(current.id).execute(&mut *tx).await.map_err(repo)?;
                 sqlx::query("DELETE FROM themes WHERE id=$1").bind(current.id).execute(&mut *tx).await.map_err(repo)?;
-                crate::audit::record_change(&mut tx, actor, "theme.uninstall", "theme", &current.id.to_string(), serde_json::json!({"slug":slug,"release":current.release,"version":current.version})).await?;
+                crate::audit::record_change(&mut tx, actor.clone(), "theme.uninstall", "theme", &current.id.to_string(), serde_json::json!({"slug":slug,"release":current.release,"version":current.version})).await?;
                 tx.commit().await.map_err(repo)
             }.await;
             if result.is_ok() {

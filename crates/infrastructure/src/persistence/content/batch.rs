@@ -11,7 +11,8 @@ impl PostgresPostRepository {
         action: PostBatchAction,
         now: OffsetDateTime,
     ) -> Result<BatchResult, UseCaseError> {
-        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        let mut tx =
+            crate::persistence::begin_authorized_write(&self.pool, &actor.audit_context()).await?;
         lock_content_relations(&mut tx).await?;
         if let PostBatchAction::ChangeCategory(Some(id)) = action {
             let category: Option<Uuid> =

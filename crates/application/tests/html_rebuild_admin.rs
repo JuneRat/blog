@@ -131,6 +131,7 @@ async fn start_uses_the_trusted_actor_and_address_as_audit_context() {
         [Call::Start(AuditContext {
             actor_id: Some(actor.user_id.0),
             ip_address: Some("2001:db8::17".parse().unwrap()),
+            ..Default::default()
         })]
     );
 }

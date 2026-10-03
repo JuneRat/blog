@@ -145,7 +145,7 @@ impl RbacStore for PostgresRbacStore {
         entries: &[PermissionDescriptor],
     ) -> Result<(), UseCaseError> {
         let mut tx = self.pool.begin().await.map_err(Self::map_err)?;
-        crate::persistence::acquire_identity_lock(&mut *tx)
+        crate::persistence::acquire_identity_lock(&mut tx)
             .await
             .map_err(Self::map_err)?;
         let mut changed = 0u64;
@@ -179,7 +179,7 @@ impl RbacStore for PostgresRbacStore {
     async fn sync_builtin_roles(&self, defs: &[BuiltinRoleDef]) -> Result<(), UseCaseError> {
         for def in defs {
             let mut tx = self.pool.begin().await.map_err(Self::map_err)?;
-            crate::persistence::acquire_identity_lock(&mut *tx)
+            crate::persistence::acquire_identity_lock(&mut tx)
                 .await
                 .map_err(Self::map_err)?;
 
@@ -336,9 +336,10 @@ impl RbacStore for PostgresRbacStore {
         audit_actor: application::audit::AuditContext,
     ) -> Result<(), UseCaseError> {
         let mut tx = self.pool.begin().await.map_err(Self::map_err)?;
-        crate::persistence::acquire_identity_lock(&mut *tx)
+        crate::persistence::acquire_identity_lock(&mut tx)
             .await
             .map_err(Self::map_err)?;
+        crate::persistence::revalidate_write(&mut tx, &audit_actor).await?;
 
         // 锁取得后复用同一事务连接重新读取（docs §3）。
         let role_id = Self::role_id_by_slug(&mut *tx, role_slug)
@@ -385,9 +386,10 @@ impl RbacStore for PostgresRbacStore {
         audit_actor: application::audit::AuditContext,
     ) -> Result<(), UseCaseError> {
         let mut tx = self.pool.begin().await.map_err(Self::map_err)?;
-        crate::persistence::acquire_identity_lock(&mut *tx)
+        crate::persistence::acquire_identity_lock(&mut tx)
             .await
             .map_err(Self::map_err)?;
+        crate::persistence::revalidate_write(&mut tx, &audit_actor).await?;
 
         // 锁取得后复用同一事务连接重新读取（docs §3）。
         let role_id = Self::role_id_by_slug(&mut *tx, role_slug)

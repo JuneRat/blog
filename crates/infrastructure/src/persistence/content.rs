@@ -82,7 +82,7 @@ impl PostgresPostRepository {
         actor_id: application::audit::AuditContext,
     ) -> Result<PostRecord, UseCaseError> {
         let rendered = render_content(&*self.renderer, &snapshot.content).await?;
-        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        let mut tx = crate::persistence::begin_authorized_write(&self.pool, &actor_id).await?;
         lock_content_relations(&mut tx).await?;
         sqlx::query("INSERT INTO posts (id, author_id, category_id, title, slug, excerpt, content, cover_media_id, status, visibility, published_at, version, created_at, updated_at, deleted_at, content_html, content_render_version) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)")
             .bind(snapshot.id).bind(snapshot.author_id).bind(snapshot.category_id).bind(&snapshot.title)
@@ -104,7 +104,7 @@ impl PostgresPostRepository {
         .await?;
         audit_content(
             &mut tx,
-            actor_id,
+            actor_id.clone(),
             "post.create",
             "post",
             snapshot.id,
@@ -140,7 +140,7 @@ impl PostgresPostRepository {
         mode: WriteMode,
     ) -> Result<PostCommitOutcome, UseCaseError> {
         let rendered = render_content(&*self.renderer, &snapshot.content).await?;
-        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        let mut tx = crate::persistence::begin_authorized_write(&self.pool, &actor_id).await?;
         lock_content_relations(&mut tx).await?;
         let row = sqlx::query(&format!(
             "SELECT {POST_COLUMNS} FROM posts WHERE id=$1 FOR UPDATE"
@@ -195,7 +195,7 @@ impl PostgresPostRepository {
             &RevisionContent::post(&edited),
             &ids,
             &retained,
-            actor_id,
+            actor_id.clone(),
             now,
         )
         .await?;
@@ -430,7 +430,7 @@ impl PostRepository for PostgresPostRepository {
     ) -> Result<PostCommitOutcome, UseCaseError> {
         let snapshot = post.snapshot();
         let expected_deleted = snapshot.deleted_at.is_none();
-        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        let mut tx = crate::persistence::begin_authorized_write(&self.pool, &actor_id).await?;
         // 状态转换已由领域决定；存储只保护 CAS 与原回收站状态前提。
         // 不改系列归属/序号，因而不需要取得系列锁，也不覆盖当前标签。
         let updated: Option<(i64,)> = sqlx::query_as(
@@ -493,7 +493,7 @@ impl PostRepository for PostgresPostRepository {
         expected_version: i64,
         actor_id: application::audit::AuditContext,
     ) -> Result<SaveOutcome, UseCaseError> {
-        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        let mut tx = crate::persistence::begin_authorized_write(&self.pool, &actor_id).await?;
         lock_content_relations(&mut tx).await?;
         let row = sqlx::query(&format!(
             "SELECT {POST_COLUMNS} FROM posts WHERE id=$1 FOR UPDATE"
@@ -841,7 +841,7 @@ impl PostgresPageRepository {
     ) -> Result<PageCommitOutcome, UseCaseError> {
         let s = page.snapshot();
         let rendered = render_content(&*self.renderer, &s.content).await?;
-        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        let mut tx = crate::persistence::begin_authorized_write(&self.pool, &actor_id).await?;
         let prior: Option<(i64, String)> = sqlx::query_as(
             "SELECT version, status FROM pages WHERE id=$1 AND deleted_at IS NULL FOR UPDATE",
         )
@@ -884,7 +884,7 @@ impl PostgresPageRepository {
             &RevisionContent::page(&s),
             &rendered.media_ids,
             &retained,
-            actor_id,
+            actor_id.clone(),
             now,
         )
         .await?;
@@ -999,7 +999,7 @@ impl PageRepository for PostgresPageRepository {
     ) -> Result<PageSnapshot, UseCaseError> {
         let s = page.snapshot();
         let rendered = render_content(&*self.renderer, &s.content).await?;
-        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        let mut tx = crate::persistence::begin_authorized_write(&self.pool, &actor_id).await?;
         sqlx::query("INSERT INTO pages (id,title,slug,content,status,visibility,published_at,version,created_at,updated_at,deleted_at,content_html,content_render_version) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)")
             .bind(s.id).bind(&s.title).bind(&s.slug).bind(&s.content).bind(s.status.as_str()).bind(s.visibility.as_str())
             .bind(s.published_at).bind(s.version).bind(s.created_at).bind(s.updated_at).bind(s.deleted_at).bind(&rendered.content_html).bind(rendered.render_version)
@@ -1007,7 +1007,7 @@ impl PageRepository for PostgresPageRepository {
         sync_media_refs(&mut tx, MediaContentKind::Page, s.id, &rendered.media_ids).await?;
         audit_content(
             &mut tx,
-            actor_id,
+            actor_id.clone(),
             "page.create",
             "page",
             s.id,
@@ -1101,7 +1101,7 @@ impl PageRepository for PostgresPageRepository {
     ) -> Result<PageCommitOutcome, UseCaseError> {
         let s = page.snapshot();
         let expected_deleted = s.deleted_at.is_none();
-        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        let mut tx = crate::persistence::begin_authorized_write(&self.pool, &actor_id).await?;
         let updated=sqlx::query("UPDATE pages SET status=$3,deleted_at=$4,updated_at=$5,version=version+1 WHERE id=$1 AND version=$2 AND (deleted_at IS NOT NULL)=$6")
             .bind(s.id).bind(expected_version).bind(s.status.as_str()).bind(s.deleted_at).bind(now).bind(expected_deleted)
             .execute(&mut *tx).await.map_err(map_sqlx_error)?.rows_affected();
@@ -1150,7 +1150,7 @@ impl PageRepository for PostgresPageRepository {
         expected_version: i64,
         actor_id: application::audit::AuditContext,
     ) -> Result<PageDeleteOutcome, UseCaseError> {
-        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        let mut tx = crate::persistence::begin_authorized_write(&self.pool, &actor_id).await?;
         let prior: Option<(i64,)> = sqlx::query_as(
             "SELECT version FROM pages WHERE id=$1 AND deleted_at IS NOT NULL FOR UPDATE",
         )
@@ -1204,7 +1204,7 @@ impl PostgresScheduledPublicationStore {
         self
     }
     pub fn with_task_lease(mut self, lease: application::tasks::TaskLease) -> Self {
-        self.audit = lease.audit;
+        self.audit = lease.audit.clone();
         self.task_lease = Some(lease);
         self
     }
@@ -1213,7 +1213,7 @@ impl PostgresScheduledPublicationStore {
 #[async_trait]
 impl application::publishing::ScheduledPublicationStore for PostgresScheduledPublicationStore {
     async fn publish_batch(&self, now: OffsetDateTime, limit: i64) -> Result<usize, UseCaseError> {
-        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        let mut tx = crate::persistence::begin_authorized_write(&self.pool, &self.audit).await?;
         if let Some(lease) = &self.task_lease {
             if lease.run.kind != application::tasks::TaskKind::PublishDue {
                 return Err(UseCaseError::Invalid("任务租约类型不匹配".into()));
@@ -1244,7 +1244,7 @@ impl application::publishing::ScheduledPublicationStore for PostgresScheduledPub
             for (id, version) in rows {
                 audit_content(
                     &mut tx,
-                    self.audit,
+                    self.audit.clone(),
                     &format!("{kind}.publish_due"),
                     kind,
                     id,

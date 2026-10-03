@@ -134,7 +134,7 @@ pub async fn initialize(
         .execute(&mut *tx)
         .await
         .map_err(database_error)?;
-    crate::persistence::acquire_identity_lock(&mut *tx)
+    crate::persistence::acquire_identity_lock(&mut tx)
         .await
         .map_err(database_error)?;
     // Include content tables: even writes that do not take the identity lock

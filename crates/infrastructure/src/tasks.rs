@@ -349,14 +349,16 @@ impl TaskStore for PostgresTaskStore {
         retry_of: Option<Uuid>,
         context: AuditContext,
     ) -> Result<TaskRun, UseCaseError> {
-        let mut tx = self.database.pool.begin().await.map_err(db)?;
+        let mut tx =
+            crate::persistence::begin_authorized_write(&self.database.pool, &context).await?;
         guard_writes(&mut tx).await?;
         let result = insert_run(&mut tx, kind, run_at, trigger, retry_of, context, true).await?;
         tx.commit().await.map_err(db)?;
         Ok(result)
     }
     async fn retry(&self, id: Uuid, context: AuditContext) -> Result<TaskRun, UseCaseError> {
-        let mut tx = self.database.pool.begin().await.map_err(db)?;
+        let mut tx =
+            crate::persistence::begin_authorized_write(&self.database.pool, &context).await?;
         guard_writes(&mut tx).await?;
         // Terminal status/kind are immutable. Do not lock an old terminal row
         // before the active row: finish/prune lock in the opposite direction.
@@ -391,7 +393,8 @@ impl TaskStore for PostgresTaskStore {
         Ok(result)
     }
     async fn cancel(&self, id: Uuid, context: AuditContext) -> Result<TaskRun, UseCaseError> {
-        let mut tx = self.database.pool.begin().await.map_err(db)?;
+        let mut tx =
+            crate::persistence::begin_authorized_write(&self.database.pool, &context).await?;
         guard_writes(&mut tx).await?;
         let row: Option<(String, String, String)> =
             sqlx::query_as("SELECT kind,status,trigger FROM task_runs WHERE id=$1 FOR UPDATE")
@@ -459,7 +462,8 @@ impl TaskStore for PostgresTaskStore {
         input: TaskScheduleInput,
         context: AuditContext,
     ) -> Result<TaskSchedule, UseCaseError> {
-        let mut tx = self.database.pool.begin().await.map_err(db)?;
+        let mut tx =
+            crate::persistence::begin_authorized_write(&self.database.pool, &context).await?;
         guard_writes(&mut tx).await?;
         let now: OffsetDateTime = sqlx::query_scalar("SELECT clock_timestamp()")
             .fetch_one(&mut *tx)
@@ -554,11 +558,12 @@ impl TaskExecutionStore for PostgresTaskStore {
                 .map(|ip| ip.parse())
                 .transpose()
                 .map_err(|_| UseCaseError::DataCorrupt("任务来源地址无效".into()))?,
+            ..Default::default()
         };
         let run = fetch(&mut tx, id).await?;
         audit(
             &mut tx,
-            audit_context,
+            audit_context.clone(),
             "task.claim",
             id,
             json!({"kind":run.kind.as_str()}),
@@ -619,7 +624,7 @@ impl TaskExecutionStore for PostgresTaskStore {
         if changed {
             audit(
                 &mut tx,
-                lease.audit,
+                lease.audit.clone(),
                 "task.finish",
                 lease.run.id,
                 json!({"kind":lease.run.kind.as_str(),"status":status.as_str()}),

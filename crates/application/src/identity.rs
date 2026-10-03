@@ -317,6 +317,7 @@ pub struct Actor {
     pub channel: ActorChannel,
     permissions: PermissionSet,
     audit_ip: Option<std::net::IpAddr>,
+    authorization: Option<Arc<crate::audit::WriteAuthorization>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -337,6 +338,7 @@ impl Actor {
         crate::audit::AuditContext {
             actor_id: self.audit_actor_id(),
             ip_address: self.audit_ip,
+            authorization: self.authorization.clone(),
         }
     }
     /// 安装/恢复 CLI 的空身份及系统任务不伪造用户外键。
@@ -348,13 +350,27 @@ impl Actor {
         }
     }
 
+    /// Trusted constructor for bootstrap/in-memory adapters. Production identity
+    /// resolution must attach its database snapshot with `with_auth_version`.
     pub fn new(user_id: UserId, channel: ActorChannel, permissions: PermissionSet) -> Self {
         Self {
             user_id,
             channel,
             permissions,
             audit_ip: None,
+            authorization: None,
         }
+    }
+
+    /// Attach the database identity used to authorize this request. Adapters
+    /// revalidate it under the transaction's identity lock before writing.
+    fn with_auth_version(mut self, auth_version: i64) -> Self {
+        self.authorization = Some(Arc::new(crate::audit::WriteAuthorization {
+            auth_version,
+            permissions: self.permissions.clone(),
+            channel: self.channel,
+        }));
+        self
     }
 
     /// 受控 CLI 引导身份：本机 shell 访问等同部署权限，持有全部已注册权限。
@@ -809,7 +825,10 @@ impl UserInteractor {
             return Err(UseCaseError::Forbidden);
         }
         let permissions = self.rbac.permissions_of_user(user.id().0).await?;
-        Ok((Actor::new(user.id(), channel, permissions), version))
+        Ok((
+            Actor::new(user.id(), channel, permissions).with_auth_version(version),
+            version,
+        ))
     }
 
     pub async fn roles_of_user(&self, id: Uuid) -> Result<Vec<String>, UseCaseError> {
@@ -817,17 +836,17 @@ impl UserInteractor {
     }
 
     async fn actor_from_snapshot(&self, snapshot: UserSnapshot) -> Result<Actor, UseCaseError> {
+        let auth_version = snapshot.auth_version;
         let user =
             User::reconstitute(snapshot).map_err(|e| UseCaseError::DataCorrupt(e.to_string()))?;
         if !user.is_active() {
             return Err(UseCaseError::Forbidden);
         }
         let permissions = self.rbac.permissions_of_user(user.id().0).await?;
-        Ok(Actor::new(
-            user.id(),
-            ActorChannel::ControlledCli,
-            permissions,
-        ))
+        Ok(
+            Actor::new(user.id(), ActorChannel::ControlledCli, permissions)
+                .with_auth_version(auth_version),
+        )
     }
 }
 

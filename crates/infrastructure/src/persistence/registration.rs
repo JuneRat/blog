@@ -42,7 +42,7 @@ impl RegistrationStore for PostgresRegistrationStore {
         mut policy: AccessPolicy,
         audit: AuditContext,
     ) -> Result<AccessPolicy, UseCaseError> {
-        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        let mut tx = crate::persistence::begin_authorized_write(&self.pool, &audit).await?;
         crate::locks::acquire(&mut *tx, crate::locks::ACCESS_POLICY, false)
             .await
             .map_err(map_sqlx_error)?;
@@ -66,7 +66,7 @@ impl RegistrationStore for PostgresRegistrationStore {
         audit: AuditContext,
     ) -> Result<(), UseCaseError> {
         let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
-        super::identity::acquire_identity_lock(&mut *tx)
+        super::identity::acquire_identity_lock(&mut tx)
             .await
             .map_err(map_sqlx_error)?;
         crate::locks::acquire(&mut *tx, crate::locks::ACCESS_POLICY, true)

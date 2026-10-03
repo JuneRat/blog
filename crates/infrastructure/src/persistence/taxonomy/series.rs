@@ -60,7 +60,7 @@ impl SeriesRepository for PostgresSeriesRepository {
         actor_id: application::audit::AuditContext,
     ) -> Result<(), UseCaseError> {
         let snapshot = aggregate.snapshot();
-        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        let mut tx = crate::persistence::begin_authorized_write(&self.pool, &actor_id).await?;
         lock_content_relations(&mut tx).await?;
         sqlx::query(
             "INSERT INTO series (id, name, slug, description, cover_media_id, version, created_at, \
@@ -137,7 +137,7 @@ impl SeriesRepository for PostgresSeriesRepository {
     ) -> Result<Option<SeriesWithUsage>, UseCaseError> {
         // name/描述/封面与引用行在同一事务：封面替换时旧图必须同时被释放，
         // 否则会出现「列里已换新图、引用表还占着旧图」的幽灵占用。
-        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        let mut tx = crate::persistence::begin_authorized_write(&self.pool, &actor_id).await?;
         lock_content_relations(&mut tx).await?;
         let row = sqlx::query(
             "UPDATE series s SET name = $3, description = $4, cover_media_id = $5, \
@@ -197,7 +197,7 @@ impl SeriesRepository for PostgresSeriesRepository {
         expected_version: i64,
         actor_id: application::audit::AuditContext,
     ) -> Result<SeriesDeleteOutcome, UseCaseError> {
-        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        let mut tx = crate::persistence::begin_authorized_write(&self.pool, &actor_id).await?;
         lock_content_relations(&mut tx).await?;
         // 关系锁阻止成员并发变化，系列行锁保护版本检查与删除。
         let locked: Option<(i64,)> =
@@ -219,7 +219,7 @@ impl SeriesRepository for PostgresSeriesRepository {
         for (post_id, version) in &affected {
             audit_content(
                 &mut tx,
-                actor_id,
+                actor_id.clone(),
                 "post.series_removed",
                 "post",
                 *post_id,
@@ -285,7 +285,7 @@ impl SeriesRepository for PostgresSeriesRepository {
         ordered_post_ids: &[Uuid],
         actor_id: application::audit::AuditContext,
     ) -> Result<ReorderOutcome, UseCaseError> {
-        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        let mut tx = crate::persistence::begin_authorized_write(&self.pool, &actor_id).await?;
         lock_content_relations(&mut tx).await?;
         let locked: Option<(i64,)> =
             sqlx::query_as("SELECT version FROM series WHERE id = $1 FOR UPDATE")

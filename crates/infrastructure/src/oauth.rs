@@ -568,9 +568,10 @@ impl OAuthConfigStore for PostgresOAuthConfigStore {
             .begin()
             .await
             .map_err(|e| UseCaseError::Repository(e.to_string()))?;
-        crate::persistence::acquire_identity_lock(&mut *tx)
+        crate::persistence::acquire_identity_lock(&mut tx)
             .await
             .map_err(|e| UseCaseError::Repository(e.to_string()))?;
+        crate::persistence::revalidate_write(&mut tx, &audit_actor).await?;
         let before = read_oauth_settings(&mut *tx).await?;
         if before.version != expected_version {
             return Err(UseCaseError::VersionConflict);
@@ -680,9 +681,10 @@ impl OAuthAccountStore for PostgresOAuthAccountStore {
             .begin()
             .await
             .map_err(|e| UseCaseError::Repository(e.to_string()))?;
-        crate::persistence::acquire_identity_lock(&mut *tx)
+        crate::persistence::acquire_identity_lock(&mut tx)
             .await
             .map_err(|e| UseCaseError::Repository(e.to_string()))?;
+        crate::persistence::revalidate_write(&mut tx, &audit_actor).await?;
         // This path also revokes sessions; do not block the KEY SHARE taken by
         // a concurrent session insertion after capacity eviction.
         sqlx::query("SELECT id FROM users WHERE id=$1 AND status='active' AND deleted_at IS NULL FOR NO KEY UPDATE")
@@ -744,9 +746,10 @@ impl OAuthAccountStore for PostgresOAuthAccountStore {
             .await
             .map_err(|e| UseCaseError::Repository(e.to_string()))?;
         // 身份变更走统一排他锁（docs §3 协议）。
-        crate::persistence::acquire_identity_lock(&mut *tx)
+        crate::persistence::acquire_identity_lock(&mut tx)
             .await
             .map_err(|e| UseCaseError::Repository(e.to_string()))?;
+        crate::persistence::revalidate_write(&mut tx, &audit_actor).await?;
 
         let exists: bool = sqlx::query_scalar(
             "SELECT EXISTS (SELECT 1 FROM oauth_accounts WHERE user_id=$1 AND provider=$2 AND subject=$3)",

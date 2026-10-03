@@ -591,7 +591,7 @@ async fn run_business(
                 runtime.rendering.clone(),
                 runtime.rendering.clone(),
             )
-            .with_audit(lease.audit)
+            .with_audit(lease.audit.clone())
             .with_task_lease(lease.clone());
             match HtmlRebuildInteractor::new(Arc::new(store))
                 .run_with_progress(RebuildOptions::default(), &observer)
@@ -625,7 +625,7 @@ async fn run_business(
         TaskKind::PublishDue => {
             let store =
                 infrastructure::PostgresScheduledPublicationStore::new(runtime.pool.clone())
-                    .with_audit(lease.audit)
+                    .with_audit(lease.audit.clone())
                     .with_task_lease(lease.clone());
             let start = std::time::Instant::now();
             let result =

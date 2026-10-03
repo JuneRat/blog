@@ -26,6 +26,7 @@ fn context(actor: Uuid) -> application::audit::AuditContext {
     application::audit::AuditContext {
         actor_id: Some(actor),
         ip_address: Some("2001:db8::42".parse().unwrap()),
+        ..Default::default()
     }
 }
 

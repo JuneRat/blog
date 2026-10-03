@@ -3,7 +3,9 @@
 //! UUID 与业务时间由应用生成；写侧通过条件更新执行乐观并发协议。
 //! 模块内部共享 SQL 错误映射和跨业务使用的媒体引用锁协议。
 
+mod authorization;
 mod connection;
+pub(crate) use authorization::{begin_authorized_write, revalidate_write};
 mod content;
 mod content_queries;
 mod html_rebuild;

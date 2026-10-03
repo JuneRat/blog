@@ -79,7 +79,7 @@ impl RetentionStore for PostgresRetentionStore {
     ) -> Result<RetentionSettings, UseCaseError> {
         validate_days(value.comment_ip_days)?;
         validate_days(value.audit_days)?;
-        let mut tx = self.pool.begin().await.map_err(db)?;
+        let mut tx = crate::persistence::begin_authorized_write(&self.pool, &actor).await?;
         lock(&mut tx, true).await?;
         let (current, mut comments, mut audit) = read(&mut tx).await?;
         if value.comment_version != current.comment_version
@@ -154,7 +154,7 @@ impl PostgresRetentionCleanupStore {
         self
     }
     pub fn with_task_lease(mut self, lease: application::tasks::TaskLease) -> Self {
-        self.audit = lease.audit;
+        self.audit = lease.audit.clone();
         self.task_lease = Some(lease);
         self
     }
@@ -168,7 +168,7 @@ impl application::retention::RetentionCleanupStore for PostgresRetentionCleanupS
         dry_run: bool,
     ) -> Result<application::retention::RetentionBatch, UseCaseError> {
         let mut result = application::retention::RetentionBatch::default();
-        let mut tx = self.pool.begin().await.map_err(db)?;
+        let mut tx = crate::persistence::begin_authorized_write(&self.pool, &self.audit).await?;
         if let Some(lease) = &self.task_lease {
             if lease.run.kind != application::tasks::TaskKind::Retention {
                 return Err(UseCaseError::Invalid("任务租约类型不匹配".into()));

@@ -678,7 +678,8 @@ async fn weak_hash_is_upgraded_on_successful_login() {
         *f.repo.last_password_audit.lock().unwrap(),
         Some(application::audit::AuditContext {
             actor_id: Some(f.user_id),
-            ip_address: Some("198.51.100.42".parse().unwrap())
+            ip_address: Some("198.51.100.42".parse().unwrap()),
+            ..Default::default()
         })
     );
 }
