@@ -3,6 +3,7 @@ import type { MenuProps } from "antd";
 import type { ReactNode } from "react";
 import { lazy, Suspense, useState } from "react";
 import { useAuth } from "../auth";
+import { useColorScheme } from "../providers";
 import { navigate, paths, useRoute } from "../router";
 import type { Route } from "../router";
 import { useLeaveConfirmation } from "../unsaved";
@@ -134,9 +135,14 @@ export function AdminLayout({ children, readerOnly = false }: { children: ReactN
   // 测试里 mock 的 auth 只给 status/me，缺少的字段用可选调用兜住，
   // 免得外壳把整屏带崩（真实 AuthProvider 一定提供这些方法）。
   const { me, logout, logoutError } = useAuth();
+  const { scheme, setScheme } = useColorScheme();
   const confirmLeave = useLeaveConfirmation();
   const [passwordOpen, setPasswordOpen] = useState(false);
   const [avatarOpen, setAvatarOpen] = useState(false);
+
+  const nextScheme = scheme === "auto" ? "light" : scheme === "light" ? "dark" : "auto";
+  const schemeLabel = scheme === "auto" ? "跟随系统" : scheme === "light" ? "浅色模式" : "深色模式";
+  const schemeIcon = scheme === "auto" ? "💻 自动" : scheme === "light" ? "☀️ 浅色" : "🌙 深色";
 
   /**
    * 菜单导航：离开前先过统一的确认口径。
@@ -185,6 +191,16 @@ export function AdminLayout({ children, readerOnly = false }: { children: ReactN
           <Flex gap={12} align="center" wrap style={{ maxWidth: "100%" }}>
             <Button type="link" href="/" target="_blank" style={{ paddingInline: 8 }}>
               查看站点 ↗
+            </Button>
+            <Button
+              type="text"
+              size="small"
+              onClick={() => setScheme(nextScheme)}
+              aria-label={`切换主题外观（当前：${schemeLabel}）`}
+              title={`当前：${schemeLabel}（点击切换）`}
+              style={{ paddingInline: 8 }}
+            >
+              {schemeIcon}
             </Button>
             {/* 头像入口：显示当前头像，点击直接打开自助更换弹窗。 */}
             <Button

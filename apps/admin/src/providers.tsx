@@ -1,9 +1,27 @@
 import { QueryClientProvider } from "@tanstack/react-query";
 import { App as AntdApp, ConfigProvider, theme as antdTheme } from "antd";
 import zhCN from "antd/locale/zh_CN";
-import { useEffect, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import { createQueryClient } from "./queryClient";
 import type { ReactNode } from "react";
+
+export type ColorScheme = "auto" | "light" | "dark";
+
+interface ColorSchemeContextValue {
+  scheme: ColorScheme;
+  setScheme: (scheme: ColorScheme) => void;
+  isDark: boolean;
+}
+
+export const ColorSchemeContext = createContext<ColorSchemeContextValue>({
+  scheme: "auto",
+  setScheme: () => {},
+  isDark: false,
+});
+
+export function useColorScheme(): ColorSchemeContextValue {
+  return useContext(ColorSchemeContext);
+}
 
 /**
  * 后台的设计语言集中在这里。
@@ -30,7 +48,7 @@ function prefersDark(): boolean {
   return window.matchMedia(DARK_QUERY).matches;
 }
 
-/** 跟随系统深浅色：与迁移前 `color-scheme: light dark` 的表现一致（没有手动开关）。 */
+/** 自动外观持续跟随系统；手动选择时仍保留最新的系统状态。 */
 export function useSystemDark(): boolean {
   const [dark, setDark] = useState(prefersDark);
   useEffect(() => {
@@ -53,25 +71,46 @@ export function useSystemDark(): boolean {
  *   （`Modal.confirm` 等）不消费 ConfigProvider，主题和中文 locale 都不生效。
  */
 export function AdminProviders({ children }: { children: ReactNode }) {
-  const dark = useSystemDark();
+  const systemDark = useSystemDark();
+  const [scheme, setSchemeState] = useState<ColorScheme>(() => {
+    if (typeof window === "undefined") return "auto";
+    try {
+      const saved = window.localStorage.getItem("admin_color_scheme");
+      return saved === "light" || saved === "dark" || saved === "auto" ? saved : "auto";
+    } catch {
+      return "auto";
+    }
+  });
+
+  const setScheme = useCallback((next: ColorScheme) => {
+    setSchemeState(next);
+    try {
+      window.localStorage?.setItem("admin_color_scheme", next);
+    } catch {}
+  }, []);
+
+  const isDark = scheme === "dark" ? true : scheme === "light" ? false : systemDark;
+
   // 惰性创建：每次挂载一个 client（测试因此天然隔离），而不是模块级单例。
   const [queryClient] = useState(createQueryClient);
   useEffect(() => () => queryClient.clear(), [queryClient]);
   return (
-    <ConfigProvider
-      locale={zhCN}
-      // antd 默认会在「默认类型」的两字中文按钮里插入空格（保存 → 保 存），
-      // 而 text/link 按钮不插。同类按钮文案不一致，也会让按无障碍名定位的测试
-      // 时灵时不灵；后台按钮密度高，统一不插空格更好排版。
-      button={{ autoInsertSpace: false }}
-      theme={{
-        algorithm: dark ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm,
-        token: ADMIN_TOKENS,
-      }}
-    >
-      <QueryClientProvider client={queryClient}>
-        <AntdApp>{children}</AntdApp>
-      </QueryClientProvider>
-    </ConfigProvider>
+    <ColorSchemeContext.Provider value={{ scheme, setScheme, isDark }}>
+      <ConfigProvider
+        locale={zhCN}
+        // antd 默认会在「默认类型」的两字中文按钮里插入空格（保存 → 保 存），
+        // 而 text/link 按钮不插。同类按钮文案不一致，也会让按无障碍名定位的测试
+        // 时灵时不灵；后台按钮密度高，统一不插空格更好排版。
+        button={{ autoInsertSpace: false }}
+        theme={{
+          algorithm: isDark ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm,
+          token: ADMIN_TOKENS,
+        }}
+      >
+        <QueryClientProvider client={queryClient}>
+          <AntdApp>{children}</AntdApp>
+        </QueryClientProvider>
+      </ConfigProvider>
+    </ColorSchemeContext.Provider>
   );
 }

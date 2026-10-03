@@ -69,6 +69,7 @@ export default class FakeVditor {
   setValue(value: string) { this.vditor.sv.element.value = value; this.vditor.ir.element.textContent = value; }
   getValue() { return this.mode === "sv" ? this.vditor.sv.element.value : (this.vditor.ir.element.textContent ?? ""); }
   getCurrentMode() { return this.mode; }
+  setTheme(theme: string) { this.vditor.element.classList.toggle("vditor--dark", theme === "dark"); }
   setPreviewMode(mode: string) { this.vditor.preview.element.style.display = mode === "both" ? "block" : "none"; }
   enable() { this.vditor.sv.element.disabled = false; this.vditor.ir.element.contentEditable = "true"; }
   disabled() { this.vditor.sv.element.disabled = true; this.vditor.ir.element.contentEditable = "false"; }

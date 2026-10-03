@@ -118,6 +118,7 @@ export function PostMetadataFields({
       ))}
       <Form.Item label="标签" name="tagIds">
         <Checkbox.Group
+          style={{ maxHeight: 240, overflowY: "auto", display: "flex", flexDirection: "column", gap: 4 }}
           options={(catalog ?? []).map((tag) => ({
             label: tag.name,
             value: tag.id,

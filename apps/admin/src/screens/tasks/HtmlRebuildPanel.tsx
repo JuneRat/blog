@@ -47,7 +47,7 @@ export function HtmlRebuildPanel({ available, pending, run, busy, onStart, onRet
     <Table pagination={false} size="small" style={{ marginBottom: 16 }}
       dataSource={rows.map(row => ({ ...row, pending: pending?.[row.key] ?? "—", rebuilt: progress?.rebuilt[row.key] ?? "—", skipped: progress?.skipped[row.key] ?? "—" }))}
       columns={[{ title: "内容类型", dataIndex: "label" }, { title: "待重建", dataIndex: "pending" }, { title: "本轮已重建", dataIndex: "rebuilt" }, { title: "本轮跳过", dataIndex: "skipped" }]} />
-    <Space direction="vertical" size={12}>
+    <Space orientation="vertical" size={12}>
       <Radio.Group aria-label="重建执行方式" value={mode} disabled={busy || active || !available} onChange={event => changeMode(event.target.value as "now" | "once")}
         options={[{ value: "now", label: "立即执行" }, { value: "once", label: "一次性计划" }]} />
       {mode === "once" && <>

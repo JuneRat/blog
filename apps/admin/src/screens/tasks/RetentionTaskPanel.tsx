@@ -53,7 +53,7 @@ export function RetentionTaskPanel({ schedule, run, available, retentionAvailabl
     <Button disabled={!available || !retentionAvailable || busy || run !== null && activeTask(run.status)} onClick={() => { void onStart(); }}>立即清理</Button>
     <Typography.Title level={5}>周期计划</Typography.Title>
     {schedule && <Typography.Paragraph type="secondary">当前计划：{schedule.enabled ? "已启用" : "已停止"}。{schedule.next_run_at && <>下次执行：{formatDateTime(schedule.next_run_at, timeZone)}。</>}</Typography.Paragraph>}
-    <Space direction="vertical" size={12}>
+    <Space orientation="vertical" size={12}>
       <Checkbox checked={fields.enabled} disabled={!available || busy || !retentionAvailable && !fields.enabled} onChange={event => setFields(current => ({ ...current, enabled: event.target.checked }))}>启用周期清理</Checkbox>
       <Space><Typography.Text>间隔（小时）</Typography.Text><InputNumber aria-label="清理间隔（小时）" min={1} max={720} value={fields.hours} disabled={!available || !retentionAvailable || busy} onChange={hours => setFields(current => ({ ...current, hours }))} /></Space>
       <Input aria-label={`首次清理时间（${timeZone}）`} type="datetime-local" value={fields.at} disabled={!available || !retentionAvailable || busy} onChange={event => setFields(current => ({ ...current, at: event.target.value }))} style={{ width: 260 }} />

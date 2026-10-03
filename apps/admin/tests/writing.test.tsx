@@ -235,8 +235,9 @@ describe("写作恢复与发布边界", () => {
     const update = kind === "post" ? vi.mocked(postsApi.updatePost) : vi.mocked(pagesApi.updatePage);
     update.mockResolvedValue({ ...post, content: "**服务器正文**", version: 2 });
     render(editor(kind)); await screen.findByDisplayValue(page.content);
+    await waitFor(() => expect(content().className).toContain("vditor-sv"));
     content().setSelectionRange(0, page.content.length);
-    fireEvent.click(screen.getByRole("button", { name: "粗体" }));
+    fireEvent.click(await screen.findByRole("button", { name: "粗体" }));
     expect(content().value).toBe("**服务器正文**");
     expect(update).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "保存草稿" }));

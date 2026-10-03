@@ -65,7 +65,7 @@ function PageEditor({ id }: { id: string | null }) {
       <Flex justify="space-between" align="center" wrap gap={12} style={{ marginBottom: 16 }}>
         <Flex align="center" gap={8}>
           <Typography.Title level={3} style={{ margin: 0 }}>
-            {id === null ? "新建页面" : view.slug}
+            {id === null ? "新建页面" : (view.title || view.slug)}
           </Typography.Title>
           <Tag color={published ? "green" : undefined}>{statusLabel(pageStatus)}</Tag>
           {version !== null && <Typography.Text type="secondary">v{version}</Typography.Text>}

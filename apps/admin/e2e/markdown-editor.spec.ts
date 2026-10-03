@@ -96,6 +96,23 @@ for (const kind of ["posts", "pages"]) {
     const imageDialog = page.getByRole("dialog", { name: "插入图片", exact: true });
     await expect(imageButton).toHaveCount(1);
     await expect(toolbar.locator('[data-type="upload"], [data-type="media-library"]')).toHaveCount(0);
+    // Manual appearance follows the editor without replacing its source DOM.
+    await page.getByRole("button", { name: "切换主题外观（当前：跟随系统）" }).click();
+    await page.getByRole("button", { name: "切换主题外观（当前：浅色模式）" }).click();
+    await expect(page.locator(".markdown-editor-vditor")).toHaveClass(/vditor--dark/);
+    await expect(body).toHaveValue(source);
+    await page.getByRole("button", { name: "切换主题外观（当前：深色模式）" }).click();
+    // The media dialog must remain above the fullscreen editor and accept clicks.
+    await page.getByRole("button", { name: "全屏写作", exact: true }).click();
+    await expect(page.locator(".markdown-editor--fullscreen")).toBeInViewport({ ratio: 0.99 });
+    await imageButton.click();
+    await imageDialog.getByLabel("搜索图片").fill("editor");
+    await page.keyboard.press("Escape");
+    await expect(imageDialog).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "退出全屏", exact: true })).toBeVisible();
+    await body.press("Escape");
+    await expect(page.locator(".markdown-editor--fullscreen")).toHaveCount(0);
+    await expect(body).toHaveValue(source);
     // Opening from the initial viewport must show the picker without scrolling past the editor.
     await imageButton.click();
     await expect(imageDialog).toBeInViewport({ ratio: 0.95 });

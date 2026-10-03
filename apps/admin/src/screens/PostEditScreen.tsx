@@ -68,7 +68,7 @@ function PostEditor({ id }: { id: string | null }) {
         >
           <Flex align="center" gap={8}>
             <Typography.Title level={3} style={{ margin: 0 }}>
-              {id === null ? "新建草稿" : view.slug}
+              {id === null ? "新建草稿" : (view.title || view.slug)}
             </Typography.Title>
             <Tag color={postStatus === "published" ? "green" : undefined}>
               {statusLabel(postStatus)}

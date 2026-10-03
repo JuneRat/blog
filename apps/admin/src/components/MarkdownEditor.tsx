@@ -6,6 +6,8 @@ import type { MarkdownEditorHandle, EditorImage } from "./editorHandle";
 import { linkEditorScroll } from "./editorScroll";
 import { editorCdn, loadVditor } from "./vditorRuntime";
 import { insertImageMarkdown } from "../media";
+import { codePointLength } from "../text";
+import { useColorScheme } from "../providers";
 import "vditor/dist/index.css";
 import "./markdownEditor.css";
 
@@ -29,11 +31,13 @@ interface MarkdownEditorProps extends AriaAttributes {
 export function MarkdownEditor(props: MarkdownEditorProps) {
   const { id, value = "", disabled, editorScope, contentRef } = props;
   const { token } = theme.useToken();
+  const { isDark } = useColorScheme();
   const screens = Grid.useBreakpoint();
   const [mode, setMode] = useState<Mode>("split");
   const effectiveMode = !screens.md && mode === "split" ? "source" : mode;
   const [composing, setComposing] = useState(false);
   const [ready, setReady] = useState(false);
+  const [fullscreen, setFullscreen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [retry, setRetry] = useState(0);
   const host = useRef<HTMLDivElement>(null);
@@ -46,6 +50,17 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
   const observed = useRef("");
   const applied = useRef("");
   const scope = useRef(editorScope);
+
+  useEffect(() => {
+    if (ready) editor.current?.setTheme(isDark ? "dark" : "classic", isDark ? "dark" : "light");
+  }, [ready, isDark]);
+
+  useEffect(() => {
+    if (!fullscreen) return;
+    const overflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = overflow; };
+  }, [fullscreen]);
 
   function publish() {
     const instance = editor.current;
@@ -228,14 +243,30 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
     if (!latest.current.disabled) void latest.current.onInsertFiles?.(list);
   }
 
-  return <div className="markdown-editor" data-mode={effectiveMode} style={{
+  const charCount = codePointLength(value);
+  const readingMinutes = Math.max(1, Math.ceil(charCount / 400));
+
+  return <div className={`markdown-editor${fullscreen ? " markdown-editor--fullscreen" : ""}`} data-mode={effectiveMode}
+    onKeyDown={event => {
+      if (event.key === "Escape" && fullscreen && !composing && !event.nativeEvent.isComposing && !props.mediaOpen) {
+        event.preventDefault(); event.stopPropagation(); setFullscreen(false);
+      }
+    }} style={{
     "--editor-border": token.colorBorderSecondary, "--editor-surface": token.colorBgContainer,
-    borderRadius: token.borderRadiusLG,
+    borderRadius: fullscreen ? 0 : token.borderRadiusLG,
   } as CSSProperties}>
     <Flex className="markdown-editor-toolbar" gap={8} wrap justify="space-between" align="center">
       <Segmented<Mode> size="small" aria-label="编辑器视图" value={effectiveMode} disabled={!ready || composing}
         options={[{ value: "ir", label: "即时渲染" }, ...(screens.md ? [{ value: "split" as const, label: "双栏" }] : []), { value: "source", label: "源码" }]}
         onChange={next => { publish(); setMode(next); }} />
+      <Flex gap={12} align="center">
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          {charCount > 0 ? `${charCount} 字 · 预计 ${readingMinutes} 分钟` : "0 字"}
+        </Typography.Text>
+        <Button size="small" type="text" onClick={() => setFullscreen(f => !f)} aria-label={fullscreen ? "退出全屏" : "全屏写作"}>
+          {fullscreen ? "退出全屏" : "全屏写作"}
+        </Button>
+      </Flex>
     </Flex>
     {error && <Alert type="warning" showIcon title={error} action={<Button size="small" onClick={() => setRetry(n => n + 1)}>重试</Button>} />}
     <div className="markdown-editor-workspace" onPasteCapture={files} onDropCapture={files}
@@ -256,8 +287,8 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
       </div>}
       <div ref={host} className="markdown-editor-vditor" hidden={!ready} />
     </div>
-    <div className="markdown-editor-footer"><Typography.Text type="secondary">
+    <div className="markdown-editor-footer"><Flex justify="space-between" align="center"><Typography.Text type="secondary">
       {effectiveMode === "split" ? "双栏滚动联动。" : ""}保存后才会修改内容。
-    </Typography.Text></div>
+    </Typography.Text><Typography.Text type="secondary" style={{ fontSize: 11 }}>Markdown · KaTeX · Mermaid</Typography.Text></Flex></div>
   </div>;
 }

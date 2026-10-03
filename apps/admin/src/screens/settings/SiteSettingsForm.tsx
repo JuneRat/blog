@@ -320,7 +320,7 @@ export function SiteSettingsForm({ onDirtyChange }: { onDirtyChange: (dirty: boo
               rules={[{ required: true, type: "integer", min: 1, max: 100, message: "请输入 1–100 的整数。" }]}>
               <InputNumber min={1} max={100} precision={0} />
             </Form.Item>
-            <Form.Item name="navigation" label="页面导航"><NavigationEditor /></Form.Item>
+            <Form.Item name="navigation" label="页面导航"><NavigationEditor canReadPages={me?.permissions.includes("page.read") ?? false} /></Form.Item>
             {conflict === null && (
               // 用文案切换而不是 Button 的 loading：见 PostEditScreen 的同名说明。
               <Button type="primary" htmlType="submit" disabled={busy}>

@@ -255,7 +255,7 @@ export function ThemeManagementScreen() {
             <Typography.Paragraph type="secondary">
               ZIP 根目录包含 theme.json、templates 和 assets，也可以放在一个顶层主题目录内。最大 10 MiB。
             </Typography.Paragraph>
-            <Space direction="vertical" style={{ width: "100%" }}>
+            <Space orientation="vertical" style={{ width: "100%" }}>
               <Space wrap>
                 <Button disabled={controlsBusy} onClick={() => fileInput.current?.click()}>选择主题包</Button>
                 <Typography.Text type="secondary">{packageFile?.name ?? "未选择主题包"}</Typography.Text>

@@ -22,3 +22,19 @@
   .markdown-editor .vditor-toolbar { flex-wrap: wrap; }
   .markdown-editor .vditor-hint { max-width: min(300px, 80vw); }
 }
+.markdown-editor--fullscreen {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100dvh;
+  /* Below Ant Design dialogs so the media picker remains interactive. */
+  z-index: 900;
+  border: 0;
+  display: flex;
+  flex-direction: column;
+}
+.markdown-editor--fullscreen .markdown-editor-workspace {
+  flex: 1 1 0%;
+  height: auto;
+  min-height: 0;
+}

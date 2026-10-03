@@ -44,4 +44,23 @@ describe("Vditor 表单边界", () => {
     expect(input().disabled).toBe(false);
     expect(input().value).toBe("正文");
   });
+
+  it("全屏退出和卸载恢复页面滚动，输入法 Escape 不丢失写作状态", async () => {
+    const mounted = render(<Editor initial="尚未保存的正文" />); await ready();
+    const original = input();
+    fireEvent.click(screen.getByRole("button", { name: "全屏写作" }));
+    expect(document.body.style.overflow).toBe("hidden");
+    fireEvent.compositionStart(input());
+    fireEvent.keyDown(input(), { key: "Escape", isComposing: true });
+    expect(screen.getByRole("button", { name: "退出全屏" })).toBeTruthy();
+    fireEvent.compositionEnd(input());
+    fireEvent.keyDown(input(), { key: "Escape" });
+    expect(screen.getByRole("button", { name: "全屏写作" })).toBeTruthy();
+    expect(input()).toBe(original);
+    expect(input().value).toBe("尚未保存的正文");
+    expect(document.body.style.overflow).toBe("");
+    fireEvent.click(screen.getByRole("button", { name: "全屏写作" }));
+    mounted.unmount();
+    expect(document.body.style.overflow).toBe("");
+  });
 });
