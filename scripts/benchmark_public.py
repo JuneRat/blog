@@ -121,22 +121,27 @@ class MixedWriter:
         require(result["ordered_post_ids"] == order, "reorder response does not match submitted order")
 
 
-def measure_write(operation, samples):
+def measure_write(operation, samples, *, raise_errors=False):
     started = time.perf_counter()
     status = 200
     error_type = None
     try:
-        operation()
+        return operation()
     except AcceptanceError as error:
         match = re.search(r": HTTP ([1-5]\d{2})(?:[ ,]|$)", str(error))
         status = int(match.group(1)) if match else 0
         error_type = (f"http_{status}" if match else "transport" if str(error).endswith(": connection failed")
                       else "contract_validation")
+        if raise_errors:
+            raise
     except (OSError, ValueError, KeyError, TypeError) as error:
         status = 0
         # Preserve the safe exception class, never its potentially private payload.
         error_type = type(error).__name__
-    samples.add(status, time.perf_counter() - started, error_type)
+        if raise_errors:
+            raise
+    finally:
+        samples.add(status, time.perf_counter() - started, error_type)
 
 
 class ReadConnection:

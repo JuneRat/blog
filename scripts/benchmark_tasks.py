@@ -25,7 +25,8 @@ import time
 import uuid
 
 from acceptance_support import API, AcceptanceError, Client, SiteScenario, require
-from benchmark_public import MixedWriter, Samples, load, measurement_passed
+from benchmark_public import Samples, load, measurement_passed
+from benchmark_writing import RevisionWriter, writing_summary
 from compose_recovery import dotenv
 
 PROJECT = Path(__file__).resolve().parents[1]
@@ -129,7 +130,7 @@ class ComposeSite(SiteScenario):
         self.query("UPDATE comments SET ip_address='192.0.2.11' WHERE author_name='Capacity seed'")
         ids = self.query("SELECT id FROM posts ORDER BY (slug<>'capacity-post'),slug "
                          f"LIMIT {self.args.writers}").splitlines()
-        return [MixedWriter(self.admin.clone(), item, post["content"]) for item in ids]
+        return [RevisionWriter(self.admin.clone(), self.guest.clone(), item, post["content"]) for item in ids]
 
 
 def metric_values(body):
@@ -312,6 +313,7 @@ def validate(args):
     require(2 <= args.posts <= 100000 and 1 <= args.writers <= min(32, args.posts), "invalid post/writer count")
     require(math.isfinite(args.duration) and 5 <= args.duration <= 3600, "duration must be 5..3600 seconds per measurement")
     require(10 <= args.write_interval_ms <= 60000, "write interval must be 10..60000 ms")
+    require(26 <= args.minimum_writing_cycles <= 10000, "minimum writing cycles must be 26..10000 to exercise history pruning")
     require(math.isfinite(args.connection_lifetime_seconds) and 0 < args.connection_lifetime_seconds <= 240,
             "connection lifetime must be positive and at most 240 seconds (server default age is 300)")
     require(5 <= args.task_interval <= 600 and 1 <= args.scheduled_per_cycle <= 1000, "invalid background fixture cadence")
@@ -328,6 +330,14 @@ def failed_checks(row, args):
               "monitor_errors": row["monitor"]["errors"] == 0,
               "scheduler_unavailable": row["monitor"]["metrics"].get("blog_task_scheduler_available", {}).get("last") == 1,
               "background_validation": "background_error" not in row}
+    writing = row.get("writing", {})
+    cycles = writing.get("completed_cycles_per_writer", [])
+    checks["writing_cycles"] = (len(cycles) == args.writers
+                                and all(value >= args.minimum_writing_cycles for value in cycles))
+    checks["writing_integrity"] = ("writing_error" not in row
+                                   and len(writing.get("verification", [])) == args.writers)
+    checks["writing_phase_errors"] = bool(writing.get("phases")) and all(
+        phase["errors"] == 0 for phase in writing.get("phases", {}).values())
     errors = row["monitor"]["metrics"].get('blog_task_scheduler_checks_total{result="error"}', {})
     checks["scheduler_errors"] = errors.get("last", 0) == errors.get("first", 0)
     if "background" in row and "background_error" not in row:
@@ -382,6 +392,13 @@ def measure(args, root, pool, tasks):
             except Exception as error:
                 row["background"] = background.result
                 row["background_error"] = str(error) if isinstance(error, AcceptanceError) else "background " + type(error).__name__
+        row["writing"] = writing_summary(writers)
+        row["writing"]["verification"] = []
+        try:
+            for writer in writers:
+                row["writing"]["verification"].append(writer.finish(site.query, args.minimum_writing_cycles))
+        except Exception as error:
+            row["writing_error"] = str(error) if isinstance(error, AcceptanceError) else "writing " + type(error).__name__
         # Include terminal counters after draining; peaks during the measured
         # interval still come from the five-second sampling loop above.
         try:
@@ -406,6 +423,8 @@ def main():
     parser.add_argument("--writers", type=int, default=4)
     parser.add_argument("--duration", type=float, default=300)
     parser.add_argument("--write-interval-ms", type=int, default=250)
+    parser.add_argument("--minimum-writing-cycles", type=int, default=30,
+                        help="minimum full cycles per writer, at least 26 to exercise the 50-revision bound")
     parser.add_argument("--connection-lifetime-seconds", type=float, default=60)
     parser.add_argument("--task-interval", type=int, default=15)
     parser.add_argument("--scheduled-per-cycle", type=int, default=16)
@@ -414,11 +433,15 @@ def main():
     parser.add_argument("--publication-delay-seconds", type=float, default=45)
     parser.add_argument("--report", type=Path, required=True)
     args = parser.parse_args()
-    report = {"format": 1, "status": "failed", "started_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+    report = {"format": 2, "status": "failed", "started_at": dt.datetime.now(dt.timezone.utc).isoformat(),
               "cpu_count": os.cpu_count(), "image": args.image,
+              "python_version": platform.python_version(), "python_implementation": platform.python_implementation(),
               "workload": {key: value for key, value in vars(args).items() if key not in ("report", "image")},
               "measurements": [], "runner_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
               "load_runner_sha256": hashlib.sha256((PROJECT / "scripts/benchmark_public.py").read_bytes()).hexdigest(),
+              "support_sha256": {name: hashlib.sha256((PROJECT / name).read_bytes()).hexdigest() for name in
+                                 ("scripts/benchmark_writing.py", "scripts/acceptance_support.py",
+                                  "scripts/compose_recovery.py", "compose.yaml", "ops/postgres-init.sh")},
               "threshold_scope": "local regression gates, not production SLA; CAS conflicts counted separately"}
     try:
         require(not args.report.exists(), "report exists; choose a new path")
@@ -430,6 +453,11 @@ def main():
         info = json.loads(metadata.stdout)
         report["image_metadata"] = {"id": info["Id"], "os": info["Os"], "architecture": info["Architecture"],
                                     "revision": info["Config"]["Labels"].get("org.opencontainers.image.revision")}
+        if args.expected_revision:
+            require(report["image_metadata"]["revision"] == args.expected_revision,
+                    "image label differs from expected revision")
+        # All groups use the inspected immutable image, even if its tag moves.
+        args.image = info["Id"]
         with tempfile.TemporaryDirectory(prefix="blog-task-capacity-") as temporary:
             for pool in args.pool_sizes:
                 for tasks in (False, True):
@@ -443,6 +471,7 @@ def main():
         report["error"] = str(error) if isinstance(error, AcceptanceError) else "interrupted"
     except Exception as error:
         report["error"] = "unexpected " + type(error).__name__
+    report["finished_at"] = dt.datetime.now(dt.timezone.utc).isoformat()
     try:
         with args.report.open("x") as output:
             json.dump(report, output, ensure_ascii=False, indent=2)
