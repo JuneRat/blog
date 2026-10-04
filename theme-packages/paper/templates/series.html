@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="series-page">
+  <h1>{{ series.series_name }}</h1>
+  {% if series.cover_url %}<img class="series-cover" src="{{ series.cover_url | url }}" alt="{{ series.series_name }}">{% endif %}
+  {% if series.posts %}
+  <ol class="post-list series-list">
+    {% for post in series.posts %}
+    <li class="post-item" value="{{ post.index }}">
+      <h2><a href="{{ post.url | url }}">{{ post.title }}</a></h2>
+      {% if post.excerpt %}<p class="excerpt">{{ post.excerpt }}</p>{% endif %}
+      <p class="meta">
+        <time>{{ post.published_at }}</time>
+        <span class="author">{% if post.author_avatar_url %}<img class="avatar" src="{{ post.author_avatar_url | url }}" alt="">{% endif %}{{ post.author_display }}</span>
+      </p>
+    </li>
+    {% endfor %}
+  </ol>
+  {% else %}
+  <p class="empty">这个系列下还没有公开文章。</p>
+  {% endif %}
+  {% if series.total_pages > 1 or series.page > 1 %}
+  <nav class="pagination">
+    {% if series.page > 1 %}<a class="pagination-prev" href="/series/{{ series.series_slug }}?page={{ series.page - 1 }}">上一页</a>{% endif %}
+    <span class="pagination-state">第 {{ series.page }} / {{ series.total_pages }} 页</span>
+    {% if series.page < series.total_pages %}<a class="pagination-next" href="/series/{{ series.series_slug }}?page={{ series.page + 1 }}">下一页</a>{% endif %}
+  </nav>
+  {% endif %}
+</section>
+{% endblock %}

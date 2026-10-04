@@ -1,0 +1,22 @@
+{
+  "revision": "e610be9625a276b11885ea73b4e202de5b9d575c",
+  "source_archive_sha256": "76464b3b89c34e678313836a78623ecde61d6d2cafcea6141ddf3a32f3ccf364",
+  "started_at": "2026-10-03T15:19:01.272077+00:00",
+  "directory": "/tmp/blog-container-smtp-release-h849hzrc",
+  "images": {
+    "application": {
+      "name": "codex-blog-release:e610be9625a2",
+      "id": "sha256:d6eab006dbc274da91aecd76bdcf1b88e5ce1dc1676214929f6762164384cd7c",
+      "architecture": "arm64",
+      "revision": "e610be9625a276b11885ea73b4e202de5b9d575c"
+    },
+    "ops": {
+      "name": "codex-blog-release:e610be9625a2-ops",
+      "id": "sha256:5e16d6ec081a436c43f6169283a0d1a4479958fdf293f47dbbb63b569fdee704",
+      "architecture": "arm64",
+      "revision": "e610be9625a276b11885ea73b4e202de5b9d575c"
+    }
+  },
+  "status": "passed",
+  "finished_at": "2026-10-03T15:20:31.487128+00:00"
+}

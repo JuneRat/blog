@@ -1,0 +1,195 @@
+{
+  "format": 1,
+  "status": "passed",
+  "started_at": "2026-10-03T08:14:25.655978+00:00",
+  "steps": [
+    {
+      "name": "fresh database",
+      "status": "passed",
+      "seconds": 0.664
+    },
+    {
+      "name": "first-run installation",
+      "status": "passed",
+      "seconds": 3.149
+    },
+    {
+      "name": "identity and persistent sessions",
+      "status": "passed",
+      "seconds": 2.389
+    },
+    {
+      "name": "production browser writing and tasks",
+      "status": "passed",
+      "seconds": 68.201
+    },
+    {
+      "name": "SMTP invitation, recovery and revocation",
+      "status": "passed",
+      "seconds": 62.392
+    },
+    {
+      "name": "media, taxonomy and writing",
+      "status": "passed",
+      "seconds": 0.949
+    },
+    {
+      "name": "published editing drafts and revision restoration",
+      "status": "passed",
+      "seconds": 0.391
+    },
+    {
+      "name": "theme preview, upgrade and rollback",
+      "status": "passed",
+      "seconds": 0.622
+    },
+    {
+      "name": "content and media trash",
+      "status": "passed",
+      "seconds": 0.173
+    },
+    {
+      "name": "nested comments and moderation",
+      "status": "passed",
+      "seconds": 0.199
+    },
+    {
+      "name": "persistent tasks, retry, periodic retention and publication",
+      "status": "passed",
+      "seconds": 6.597
+    },
+    {
+      "name": "scheduled publication and writer shutdown",
+      "status": "passed",
+      "seconds": 0.065
+    },
+    {
+      "name": "backup and isolated restore",
+      "status": "passed",
+      "seconds": 3.457
+    },
+    {
+      "name": "isolated HTTP verification",
+      "status": "passed",
+      "seconds": 6.358
+    },
+    {
+      "name": "release and recovered site",
+      "status": "passed",
+      "seconds": 20.634
+    },
+    {
+      "name": "cleanup",
+      "status": "passed",
+      "seconds": 1.584
+    }
+  ],
+  "evidence": {
+    "server_sha256": "27ae0006a13f154f81ae24426337162deaa30ae4564870a7bcd62ee52efa5faf",
+    "admin_entry_sha256": "0b85a3c2dc619a4f7846af392092f933f0ff9efc505532d5777ed4a815238f1a",
+    "scenarios_sha256": "eb9db20f33f6a55ed0ac6bf79d9b6a511e73ae566ea46c60180d2a8000f02c65",
+    "smtp_runner_sha256": "7a19e7d9ef888f3d41640b91760223ee760b6300a49118ad72ddcc17298c09e4",
+    "runner_sha256": "60f3db3c76b8f8206e80fdc6b874cef65a97fd034dc94ce9901973c31b4547db",
+    "smtp": {
+      "transport": "loopback SMTP sink",
+      "deliveries": 2,
+      "invitation_replay_rejected": true,
+      "old_session_revoked": true
+    },
+    "task_lifecycle": {
+      "cancelled_id": "01a100d6-458e-7141-8a57-abccdfa9b42a",
+      "restarted_queue_id": "01a100d6-45e3-7401-af05-f85aae18fb76",
+      "failed_id": "01a100d6-4d5c-771d-b6b4-02da056c53ab",
+      "retry_id": "01a100d6-4ed1-7368-98a9-f28e7e2df2f9",
+      "retention_id": "01a100d6-5599-72e8-8bb0-debdb7407397",
+      "publication_id": "01a100d6-5d62-776d-89f3-0efa7a5ff2b3",
+      "test_clock_advanced": true
+    },
+    "schema": "blog-postgres-0010-content-revisions",
+    "migrations": [
+      {
+        "version": 1,
+        "checksum": "37e7a5cb07b483990436f88bcaab81fa96c8d8bc210130b3322cb16724671531cd3c86b95d84f415060a57e7caf1c0a4"
+      },
+      {
+        "version": 2,
+        "checksum": "ab5c19a56f489afa5f2ac30704b49e0b7277f2443d11e8513691cecfc1bf5f029e458adbf0b299024b6c89879855bee9"
+      },
+      {
+        "version": 3,
+        "checksum": "7f67ad83363c131f54e042628c146a4af1da1d7c7309d2159eb41e51011d87032aa70e0544fc41da6e2e754da522d185"
+      },
+      {
+        "version": 4,
+        "checksum": "4c019801f7a5d532630f22d742853946252c072b18c19c27e72e23e8c96cbcda1096d8b62b489750573c214029063681"
+      },
+      {
+        "version": 5,
+        "checksum": "eda909f18428745430291aed3ff9d7a5a503dbebcce44a4a87122ec71fa50fa037d92e5e7d2d1cb02769d4b5727af694"
+      },
+      {
+        "version": 6,
+        "checksum": "5384fab741cc094bb987fd73d40bb488bcf23819082769cdfd9a73ac88cbf93fc68500b013b71c1baded0fab8a332fc5"
+      },
+      {
+        "version": 7,
+        "checksum": "7c65349eb430e7f1dd6a7f18c90364b77585778c4fcc81776ebfc2aa199a2a766b58a062598b269e3386f6b18d99d927"
+      },
+      {
+        "version": 8,
+        "checksum": "cffd6913f7b66783e4a187f0b491a74dfece5ec648a73384250d61f56590d254d4fd43544359fc32accd0157a3aedfda"
+      },
+      {
+        "version": 9,
+        "checksum": "40a10bdec76dea2438df66b2e9a74896cf5856b768d062cd63631717f214081763d743787f53049877ad8eaae29247f2"
+      },
+      {
+        "version": 10,
+        "checksum": "d800ad44574eef275454415331c2d43e165db08ef75381d8299cf3747c45aab471bf4b197e77f895866a8864b7718d18"
+      }
+    ],
+    "backup_counts": {
+      "tags": 1,
+      "media": 1,
+      "pages": 4,
+      "posts": 11,
+      "roles": 4,
+      "users": 2,
+      "series": 2,
+      "themes": 3,
+      "plugins": 0,
+      "comments": 5,
+      "sessions": 7,
+      "settings": 5,
+      "post_tags": 1,
+      "task_runs": 14,
+      "audit_logs": 130,
+      "categories": 2,
+      "media_refs": 25,
+      "user_roles": 1,
+      "pages_draft": 0,
+      "pages_trash": 0,
+      "permissions": 34,
+      "post_series": 2,
+      "posts_draft": 5,
+      "posts_trash": 0,
+      "account_links": 1,
+      "oauth_accounts": 0,
+      "pages_archived": 0,
+      "plugin_runtime": 0,
+      "posts_archived": 0,
+      "task_schedules": 2,
+      "pages_published": 3,
+      "pages_scheduled": 1,
+      "posts_published": 5,
+      "posts_scheduled": 1,
+      "role_permissions": 68,
+      "content_revisions": 42
+    },
+    "verified_media": 1,
+    "verified_references": 25
+  },
+  "seconds": 177.858,
+  "git_commit": "dccbd7bed88522957d35909ee54d481b31b0a789",
+  "tracked_changes": true
+}

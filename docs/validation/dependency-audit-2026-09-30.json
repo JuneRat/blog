@@ -1,0 +1,2156 @@
+{
+  "recorded_at_utc": "2026-09-30T10:19:10.314055+00:00",
+  "scope": "Cargo.lock and both documents of apps/admin/pnpm-lock.yaml; no database or application secrets were read",
+  "input_sha256": {
+    "Cargo.lock": "d2898817cd69deafc9fbc2ebfd1eb44d5cdd84f3090d7f1f42469ea13974a10f",
+    "apps/admin/pnpm-lock.yaml": "fd8093dd1b96c50dd29d93f13757eccafdd905c059e7d8d071620acc20306117",
+    "apps/admin/package.json": "aa149b6243f9d57b31e3826150479fe123d0a22e652436087ad2704cd07fc53a"
+  },
+  "rustsec": {
+    "scanner": {
+      "name": "cargo-audit",
+      "version": "0.22.2",
+      "platform": "aarch64-apple-darwin",
+      "asset_url": "https://github.com/rustsec/rustsec/releases/download/cargo-audit/v0.22.2/cargo-audit-aarch64-apple-darwin-v0.22.2.tgz",
+      "asset_sha256": "ec7ca4263769593df4d909be85b94a6b79efa2897be5d2bb8ebd516e823175af",
+      "verification": "Downloaded official GitHub release asset SHA256 equals its GitHub API digest"
+    },
+    "database": {
+      "url": "https://github.com/RustSec/advisory-db.git",
+      "commit": "9b3a3b73a7f42606494c943e95f8196e9994df46",
+      "commit_time": "2026-09-30T09:15:39+02:00",
+      "advisory_count": 1277
+    },
+    "full_lockfile": {
+      "dependency_count": 336,
+      "vulnerability_count": 1,
+      "warnings": {},
+      "cargo_audit_exit_code": 1,
+      "raw_report": {
+        "database": {
+          "advisory-count": 1277,
+          "last-commit": null,
+          "last-updated": null
+        },
+        "lockfile": {
+          "dependency-count": 336
+        },
+        "settings": {
+          "target_arch": [],
+          "target_os": [],
+          "severity": null,
+          "ignore": [],
+          "informational_warnings": [
+            "unmaintained",
+            "unsound",
+            "notice"
+          ]
+        },
+        "vulnerabilities": {
+          "found": true,
+          "count": 1,
+          "list": [
+            {
+              "advisory": {
+                "id": "RUSTSEC-2023-0071",
+                "package": "rsa",
+                "title": "Marvin Attack: potential key recovery through timing sidechannels",
+                "description": "### Impact\nDue to a non-constant-time implementation, information about the private key is leaked through timing information which is observable over the network. An attacker may be able to use that information to recover the key.\n\n### Patches\nNo patch is yet available. The crypto-bigint migration ([RustCrypto/RSA#394](https://github.com/RustCrypto/RSA/pull/394)) did not close this. Tracking is [RustCrypto/RSA#626](https://github.com/RustCrypto/RSA/issues/626) (padding still not constant-time). Implicit rejection work is in [RustCrypto/RSA#680](https://github.com/RustCrypto/RSA/pull/680); default-path blinding is in [RustCrypto/RSA#702](https://github.com/RustCrypto/RSA/pull/702).\n\nStill affected as of 2026-09-12: rsa 0.9.10 (latest stable) and rsa 0.10.0-rc.18 (latest). `patched = []` is intentional.\n\n### Workarounds\nAvoid using the `rsa` crate in settings where attackers can observe timing, for example over the network. Local use on a non-compromised computer is fine.\n\n### References\nThis vulnerability was discovered as part of the \"[Marvin Attack]\", which revealed several implementations of RSA including OpenSSL had not properly mitigated timing sidechannel attacks.\n\n[Marvin Attack]: https://people.redhat.com/~hkario/marvin/",
+                "date": "2023-11-22",
+                "aliases": [
+                  "CVE-2023-49092",
+                  "GHSA-c38w-74pg-36hr",
+                  "GHSA-4grx-2x9w-596c"
+                ],
+                "related": [],
+                "collection": "crates",
+                "categories": [
+                  "crypto-failure"
+                ],
+                "keywords": [
+                  "cryptography"
+                ],
+                "cvss": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N",
+                "informational": null,
+                "references": [
+                  "https://github.com/RustCrypto/RSA/issues/19#issuecomment-1822995643",
+                  "https://people.redhat.com/~hkario/marvin/",
+                  "https://github.com/RustCrypto/RSA/pull/394",
+                  "https://github.com/RustCrypto/RSA/pull/680",
+                  "https://github.com/RustCrypto/RSA/pull/702"
+                ],
+                "source": null,
+                "url": "https://github.com/RustCrypto/RSA/issues/626",
+                "withdrawn": null,
+                "license": "CC0-1.0",
+                "expect-deleted": false
+              },
+              "versions": {
+                "patched": [],
+                "unaffected": []
+              },
+              "affected": null,
+              "package": {
+                "name": "rsa",
+                "version": "0.9.10",
+                "source": "registry+https://github.com/rust-lang/crates.io-index",
+                "checksum": "b8573f03f5883dcaebdfcf4725caa1ecb9c15b2ef50c43a07b816e06799bb12d",
+                "dependencies": [
+                  {
+                    "name": "const-oid",
+                    "version": "0.9.6",
+                    "source": "registry+https://github.com/rust-lang/crates.io-index"
+                  },
+                  {
+                    "name": "digest",
+                    "version": "0.10.7",
+                    "source": "registry+https://github.com/rust-lang/crates.io-index"
+                  },
+                  {
+                    "name": "num-bigint-dig",
+                    "version": "0.8.6",
+                    "source": "registry+https://github.com/rust-lang/crates.io-index"
+                  },
+                  {
+                    "name": "num-integer",
+                    "version": "0.1.47",
+                    "source": "registry+https://github.com/rust-lang/crates.io-index"
+                  },
+                  {
+                    "name": "num-traits",
+                    "version": "0.2.19",
+                    "source": "registry+https://github.com/rust-lang/crates.io-index"
+                  },
+                  {
+                    "name": "pkcs1",
+                    "version": "0.7.5",
+                    "source": "registry+https://github.com/rust-lang/crates.io-index"
+                  },
+                  {
+                    "name": "pkcs8",
+                    "version": "0.10.2",
+                    "source": "registry+https://github.com/rust-lang/crates.io-index"
+                  },
+                  {
+                    "name": "rand_core",
+                    "version": "0.6.4",
+                    "source": "registry+https://github.com/rust-lang/crates.io-index"
+                  },
+                  {
+                    "name": "signature",
+                    "version": "2.2.0",
+                    "source": "registry+https://github.com/rust-lang/crates.io-index"
+                  },
+                  {
+                    "name": "spki",
+                    "version": "0.7.3",
+                    "source": "registry+https://github.com/rust-lang/crates.io-index"
+                  },
+                  {
+                    "name": "subtle",
+                    "version": "2.6.1",
+                    "source": "registry+https://github.com/rust-lang/crates.io-index"
+                  },
+                  {
+                    "name": "zeroize",
+                    "version": "1.9.0",
+                    "source": "registry+https://github.com/rust-lang/crates.io-index"
+                  }
+                ],
+                "replace": null
+              }
+            }
+          ]
+        },
+        "warnings": {}
+      }
+    },
+    "feature_graph": {
+      "command": "cargo tree --locked --workspace --all-features --target all --edges normal,build,dev --prefix none --format \"{p} {f}\" --offline",
+      "unique_package_versions": 297,
+      "rsa_present": false,
+      "sqlx_mysql_present": false,
+      "evidence_lines": [
+        "allocator-api2 v0.2.21 alloc",
+        "ammonia v4.2.0 ",
+        "anstream v1.0.0 auto,default,wincon",
+        "anstyle v1.0.14 default,std",
+        "anstyle-parse v1.0.0 default,utf8",
+        "anstyle-query v1.1.5 ",
+        "anstyle-wincon v3.0.11 ",
+        "application v0.1.0 (${REPO}/crates/application) ",
+        "application v0.1.0 (${REPO}/crates/application)  (*)",
+        "argon2 v0.5.3 alloc,default,password-hash,rand,std",
+        "async-trait v0.1.92 (proc-macro) ",
+        "async-trait v0.1.92 (proc-macro)  (*)",
+        "atoi v2.0.0 default,std",
+        "atomic-waker v1.1.2 ",
+        "autocfg v1.5.1 ",
+        "axum v0.8.9 default,form,http1,json,matched-path,original-uri,query,tokio,tower-log,tracing",
+        "axum v0.8.9 default,form,http1,json,matched-path,original-uri,query,tokio,tower-log,tracing (*)",
+        "axum-core v0.5.6 tracing",
+        "base64 v0.22.1 alloc,default,std",
+        "base64ct v1.8.3 alloc,std",
+        "bitflags v2.13.2 ",
+        "blake2 v0.10.6 ",
+        "block-buffer v0.10.4 ",
+        "bumpalo v3.20.3 default",
+        "byteorder v1.5.0 std",
+        "bytes v1.12.1 default,std",
+        "cc v1.4.7 ",
+        "cfg-if v1.0.5 ",
+        "clap v4.6.7 color,default,derive,error-context,help,std,suggestions,usage",
+        "clap_builder v4.6.7 color,error-context,help,std,suggestions,usage",
+        "clap_derive v4.6.7 (proc-macro) default",
+        "clap_lex v1.1.1 ",
+        "colorchoice v1.0.5 ",
+        "cpufeatures v0.2.17 ",
+        "cpufeatures v0.2.17  (*)",
+        "crc v3.4.0 ",
+        "crc v3.4.0  (*)",
+        "crc-catalog v2.5.0 ",
+        "crossbeam-queue v0.3.14 alloc,default,std",
+        "crossbeam-utils v0.8.23 std",
+        "crypto-common v0.1.7 std",
+        "cssparser v0.38.0 ",
+        "deranged v0.5.8 default,serde",
+        "digest v0.10.7 alloc,block-buffer,core-api,default,mac,std,subtle",
+        "digest v0.10.7 alloc,block-buffer,core-api,default,mac,std,subtle (*)",
+        "displaydoc v0.2.7 (proc-macro) ",
+        "displaydoc v0.2.7 (proc-macro)  (*)",
+        "domain v0.1.0 (${REPO}/crates/domain) ",
+        "domain v0.1.0 (${REPO}/crates/domain)  (*)",
+        "dotenvy v0.15.7 ",
+        "dtoa v1.0.11 ",
+        "dtoa-short v0.3.5 ",
+        "either v1.18.0 default,serde,std",
+        "equivalent v1.0.2 ",
+        "errno v0.3.14 default,std",
+        "etcetera v0.8.0 ",
+        "event-listener v5.4.2 default,parking,std",
+        "fastrand v2.5.0 ",
+        "find-msvc-tools v0.1.13 ",
+        "fnv v1.0.7 default,std",
+        "foldhash v0.1.5 ",
+        "form_urlencoded v1.2.2 alloc,default,std",
+        "form_urlencoded v1.2.2 alloc,default,std (*)",
+        "futures-channel v0.3.34 alloc,default,futures-sink,sink,std",
+        "futures-channel v0.3.34 alloc,default,futures-sink,sink,std (*)",
+        "futures-core v0.3.34 alloc,default,std",
+        "futures-intrusive v0.5.0 alloc,default,parking_lot,std",
+        "futures-io v0.3.34 default,std",
+        "futures-sink v0.3.34 alloc,default,std",
+        "futures-task v0.3.34 alloc,std",
+        "futures-util v0.3.34 alloc,futures-io,futures-sink,io,memchr,sink,slab,std",
+        "futures-util v0.3.34 alloc,futures-io,futures-sink,io,memchr,sink,slab,std (*)",
+        "generic-array v0.14.7 more_lengths",
+        "generic-array v0.14.7 more_lengths (*)",
+        "getrandom v0.2.17 std",
+        "getrandom v0.2.17 std (*)",
+        "getrandom v0.3.4 ",
+        "getrandom v0.4.3 ",
+        "hashbrown v0.15.5 allocator-api2,default,default-hasher,equivalent,inline-more,raw-entry",
+        "hashbrown v0.15.5 allocator-api2,default,default-hasher,equivalent,inline-more,raw-entry (*)",
+        "hashbrown v0.17.1 ",
+        "hashlink v0.10.0 ",
+        "heck v0.5.0 ",
+        "hex v0.4.3 alloc,default,std",
+        "hkdf v0.12.4 ",
+        "hmac v0.12.1 reset",
+        "hmac v0.12.1 reset (*)",
+        "home v0.5.12 ",
+        "home v0.5.12  (*)",
+        "html5ever v0.40.1 ",
+        "html5ever v0.40.1  (*)",
+        "http v1.5.0 default,std",
+        "http v1.5.0 default,std (*)",
+        "http-body v1.1.0 ",
+        "http-body v1.1.0  (*)",
+        "http-body-util v0.1.5 default",
+        "http-body-util v0.1.5 default (*)",
+        "http-range-header v0.4.2 ",
+        "httparse v1.10.1 default,std",
+        "httpdate v1.0.3 ",
+        "hyper v1.11.1 client,default,http1,server",
+        "hyper v1.11.1 client,default,http1,server (*)",
+        "hyper-rustls v0.27.10 http1,ring,tls12,webpki-roots,webpki-tokio",
+        "hyper-util v0.1.20 client,client-legacy,client-proxy,default,http1,server,service,tokio",
+        "hyper-util v0.1.20 client,client-legacy,client-proxy,default,http1,server,service,tokio (*)",
+        "icu_collections v2.3.0 ",
+        "icu_collections v2.3.0  (*)",
+        "icu_locale_core v2.3.0 zerovec",
+        "icu_locale_core v2.3.0 zerovec (*)",
+        "icu_normalizer v2.3.0 compiled_data",
+        "icu_normalizer_data v2.3.0 ",
+        "icu_properties v2.3.0 compiled_data",
+        "icu_properties_data v2.3.0 ",
+        "icu_provider v2.3.1 baked",
+        "icu_provider v2.3.1 baked (*)",
+        "idna v1.1.0 alloc,compiled_data,std",
+        "idna_adapter v1.2.2 compiled_data",
+        "indexmap v2.14.2 default,std",
+        "indexmap v2.14.2 default,std (*)",
+        "infrastructure v0.1.0 (${REPO}/crates/infrastructure) sqlx-test-support",
+        "infrastructure v0.1.0 (${REPO}/crates/infrastructure) sqlx-test-support (*)",
+        "interfaces v0.1.0 (${REPO}/crates/interfaces) ",
+        "interfaces v0.1.0 (${REPO}/crates/interfaces)  (*)",
+        "ipnet v2.12.2 default,std",
+        "is_terminal_polyfill v1.70.2 default",
+        "itoa v1.0.18 ",
+        "jiff v0.2.37 alloc,std,tzdb-bundle-always",
+        "jiff-core v0.1.1 alloc,default,std,tz-fat",
+        "jiff-core v0.1.1 alloc,std",
+        "jiff-static v0.2.37 (proc-macro) default",
+        "jiff-tzdb v0.1.8 ",
+        "js-sys v0.3.105 default,std,unsafe-eval",
+        "js-sys v0.3.105 default,std,unsafe-eval (*)",
+        "jsonwebtoken v10.4.0 default,pem,simple_asn1,use_pem",
+        "lazy_static v1.5.0 ",
+        "libc v0.2.189 default,std",
+        "libredox v0.1.24 base,bitflags,call,default,libc,numa,plain,protocol,redox_syscall,std",
+        "litemap v0.8.3 ",
+        "lock_api v0.4.14 atomic_usize,default",
+        "lock_api v0.4.14 atomic_usize,default (*)",
+        "log v0.4.34 alloc,std",
+        "maplit v1.0.2 ",
+        "markup5ever v0.40.0 ",
+        "matchers v0.2.0 ",
+        "matchit v0.8.4 default",
+        "md-5 v0.10.6 ",
+        "memchr v2.8.3 alloc,default,std",
+        "memo-map v0.3.4 ",
+        "mime v0.3.17 ",
+        "mime_guess v2.0.5 default,rev-mappings",
+        "mime_guess v2.0.5 default,rev-mappings (*)",
+        "minijinja v2.24.0 adjacent_loop_items,builtins,debug,default,deserialization,fuel,loader,macros,multi_template,serde,std_collections",
+        "mio v1.2.3 net,os-ext,os-poll",
+        "new_debug_unreachable v1.0.6 ",
+        "nu-ansi-term v0.50.3 default,std",
+        "num-bigint v0.4.8 ",
+        "num-conv v0.2.2 ",
+        "num-integer v0.1.47 i128",
+        "num-traits v0.2.19 i128,std",
+        "num-traits v0.2.19 i128,std (*)",
+        "once_cell v1.21.4 alloc,default,race,std",
+        "once_cell_polyfill v1.70.2 default",
+        "parking v2.2.1 ",
+        "parking_lot v0.12.5 default",
+        "parking_lot v0.12.5 default (*)",
+        "parking_lot_core v0.9.12 ",
+        "password-hash v0.5.0 alloc,default,rand_core,std",
+        "pem v3.0.6 default,std",
+        "percent-encoding v2.3.2 alloc,default,std",
+        "phf v0.14.0 default,std",
+        "phf_codegen v0.14.0 ",
+        "phf_generator v0.14.0 ",
+        "phf_generator v0.14.0  (*)",
+        "phf_shared v0.14.0 default,std",
+        "phf_shared v0.14.0 default,std (*)",
+        "pin-project-lite v0.2.17 ",
+        "plain v0.2.3 ",
+        "portable-atomic v1.15.0 require-cas",
+        "portable-atomic-util v0.2.8 alloc",
+        "potential_utf v0.1.6 zerovec",
+        "powerfmt v0.2.0 ",
+        "ppv-lite86 v0.2.21 simd,std",
+        "precomputed-hash v0.1.1 ",
+        "proc-macro2 v1.0.107 default,proc-macro",
+        "proc-macro2 v1.0.107 default,proc-macro (*)",
+        "prometheus v0.14.0 ",
+        "pulldown-cmark v0.13.4 html,pulldown-cmark-escape",
+        "pulldown-cmark-escape v0.11.0 ",
+        "quote v1.0.47 default,proc-macro",
+        "quote v1.0.47 default,proc-macro (*)",
+        "r-efi v5.3.0 ",
+        "r-efi v6.0.0 ",
+        "rand v0.8.8 alloc,getrandom,libc,rand_chacha,std,std_rng",
+        "rand_chacha v0.3.1 std",
+        "rand_core v0.6.4 alloc,getrandom,std",
+        "rand_core v0.6.4 alloc,getrandom,std (*)",
+        "redox_syscall v0.5.18 default,userspace",
+        "redox_syscall v0.9.4 default,userspace",
+        "regex-automata v0.4.18 alloc,dfa-build,dfa-search,nfa-thompson,std,syntax",
+        "regex-automata v0.4.18 alloc,dfa-build,dfa-search,nfa-thompson,std,syntax (*)",
+        "regex-syntax v0.8.11 std",
+        "reqwest v0.12.28 __rustls,__rustls-ring,__tls,json,rustls-tls,rustls-tls-webpki-roots,rustls-tls-webpki-roots-no-provider",
+        "reqwest v0.12.28 __rustls,__rustls-ring,__tls,json,rustls-tls,rustls-tls-webpki-roots,rustls-tls-webpki-roots-no-provider (*)",
+        "ring v0.17.14 alloc,default,dev_urandom_fallback",
+        "ring v0.17.14 alloc,default,dev_urandom_fallback (*)",
+        "rpassword v7.5.4 ",
+        "rtoolbox v0.0.6 ",
+        "rustls v0.23.45 ring,std,tls12",
+        "rustls v0.23.45 ring,std,tls12 (*)",
+        "rustls-pki-types v1.15.1 alloc,default,std",
+        "rustls-pki-types v1.15.1 alloc,default,std (*)",
+        "rustls-webpki v0.103.15 alloc,ring,std",
+        "rustversion v1.0.23 (proc-macro) ",
+        "ryu v1.0.23 ",
+        "scopeguard v1.2.0 ",
+        "serde v1.0.229 alloc,default,derive,rc,serde_derive,std",
+        "serde v1.0.229 alloc,default,derive,rc,serde_derive,std (*)",
+        "serde_core v1.0.229 alloc,default,rc,result,std",
+        "serde_core v1.0.229 alloc,default,rc,result,std (*)",
+        "serde_derive v1.0.229 (proc-macro) default",
+        "serde_derive v1.0.229 (proc-macro) default (*)",
+        "serde_json v1.0.151 default,raw_value,std",
+        "serde_json v1.0.151 default,raw_value,std (*)",
+        "serde_path_to_error v0.1.20 ",
+        "serde_spanned v0.6.9 serde",
+        "serde_spanned v0.6.9 serde (*)",
+        "serde_urlencoded v0.7.1 ",
+        "serde_urlencoded v0.7.1  (*)",
+        "server v0.1.0 (${REPO}/crates/server) ",
+        "sha2 v0.10.9 default,std",
+        "sha2 v0.10.9 default,std (*)",
+        "sharded-slab v0.1.7 ",
+        "shlex v2.0.1 default,std",
+        "signal-hook-registry v1.4.8 ",
+        "signature v2.2.0 alloc,std",
+        "simple_asn1 v0.6.4 ",
+        "siphasher v1.0.3 default,std",
+        "slab v0.4.12 std",
+        "smallvec v1.16.1 const_generics,const_new,serde",
+        "smallvec v1.16.1 const_generics,const_new,serde (*)",
+        "socket2 v0.6.5 all",
+        "socket2 v0.6.5 all (*)",
+        "sqlx v0.8.6 _rt-tokio,json,migrate,postgres,runtime-tokio,sqlx-postgres,time,tls-rustls-ring-webpki,uuid",
+        "sqlx v0.8.6 _rt-tokio,json,migrate,postgres,runtime-tokio,sqlx-postgres,time,tls-rustls-ring-webpki,uuid (*)",
+        "sqlx-core v0.8.6 _rt-tokio,_tls-rustls,_tls-rustls-ring-webpki,crc,default,json,migrate,offline,rustls,serde,serde_json,sha2,time,tokio,tokio-stream,uuid,webpki-roots",
+        "sqlx-core v0.8.6 _rt-tokio,_tls-rustls,_tls-rustls-ring-webpki,crc,default,json,migrate,offline,rustls,serde,serde_json,sha2,time,tokio,tokio-stream,uuid,webpki-roots (*)",
+        "sqlx-postgres v0.8.6 json,migrate,time,uuid",
+        "stable_deref_trait v1.2.1 ",
+        "string_cache v0.11.0 ",
+        "string_cache_codegen v0.11.2 ",
+        "stringprep v0.1.5 ",
+        "strsim v0.11.1 ",
+        "subtle v2.6.1 ",
+        "syn v2.0.119 clone-impls,default,derive,extra-traits,full,parsing,printing,proc-macro,visit,visit-mut",
+        "syn v2.0.119 clone-impls,default,derive,extra-traits,full,parsing,printing,proc-macro,visit,visit-mut (*)",
+        "syn v3.0.6 clone-impls,default,derive,extra-traits,fold,full,parsing,printing,proc-macro,visit,visit-mut",
+        "syn v3.0.6 clone-impls,default,derive,extra-traits,fold,full,parsing,printing,proc-macro,visit,visit-mut (*)",
+        "sync_wrapper v1.0.2 futures,futures-core",
+        "sync_wrapper v1.0.2 futures,futures-core (*)",
+        "synstructure v0.14.0 default,proc-macro",
+        "synstructure v0.14.0 default,proc-macro (*)",
+        "tendril v0.5.1 ",
+        "termcolor v1.4.1 ",
+        "thiserror v2.0.20 default,std",
+        "thiserror v2.0.20 default,std (*)",
+        "thiserror-impl v2.0.20 (proc-macro) ",
+        "thread_local v1.1.10 ",
+        "time v0.3.55 alloc,default,formatting,macros,parsing,serde,std",
+        "time v0.3.55 alloc,default,formatting,macros,parsing,serde,std (*)",
+        "time-core v0.1.9 ",
+        "time-macros v0.2.32 (proc-macro) formatting,parsing,serde",
+        "tinystr v0.8.4 zerovec",
+        "tinyvec v1.13.3 alloc,default",
+        "tokio v1.53.1 bytes,default,fs,io-util,libc,macros,mio,net,rt,rt-multi-thread,signal,signal-hook-registry,socket2,sync,time,tokio-macros,windows-sys",
+        "tokio v1.53.1 bytes,default,fs,io-util,libc,macros,mio,net,rt,rt-multi-thread,signal,signal-hook-registry,socket2,sync,time,tokio-macros,windows-sys (*)",
+        "tokio-macros v2.7.2 (proc-macro) ",
+        "tokio-rustls v0.26.5 ring,tls12",
+        "tokio-rustls v0.26.5 ring,tls12 (*)",
+        "tokio-stream v0.1.19 default,fs,time",
+        "tokio-util v0.7.19 io",
+        "toml v0.8.23 default,display,parse",
+        "toml_datetime v0.6.11 serde",
+        "toml_datetime v0.6.11 serde (*)",
+        "toml_edit v0.22.27 default,display,parse,serde",
+        "toml_edit v0.22.27 default,display,parse,serde (*)",
+        "toml_write v0.1.2 alloc,default,std",
+        "tower v0.5.3 futures-core,futures-util,log,make,pin-project-lite,retry,sync_wrapper,timeout,tokio,tracing,util",
+        "tower v0.5.3 futures-core,futures-util,log,make,pin-project-lite,retry,sync_wrapper,timeout,tokio,tracing,util (*)",
+        "tower-http v0.6.11 default,follow-redirect,fs,futures-core,futures-util,httpdate,mime,mime_guess,percent-encoding,set-status,tokio-util,tower",
+        "tower-http v0.6.11 default,follow-redirect,fs,futures-core,futures-util,httpdate,mime,mime_guess,percent-encoding,set-status,tokio-util,tower (*)",
+        "tower-layer v0.3.3 ",
+        "tower-service v0.3.3 ",
+        "tracing v0.1.44 attributes,default,log,std,tracing-attributes",
+        "tracing v0.1.44 attributes,default,log,std,tracing-attributes (*)",
+        "tracing-attributes v0.1.31 (proc-macro) ",
+        "tracing-core v0.1.36 default,once_cell,std",
+        "tracing-core v0.1.36 default,once_cell,std (*)",
+        "tracing-log v0.2.0 log-tracer,std",
+        "tracing-serde v0.2.0 ",
+        "tracing-subscriber v0.3.23 alloc,ansi,default,env-filter,fmt,json,matchers,nu-ansi-term,once_cell,registry,serde,serde_json,sharded-slab,smallvec,std,thread_local,tracing,tracing-log,tracing-serde",
+        "try-lock v0.2.5 ",
+        "ts-rs v12.0.1 default,serde-compat,uuid,uuid-impl",
+        "ts-rs-macros v12.0.1 (proc-macro) serde-compat,termcolor",
+        "typenum v1.20.1 ",
+        "unicase v2.9.0 ",
+        "unicode-bidi v0.3.18 default,hardcoded-data,std",
+        "unicode-ident v1.0.26 ",
+        "unicode-normalization v0.1.25 default,std",
+        "unicode-properties v0.1.4 default,emoji,general-category",
+        "untrusted v0.9.0 ",
+        "url v2.5.8 default,std",
+        "url v2.5.8 default,std (*)",
+        "utf8_iter v1.0.4 ",
+        "utf8parse v0.2.2 default",
+        "uuid v1.26.1 default,rng,serde,std,v7",
+        "uuid v1.26.1 default,rng,serde,std,v7 (*)",
+        "version_check v0.9.5 ",
+        "want v0.3.1 ",
+        "wasi v0.11.1+wasi-snapshot-preview1 default,std",
+        "wasip2 v1.0.4+wasi-0.2.12 ",
+        "wasite v0.1.0 ",
+        "wasm-bindgen v0.2.128 default,std",
+        "wasm-bindgen v0.2.128 default,std (*)",
+        "wasm-bindgen-futures v0.4.78 default,std",
+        "wasm-bindgen-macro v0.2.128 (proc-macro) ",
+        "wasm-bindgen-macro-support v0.2.128 ",
+        "wasm-bindgen-shared v0.2.128 ",
+        "wasm-bindgen-shared v0.2.128  (*)",
+        "web-sys v0.3.105 AbortController,AbortSignal,Blob,BlobPropertyBag,EventTarget,File,FormData,Headers,ReadableStream,Request,RequestCache,RequestCredentials,RequestInit,RequestMode,Response,ServiceWorkerGlobalScope,Window,WorkerGlobalScope,default,std",
+        "web_atoms v0.3.0 ",
+        "webpki-roots v0.26.11 ",
+        "webpki-roots v1.0.9 ",
+        "webpki-roots v1.0.9  (*)",
+        "whoami v1.6.1 ",
+        "winapi-util v0.1.11 ",
+        "windows-link v0.2.1 ",
+        "windows-sys v0.48.0 Win32,Win32_Foundation,Win32_UI,Win32_UI_Shell,default",
+        "windows-sys v0.52.0 Win32,Win32_Foundation,Win32_System,Win32_System_Threading,default",
+        "windows-sys v0.61.2 Wdk,Wdk_Foundation,Wdk_Storage,Wdk_Storage_FileSystem,Wdk_System,Wdk_System_IO,Win32,Win32_Foundation,Win32_Networking,Win32_Networking_WinSock,Win32_Security,Win32_Storage,Win32_Storage_FileSystem,Win32_System,Win32_System_Com,Win32_System_Console,Win32_System_Diagnostics,Win32_System_Diagnostics_Debug,Win32_System_IO,Win32_System_Pipes,Win32_System_SystemServices,Win32_System_Threading,Win32_System_WindowsProgramming,Win32_UI,Win32_UI_Shell,default",
+        "windows-sys v0.61.2 Wdk,Wdk_Foundation,Wdk_Storage,Wdk_Storage_FileSystem,Wdk_System,Wdk_System_IO,Win32,Win32_Foundation,Win32_Networking,Win32_Networking_WinSock,Win32_Security,Win32_Storage,Win32_Storage_FileSystem,Win32_System,Win32_System_Com,Win32_System_Console,Win32_System_Diagnostics,Win32_System_Diagnostics_Debug,Win32_System_IO,Win32_System_Pipes,Win32_System_SystemServices,Win32_System_Threading,Win32_System_WindowsProgramming,Win32_UI,Win32_UI_Shell,default (*)",
+        "windows-sys v0.61.2 Win32,Win32_Foundation,Win32_Storage,Win32_Storage_FileSystem,Win32_System,Win32_System_Console,Win32_System_SystemInformation,default",
+        "windows-targets v0.48.5 ",
+        "windows-targets v0.52.6 ",
+        "windows_aarch64_gnullvm v0.48.5 ",
+        "windows_aarch64_gnullvm v0.52.6 ",
+        "windows_aarch64_msvc v0.48.5 ",
+        "windows_aarch64_msvc v0.52.6 ",
+        "windows_i686_gnu v0.48.5 ",
+        "windows_i686_gnu v0.52.6 ",
+        "windows_i686_gnullvm v0.52.6 ",
+        "windows_i686_msvc v0.48.5 ",
+        "windows_i686_msvc v0.52.6 ",
+        "windows_x86_64_gnu v0.48.5 ",
+        "windows_x86_64_gnu v0.52.6 ",
+        "windows_x86_64_gnullvm v0.48.5 ",
+        "windows_x86_64_gnullvm v0.52.6 ",
+        "windows_x86_64_msvc v0.48.5 ",
+        "windows_x86_64_msvc v0.52.6 ",
+        "winnow v0.7.15 alloc,default,std",
+        "wit-bindgen v0.57.1 ",
+        "writeable v0.6.4 ",
+        "yoke v0.8.3 derive,zerofrom",
+        "yoke v0.8.3 derive,zerofrom (*)",
+        "yoke-derive v0.8.3 (proc-macro) ",
+        "zerocopy v0.8.57 simd",
+        "zerocopy-derive v0.8.57 (proc-macro) ",
+        "zerofrom v0.1.8 derive",
+        "zerofrom v0.1.8 derive (*)",
+        "zerofrom-derive v0.1.8 (proc-macro) ",
+        "zeroize v1.9.0 alloc,default,derive,zeroize_derive",
+        "zeroize v1.9.0 alloc,default,derive,zeroize_derive (*)",
+        "zeroize_derive v1.5.0 (proc-macro) ",
+        "zerotrie v0.2.5 yoke,zerofrom",
+        "zerotrie v0.2.5 yoke,zerofrom (*)",
+        "zerovec v0.11.8 derive,yoke",
+        "zerovec v0.11.8 derive,yoke (*)",
+        "zerovec-derive v0.11.6 (proc-macro) ",
+        "zmij v1.0.23 "
+      ],
+      "note": "Cargo metadata retains optional dependencies; this evidence instead uses the Cargo feature graph across all targets and workspace features, including normal/build/dev dependencies"
+    },
+    "policy_result": {
+      "exit_code": 0,
+      "blocking_findings": 0,
+      "explained_unreachable_findings": 1,
+      "advisory": "RUSTSEC-2023-0071",
+      "package": "rsa",
+      "version": "0.9.10",
+      "upstream_no_patched_version": true,
+      "upstream_url": "https://rustsec.org/advisories/RUSTSEC-2023-0071.html",
+      "reason": "SQLx optional MySQL dependency is retained in the lockfile; neither rsa nor sqlx-mysql appears in the all-platform workspace feature graph",
+      "conditions": "Only the exact advisory/package/version/crates.io source/checksum can pass, only while no patched version exists and rsa/sqlx-mysql are both absent from the graph. Any other finding or missing/invalid evidence fails. No --ignore flag is used."
+    },
+    "reproduction_commands": [
+      "AUDIT_TMP=$(mktemp -d)",
+      "cargo install cargo-audit --version 0.22.2 --locked --root \"$AUDIT_TMP/cargo-audit\"",
+      "git clone --depth 1 https://github.com/RustSec/advisory-db.git \"$AUDIT_TMP/advisory-db\"",
+      "python3 -B scripts/audit_dependencies.py --cargo-audit \"$AUDIT_TMP/cargo-audit/bin/cargo-audit\" --advisory-db \"$AUDIT_TMP/advisory-db\" --report-dir \"$AUDIT_TMP/reports\"",
+      "PYTHONPATH=scripts python3 -B -m unittest scripts/test_audit_dependencies.py"
+    ],
+    "tests": {
+      "count": 6,
+      "result": "passed",
+      "coverage": [
+        "exact unreachable exception",
+        "reachable RSA or MySQL blocks",
+        "changed source/version/checksum or new patch blocks",
+        "any other advisory or warning blocks",
+        "missing/malformed graph fails",
+        "ignored advisories or malformed report fails"
+      ]
+    }
+  },
+  "npm_osv_offline": {
+    "scanner": {
+      "name": "osv-scanner",
+      "version": "2.6.0",
+      "osv_scalibr_version": "0.5.2",
+      "commit": "e840a6e8adb14b7777c78e26cfbf6e2abc1d1fc6",
+      "platform": "darwin_arm64",
+      "asset_url": "https://github.com/google/osv-scanner/releases/download/v2.6.0/osv-scanner_darwin_arm64",
+      "asset_sha256": "98c460dcd37de25819babd757d04542045b6243113e209edcd4d89fedb0256b4",
+      "verification": "Downloaded official GitHub release asset SHA256 equals its GitHub API digest"
+    },
+    "catalog": {
+      "url": "https://osv-vulnerabilities.storage.googleapis.com/npm/all.zip",
+      "last_modified_utc": "2026-09-30T10:02:55Z",
+      "generation": "1790762575320767",
+      "bytes": 217015248,
+      "md5": "bbfbe77f2c75367c4e386c11f732d55f",
+      "verification": "Downloaded bytes MD5 matches the public catalog HTTP ETag/x-goog-hash",
+      "records": 229605
+    },
+    "inventory": {
+      "yaml_parser": "PyYAML 6.0.3 safe_load_all",
+      "yaml_documents": 2,
+      "package_versions_per_document": [
+        15,
+        195
+      ],
+      "unique_package_versions": 210,
+      "scanned_package_versions": 210,
+      "scanner_inventory_exact_match": true,
+      "includes_pnpm_12_5_1_and_all_platform_executables": true,
+      "method": "Union of every document packages map converted to CycloneDX 1.5; no single-document pnpm parser or remote package lookup"
+    },
+    "result": {
+      "exit_code": 0,
+      "vulnerabilities": 0,
+      "raw_results": {
+        "results": [
+          {
+            "source": {
+              "path": "all packages from both apps/admin/pnpm-lock.yaml documents (CycloneDX inventory)",
+              "type": "sbom"
+            },
+            "packages": [
+              {
+                "package": {
+                  "name": "@ant-design/colors",
+                  "version": "8.0.1",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@ant-design/cssinjs",
+                  "version": "2.1.2",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@ant-design/cssinjs-utils",
+                  "version": "2.1.2",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@ant-design/fast-color",
+                  "version": "3.0.1",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@ant-design/icons",
+                  "version": "6.3.4",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@ant-design/icons-svg",
+                  "version": "4.6.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@ant-design/react-slick",
+                  "version": "2.0.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@asamuzakjp/css-color",
+                  "version": "7.0.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@asamuzakjp/dom-selector",
+                  "version": "9.2.1",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@babel/code-frame",
+                  "version": "7.29.7",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@babel/helper-validator-identifier",
+                  "version": "7.29.7",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@babel/runtime",
+                  "version": "7.29.7",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@babel/runtime",
+                  "version": "8.0.5",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@bramus/specificity",
+                  "version": "2.4.2",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@csstools/color-helpers",
+                  "version": "6.1.1",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@csstools/css-calc",
+                  "version": "3.4.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@csstools/css-color-parser",
+                  "version": "4.2.3",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@csstools/css-parser-algorithms",
+                  "version": "4.0.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@csstools/css-syntax-patches-for-csstree",
+                  "version": "1.1.14",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@csstools/css-tokenizer",
+                  "version": "4.0.1",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@emotion/hash",
+                  "version": "0.8.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@emotion/unitless",
+                  "version": "0.7.5",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@exodus/bytes",
+                  "version": "1.15.1",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@jridgewell/resolve-uri",
+                  "version": "3.1.2",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@jridgewell/sourcemap-codec",
+                  "version": "1.6.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@jridgewell/trace-mapping",
+                  "version": "0.3.31",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@js-temporal/polyfill",
+                  "version": "0.5.1",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@oxc-project/types",
+                  "version": "0.150.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@playwright/test",
+                  "version": "1.63.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@pnpm/exe.android-arm64",
+                  "version": "12.5.1",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@pnpm/exe.android-x64",
+                  "version": "12.5.1",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@pnpm/exe.darwin-arm64",
+                  "version": "12.5.1",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@pnpm/exe.darwin-x64",
+                  "version": "12.5.1",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@pnpm/exe.freebsd-x64",
+                  "version": "12.5.1",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@pnpm/exe.linux-arm64",
+                  "version": "12.5.1",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@pnpm/exe.linux-arm64-musl",
+                  "version": "12.5.1",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@pnpm/exe.linux-ppc64",
+                  "version": "12.5.1",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@pnpm/exe.linux-riscv64",
+                  "version": "12.5.1",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@pnpm/exe.linux-s390x",
+                  "version": "12.5.1",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@pnpm/exe.linux-x64",
+                  "version": "12.5.1",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@pnpm/exe.linux-x64-musl",
+                  "version": "12.5.1",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@pnpm/exe.win32-arm64",
+                  "version": "12.5.1",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@pnpm/exe.win32-x64",
+                  "version": "12.5.1",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@rc-component/async-validator",
+                  "version": "6.0.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@rc-component/cascader",
+                  "version": "1.22.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@rc-component/checkbox",
+                  "version": "2.0.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@rc-component/collapse",
+                  "version": "1.2.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@rc-component/color-picker",
+                  "version": "3.1.1",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@rc-component/context",
+                  "version": "2.0.2",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@rc-component/dialog",
+                  "version": "1.10.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@rc-component/drawer",
+                  "version": "1.4.2",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@rc-component/dropdown",
+                  "version": "1.0.3",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@rc-component/form",
+                  "version": "1.8.6",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@rc-component/image",
+                  "version": "1.10.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@rc-component/input",
+                  "version": "1.3.1",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@rc-component/input-number",
+                  "version": "1.6.2",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@rc-component/listy",
+                  "version": "1.2.3",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@rc-component/mentions",
+                  "version": "1.12.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@rc-component/menu",
+                  "version": "1.5.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@rc-component/mini-decimal",
+                  "version": "1.1.4",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@rc-component/motion",
+                  "version": "1.3.3",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@rc-component/mutate-observer",
+                  "version": "2.0.1",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@rc-component/notification",
+                  "version": "2.0.8",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@rc-component/overflow",
+                  "version": "1.0.1",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@rc-component/pagination",
+                  "version": "1.4.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@rc-component/picker",
+                  "version": "1.12.2",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@rc-component/portal",
+                  "version": "2.2.1",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@rc-component/progress",
+                  "version": "1.0.3",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@rc-component/qrcode",
+                  "version": "2.0.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@rc-component/rate",
+                  "version": "1.0.1",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@rc-component/resize-observer",
+                  "version": "1.1.2",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@rc-component/segmented",
+                  "version": "1.4.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@rc-component/select",
+                  "version": "1.10.1",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@rc-component/slider",
+                  "version": "1.1.1",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@rc-component/steps",
+                  "version": "1.2.3",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@rc-component/switch",
+                  "version": "1.0.3",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@rc-component/table",
+                  "version": "1.11.1",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@rc-component/tabs",
+                  "version": "1.13.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@rc-component/tooltip",
+                  "version": "1.5.2",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@rc-component/tour",
+                  "version": "2.4.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@rc-component/tree",
+                  "version": "1.4.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@rc-component/tree-select",
+                  "version": "1.16.1",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@rc-component/trigger",
+                  "version": "3.10.1",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@rc-component/upload",
+                  "version": "1.1.1",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@rc-component/util",
+                  "version": "1.13.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@rc-component/virtual-list",
+                  "version": "1.5.2",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@rolldown/binding-android-arm-eabi",
+                  "version": "1.2.9",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@rolldown/binding-android-arm64",
+                  "version": "1.2.9",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@rolldown/binding-darwin-arm64",
+                  "version": "1.2.9",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@rolldown/binding-darwin-x64",
+                  "version": "1.2.9",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@rolldown/binding-freebsd-x64",
+                  "version": "1.2.9",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@rolldown/binding-linux-arm-gnueabihf",
+                  "version": "1.2.9",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@rolldown/binding-linux-arm64-gnu",
+                  "version": "1.2.9",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@rolldown/binding-linux-arm64-musl",
+                  "version": "1.2.9",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@rolldown/binding-linux-ppc64-gnu",
+                  "version": "1.2.9",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@rolldown/binding-linux-s390x-gnu",
+                  "version": "1.2.9",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@rolldown/binding-linux-x64-gnu",
+                  "version": "1.2.9",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@rolldown/binding-linux-x64-musl",
+                  "version": "1.2.9",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@rolldown/binding-openharmony-arm64",
+                  "version": "1.2.9",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@rolldown/binding-win32-arm64-msvc",
+                  "version": "1.2.9",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@rolldown/binding-win32-x64-msvc",
+                  "version": "1.2.9",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@rolldown/pluginutils",
+                  "version": "1.0.1",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@tanstack/query-core",
+                  "version": "5.103.2",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@tanstack/react-query",
+                  "version": "5.103.2",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@testing-library/dom",
+                  "version": "10.4.2",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@testing-library/react",
+                  "version": "16.3.3",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@types/aria-query",
+                  "version": "5.0.4",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@types/chai",
+                  "version": "5.2.3",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@types/deep-eql",
+                  "version": "4.0.2",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@types/estree",
+                  "version": "1.0.9",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@types/node",
+                  "version": "22.20.4",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@types/react",
+                  "version": "19.3.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@types/react-dom",
+                  "version": "19.3.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@vitejs/plugin-react",
+                  "version": "6.1.1",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@vitest/mocker",
+                  "version": "5.0.1",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "@vitest/spy",
+                  "version": "5.0.1",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "ansi-regex",
+                  "version": "5.0.1",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "ansi-styles",
+                  "version": "5.2.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "antd",
+                  "version": "6.6.5",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "aria-query",
+                  "version": "5.3.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "assertion-error",
+                  "version": "2.0.1",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "bidi-js",
+                  "version": "1.1.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "chai",
+                  "version": "6.2.2",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "clsx",
+                  "version": "2.1.1",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "compute-scroll-into-view",
+                  "version": "3.1.1",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "css-tree",
+                  "version": "3.2.1",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "csstype",
+                  "version": "3.2.3",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "data-urls",
+                  "version": "7.0.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "dayjs",
+                  "version": "1.11.23",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "decimal.js",
+                  "version": "10.6.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "dequal",
+                  "version": "2.0.3",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "detect-libc",
+                  "version": "2.1.2",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "dom-accessibility-api",
+                  "version": "0.5.16",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "entities",
+                  "version": "8.1.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "es-module-lexer",
+                  "version": "2.3.2",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "estree-walker",
+                  "version": "3.0.3",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "expect-type",
+                  "version": "1.4.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "fdir",
+                  "version": "6.5.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "fsevents",
+                  "version": "2.3.3",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "html-encoding-sniffer",
+                  "version": "6.0.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "is-mobile",
+                  "version": "5.0.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "is-potential-custom-element-name",
+                  "version": "1.0.1",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "js-tokens",
+                  "version": "4.0.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "jsbi",
+                  "version": "4.3.2",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "jsdom",
+                  "version": "30.1.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "json2mq",
+                  "version": "0.2.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "lightningcss",
+                  "version": "1.33.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "lightningcss-android-arm64",
+                  "version": "1.33.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "lightningcss-darwin-arm64",
+                  "version": "1.33.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "lightningcss-darwin-x64",
+                  "version": "1.33.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "lightningcss-freebsd-x64",
+                  "version": "1.33.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "lightningcss-linux-arm-gnueabihf",
+                  "version": "1.33.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "lightningcss-linux-arm64-gnu",
+                  "version": "1.33.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "lightningcss-linux-arm64-musl",
+                  "version": "1.33.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "lightningcss-linux-x64-gnu",
+                  "version": "1.33.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "lightningcss-linux-x64-musl",
+                  "version": "1.33.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "lightningcss-win32-arm64-msvc",
+                  "version": "1.33.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "lightningcss-win32-x64-msvc",
+                  "version": "1.33.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "lru-cache",
+                  "version": "11.5.3",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "lz-string",
+                  "version": "1.5.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "magic-string",
+                  "version": "1.4.1",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "mdn-data",
+                  "version": "2.27.1",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "nanoid",
+                  "version": "3.3.19",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "obug",
+                  "version": "2.2.1",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "parse5",
+                  "version": "8.0.1",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "picocolors",
+                  "version": "1.1.1",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "picomatch",
+                  "version": "4.0.7",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "playwright",
+                  "version": "1.63.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "playwright-core",
+                  "version": "1.63.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "pnpm",
+                  "version": "12.5.1",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "postcss",
+                  "version": "8.5.28",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "pretty-format",
+                  "version": "27.5.1",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "punycode",
+                  "version": "2.3.1",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "react",
+                  "version": "19.3.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "react-dom",
+                  "version": "19.3.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "react-is",
+                  "version": "17.0.2",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "react-is",
+                  "version": "19.3.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "require-from-string",
+                  "version": "2.0.2",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "rolldown",
+                  "version": "1.2.9",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "saxes",
+                  "version": "6.0.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "scheduler",
+                  "version": "0.28.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "scroll-into-view-if-needed",
+                  "version": "3.1.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "siginfo",
+                  "version": "2.0.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "source-map-js",
+                  "version": "1.2.1",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "stackback",
+                  "version": "0.0.2",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "std-env",
+                  "version": "4.2.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "string-convert",
+                  "version": "0.2.1",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "stylis",
+                  "version": "4.4.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "throttle-debounce",
+                  "version": "5.0.2",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "tinybench",
+                  "version": "6.1.4",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "tinyexec",
+                  "version": "1.3.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "tinyglobby",
+                  "version": "0.2.17",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "tldts",
+                  "version": "7.4.13",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "tldts-core",
+                  "version": "7.4.13",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "tough-cookie",
+                  "version": "6.0.2",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "tr46",
+                  "version": "6.0.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "typescript",
+                  "version": "5.9.3",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "undici",
+                  "version": "8.10.2",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "undici-types",
+                  "version": "6.21.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "vite",
+                  "version": "8.3.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "vitest",
+                  "version": "5.0.1",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "w3c-xmlserializer",
+                  "version": "5.0.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "webidl-conversions",
+                  "version": "8.0.1",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "whatwg-mimetype",
+                  "version": "5.0.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "whatwg-url",
+                  "version": "16.0.1",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "whatwg-url",
+                  "version": "17.1.1",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "why-is-node-running",
+                  "version": "2.3.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "xml-name-validator",
+                  "version": "5.0.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "xmlchars",
+                  "version": "2.2.0",
+                  "ecosystem": "npm"
+                }
+              },
+              {
+                "package": {
+                  "name": "zod",
+                  "version": "4.6.5",
+                  "ecosystem": "npm"
+                }
+              }
+            ]
+          }
+        ],
+        "experimental_config": {
+          "licenses": {
+            "summary": false,
+            "allowlist": null
+          }
+        }
+      }
+    },
+    "positive_control": {
+      "package": "lodash",
+      "version": "4.17.20",
+      "exit_code": 1,
+      "detected_advisories": [
+        "GHSA-29mw-wpgm-hmr9",
+        "GHSA-35jh-r3h4-6jhm",
+        "GHSA-f23m-r3pf-42rh",
+        "GHSA-r5fr-rjxr-66jc",
+        "GHSA-xxjr-mmjv-4gpg"
+      ],
+      "purpose": "Confirms the same offline catalog and matching pipeline detect a known vulnerable package"
+    },
+    "network_boundary": "Only entire public catalogs and public scanner/parser assets were downloaded; --offline disabled matching/resolution network calls. No project package names or versions were sent to any audit/query endpoint.",
+    "reproduction_commands": [
+      "AUDIT_TMP=$(mktemp -d)",
+      "python3 -m venv \"$AUDIT_TMP/venv\"",
+      "\"$AUDIT_TMP/venv/bin/pip\" install PyYAML==6.0.3",
+      "curl --location --fail https://github.com/google/osv-scanner/releases/download/v2.6.0/osv-scanner_darwin_arm64 --output \"$AUDIT_TMP/osv-scanner\"",
+      "shasum -a 256 \"$AUDIT_TMP/osv-scanner\" # must match the recorded scanner asset SHA256",
+      "chmod +x \"$AUDIT_TMP/osv-scanner\"",
+      "mkdir -p \"$AUDIT_TMP/cache/osv-scalibr/npm\"",
+      "curl --location --fail https://osv-vulnerabilities.storage.googleapis.com/npm/all.zip --output \"$AUDIT_TMP/cache/osv-scalibr/npm/all.zip\"",
+      "\"$AUDIT_TMP/venv/bin/python\" - \"$AUDIT_TMP\" <<'PY'\nimport json, re, sys\nfrom pathlib import Path\nfrom urllib.parse import quote\nimport yaml\ndocuments = list(yaml.safe_load_all(Path('apps/admin/pnpm-lock.yaml').read_text()))\npackages = {}\nfor document in documents:\n    assert str(document['lockfileVersion']) == '9.0'\n    for key in document['packages']:\n        name, separator, version = key.rpartition('@')\n        assert separator and name and re.fullmatch(r'[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][a-zA-Z0-9.-]+)?', version)\n        packages[key] = {'type': 'library', 'name': name, 'version': version,\n                         'bom-ref': key, 'purl': f'pkg:npm/{quote(name, safe=\"/\")}@{quote(version, safe=\"\")}' }\nassert 'pnpm@12.5.1' in packages\nbom = {'bomFormat': 'CycloneDX', 'specVersion': '1.5', 'version': 1, 'components': list(packages.values())}\n(Path(sys.argv[1]) / 'pnpm-complete.cdx.json').write_text(json.dumps(bom))\nprint('YAML documents:', len(documents), 'unique package versions:', len(packages))\nPY",
+      "OSV_SCANNER_LOCAL_DB_CACHE_DIRECTORY=\"$AUDIT_TMP/cache\" OSV_SCALIBR_LOCAL_DB_CACHE_DIRECTORY=\"$AUDIT_TMP/cache\" \"$AUDIT_TMP/osv-scanner\" scan source --offline --all-packages --all-vulns --format json --lockfile \"$AUDIT_TMP/pnpm-complete.cdx.json\" --output-file \"$AUDIT_TMP/npm-osv-audit.json\""
+    ],
+    "reproduction_note": "Run from the repository root. The scanner download above is for the recorded Apple Silicon host; choose the official matching release asset on other hosts. Public catalogs change over time, so later findings may differ."
+  },
+  "pnpm_native_audit": {
+    "executed": false,
+    "status": "automatic_approval_rejected_before_execution",
+    "requested_destination": "https://registry.npmjs.org",
+    "reason": "pnpm audit uploads project dependency names and versions to the external npm registry; the automatic approval reviewer required explicit human authorization for that disclosure, which had not been received at recording time",
+    "no_bypass": "The command was not retried or run indirectly. The alternative downloaded the entire public npm catalog and performed local-only offline matching.",
+    "ci": "Native pnpm audit --audit-level low is configured using the pinned packageManager version. It has not been validated locally or in GitHub during this change; the offline OSV result is not a claim that native pnpm audit passed."
+  },
+  "configuration_validation": {
+    "yaml_files_parsed": [
+      ".github/dependabot.yml",
+      ".github/workflows/ci.yml"
+    ],
+    "git_diff_check": "passed"
+  },
+  "dependency_version_changes_required": []
+}

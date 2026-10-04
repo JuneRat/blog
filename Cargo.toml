@@ -1,0 +1,45 @@
+[workspace]
+resolver = "3"
+
+members = [
+    "crates/domain",
+    "crates/application",
+    "crates/infrastructure",
+    "crates/interfaces",
+    "crates/server",
+]
+
+# 统一版本配置；各 crate 按需显式引入，不会自动继承。
+[workspace.dependencies]
+uuid = { version = "1", features = ["v7", "serde"] }
+time = { version = "0.3", features = ["serde", "macros", "formatting", "parsing"] }
+thiserror = "2"
+async-trait = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+toml_edit = "0.22"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time", "process", "fs", "io-util"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls-ring-webpki", "postgres", "time", "uuid", "migrate", "json"] }
+axum = "0.8"
+clap = { version = "4", features = ["derive"] }
+minijinja = { version = "2", features = ["fuel", "loader"] }
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
+ammonia = "4"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+# 出站 HTTP 与加密原语仅进入 infrastructure（OAuth 客户端、令牌摘要、PKCE）。
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+# Exactly one backend is required by jsonwebtoken 10; AWS-LC also avoids the
+# RustCrypto RSA dependency, which currently has an unpatched timing advisory.
+jsonwebtoken = { version = "10", features = ["aws_lc_rs"] }
+sha2 = "0.10"
+getrandom = "0.3"
+base64 = "0.22"
+# 本地密码凭据：Argon2id（PHC 字符串自描述参数，便于按策略升级重哈希）。
+argon2 = { version = "0.5", features = ["std"] }
+# 受控 CLI 的隐藏口令输入（不回显、不进入 argv 与 shell 历史）。
+rpassword = "7"
+# 站点公开地址解析（application::seo）：URL 语法自己手写迟早出错，
+# 交给成熟解析器，业务限制（scheme/无凭据/无路径前缀）在解析结果上再检查。
+url = "2"

@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>安装博客</title>
+  <link rel="stylesheet" href="/install/style.css">
+  <script src="/install/app.js" defer></script>
+</head>
+<body>
+  <main>
+    <p class="eyebrow">开始写作之前</p>
+    <h1>安装你的博客</h1>
+    <p class="intro">连接数据库，创建管理员。一切就绪后，就可以开始写第一篇文章。</p>
+    <noscript>请启用 JavaScript 以完成安装。</noscript>
+    <form id="install-form">
+      <label for="token">安装码</label>
+      <input id="token" type="password" autocomplete="off" required spellcheck="false" aria-describedby="token-help">
+      <p class="hint" id="token-help">填写部署时设置的安装码；自行启动的站点可在启动日志查看。</p>
+      <fieldset id="fields" disabled hidden>
+        <div id="database-fields">
+          <label for="database">数据库地址</label>
+          <input id="database" type="password" autocomplete="off" required spellcheck="false" placeholder="postgres://用户:密码@主机:5432/数据库" aria-describedby="database-help">
+          <p class="hint" id="database-help">使用已创建的 PostgreSQL 空库，连接账号需要建表和读写权限。</p>
+        </div>
+        <p id="resume" class="notice" hidden>数据库已配置，将使用当前部署的连接设置。</p>
+        <label for="public-url">站点地址</label>
+        <input id="public-url" type="url" required spellcheck="false" placeholder="https://blog.example.com" aria-describedby="url-help">
+        <p class="hint" id="url-help">访客实际访问的完整地址，使用独立域名或本地地址。</p>
+        <fieldset id="admin-fields" disabled hidden>
+        <hr>
+        <h2>首个管理员</h2>
+        <label for="username">用户名</label>
+        <input id="username" autocomplete="username" required maxlength="64" pattern="[A-Za-z0-9_-]+" spellcheck="false" aria-describedby="username-help">
+        <p class="hint" id="username-help">字母、数字、短横线或下划线；保存时统一为小写。</p>
+        <label for="password">密码</label>
+        <input id="password" type="password" autocomplete="new-password" required aria-describedby="password-help">
+        <p class="hint" id="password-help">12–128 个字符，不能包含用户名或使用常见密码。</p>
+        <label for="confirm">确认密码</label>
+        <input id="confirm" type="password" autocomplete="new-password" required>
+        </fieldset>
+      </fieldset>
+      <p id="message" role="status" aria-live="polite"></p>
+      <button id="submit" type="submit">验证安装码</button>
+    </form>
+    <p class="footer"><a href="/recovery">已有备份？从备份恢复站点</a></p>
+    <p class="footer">管理员拥有站点的全部权限。安装完成后，此入口自动关闭。</p>
+  </main>
+</body>
+</html>

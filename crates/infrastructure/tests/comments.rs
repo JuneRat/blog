@@ -1,0 +1,1257 @@
+mod common;
+use application::{
+    comments::*,
+    error::UseCaseError,
+    html_rebuild::{HtmlKind, HtmlRebuildStore},
+    identity::{Actor, ActorChannel},
+    ports::CommentRenderer,
+};
+use domain::identity::{PermissionSet, UserId};
+use infrastructure::{
+    COMMENT_RENDER_VERSION, PostgresHtmlRebuildStore, RenderingRuntime,
+    comments::PostgresCommentRepository,
+};
+use sqlx::{PgPool, Row};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
+use uuid::Uuid;
+
+fn actor(id: Uuid, all: bool) -> Actor {
+    Actor::new(
+        UserId(id),
+        ActorChannel::Session,
+        PermissionSet::from_keys(if all {
+            vec!["post.update_any", "settings.manage"]
+        } else {
+            vec!["post.update"]
+        }),
+    )
+}
+fn cmd(body: &str, parent_id: Option<Uuid>) -> SubmitComment {
+    SubmitComment {
+        nickname: Some("Guest".into()),
+        email: Some("guest@example.com".into()),
+        body: body.into(),
+        parent_id,
+    }
+}
+fn service(pool: &PgPool) -> CommentInteractor {
+    let renderer = Arc::new(RenderingRuntime::default());
+    CommentInteractor::new(
+        Arc::new(PostgresCommentRepository::new(
+            common::database(pool.clone()),
+            renderer.clone(),
+        )),
+        renderer,
+    )
+}
+async fn fixture(db: &str) -> (PgPool, CommentInteractor, Actor, Uuid) {
+    let pool = common::fresh_database(db).await;
+    sqlx::query(
+        "INSERT INTO settings(key,value) VALUES('access','{\"guest_comments_enabled\":true}')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let user = common::seed_user(&pool, "author").await;
+    let post = seed_post(&pool, user, "discussion").await;
+    let service = service(&pool);
+    (pool, service, actor(user, true), post)
+}
+async fn seed_post(pool: &PgPool, owner: Uuid, slug: &str) -> Uuid {
+    let post = Uuid::now_v7();
+    sqlx::query("INSERT INTO posts(id,author_id,slug,title,content,content_html,content_render_version,status,published_at) VALUES($1,$2,$3,'Discussion','Body','<p>Body</p>',1,'published',now())")
+        .bind(post).bind(owner).bind(slug).execute(pool).await.unwrap();
+    post
+}
+async fn change(
+    service: &CommentInteractor,
+    admin: &Actor,
+    id: Uuid,
+    version: i64,
+    status: CommentStatus,
+) {
+    service
+        .moderate(
+            admin,
+            id,
+            version,
+            ModerationAction::SetStatus(status),
+            None,
+        )
+        .await
+        .unwrap();
+}
+async fn new_comment(
+    service: &CommentInteractor,
+    admin: &Actor,
+    parent: Option<Uuid>,
+) -> CommentDto {
+    service
+        .submit(
+            "discussion",
+            None,
+            Some("198.51.100.2".parse().unwrap()),
+            cmd("**Hello**\n<script>alert(1)</script>", parent),
+        )
+        .await
+        .unwrap();
+    service
+        .list(admin, Some("pending"), None, 1)
+        .await
+        .unwrap()
+        .items
+        .remove(0)
+}
+
+#[tokio::test]
+async fn persisted_html_privacy_identity_and_independent_submissions() {
+    let (pool, service, admin, post) = fixture("blog_test_comments_html").await;
+    let root = new_comment(&service, &admin, None).await;
+    assert_eq!(root.author_email.as_deref(), Some("guest@example.com"));
+    assert_eq!(root.ip_address.as_deref(), Some("198.51.100.2"));
+    assert_eq!(
+        root.content_html,
+        service.preview(&root.body).await.unwrap()
+    );
+    assert!(root.content_html.contains("<strong>Hello</strong>"));
+    assert!(!root.content_html.contains("<script>"));
+    assert_eq!(
+        service
+            .public_list("discussion", None, 1)
+            .await
+            .unwrap()
+            .total,
+        0
+    );
+    change(&service, &admin, root.id, 1, CommentStatus::Approved).await;
+    let public =
+        serde_json::to_value(service.public_list("discussion", None, 1).await.unwrap()).unwrap();
+    for key in [
+        "body",
+        "author_email",
+        "ip_address",
+        "user_id",
+        "status",
+        "version",
+    ] {
+        assert!(public["items"][0].get(key).is_none(), "{key}");
+    }
+    assert!(!public.to_string().contains("guest@example.com"));
+    let source = cmd("Duplicate is an independent request", None);
+    let (a, b) = tokio::join!(
+        service.submit("discussion", None, None, source.clone()),
+        service.submit("discussion", None, None, source)
+    );
+    a.unwrap();
+    b.unwrap();
+    assert_eq!(
+        service
+            .list(&admin, Some("pending"), None, 1)
+            .await
+            .unwrap()
+            .total,
+        2
+    );
+    sqlx::query("UPDATE users SET display_name=$2 WHERE id=$1")
+        .bind(admin.user_id.0)
+        .bind("  Alice\nAdmin\u{7}  ")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let mut account = cmd("Account comment", None);
+    account.nickname = Some("\nspoof".into());
+    account.email = Some("invalid".into());
+    service
+        .submit("discussion", Some(&admin), None, account)
+        .await
+        .unwrap();
+    let account = service
+        .list(&admin, Some("pending"), None, 1)
+        .await
+        .unwrap()
+        .items
+        .remove(0);
+    assert_eq!(account.nickname, "AliceAdmin");
+    assert!(account.is_author);
+    assert!(account.author_email.is_none());
+    // Authenticated identity is server-owned; the nickname field may be absent.
+    let mut without_nickname = cmd("Authenticated reply without nickname", None);
+    without_nickname.nickname = None;
+    service
+        .submit("discussion", Some(&admin), None, without_nickname.clone())
+        .await
+        .unwrap();
+    assert!(matches!(
+        service
+            .submit("discussion", None, None, without_nickname)
+            .await,
+        Err(UseCaseError::Invalid(_))
+    ));
+    let mut bad = cmd("Guest", None);
+    bad.email = Some("invalid".into());
+    assert!(matches!(
+        service.submit("discussion", None, None, bad).await,
+        Err(UseCaseError::Invalid(_))
+    ));
+    let version: i64 = sqlx::query_scalar("SELECT version FROM posts WHERE id=$1")
+        .bind(post)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(version, 1);
+    let audits: Vec<serde_json::Value> =
+        sqlx::query_scalar("SELECT metadata FROM audit_logs WHERE action LIKE 'comment.%'")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(audits.len(), 6);
+    assert!(audits.iter().all(|v| !v.to_string().contains("example.com")
+        && v.get("body").is_none()
+        && v.get("content").is_none()));
+    pool.close().await;
+}
+
+#[tokio::test]
+async fn multilevel_replies_survive_deleted_and_hidden_ancestors() {
+    let (pool, service, admin, post) = fixture("blog_test_comments_tree").await;
+    let root = new_comment(&service, &admin, None).await;
+    assert!(matches!(
+        service
+            .submit("discussion", None, None, cmd("Reply", Some(root.id)))
+            .await,
+        Err(UseCaseError::NotFound(_))
+    ));
+    change(&service, &admin, root.id, 1, CommentStatus::Approved).await;
+    let reply = new_comment(&service, &admin, Some(root.id)).await;
+    change(&service, &admin, reply.id, 1, CommentStatus::Approved).await;
+    let nested = new_comment(&service, &admin, Some(reply.id)).await;
+    change(&service, &admin, nested.id, 1, CommentStatus::Approved).await;
+    assert_eq!(nested.root_id, Some(root.id));
+    assert_eq!(nested.parent_id, Some(reply.id));
+    assert_eq!(
+        service
+            .public_list("discussion", Some(root.id), 1)
+            .await
+            .unwrap()
+            .total,
+        2
+    );
+    assert!(matches!(
+        service.public_list("discussion", Some(reply.id), 1).await,
+        Err(UseCaseError::NotFound(_))
+    ));
+    seed_post(&pool, admin.user_id.0, "other").await;
+    assert!(matches!(
+        service
+            .submit("other", None, None, cmd("Cross post", Some(nested.id)))
+            .await,
+        Err(UseCaseError::NotFound(_))
+    ));
+    change(&service, &admin, root.id, 2, CommentStatus::Trash).await;
+    change(&service, &admin, reply.id, 2, CommentStatus::Spam).await;
+    let roots = service.public_list("discussion", None, 1).await.unwrap();
+    assert_eq!(roots.total, 1);
+    assert!(roots.items[0].deleted);
+    assert!(roots.items[0].placeholder);
+    assert!(roots.items[0].content_html.is_empty());
+    assert!(roots.items[0].nickname.is_empty());
+    assert!(!roots.items[0].is_author);
+    let replies = service
+        .public_list("discussion", Some(root.id), 1)
+        .await
+        .unwrap();
+    assert_eq!(replies.total, 2);
+    assert!(replies.items[0].placeholder);
+    assert!(!replies.items[0].deleted);
+    assert!(replies.items[1].parent_nickname.is_none());
+    assert!(!replies.items[1].placeholder);
+    // A public descendant remains replyable even when its root was deleted.
+    let fourth = new_comment(&service, &admin, Some(nested.id)).await;
+    assert_eq!(fourth.root_id, Some(root.id));
+    assert!(matches!(
+        service
+            .moderate(
+                &admin,
+                root.id,
+                3,
+                ModerationAction::SetStatus(CommentStatus::Approved),
+                None
+            )
+            .await,
+        Err(UseCaseError::Invalid(_))
+    ));
+    change(&service, &admin, root.id, 3, CommentStatus::Pending).await;
+    assert!(
+        service
+            .public_list("discussion", None, 1)
+            .await
+            .unwrap()
+            .items[0]
+            .placeholder
+    );
+    change(&service, &admin, root.id, 4, CommentStatus::Approved).await;
+    assert!(
+        !service
+            .public_list("discussion", None, 1)
+            .await
+            .unwrap()
+            .items[0]
+            .placeholder
+    );
+    assert!(
+        sqlx::query("DELETE FROM comments WHERE id=$1")
+            .bind(root.id)
+            .execute(&pool)
+            .await
+            .is_err()
+    );
+    // Explicit tree deletion is safe for post purge; individual parents are protected.
+    sqlx::query("DELETE FROM comments WHERE post_id=$1")
+        .bind(post)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM posts WHERE id=$1")
+        .bind(post)
+        .execute(&pool)
+        .await
+        .unwrap();
+    pool.close().await;
+}
+
+#[tokio::test]
+async fn moderation_scope_cas_noop_and_post_visibility() {
+    let (pool, service, admin, post) = fixture("blog_test_comments_scope").await;
+    let root = new_comment(&service, &admin, None).await;
+    let outsider = actor(common::seed_user(&pool, "outsider").await, false);
+    assert_eq!(
+        service.list(&outsider, None, None, 1).await.unwrap().total,
+        0
+    );
+    assert!(matches!(
+        service
+            .moderate(
+                &outsider,
+                root.id,
+                1,
+                ModerationAction::SetStatus(CommentStatus::Approved),
+                None
+            )
+            .await,
+        Err(UseCaseError::Forbidden)
+    ));
+    change(&service, &admin, root.id, 1, CommentStatus::Pending).await;
+    let (a, b) = tokio::join!(
+        service.moderate(
+            &admin,
+            root.id,
+            1,
+            ModerationAction::SetStatus(CommentStatus::Approved),
+            None
+        ),
+        service.moderate(
+            &admin,
+            root.id,
+            1,
+            ModerationAction::SetStatus(CommentStatus::Trash),
+            None
+        )
+    );
+    assert!(a.is_ok() ^ b.is_ok());
+    assert!(
+        matches!(a, Err(UseCaseError::VersionConflict))
+            || matches!(b, Err(UseCaseError::VersionConflict))
+    );
+    for change in [
+        "status='draft'",
+        "status='published',visibility='private'",
+        "visibility='public',deleted_at=now()",
+        "deleted_at=NULL,published_at=now()+interval '1 hour'",
+    ] {
+        sqlx::query(&format!("UPDATE posts SET {change} WHERE id=$1"))
+            .bind(post)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(matches!(
+            service.public_list("discussion", None, 1).await,
+            Err(UseCaseError::NotFound(_))
+        ));
+        assert!(matches!(
+            service
+                .submit("discussion", None, None, cmd("Hidden", None))
+                .await,
+            Err(UseCaseError::NotFound(_))
+        ));
+    }
+    pool.close().await;
+}
+
+#[tokio::test]
+async fn aggregate_initial_state_and_moderation_preserve_stored_identity() {
+    let (pool, service, admin, _) = fixture("blog_test_comments_aggregate").await;
+    // Creation must persist the domain's initial state rather than rely on DDL defaults.
+    sqlx::raw_sql("ALTER TABLE comments ALTER COLUMN status SET DEFAULT 'approved'; ALTER TABLE comments ALTER COLUMN version SET DEFAULT 9")
+        .execute(&pool).await.unwrap();
+    let root = new_comment(&service, &admin, None).await;
+    assert_eq!(root.status, CommentStatus::Pending);
+    assert_eq!(root.version, 1);
+    let before: serde_json::Value =
+        sqlx::query_scalar("SELECT to_jsonb(c) FROM comments c WHERE id=$1")
+            .bind(root.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    change(&service, &admin, root.id, 1, CommentStatus::Pending).await;
+    let after: serde_json::Value =
+        sqlx::query_scalar("SELECT to_jsonb(c) FROM comments c WHERE id=$1")
+            .bind(root.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(before, after, "no-op must preserve every stored field");
+    change(&service, &admin, root.id, 1, CommentStatus::Approved).await;
+    assert!(matches!(
+        service
+            .moderate(
+                &admin,
+                root.id,
+                1,
+                ModerationAction::SetStatus(CommentStatus::Approved),
+                None
+            )
+            .await,
+        Err(UseCaseError::VersionConflict)
+    ));
+    let after: serde_json::Value =
+        sqlx::query_scalar("SELECT to_jsonb(c) FROM comments c WHERE id=$1")
+            .bind(root.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(after["status"], "approved");
+    assert_eq!(after["version"], 2);
+    assert_eq!(after["moderation_reason"], "manual_approval");
+    for key in [
+        "author_name",
+        "user_id",
+        "author_email",
+        "content",
+        "content_html",
+        "post_id",
+        "parent_id",
+        "root_id",
+        "ip_address",
+    ] {
+        assert_eq!(before[key], after[key], "moderation preserves {key}");
+    }
+    let audits: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM audit_logs WHERE action='comment.moderate'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        audits, 1,
+        "no-op and stale requests must not append audit entries"
+    );
+    pool.close().await;
+}
+
+async fn wait_for_blocked_submit(pool: &PgPool, blocker: i32) {
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            let waiting: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND $1=ANY(pg_blocking_pids(pid)))")
+                .bind(blocker).fetch_one(pool).await.unwrap();
+            if waiting {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }).await.expect("submission must wait for the transaction that changes admission facts");
+}
+
+#[tokio::test]
+async fn submission_rechecks_global_post_and_parent_facts_after_waiting() {
+    for gate in ["global", "post", "parent"] {
+        let (pool, service, admin, post) =
+            fixture(&format!("blog_test_comments_wait_{gate}")).await;
+        let parent = if gate == "parent" {
+            let root = new_comment(&service, &admin, None).await;
+            change(&service, &admin, root.id, 1, CommentStatus::Approved).await;
+            Some(root.id)
+        } else {
+            None
+        };
+        let before: (i64, i64) = sqlx::query_as(
+            "SELECT (SELECT count(*) FROM comments), (SELECT count(*) FROM audit_logs)",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let blocker: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap();
+        match gate {
+            "global" => {
+                sqlx::query("SELECT pg_advisory_xact_lock(1129270605,1)")
+                    .execute(&mut *tx)
+                    .await
+                    .unwrap();
+                sqlx::query(
+                    "INSERT INTO settings(key,value) VALUES('comments','{\"enabled\":false}')",
+                )
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+            }
+            "post" => {
+                sqlx::query(
+                    "UPDATE posts SET comments_enabled=false,version=version+1 WHERE id=$1",
+                )
+                .bind(post)
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+            }
+            "parent" => {
+                sqlx::query("UPDATE comments SET status='trash',version=version+1 WHERE id=$1")
+                    .bind(parent)
+                    .execute(&mut *tx)
+                    .await
+                    .unwrap();
+            }
+            _ => unreachable!(),
+        }
+        let submitted = tokio::spawn(async move {
+            service
+                .submit("discussion", None, None, cmd("Racing submission", parent))
+                .await
+        });
+        wait_for_blocked_submit(&pool, blocker).await;
+        tx.commit().await.unwrap();
+        let result = submitted.await.unwrap();
+        if gate == "parent" {
+            assert!(matches!(result, Err(UseCaseError::NotFound(_))));
+        } else {
+            assert!(
+                matches!(result, Err(UseCaseError::Invalid(ref message)) if message == "新评论已关闭")
+            );
+        }
+        let after: (i64, i64) = sqlx::query_as(
+            "SELECT (SELECT count(*) FROM comments), (SELECT count(*) FROM audit_logs)",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            before, after,
+            "rejected submission must leave no row or audit entry"
+        );
+        pool.close().await;
+    }
+}
+
+#[tokio::test]
+async fn policy_defaults_post_versions_and_global_merge() {
+    let (pool, service, admin, post) = fixture("blog_test_comments_policy").await;
+    let root = new_comment(&service, &admin, None).await;
+    change(&service, &admin, root.id, 1, CommentStatus::Approved).await;
+    let global = service.policy(&admin, None, None, None).await.unwrap();
+    assert!(global.enabled);
+    assert_eq!(global.version, 0);
+    let noop = service
+        .policy(&admin, None, Some(global.clone()), None)
+        .await
+        .unwrap();
+    assert_eq!(noop.version, 0);
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM settings WHERE key='comments'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 0);
+    let p = service
+        .policy(&admin, Some(post), None, None)
+        .await
+        .unwrap();
+    assert_eq!(p.version, 1);
+    let closed = service
+        .policy(
+            &admin,
+            Some(post),
+            Some(CommentPolicy {
+                moderation: None,
+                enabled: false,
+                ..p.clone()
+            }),
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(closed.version, 2);
+    assert!(matches!(
+        service.policy(&admin, Some(post), Some(p), None).await,
+        Err(UseCaseError::VersionConflict)
+    ));
+    assert_eq!(
+        service
+            .policy(&admin, Some(post), Some(closed.clone()), None)
+            .await
+            .unwrap()
+            .version,
+        2
+    );
+    let visible = service.public_list("discussion", None, 1).await.unwrap();
+    assert!(!visible.enabled);
+    assert_eq!(visible.total, 1);
+    assert!(matches!(
+        service
+            .submit("discussion", None, None, cmd("Closed", None))
+            .await,
+        Err(UseCaseError::Invalid(_))
+    ));
+    // The article editor's previous expected_version cannot overwrite a policy change.
+    assert_eq!(
+        sqlx::query("UPDATE posts SET title='Lost' WHERE id=$1 AND version=1")
+            .bind(post)
+            .execute(&pool)
+            .await
+            .unwrap()
+            .rows_affected(),
+        0
+    );
+    service
+        .policy(
+            &admin,
+            Some(post),
+            Some(CommentPolicy {
+                moderation: None,
+                enabled: true,
+                ..closed
+            }),
+            None,
+        )
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO settings(key,value) VALUES('comments','{\"ip_retention_days\":30,\"moderation\":\"guests\"}')")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let p = service.policy(&admin, None, None, None).await.unwrap();
+    let (a, b) = tokio::join!(
+        service.policy(
+            &admin,
+            None,
+            Some(CommentPolicy {
+                moderation: None,
+                enabled: false,
+                ..p.clone()
+            }),
+            None
+        ),
+        service.policy(
+            &admin,
+            None,
+            Some(CommentPolicy {
+                moderation: None,
+                enabled: false,
+                ..p
+            }),
+            None
+        )
+    );
+    assert!(a.is_ok() ^ b.is_ok());
+    let value: serde_json::Value =
+        sqlx::query_scalar("SELECT value FROM settings WHERE key='comments'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(value["ip_retention_days"], 30);
+    assert_eq!(value["moderation"], "guests");
+    assert!(
+        !service
+            .public_list("discussion", None, 1)
+            .await
+            .unwrap()
+            .enabled
+    );
+    let ordinary = actor(admin.user_id.0, false);
+    assert!(matches!(
+        service.policy(&ordinary, None, None, None).await,
+        Err(UseCaseError::Forbidden)
+    ));
+    pool.close().await;
+}
+
+#[tokio::test]
+async fn public_roots_and_flat_descendants_have_independent_pagination() {
+    let (pool, service, admin, _) = fixture("blog_test_comments_pages").await;
+    let root = new_comment(&service, &admin, None).await;
+    change(&service, &admin, root.id, 1, CommentStatus::Approved).await;
+    for _ in 0..21 {
+        new_comment(&service, &admin, None).await;
+        new_comment(&service, &admin, Some(root.id)).await;
+    }
+    sqlx::query("UPDATE comments SET status='approved'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    for (parent, total, last) in [(None, 22, 2), (Some(root.id), 21, 1)] {
+        let first = service.public_list("discussion", parent, 1).await.unwrap();
+        assert_eq!(first.total, total);
+        assert_eq!(first.items.len(), 20);
+        assert_eq!(
+            service
+                .public_list("discussion", parent, 2)
+                .await
+                .unwrap()
+                .items
+                .len(),
+            last
+        );
+        let beyond = service.public_list("discussion", parent, 3).await.unwrap();
+        assert_eq!(beyond.total, total);
+        assert!(beyond.items.is_empty());
+    }
+    assert!(matches!(
+        service.public_list("discussion", None, 0).await,
+        Err(UseCaseError::Invalid(_))
+    ));
+    let admin_page = service.list(&admin, None, None, 3).await.unwrap();
+    assert_eq!(
+        (admin_page.total, admin_page.page, admin_page.per_page),
+        (43, 3, 20)
+    );
+    assert_eq!(admin_page.items.len(), 3);
+    assert!(admin_page.enabled);
+    service
+        .policy(
+            &admin,
+            None,
+            Some(CommentPolicy {
+                enabled: false,
+                moderation: None,
+                version: 0,
+            }),
+            None,
+        )
+        .await
+        .unwrap();
+    let beyond = service.list(&admin, None, None, 4).await.unwrap();
+    assert_eq!((beyond.total, beyond.page, beyond.per_page), (43, 4, 20));
+    assert!(beyond.items.is_empty());
+    assert!(
+        !beyond.enabled,
+        "后台仍可读取已关闭评论的数据，enabled 反映全站开关"
+    );
+    pool.close().await;
+}
+
+#[tokio::test]
+async fn audit_failure_rolls_back_create_moderation_and_both_policies() {
+    let (pool, service, admin, post) = fixture("blog_test_comments_audit").await;
+    let root = new_comment(&service, &admin, None).await;
+    sqlx::query("ALTER TABLE audit_logs ADD CONSTRAINT fail_audit CHECK(action='never') NOT VALID")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(
+        service
+            .submit("discussion", None, None, cmd("Rollback", None))
+            .await
+            .is_err()
+    );
+    assert!(
+        service
+            .moderate(
+                &admin,
+                root.id,
+                1,
+                ModerationAction::SetStatus(CommentStatus::Approved),
+                None
+            )
+            .await
+            .is_err()
+    );
+    for (target, version) in [(None, 0), (Some(post), 1)] {
+        assert!(
+            service
+                .policy(
+                    &admin,
+                    target,
+                    Some(CommentPolicy {
+                        moderation: None,
+                        enabled: false,
+                        version
+                    }),
+                    None
+                )
+                .await
+                .is_err()
+        );
+    }
+    let comments = service.list(&admin, None, None, 1).await.unwrap();
+    assert_eq!(comments.total, 1);
+    assert_eq!(comments.items[0].status, CommentStatus::Pending);
+    assert_eq!(comments.items[0].version, 1);
+    assert_eq!(
+        service
+            .policy(&admin, None, None, None)
+            .await
+            .unwrap()
+            .version,
+        0
+    );
+    let p = service
+        .policy(&admin, Some(post), None, None)
+        .await
+        .unwrap();
+    assert!(p.enabled);
+    assert_eq!(p.version, 1);
+    pool.close().await;
+}
+
+struct RacingRenderer {
+    pool: PgPool,
+    id: Uuid,
+    changed: AtomicBool,
+}
+#[async_trait::async_trait]
+impl CommentRenderer for RacingRenderer {
+    async fn render_comment(&self, source: &str) -> Result<String, UseCaseError> {
+        if !self.changed.swap(true, Ordering::SeqCst) {
+            sqlx::query("UPDATE comments SET content='New source',content_html='<p>New source</p>',content_render_version=$2,version=version+1 WHERE id=$1")
+                .bind(self.id).bind(COMMENT_RENDER_VERSION).execute(&self.pool).await.unwrap();
+        }
+        RenderingRuntime::default().render_comment(source).await
+    }
+}
+#[tokio::test]
+async fn rebuild_updates_only_derived_fields_and_does_not_clobber_a_newer_source() {
+    let (pool, service, admin, _) = fixture("blog_test_comments_rebuild").await;
+    let root = new_comment(&service, &admin, None).await;
+    let before: time::OffsetDateTime =
+        sqlx::query_scalar("SELECT updated_at FROM comments WHERE id=$1")
+            .bind(root.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    sqlx::query("UPDATE comments SET content_html='stale',content_render_version=2 WHERE id=$1")
+        .bind(root.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let runtime = Arc::new(RenderingRuntime::default());
+    let store =
+        PostgresHtmlRebuildStore::new(common::database(pool.clone()), runtime.clone(), runtime);
+    assert_eq!(
+        store
+            .rebuild_batch(HtmlKind::Comment, None, 100)
+            .await
+            .unwrap()
+            .rebuilt,
+        1
+    );
+    let row = sqlx::query(
+        "SELECT content_html,version,updated_at,content_render_version FROM comments WHERE id=$1",
+    )
+    .bind(root.id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(row.get::<String, _>("content_html"), root.content_html);
+    assert_eq!(row.get::<i64, _>("version"), 1);
+    assert_eq!(row.get::<time::OffsetDateTime, _>("updated_at"), before);
+    assert_eq!(
+        row.get::<i32, _>("content_render_version"),
+        COMMENT_RENDER_VERSION
+    );
+    sqlx::query("UPDATE comments SET content_render_version=2 WHERE id=$1")
+        .bind(root.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let racing = PostgresHtmlRebuildStore::new(
+        common::database(pool.clone()),
+        Arc::new(RenderingRuntime::default()),
+        Arc::new(RacingRenderer {
+            pool: pool.clone(),
+            id: root.id,
+            changed: AtomicBool::new(false),
+        }),
+    );
+    let result = racing
+        .rebuild_batch(HtmlKind::Comment, None, 100)
+        .await
+        .unwrap();
+    assert_eq!(
+        (result.rebuilt, result.skipped),
+        (0, 1),
+        "并发编辑使重建失效时不计入成功数"
+    );
+    let latest = service
+        .list(&admin, None, None, 1)
+        .await
+        .unwrap()
+        .items
+        .remove(0);
+    assert_eq!(latest.body, "New source");
+    assert_eq!(latest.content_html, "<p>New source</p>");
+    assert_eq!(latest.version, 2);
+    pool.close().await;
+}
+
+#[tokio::test]
+async fn moderation_policies_use_manual_account_history_and_preserve_pending_work() {
+    let (pool, service, admin, post) = fixture("blog_test_comments_moderation").await;
+    let reader_id = common::seed_user(&pool, "reader").await;
+    let reader = Actor::new(
+        UserId(reader_id),
+        ActorChannel::Session,
+        PermissionSet::from_keys(Vec::<&str>::new()),
+    );
+    sqlx::query("UPDATE users SET email='reader@example.com' WHERE id=$1")
+        .bind(reader_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let original = service.policy(&admin, None, None, None).await.unwrap();
+    assert_eq!(original.moderation, Some(ModerationMode::All));
+    let old_pending = new_comment(&service, &admin, None).await;
+    assert_eq!(
+        old_pending.moderation_reason.as_deref(),
+        Some("all_comments")
+    );
+
+    let guests = service
+        .policy(
+            &admin,
+            None,
+            Some(CommentPolicy {
+                moderation: Some(ModerationMode::Guests),
+                ..original.clone()
+            }),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        service.policy(&admin, None, Some(original), None).await,
+        Err(UseCaseError::VersionConflict)
+    ));
+    assert_eq!(
+        service
+            .submit(
+                "discussion",
+                Some(&reader),
+                None,
+                cmd("Auto-approved account", None)
+            )
+            .await
+            .unwrap(),
+        CommentStatus::Approved
+    );
+    assert_eq!(
+        service
+            .submit("discussion", None, None, cmd("Guest review", None))
+            .await
+            .unwrap(),
+        CommentStatus::Pending
+    );
+
+    let first = service
+        .policy(
+            &admin,
+            None,
+            Some(CommentPolicy {
+                moderation: Some(ModerationMode::FirstComment),
+                ..guests
+            }),
+            None,
+        )
+        .await
+        .unwrap();
+    // Automatic approvals cannot bootstrap trust under the first-comment policy.
+    assert_eq!(
+        service
+            .submit(
+                "discussion",
+                Some(&reader),
+                None,
+                cmd("First manual review", None)
+            )
+            .await
+            .unwrap(),
+        CommentStatus::Pending
+    );
+    let pending = service
+        .list(&admin, Some("pending"), None, 1)
+        .await
+        .unwrap()
+        .items;
+    let proof = pending
+        .iter()
+        .find(|c| c.body == "First manual review")
+        .unwrap();
+    assert_eq!(proof.moderation_reason.as_deref(), Some("first_comment"));
+    assert!(pending.iter().any(|c| c.id == old_pending.id));
+    assert_eq!(
+        pending
+            .iter()
+            .find(|c| c.body == "Guest review")
+            .unwrap()
+            .moderation_reason
+            .as_deref(),
+        Some("guest")
+    );
+    change(
+        &service,
+        &admin,
+        proof.id,
+        proof.version,
+        CommentStatus::Approved,
+    )
+    .await;
+    assert_eq!(
+        service
+            .submit(
+                "discussion",
+                Some(&reader),
+                None,
+                cmd("Trusted reply", Some(proof.id))
+            )
+            .await
+            .unwrap(),
+        CommentStatus::Approved
+    );
+    let mut guest = cmd("Matching email is not proof", None);
+    guest.email = Some("reader@example.com".into());
+    assert_eq!(
+        service
+            .submit("discussion", None, None, guest)
+            .await
+            .unwrap(),
+        CommentStatus::Pending
+    );
+    change(
+        &service,
+        &admin,
+        proof.id,
+        proof.version + 1,
+        CommentStatus::Spam,
+    )
+    .await;
+    assert_eq!(
+        service
+            .submit(
+                "discussion",
+                Some(&reader),
+                None,
+                cmd("Trust revoked", None)
+            )
+            .await
+            .unwrap(),
+        CommentStatus::Pending
+    );
+    change(
+        &service,
+        &admin,
+        proof.id,
+        proof.version + 2,
+        CommentStatus::Pending,
+    )
+    .await;
+    let restored = service
+        .list(&admin, Some("pending"), None, 1)
+        .await
+        .unwrap()
+        .items
+        .into_iter()
+        .find(|c| c.id == proof.id)
+        .unwrap();
+    assert_eq!(restored.moderation_reason.as_deref(), Some("restored"));
+
+    let none = service
+        .policy(
+            &admin,
+            None,
+            Some(CommentPolicy {
+                moderation: Some(ModerationMode::None),
+                ..first
+            }),
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        service
+            .submit("discussion", None, None, cmd("Public guest", None))
+            .await
+            .unwrap(),
+        CommentStatus::Approved
+    );
+    assert!(
+        service
+            .public_list("discussion", None, 1)
+            .await
+            .unwrap()
+            .items
+            .iter()
+            .any(|c| c.content_html.contains("Public guest"))
+    );
+    assert!(
+        service
+            .list(&admin, Some("pending"), None, 1)
+            .await
+            .unwrap()
+            .items
+            .iter()
+            .any(|c| c.id == old_pending.id)
+    );
+
+    let article = service
+        .policy(&admin, Some(post), None, None)
+        .await
+        .unwrap();
+    assert!(matches!(
+        service
+            .policy(
+                &admin,
+                Some(post),
+                Some(CommentPolicy {
+                    moderation: Some(ModerationMode::None),
+                    ..article.clone()
+                }),
+                None
+            )
+            .await,
+        Err(UseCaseError::Invalid(_))
+    ));
+    let closed_post = service
+        .policy(
+            &admin,
+            Some(post),
+            Some(CommentPolicy {
+                enabled: false,
+                ..article
+            }),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        service
+            .submit(
+                "discussion",
+                Some(&reader),
+                None,
+                cmd("Closed article", None)
+            )
+            .await,
+        Err(UseCaseError::Invalid(_))
+    ));
+    service
+        .policy(
+            &admin,
+            Some(post),
+            Some(CommentPolicy {
+                enabled: true,
+                ..closed_post
+            }),
+            None,
+        )
+        .await
+        .unwrap();
+    let closed = service
+        .policy(
+            &admin,
+            None,
+            Some(CommentPolicy {
+                enabled: false,
+                moderation: None,
+                ..none
+            }),
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(closed.moderation, Some(ModerationMode::None));
+    assert!(matches!(
+        service
+            .submit("discussion", None, None, cmd("Closed globally", None))
+            .await,
+        Err(UseCaseError::Invalid(_))
+    ));
+    assert!(
+        service
+            .public_list("discussion", None, 1)
+            .await
+            .unwrap()
+            .items
+            .iter()
+            .any(|c| c.content_html.contains("Public guest"))
+    );
+    pool.close().await;
+}
+
+#[tokio::test]
+async fn first_comment_policy_rechecks_a_concurrently_withdrawn_approval() {
+    let (pool, service, admin, _) = fixture("blog_test_comments_trust_race").await;
+    service
+        .submit("discussion", Some(&admin), None, cmd("Proof", None))
+        .await
+        .unwrap();
+    let proof = service
+        .list(&admin, Some("pending"), None, 1)
+        .await
+        .unwrap()
+        .items
+        .into_iter()
+        .find(|c| c.body == "Proof")
+        .unwrap();
+    change(
+        &service,
+        &admin,
+        proof.id,
+        proof.version,
+        CommentStatus::Approved,
+    )
+    .await;
+    let policy = service.policy(&admin, None, None, None).await.unwrap();
+    service
+        .policy(
+            &admin,
+            None,
+            Some(CommentPolicy {
+                moderation: Some(ModerationMode::FirstComment),
+                ..policy
+            }),
+            None,
+        )
+        .await
+        .unwrap();
+    let mut tx = pool.begin().await.unwrap();
+    let blocker: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE comments SET status='pending',moderation_reason='manual_review',version=version+1 WHERE id=$1").bind(proof.id).execute(&mut *tx).await.unwrap();
+    let submitted = tokio::spawn(async move {
+        service
+            .submit(
+                "discussion",
+                Some(&admin),
+                None,
+                cmd("Concurrent comment", None),
+            )
+            .await
+    });
+    wait_for_blocked_submit(&pool, blocker).await;
+    tx.commit().await.unwrap();
+    assert_eq!(submitted.await.unwrap().unwrap(), CommentStatus::Pending);
+    pool.close().await;
+}

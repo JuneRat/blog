@@ -1,0 +1,427 @@
+-- PostgreSQL 18 初始基线：19 张表，仅用于空数据库。
+-- 旧迁移链已替换；已有旧库需显式重建，不执行就地升级或自动清库。
+-- SQLx 负责事务；目标规则见 docs/database-design.md。
+
+CREATE TABLE users (
+    id              uuid PRIMARY KEY,
+    username        text NOT NULL
+                    CHECK (username = btrim(username) AND char_length(username) BETWEEN 1 AND 64),
+    email           text CHECK (email IS NULL OR
+                    (email = btrim(email) AND char_length(email) BETWEEN 1 AND 320)),
+    display_name    text CHECK (display_name IS NULL OR
+                    (btrim(display_name) <> '' AND char_length(display_name) <= 100)),
+    bio             text,
+    avatar_media_id uuid,
+    password_hash   text CHECK (password_hash IS NULL OR password_hash <> ''),
+    status          text NOT NULL DEFAULT 'active'
+                    CHECK (status IN ('active', 'disabled')),
+    version         bigint NOT NULL DEFAULT 1 CHECK (version > 0),
+    auth_version    bigint NOT NULL DEFAULT 1 CHECK (auth_version > 0),
+    created_at      timestamptz NOT NULL DEFAULT now(),
+    updated_at      timestamptz NOT NULL DEFAULT now(),
+    deleted_at      timestamptz
+);
+
+-- 用户名在应用边界统一规范化；邮箱在本站按不区分大小写处理。
+-- 软删除后仍占用用户名和邮箱；bio 是纯文本，展示时正常转义。
+-- 仅 status='active' AND deleted_at IS NULL 的账号可登录、通过受保护请求。
+-- 禁用或软删除账号不连带隐藏其文章、评论，也不改变媒体 URL 的公开性。
+-- 日常采用禁用/软删除；有文章、媒体或评论引用时，外键拒绝物理删除。
+CREATE UNIQUE INDEX users_username_ci_uq ON users (lower(username));
+CREATE UNIQUE INDEX users_email_ci_uq ON users (lower(email)) WHERE email IS NOT NULL;
+
+CREATE TABLE sessions (
+    token_hash   text COLLATE "C" PRIMARY KEY CHECK (token_hash ~ '^[0-9a-f]{64}$'),
+    user_id      uuid NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    csrf_token   text COLLATE "C" NOT NULL CHECK (csrf_token ~ '^[0-9a-f]{64}$'),
+    auth_version bigint NOT NULL CHECK (auth_version > 0),
+    created_at   timestamptz NOT NULL DEFAULT now(),
+    last_seen_at timestamptz NOT NULL DEFAULT now(),
+    expires_at   timestamptz NOT NULL,
+    CONSTRAINT sessions_activity_time_ck CHECK (last_seen_at >= created_at),
+    CONSTRAINT sessions_expiry_time_ck CHECK (expires_at > created_at),
+    CONSTRAINT sessions_activity_expiry_ck CHECK (last_seen_at <= expires_at)
+);
+CREATE INDEX sessions_user_idx ON sessions (user_id);
+CREATE INDEX sessions_expires_idx ON sessions (expires_at);
+CREATE INDEX sessions_last_seen_idx ON sessions (last_seen_at);
+
+-- 会话使用独立、不可预测的随机令牌，浏览器保存原值，数据库只保存 SHA-256 摘要。
+-- token_hash 已是唯一查找键，无需额外 UUID、通用编辑 version 或 JSON metadata。
+-- csrf_token 是另一份独立随机值，供同源前端提交校验，不作为会话登录凭据。
+-- auth_version 是签发时 users.auth_version 的快照，不能关联 users.version，
+-- 也不能在刷新活跃时间时自动同步到用户的新认证版本。
+-- 每次鉴权必须同时满足：账号 active/未删除、认证版本相等、
+-- expires_at >= 当前时间、last_seen_at >= 当前时间 - 空闲 TTL。
+-- 校验通过后刷新 last_seen_at；expires_at 在签发时固定，不因活跃而延长。
+-- 空闲/绝对 TTL 来自会话配置，不把具体时长或 now() 写入 CHECK。
+-- 会话不缓存角色/权限，受保护请求仍按当前授权判断；活跃时间刷新不属于业务编辑。
+-- 单设备退出删除对应会话；退出全部设备等撤销操作同事务递增 users.auth_version，
+-- 并可清理该用户全部会话。旧版本会话即使尚未物理清理也不得继续通过鉴权。
+-- 用户物理删除时级联清理会话；禁用/软删除通过账号状态和认证版本立即阻止使用。
+-- 过期清理覆盖绝对期限与空闲期限；如设置容量上限，清理/淘汰/插入由适配器事务协调。
+-- 会话备份恢复后应明确撤销旧会话，避免重新启用备份中仍未过期的登录凭据。
+
+CREATE TABLE oauth_accounts (
+    provider   text NOT NULL CHECK (provider = btrim(provider) AND
+               octet_length(provider) BETWEEN 1 AND 512),
+    subject    text NOT NULL CHECK (octet_length(subject) BETWEEN 1 AND 512),
+    user_id    uuid NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (provider, subject)
+);
+
+-- provider 标识固定的身份提供商实例，OIDC 实例绑定精确的 issuer 与 subject 命名空间。
+-- subject 是稳定的账号标识，不使用邮箱或展示名；同一提供商可绑定多个外部身份。
+-- 绑定关系更改与用户认证修订、最后一种可用登录方式检查在同一事务中完成。
+CREATE INDEX oauth_accounts_user_idx ON oauth_accounts (user_id);
+
+CREATE TABLE roles (
+    id          uuid PRIMARY KEY,
+    code        text NOT NULL UNIQUE
+                CHECK (code = btrim(code) AND char_length(code) BETWEEN 1 AND 64),
+    name        text NOT NULL CHECK (btrim(name) <> '' AND char_length(name) <= 100),
+    description text,
+    version     bigint NOT NULL DEFAULT 1 CHECK (version > 0),
+    created_at  timestamptz NOT NULL DEFAULT now(),
+    updated_at  timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE permissions (
+    code text PRIMARY KEY
+         CHECK (code = btrim(code) AND char_length(code) BETWEEN 1 AND 100),
+    name text NOT NULL CHECK (btrim(name) <> '' AND char_length(name) <= 100)
+);
+
+-- 权限目录由代码注册；角色 code 稳定，名称、描述和权限集合可编辑。
+CREATE TABLE user_roles (
+    user_id uuid NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    role_id uuid NOT NULL REFERENCES roles (id) ON DELETE RESTRICT,
+    PRIMARY KEY (user_id, role_id)
+);
+CREATE INDEX user_roles_role_idx ON user_roles (role_id, user_id);
+
+CREATE TABLE role_permissions (
+    role_id         uuid NOT NULL REFERENCES roles (id) ON DELETE CASCADE,
+    permission_code text NOT NULL REFERENCES permissions (code) ON DELETE CASCADE,
+    PRIMARY KEY (role_id, permission_code)
+);
+CREATE INDEX role_permissions_permission_idx ON role_permissions (permission_code);
+
+-- 仍分配给用户的角色不能直接删除，先调整分配；最后管理员保护由应用事务保证。
+-- 角色授权变更通过每次请求重读权限生效，不必仅为资料/权限变化强制退出所有会话。
+
+CREATE TABLE media (
+    id              uuid PRIMARY KEY,
+    uploaded_by     uuid REFERENCES users (id) ON DELETE RESTRICT,
+    path            text NOT NULL UNIQUE CHECK (path = btrim(path) AND path <> ''),
+    filename        text NOT NULL CHECK (btrim(filename) <> '' AND char_length(filename) <= 200),
+    mime_type       text NOT NULL
+                    CHECK (mime_type IN ('image/png', 'image/jpeg', 'image/gif', 'image/webp')),
+    size            bigint NOT NULL CHECK (size > 0),
+    width           integer NOT NULL CHECK (width > 0),
+    height          integer NOT NULL CHECK (height > 0),
+    checksum_sha256  text NOT NULL CHECK (checksum_sha256 ~ '^[0-9a-f]{64}$'),
+    version         bigint NOT NULL DEFAULT 1 CHECK (version > 0),
+    created_at      timestamptz NOT NULL DEFAULT now(),
+    updated_at      timestamptz NOT NULL DEFAULT now(),
+    deleted_at      timestamptz
+);
+CREATE INDEX media_uploaded_by_idx ON media (uploaded_by);
+CREATE INDEX media_library_idx ON media (created_at DESC, id DESC) WHERE deleted_at IS NULL;
+
+-- path 是不含域名或过期签名的稳定存储路径，二进制数据位于文件/对象存储。
+-- 服务端检查真实图片类型、尺寸和大小；完成文件写入后才注册可引用的媒体记录。
+-- uploaded_by 可空，容纳导入或系统生成的资源；哈希不是去重唯一键。
+-- 媒体 URL 独立公开，不以文章是否公开、账号是否启用或 media_refs 的存在作为鉴权。
+-- 软删除仅将管理记录移入回收站，保留对象与 URL；物理清理由独立流程处理。
+-- 引用数量为零也不意味着可以自动删除：站外链接不在本站引用表的覆盖范围内。
+
+ALTER TABLE users ADD CONSTRAINT users_avatar_media_fk
+    FOREIGN KEY (avatar_media_id) REFERENCES media (id) ON DELETE RESTRICT;
+CREATE INDEX users_avatar_media_idx ON users (avatar_media_id) WHERE avatar_media_id IS NOT NULL;
+
+CREATE TABLE categories (
+    id          uuid PRIMARY KEY,
+    parent_id   uuid REFERENCES categories (id) ON DELETE RESTRICT,
+    name        text NOT NULL CHECK (btrim(name) <> '' AND char_length(name) <= 100),
+    slug        text NOT NULL UNIQUE
+                CHECK (slug = btrim(slug) AND octet_length(slug) BETWEEN 1 AND 200),
+    description text,
+    version     bigint NOT NULL DEFAULT 1 CHECK (version > 0),
+    created_at  timestamptz NOT NULL DEFAULT now(),
+    updated_at  timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT categories_not_self_parent_ck CHECK (parent_id IS NULL OR parent_id <> id)
+);
+CREATE INDEX categories_parent_idx ON categories (parent_id);
+
+-- 有子分类或文章引用时拒绝删除。移动节点时，应用在共享事务锁内检查完整祖先链，
+-- 拒绝多节点环；单个 CHECK 只能排除自身作为父级，不能证明整棵树无环。
+
+CREATE TABLE tags (
+    id         uuid PRIMARY KEY,
+    name       text NOT NULL CHECK (btrim(name) <> '' AND char_length(name) <= 100),
+    slug       text NOT NULL UNIQUE
+               CHECK (slug = btrim(slug) AND octet_length(slug) BETWEEN 1 AND 200),
+    version    bigint NOT NULL DEFAULT 1 CHECK (version > 0),
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE series (
+    id             uuid PRIMARY KEY,
+    name           text NOT NULL CHECK (btrim(name) <> '' AND char_length(name) <= 200),
+    slug           text NOT NULL UNIQUE
+                   CHECK (slug = btrim(slug) AND octet_length(slug) BETWEEN 1 AND 200),
+    description    text,
+    cover_media_id uuid REFERENCES media (id) ON DELETE RESTRICT,
+    version        bigint NOT NULL DEFAULT 1 CHECK (version > 0),
+    created_at     timestamptz NOT NULL DEFAULT now(),
+    updated_at     timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX series_cover_media_idx ON series (cover_media_id) WHERE cover_media_id IS NOT NULL;
+
+CREATE TABLE posts (
+    id                     uuid PRIMARY KEY,
+    author_id              uuid NOT NULL REFERENCES users (id) ON DELETE RESTRICT,
+    category_id            uuid REFERENCES categories (id) ON DELETE RESTRICT,
+    title                  text NOT NULL DEFAULT '' CHECK (char_length(title) <= 300),
+    slug                   text NOT NULL UNIQUE
+                           CHECK (slug = btrim(slug) AND octet_length(slug) BETWEEN 1 AND 200),
+    excerpt                text CHECK (excerpt IS NULL OR char_length(excerpt) <= 1000),
+    content                text NOT NULL DEFAULT '' CHECK (octet_length(content) <= 1048576),
+    content_type           text NOT NULL DEFAULT 'markdown' CHECK (content_type = 'markdown'),
+    content_html           text NOT NULL CHECK (octet_length(content_html) <= 786432),
+    content_render_version integer NOT NULL CHECK (content_render_version > 0),
+    cover_media_id         uuid REFERENCES media (id) ON DELETE RESTRICT,
+    status                 text NOT NULL DEFAULT 'draft'
+                           CHECK (status IN ('draft', 'scheduled', 'published', 'archived')),
+    visibility             text NOT NULL DEFAULT 'public' CHECK (visibility IN ('public', 'private')),
+    comments_enabled       boolean NOT NULL DEFAULT true,
+    published_at           timestamptz,
+    version                bigint NOT NULL DEFAULT 1 CHECK (version > 0),
+    created_at             timestamptz NOT NULL DEFAULT now(),
+    updated_at             timestamptz NOT NULL DEFAULT now(),
+    deleted_at             timestamptz,
+    CONSTRAINT posts_publish_time_ck CHECK (
+        status NOT IN ('scheduled', 'published') OR published_at IS NOT NULL
+    ),
+    CONSTRAINT posts_publish_content_ck CHECK (
+        status NOT IN ('scheduled', 'published') OR
+        (btrim(title, E' \t\n\r') <> '' AND btrim(content, E' \t\n\r') <> '')
+    )
+);
+CREATE INDEX posts_author_idx ON posts (author_id);
+CREATE INDEX posts_category_idx ON posts (category_id);
+CREATE INDEX posts_cover_media_idx ON posts (cover_media_id) WHERE cover_media_id IS NOT NULL;
+CREATE INDEX posts_public_feed_idx ON posts (published_at DESC, id DESC)
+    WHERE deleted_at IS NULL AND status = 'published' AND visibility = 'public';
+CREATE INDEX posts_due_idx ON posts (published_at, id)
+    WHERE deleted_at IS NULL AND status = 'scheduled';
+
+-- 草稿允许空标题、空正文，发布/预约前必须完整校验；长度上限与应用规则同步维护。
+-- content 是编辑源文；content_html 只保存服务端渲染并清理后的正文片段。
+-- INSERT 和正文 UPDATE 必须同时写入原文、HTML 与对应渲染版本，失败则整体回滚。
+-- '' 是有效的空 HTML；正常保存不留下 NULL 或未渲染的占位缓存。
+-- 文章、页面、评论各自采用明确的渲染规则版本，规则升级后重建不匹配的缓存。
+-- 重建需检查原文与编辑版本仍未变化，避免覆盖并发保存；禁止用原文充当 HTML 回退。
+-- 文章/页面的正文图片、封面等引用与编辑内容在同一事务同步到 media_refs。
+--
+-- published_at 同时用于预约与公开展示时间，不再表示不可变的“首次实际发布时间”。
+-- 首次发布或预约即锁定 slug。应用禁止再次改名、禁止将 published_at 清回 NULL；
+-- 取消预约、撤回、归档、回收站恢复都保留它，避免绕过锁定；重新预约可调整时间。
+-- “立即发布”必须处理保留的未来预约时间，将其改为当前时间；不得产生名义上
+-- published、实际却要等到未来才可见的记录。到期任务发布时保留预约时间。
+-- 回收站中的 slug 仍被占用；归档可回到草稿，回收站恢复也统一回草稿。
+-- 恢复与取消预约不会自动发布；再次发布/预约需要明确操作。
+--
+-- comments_enabled 属于文章设置，修改它递增 posts.version。
+-- 新评论和回复要求 settings 的全站开关与单篇开关同时开启；
+-- 关闭开关只停止提交，已通过审核的历史评论仍可展示。
+
+CREATE TABLE post_tags (
+    post_id uuid NOT NULL REFERENCES posts (id) ON DELETE CASCADE,
+    tag_id  uuid NOT NULL REFERENCES tags (id) ON DELETE CASCADE,
+    PRIMARY KEY (post_id, tag_id)
+);
+CREATE INDEX post_tags_tag_idx ON post_tags (tag_id, post_id);
+
+CREATE TABLE post_series (
+    post_id   uuid NOT NULL REFERENCES posts (id) ON DELETE CASCADE,
+    series_id uuid NOT NULL REFERENCES series (id) ON DELETE CASCADE,
+    position  integer NOT NULL DEFAULT 0 CHECK (position >= 0),
+    PRIMARY KEY (post_id, series_id)
+);
+CREATE INDEX post_series_series_position_idx ON post_series (series_id, position, post_id);
+
+-- position 是可重复的排序权重，不是唯一章节号；读取采用 ORDER BY position, post_id。
+-- 删除标签/系列只清理关联，保留文章；批量关联/排序操作同时维护所属实体的编辑版本。
+-- 文章软删除保留标签、系列和媒体关系；所有公开关联查询必须过滤文章可见性。
+
+CREATE TABLE pages (
+    id                     uuid PRIMARY KEY,
+    title                  text NOT NULL DEFAULT '' CHECK (char_length(title) <= 300),
+    slug                   text NOT NULL UNIQUE
+                           CHECK (slug = btrim(slug) AND octet_length(slug) BETWEEN 1 AND 200),
+    content                text NOT NULL DEFAULT '' CHECK (octet_length(content) <= 1048576),
+    content_type           text NOT NULL DEFAULT 'markdown' CHECK (content_type = 'markdown'),
+    content_html           text NOT NULL CHECK (octet_length(content_html) <= 786432),
+    content_render_version integer NOT NULL CHECK (content_render_version > 0),
+    status                 text NOT NULL DEFAULT 'draft'
+                           CHECK (status IN ('draft', 'scheduled', 'published', 'archived')),
+    visibility             text NOT NULL DEFAULT 'public' CHECK (visibility IN ('public', 'private')),
+    published_at           timestamptz,
+    version                bigint NOT NULL DEFAULT 1 CHECK (version > 0),
+    created_at             timestamptz NOT NULL DEFAULT now(),
+    updated_at             timestamptz NOT NULL DEFAULT now(),
+    deleted_at             timestamptz,
+    CONSTRAINT pages_publish_time_ck CHECK (
+        status NOT IN ('scheduled', 'published') OR published_at IS NOT NULL
+    ),
+    CONSTRAINT pages_publish_content_ck CHECK (
+        status NOT IN ('scheduled', 'published') OR
+        (btrim(title, E' \t\n\r') <> '' AND btrim(content, E' \t\n\r') <> '')
+    )
+);
+
+-- 页面是全站资源，没有 author_id；管理权限按页面动作的站点范围判断。
+-- 正文、预约、slug 锁定、归档和回收站规则与文章一致。
+-- 页面进入回收站保留媒体引用，永久删除时在同一事务清理其 media_refs。
+-- 页面数量少，暂不添加列表/预约专用索引。
+
+CREATE TABLE media_refs (
+    media_id    uuid NOT NULL REFERENCES media (id) ON DELETE RESTRICT,
+    source_type text NOT NULL CHECK (source_type IN ('post', 'page', 'series', 'user', 'site')),
+    source_id   uuid NOT NULL,
+    PRIMARY KEY (media_id, source_type, source_id),
+    CONSTRAINT media_refs_site_source_ck CHECK (
+        (source_type = 'site') = (source_id = '00000000-0000-0000-0000-000000000000'::uuid)
+    )
+);
+CREATE INDEX media_refs_source_idx ON media_refs (source_type, source_id);
+
+-- 本表用于使用位置查询和删除保护，不用于媒体访问鉴权。
+-- 同一来源的正文、封面等引用取并集，一项媒体在同一来源只存一行。
+-- site 是单例来源，使用 nil UUID；站点 Logo 的 media_id 保存在 settings.site 中，
+-- 并与该组设置同事务维护引用。封面/头像使用明确的 media_id 外键。
+-- source_id 是多态关联，由应用验证来源存在、同步与清理，不能声明普通外键。
+-- 草稿、私密、归档和回收站中的内容都计入引用；软删除不清理其引用。
+-- 物理删除来源时清理对应行；物理清理媒体时，按同一锁协议检查所有引用，
+-- 存在已知引用则拒绝删除。零引用仍需显式审查站外使用，不自动回收。
+-- 上传、保存引用、清理操作须协调媒体行锁，避免引用检查与删除并发交错。
+
+CREATE TABLE comments (
+    id                     uuid PRIMARY KEY,
+    post_id                uuid NOT NULL REFERENCES posts (id) ON DELETE CASCADE,
+    parent_id              uuid,
+    root_id                uuid,
+    user_id                uuid REFERENCES users (id) ON DELETE RESTRICT,
+    author_name            text NOT NULL CHECK (btrim(author_name) <> '' AND
+                           char_length(author_name) <= 64),
+    author_email           text CHECK (author_email IS NULL OR
+                           (author_email = btrim(author_email) AND
+                            char_length(author_email) BETWEEN 1 AND 320)),
+    ip_address             inet,
+    content                text NOT NULL CHECK (btrim(content, E' \t\n\r') <> '' AND
+                           char_length(content) <= 2000),
+    content_html           text NOT NULL CHECK (octet_length(content_html) <= 786432),
+    content_render_version integer NOT NULL CHECK (content_render_version > 0),
+    status                 text NOT NULL DEFAULT 'pending'
+                           CHECK (status IN ('pending', 'approved', 'spam', 'trash')),
+    version                bigint NOT NULL DEFAULT 1 CHECK (version > 0),
+    created_at             timestamptz NOT NULL DEFAULT now(),
+    updated_at             timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT comments_post_id_id_uq UNIQUE (post_id, id),
+    CONSTRAINT comments_parent_same_post_fk
+        FOREIGN KEY (post_id, parent_id) REFERENCES comments (post_id, id) ON DELETE NO ACTION,
+    CONSTRAINT comments_root_same_post_fk
+        FOREIGN KEY (post_id, root_id) REFERENCES comments (post_id, id) ON DELETE NO ACTION,
+    CONSTRAINT comments_root_shape_ck CHECK ((parent_id IS NULL) = (root_id IS NULL)),
+    CONSTRAINT comments_not_self_parent_ck CHECK (parent_id IS NULL OR parent_id <> id),
+    CONSTRAINT comments_not_self_root_ck CHECK (root_id IS NULL OR root_id <> id),
+    CONSTRAINT comments_ip_host_ck CHECK (
+        ip_address IS NULL OR
+        masklen(ip_address) = CASE family(ip_address) WHEN 4 THEN 32 ELSE 128 END
+    )
+);
+CREATE INDEX comments_user_idx ON comments (user_id);
+CREATE INDEX comments_parent_idx ON comments (parent_id) WHERE parent_id IS NOT NULL;
+CREATE INDEX comments_thread_time_idx ON comments (post_id, root_id, created_at, id);
+CREATE INDEX comments_moderation_idx ON comments (status, created_at DESC, id DESC);
+
+-- 根评论 parent_id/root_id 均为 NULL；回复的 parent_id 指向直接回复对象，
+-- root_id 指向该对象所属的根：parent.root_id IS NULL 时取 parent.id，否则取 parent.root_id。
+-- 应用在插入时验证直接父级、根级和文章一致，根级自身没有父级。
+-- post_id、parent_id、root_id 创建后不可修改；只能引用已存在的父评论。
+-- 这些服务约束保证无环与根一致性；外键/CHECK 本身不证明任意多级关系无环。
+-- 根评论分页，其所有后代按 root_id 平铺到第二级；通过 parent_id 展示“回复谁”。
+--
+-- 评论统一使用受限 Markdown，不设置 content_type。支持换行、分段、粗体、
+-- 斜体、删除线、行内/围栏代码、引用、列表、HTTP(S) 链接与 Unicode Emoji；
+-- 普通网址自动识别为链接，编辑器提供精简工具栏与预览。
+-- 普通换行按换行显示；不开放标题、表格、嵌入媒体或可执行的原始 HTML。
+-- 原始 HTML 作为文字转义，代码内容正常转义；HTML/URL 均经服务端规则处理。
+-- content、content_html、content_render_version 在同一事务写入，重建规则与正文一致。
+-- 评论不嵌入媒体，不写 media_refs。
+--
+-- 所有新评论默认 pending；approved 公开正文，spam 不公开，trash 是回收站。
+-- 普通审核不通过可移入 trash；从 spam/trash 恢复统一回 pending，不保留 rejected。
+-- 删除只改变本条状态，保留关系与子评论，不递归改变后代的审核状态。
+-- 公开列表为有可见回复的已删除节点保留“该评论已删除”占位，隐藏其原文和 HTML；
+-- 根评论已删除也要保留必要占位，不能用“父级必须 approved”过滤掉正常子评论。
+-- 单独物理删除仍被 parent_id/root_id 引用的评论会被外键拒绝；
+-- 永久删除整篇文章时，可由 post_id 外键清理整棵评论树。
+--
+-- author_name 是登录用户/游客提交时的展示快照；author_email 是游客可选私密联系信息，
+-- 不能用于认证身份。公开接口不返回 author_email、ip_address。
+-- ip_address 记录提交来源；未知或离线导入时留 NULL，编辑/审核不覆盖它。
+-- 不设置 request_id、client_hash，不实现评论去重或评论提交频率限制，
+-- 每次有效提交独立创建一条待审核评论；也不为这两项功能建立专用索引。
+-- 评论与文章分别维护编辑版本，评论审核不递增文章 version。
+
+CREATE TABLE settings (
+    key        text PRIMARY KEY CHECK (key = btrim(key) AND char_length(key) BETWEEN 1 AND 64),
+    value      jsonb NOT NULL DEFAULT '{}'::jsonb CHECK (jsonb_typeof(value) = 'object'),
+    version    bigint NOT NULL DEFAULT 1 CHECK (version > 0),
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- 按 site/theme/oauth/comments/audit 等组保存 JSON 对象，每组独立校验、授权和版本控制。
+-- 代码定义设置名、类型、默认值与公开读取白名单；数据库仅保存覆盖值。
+-- 不把 OAuth 客户端秘密、密码或 API 凭据放进本表，使用配置的秘密存储。
+-- settings.comments 的 enabled 默认 true，与 posts.comments_enabled 共同控制提交。
+-- 不再建立 comment_settings / post_comment_settings。
+-- comments.ip_retention_days 与 audit.retention_days 均默认 180，可由授权管理员配置；
+-- 代码合并默认值，无需为了默认值预插入设置行。
+
+CREATE TABLE audit_logs (
+    id          uuid PRIMARY KEY,
+    actor_id    uuid,
+    ip_address  inet,
+    action      text NOT NULL CHECK (action = btrim(action) AND action <> ''),
+    target_type text NOT NULL CHECK (target_type = btrim(target_type) AND target_type <> ''),
+    target_id   text NOT NULL CHECK (btrim(target_id) <> ''),
+    metadata    jsonb NOT NULL DEFAULT '{}'::jsonb CHECK (jsonb_typeof(metadata) = 'object'),
+    created_at  timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT audit_logs_ip_host_ck CHECK (
+        ip_address IS NULL OR
+        masklen(ip_address) = CASE family(ip_address) WHEN 4 THEN 32 ELSE 128 END
+    )
+);
+CREATE INDEX audit_logs_time_idx ON audit_logs (created_at DESC, id DESC);
+CREATE INDEX audit_logs_target_time_idx ON audit_logs (target_type, target_id, created_at DESC);
+
+-- 记录成功的业务变更：操作者、目标、时间、来源 IP 与必要摘要，并与业务变更同事务提交。
+-- 定时发布等系统操作可使用 NULL actor_id/ip_address；不要伪造请求来源。
+-- 失败登录等无法随成功业务事务提交的事件由安全日志记录。
+-- actor_id/target_id 是历史快照，不建立业务外键；目标包含 UUID 与设置/权限键，
+-- 因而 target_id 使用 text。metadata 仅存允许的脱敏摘要，不转储正文、邮箱或凭据。
+-- 运行账号只拥有所需的读取/追加权限，不得 UPDATE/DELETE/TRUNCATE 审计日志；
+-- 保留期清理由单独授权的维护身份执行，普通修改不改写历史审计。
+-- 这不是对抗数据库管理员篡改的账本。
+--
+-- 评论/审计 IP 只保存一个 IPv4/IPv6 主机地址，不保存网段或代理转发链。
+-- HTTP 层只从已配置的可信代理解析来源，不直接信任任意转发头，也不用数据库连接 IP。
+-- 后台访问需授权，公开响应不泄露 IP/邮箱；目前没有按 IP 搜索/限流的专用索引。
+-- 保留期任务按 created_at 清理过期审计，或将过期 comments.ip_address 置 NULL。
+-- IP 清理保留评论正文、父子关系与审核状态，不把清理操作者的 IP 写回提交来源。

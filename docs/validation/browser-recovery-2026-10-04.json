@@ -1,0 +1,26 @@
+{
+  "started_at": "2026-10-04T04:43:18.077297+00:00",
+  "status": "passed",
+  "image": {
+    "id": "sha256:f22566f3c8eb0afacee8323478641a758baa99891958b023c83d46a237138de5",
+    "revision": "e3d13b3",
+    "architecture": "arm64",
+    "os": "linux"
+  },
+  "scripts_sha256": {
+    "browser_recovery.py": "35f7780e1efd01626a522f6b08c0daef7b861adebad91efbfaeeb07ba77513f1",
+    "panel_init.py": "f51e0cbc1aa816a30b172eec850dcef1a3582bf4d84228d29f73caf46cb88317",
+    "test_browser_compose.py": "d8f4a1d24a971faa949baf8e1fbf07b477cf232631ee10884c4277f3eab3c86f"
+  },
+  "browser_ui": true,
+  "recovery_session_revocation": true,
+  "in_place_restore": true,
+  "interruption_and_rollback": true,
+  "s3_protocol_round_trip": true,
+  "emergency_access": true,
+  "fresh_restore": true,
+  "credentials_not_logged": true,
+  "archive_bytes": 40886,
+  "archive_sha256": "bb96a0825e33353656927526d6c7d6edd34b726091f8f21a7c6f636bce75c83b",
+  "seconds": 61.834
+}

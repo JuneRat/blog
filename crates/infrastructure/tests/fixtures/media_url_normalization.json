@@ -1,0 +1,228 @@
+{
+  "media_id": "12345678-1234-5678-9abc-123456789abc",
+  "base_url": "https://media.invalid/posts/review",
+  "cases": [
+    {
+      "name": "canonical",
+      "source": "/media/12345678-1234-5678-9abc-123456789abc",
+      "expected_id": "12345678-1234-5678-9abc-123456789abc",
+      "browser_href": "https://media.invalid/media/12345678-1234-5678-9abc-123456789abc"
+    },
+    {
+      "name": "query-fragment",
+      "source": "/media/12345678-1234-5678-9abc-123456789abc?v=1#preview",
+      "expected_id": "12345678-1234-5678-9abc-123456789abc",
+      "browser_href": "https://media.invalid/media/12345678-1234-5678-9abc-123456789abc?v=1#preview"
+    },
+    {
+      "name": "encoded-uuid",
+      "source": "/media/%31%32%33%34%35%36%37%38%2D%31%32%33%34%2D%35%36%37%38%2D%39%61%62%63%2D%31%32%33%34%35%36%37%38%39%61%62%63",
+      "expected_id": "12345678-1234-5678-9abc-123456789abc",
+      "browser_href": "https://media.invalid/media/%31%32%33%34%35%36%37%38%2D%31%32%33%34%2D%35%36%37%38%2D%39%61%62%63%2D%31%32%33%34%35%36%37%38%39%61%62%63"
+    },
+    {
+      "name": "braced-uuid",
+      "source": "/media/%7B12345678-1234-5678-9abc-123456789abc%7D",
+      "expected_id": "12345678-1234-5678-9abc-123456789abc",
+      "browser_href": "https://media.invalid/media/%7B12345678-1234-5678-9abc-123456789abc%7D"
+    },
+    {
+      "name": "simple-uuid",
+      "source": "/media/12345678123456789abc123456789abc",
+      "expected_id": "12345678-1234-5678-9abc-123456789abc",
+      "browser_href": "https://media.invalid/media/12345678123456789abc123456789abc"
+    },
+    {
+      "name": "urn-uuid",
+      "source": "/media/urn:uuid:12345678-1234-5678-9abc-123456789abc",
+      "expected_id": "12345678-1234-5678-9abc-123456789abc",
+      "browser_href": "https://media.invalid/media/urn:uuid:12345678-1234-5678-9abc-123456789abc"
+    },
+    {
+      "name": "dot",
+      "source": "/media/./12345678-1234-5678-9abc-123456789abc",
+      "expected_id": "12345678-1234-5678-9abc-123456789abc",
+      "browser_href": "https://media.invalid/media/12345678-1234-5678-9abc-123456789abc"
+    },
+    {
+      "name": "parent",
+      "source": "/media/../media/12345678-1234-5678-9abc-123456789abc",
+      "expected_id": "12345678-1234-5678-9abc-123456789abc",
+      "browser_href": "https://media.invalid/media/12345678-1234-5678-9abc-123456789abc"
+    },
+    {
+      "name": "other-parent",
+      "source": "/other/../media/12345678-1234-5678-9abc-123456789abc",
+      "expected_id": "12345678-1234-5678-9abc-123456789abc",
+      "browser_href": "https://media.invalid/media/12345678-1234-5678-9abc-123456789abc"
+    },
+    {
+      "name": "encoded-dot",
+      "source": "/media/%2e/12345678-1234-5678-9abc-123456789abc",
+      "expected_id": "12345678-1234-5678-9abc-123456789abc",
+      "browser_href": "https://media.invalid/media/12345678-1234-5678-9abc-123456789abc"
+    },
+    {
+      "name": "encoded-parent",
+      "source": "/media/%2E%2e/media/12345678-1234-5678-9abc-123456789abc",
+      "expected_id": "12345678-1234-5678-9abc-123456789abc",
+      "browser_href": "https://media.invalid/media/12345678-1234-5678-9abc-123456789abc"
+    },
+    {
+      "name": "mixed-parent-left",
+      "source": "/media/.%2e/media/12345678-1234-5678-9abc-123456789abc",
+      "expected_id": "12345678-1234-5678-9abc-123456789abc",
+      "browser_href": "https://media.invalid/media/12345678-1234-5678-9abc-123456789abc"
+    },
+    {
+      "name": "mixed-parent-right",
+      "source": "/media/%2e./media/12345678-1234-5678-9abc-123456789abc",
+      "expected_id": "12345678-1234-5678-9abc-123456789abc",
+      "browser_href": "https://media.invalid/media/12345678-1234-5678-9abc-123456789abc"
+    },
+    {
+      "name": "root-backslash",
+      "source": "\\media\\12345678-1234-5678-9abc-123456789abc",
+      "expected_id": "12345678-1234-5678-9abc-123456789abc",
+      "browser_href": "https://media.invalid/media/12345678-1234-5678-9abc-123456789abc"
+    },
+    {
+      "name": "inner-backslash",
+      "source": "/media\\12345678-1234-5678-9abc-123456789abc",
+      "expected_id": "12345678-1234-5678-9abc-123456789abc",
+      "browser_href": "https://media.invalid/media/12345678-1234-5678-9abc-123456789abc"
+    },
+    {
+      "name": "backslash-parent",
+      "source": "\\other\\..\\media\\12345678-1234-5678-9abc-123456789abc",
+      "expected_id": "12345678-1234-5678-9abc-123456789abc",
+      "browser_href": "https://media.invalid/media/12345678-1234-5678-9abc-123456789abc"
+    },
+    {
+      "name": "trim-c0-space",
+      "source": "\u0001 \t/media/12345678-1234-5678-9abc-123456789abc\r \u001f",
+      "expected_id": "12345678-1234-5678-9abc-123456789abc",
+      "browser_href": "https://media.invalid/media/12345678-1234-5678-9abc-123456789abc"
+    },
+    {
+      "name": "remove-tab-lf-cr",
+      "source": "/me\tdi\na\r/12345678-1234-5678-9abc-123456789abc",
+      "expected_id": "12345678-1234-5678-9abc-123456789abc",
+      "browser_href": "https://media.invalid/media/12345678-1234-5678-9abc-123456789abc"
+    },
+    {
+      "name": "empty-segment-parent",
+      "source": "/media//../12345678-1234-5678-9abc-123456789abc",
+      "expected_id": "12345678-1234-5678-9abc-123456789abc",
+      "browser_href": "https://media.invalid/media/12345678-1234-5678-9abc-123456789abc"
+    },
+    {
+      "name": "above-root",
+      "source": "/../../media/12345678-1234-5678-9abc-123456789abc",
+      "expected_id": "12345678-1234-5678-9abc-123456789abc",
+      "browser_href": "https://media.invalid/media/12345678-1234-5678-9abc-123456789abc"
+    },
+    {
+      "name": "external",
+      "source": "https://external.invalid/media/12345678-1234-5678-9abc-123456789abc",
+      "expected_id": null,
+      "browser_href": "https://external.invalid/media/12345678-1234-5678-9abc-123456789abc"
+    },
+    {
+      "name": "absolute-synthetic-origin",
+      "source": "https://media.invalid/media/12345678-1234-5678-9abc-123456789abc",
+      "expected_id": null,
+      "browser_href": "https://media.invalid/media/12345678-1234-5678-9abc-123456789abc"
+    },
+    {
+      "name": "scheme-relative",
+      "source": "//external.invalid/media/12345678-1234-5678-9abc-123456789abc",
+      "expected_id": null,
+      "browser_href": "https://external.invalid/media/12345678-1234-5678-9abc-123456789abc"
+    },
+    {
+      "name": "slash-backslash-authority",
+      "source": "/\\external.invalid/media/12345678-1234-5678-9abc-123456789abc",
+      "expected_id": null,
+      "browser_href": "https://external.invalid/media/12345678-1234-5678-9abc-123456789abc"
+    },
+    {
+      "name": "backslash-slash-authority",
+      "source": "\\/external.invalid/media/12345678-1234-5678-9abc-123456789abc",
+      "expected_id": null,
+      "browser_href": "https://external.invalid/media/12345678-1234-5678-9abc-123456789abc"
+    },
+    {
+      "name": "two-backslash-authority",
+      "source": "\\\\media.invalid\\media\\12345678-1234-5678-9abc-123456789abc",
+      "expected_id": null,
+      "browser_href": "https://media.invalid/media/12345678-1234-5678-9abc-123456789abc"
+    },
+    {
+      "name": "tab-authority",
+      "source": "/\t/external.invalid/media/12345678-1234-5678-9abc-123456789abc",
+      "expected_id": null,
+      "browser_href": "https://external.invalid/media/12345678-1234-5678-9abc-123456789abc"
+    },
+    {
+      "name": "nonroot",
+      "source": "media/12345678-1234-5678-9abc-123456789abc",
+      "expected_id": null,
+      "browser_href": "https://media.invalid/posts/media/12345678-1234-5678-9abc-123456789abc"
+    },
+    {
+      "name": "relative-parent",
+      "source": "../media/12345678-1234-5678-9abc-123456789abc",
+      "expected_id": null,
+      "browser_href": "https://media.invalid/media/12345678-1234-5678-9abc-123456789abc"
+    },
+    {
+      "name": "repeated-slash",
+      "source": "/media/././12345678-1234-5678-9abc-123456789abc//",
+      "expected_id": null,
+      "browser_href": "https://media.invalid/media/12345678-1234-5678-9abc-123456789abc//"
+    },
+    {
+      "name": "repeated-inner-slash",
+      "source": "/media/.//12345678-1234-5678-9abc-123456789abc",
+      "expected_id": null,
+      "browser_href": "https://media.invalid/media//12345678-1234-5678-9abc-123456789abc"
+    },
+    {
+      "name": "extra-segment",
+      "source": "/media/12345678-1234-5678-9abc-123456789abc/extra",
+      "expected_id": null,
+      "browser_href": "https://media.invalid/media/12345678-1234-5678-9abc-123456789abc/extra"
+    },
+    {
+      "name": "trailing-dot",
+      "source": "/media/12345678-1234-5678-9abc-123456789abc/.",
+      "expected_id": null,
+      "browser_href": "https://media.invalid/media/12345678-1234-5678-9abc-123456789abc/"
+    },
+    {
+      "name": "encoded-prefix",
+      "source": "/%6Dedia/12345678-1234-5678-9abc-123456789abc",
+      "expected_id": null,
+      "browser_href": "https://media.invalid/%6Dedia/12345678-1234-5678-9abc-123456789abc"
+    },
+    {
+      "name": "double-encoded-uuid",
+      "source": "/media/%2531%2532%2533%2534%2535%2536%2537%2538%252D%2531%2532%2533%2534%252D%2535%2536%2537%2538%252D%2539%2561%2562%2563%252D%2531%2532%2533%2534%2535%2536%2537%2538%2539%2561%2562%2563",
+      "expected_id": null,
+      "browser_href": "https://media.invalid/media/%2531%2532%2533%2534%2535%2536%2537%2538%252D%2531%2532%2533%2534%252D%2535%2536%2537%2538%252D%2539%2561%2562%2563%252D%2531%2532%2533%2534%2535%2536%2537%2538%2539%2561%2562%2563"
+    },
+    {
+      "name": "encoded-slash",
+      "source": "/media/12345678-1234-5678-9abc-123456789abc%2F",
+      "expected_id": null,
+      "browser_href": "https://media.invalid/media/12345678-1234-5678-9abc-123456789abc%2F"
+    },
+    {
+      "name": "invalid-utf8",
+      "source": "/media/12345678-1234-5678-9abc-123456789abc%FF",
+      "expected_id": null,
+      "browser_href": "https://media.invalid/media/12345678-1234-5678-9abc-123456789abc%FF"
+    }
+  ]
+}

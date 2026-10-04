@@ -1,0 +1,4844 @@
+{
+  "format": 2,
+  "status": "passed",
+  "started_at": "2026-10-03T14:02:01.452508+00:00",
+  "cpu_count": 10,
+  "image": "codex-blog-release:9fb6c2425fa5",
+  "python_version": "3.9.6",
+  "python_implementation": "CPython",
+  "workload": {
+    "expected_revision": "9fb6c2425fa5dea132faa9e52bf061054a312788",
+    "pool_sizes": [
+      5,
+      10
+    ],
+    "concurrency": 16,
+    "posts": 2000,
+    "writers": 4,
+    "duration": 300.0,
+    "write_interval_ms": 250,
+    "minimum_writing_cycles": 30,
+    "connection_lifetime_seconds": 60,
+    "task_interval": 15,
+    "scheduled_per_cycle": 16,
+    "read_p95_ms": 500,
+    "write_p95_ms": 2000,
+    "publication_delay_seconds": 45
+  },
+  "measurements": [
+    {
+      "pool_size": 5,
+      "background_tasks": false,
+      "build": {
+        "version": "0.1.0",
+        "revision": "9fb6c2425fa5dea132faa9e52bf061054a312788"
+      },
+      "concurrency": 16,
+      "requests": 566790,
+      "errors": 0,
+      "failed_operations": 0,
+      "conflicts": 0,
+      "error_types": {},
+      "status_counts": {
+        "200": 566790
+      },
+      "p50_ms": 6.286,
+      "p95_ms": 18.313,
+      "p99_ms": 56.621,
+      "requests_per_second": 1889.27,
+      "seconds": 300.005,
+      "readyz": {
+        "requests": 5156,
+        "errors": 0,
+        "failed_operations": 0,
+        "conflicts": 0,
+        "error_types": {},
+        "status_counts": {
+          "200": 5156
+        },
+        "p50_ms": 1.954,
+        "p95_ms": 21.457,
+        "p99_ms": 42.07
+      },
+      "connection_lifetime_seconds": 60,
+      "connection_rotations": {
+        "reads": 64,
+        "readyz": 4
+      },
+      "writers": 4,
+      "writes": {
+        "save": {
+          "requests": 2850,
+          "errors": 0,
+          "failed_operations": 0,
+          "conflicts": 0,
+          "error_types": {},
+          "status_counts": {
+            "200": 2850
+          },
+          "p50_ms": 87.534,
+          "p95_ms": 728.446,
+          "p99_ms": 1775.845
+        },
+        "series_reorder": {
+          "requests": 0,
+          "errors": 0,
+          "failed_operations": 0,
+          "conflicts": 0,
+          "error_types": {},
+          "status_counts": {},
+          "p50_ms": null,
+          "p95_ms": null,
+          "p99_ms": null
+        }
+      },
+      "foreground_window": [
+        "2026-10-03T14:02:11.834975+00:00",
+        "2026-10-03T14:07:12.030364+00:00"
+      ],
+      "writing": {
+        "mode": "draft_publish_history_cycle",
+        "revision_limit": 50,
+        "completed_cycles_per_writer": [
+          713,
+          713,
+          712,
+          712
+        ],
+        "phases": {
+          "draft_save": {
+            "requests": 2850,
+            "errors": 0,
+            "failed_operations": 0,
+            "conflicts": 0,
+            "error_types": {},
+            "status_counts": {
+              "200": 2850
+            },
+            "p50_ms": 28.312,
+            "p95_ms": 226.458,
+            "p99_ms": 743.015
+          },
+          "draft_visibility": {
+            "requests": 2850,
+            "errors": 0,
+            "failed_operations": 0,
+            "conflicts": 0,
+            "error_types": {},
+            "status_counts": {
+              "200": 2850
+            },
+            "p50_ms": 8.629,
+            "p95_ms": 37.357,
+            "p99_ms": 71.809
+          },
+          "publish": {
+            "requests": 2850,
+            "errors": 0,
+            "failed_operations": 0,
+            "conflicts": 0,
+            "error_types": {},
+            "status_counts": {
+              "200": 2850
+            },
+            "p50_ms": 21.457,
+            "p95_ms": 149.411,
+            "p99_ms": 500.028
+          },
+          "published_visibility": {
+            "requests": 2850,
+            "errors": 0,
+            "failed_operations": 0,
+            "conflicts": 0,
+            "error_types": {},
+            "status_counts": {
+              "200": 2850
+            },
+            "p50_ms": 8.629,
+            "p95_ms": 39.644,
+            "p99_ms": 71.809
+          },
+          "history": {
+            "requests": 2850,
+            "errors": 0,
+            "failed_operations": 0,
+            "conflicts": 0,
+            "error_types": {},
+            "status_counts": {
+              "200": 2850
+            },
+            "p50_ms": 20.219,
+            "p95_ms": 149.411,
+            "p99_ms": 520.229
+          }
+        },
+        "verification": [
+          {
+            "completed_cycles": 713,
+            "newest_version": 1429,
+            "oldest_version": 1380,
+            "retained_revisions": 50,
+            "active_draft_retained": true,
+            "active_draft_differs_from_publication": true,
+            "pending_draft_private": true,
+            "original_revision_pruned": true
+          },
+          {
+            "completed_cycles": 713,
+            "newest_version": 1428,
+            "oldest_version": 1379,
+            "retained_revisions": 50,
+            "active_draft_retained": true,
+            "active_draft_differs_from_publication": true,
+            "pending_draft_private": true,
+            "original_revision_pruned": true
+          },
+          {
+            "completed_cycles": 712,
+            "newest_version": 1426,
+            "oldest_version": 1377,
+            "retained_revisions": 50,
+            "active_draft_retained": true,
+            "active_draft_differs_from_publication": true,
+            "pending_draft_private": true,
+            "original_revision_pruned": true
+          },
+          {
+            "completed_cycles": 712,
+            "newest_version": 1426,
+            "oldest_version": 1377,
+            "retained_revisions": 50,
+            "active_draft_retained": true,
+            "active_draft_differs_from_publication": true,
+            "pending_draft_private": true,
+            "original_revision_pruned": true
+          }
+        ]
+      },
+      "monitor": {
+        "metrics": {
+          "blog_database_pool_connections{state=\"idle\"}": {
+            "first": 5.0,
+            "min": 0.0,
+            "max": 5.0,
+            "last": 5.0
+          },
+          "blog_database_pool_connections{state=\"in_use\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 5.0,
+            "last": 0.0
+          },
+          "blog_database_pool_connections{state=\"max\"}": {
+            "first": 5.0,
+            "min": 5.0,
+            "max": 5.0,
+            "last": 5.0
+          },
+          "blog_database_pool_connections{state=\"size\"}": {
+            "first": 5.0,
+            "min": 5.0,
+            "max": 5.0,
+            "last": 5.0
+          },
+          "blog_render_active{kind=\"comment\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_active{kind=\"content\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_active{kind=\"theme\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 2.0,
+            "last": 0.0
+          },
+          "blog_render_completed_total{kind=\"comment\",result=\"success\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "last": 1.0
+          },
+          "blog_render_completed_total{kind=\"content\",result=\"success\"}": {
+            "first": 2.0,
+            "min": 2.0,
+            "max": 2856.0,
+            "last": 2856.0
+          },
+          "blog_render_completed_total{kind=\"theme\",result=\"success\"}": {
+            "first": 84.0,
+            "min": 84.0,
+            "max": 572578.0,
+            "last": 572578.0
+          },
+          "blog_render_execution_duration_seconds_sum{kind=\"comment\"}": {
+            "first": 7.4959e-05,
+            "min": 7.4959e-05,
+            "max": 7.4959e-05,
+            "last": 7.4959e-05
+          },
+          "blog_render_execution_duration_seconds_count{kind=\"comment\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "last": 1.0
+          },
+          "blog_render_execution_duration_seconds_sum{kind=\"content\"}": {
+            "first": 0.0007835,
+            "min": 0.0007835,
+            "max": 1.9028324519999984,
+            "last": 1.9028324519999984
+          },
+          "blog_render_execution_duration_seconds_count{kind=\"content\"}": {
+            "first": 2.0,
+            "min": 2.0,
+            "max": 2856.0,
+            "last": 2856.0
+          },
+          "blog_render_execution_duration_seconds_sum{kind=\"theme\"}": {
+            "first": 0.023734294000000003,
+            "min": 0.023734294000000003,
+            "max": 35.36839328400066,
+            "last": 35.36839328400066
+          },
+          "blog_render_execution_duration_seconds_count{kind=\"theme\"}": {
+            "first": 84.0,
+            "min": 84.0,
+            "max": 572578.0,
+            "last": 572578.0
+          },
+          "blog_render_execution_timeouts_total{kind=\"comment\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_execution_timeouts_total{kind=\"content\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_execution_timeouts_total{kind=\"theme\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_queue_duration_seconds_sum{kind=\"comment\"}": {
+            "first": 4.166e-06,
+            "min": 4.166e-06,
+            "max": 4.166e-06,
+            "last": 4.166e-06
+          },
+          "blog_render_queue_duration_seconds_count{kind=\"comment\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "last": 1.0
+          },
+          "blog_render_queue_duration_seconds_sum{kind=\"content\"}": {
+            "first": 7.332e-06,
+            "min": 7.332e-06,
+            "max": 0.0033749520000000473,
+            "last": 0.0033749520000000473
+          },
+          "blog_render_queue_duration_seconds_count{kind=\"content\"}": {
+            "first": 2.0,
+            "min": 2.0,
+            "max": 2856.0,
+            "last": 2856.0
+          },
+          "blog_render_queue_duration_seconds_sum{kind=\"theme\"}": {
+            "first": 0.0008252080000000001,
+            "min": 0.0008252080000000001,
+            "max": 0.3822803889995284,
+            "last": 0.3822803889995284
+          },
+          "blog_render_queue_duration_seconds_count{kind=\"theme\"}": {
+            "first": 84.0,
+            "min": 84.0,
+            "max": 572578.0,
+            "last": 572578.0
+          },
+          "blog_render_queue_total{kind=\"comment\",result=\"admitted\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "last": 1.0
+          },
+          "blog_render_queue_total{kind=\"content\",result=\"admitted\"}": {
+            "first": 2.0,
+            "min": 2.0,
+            "max": 2856.0,
+            "last": 2856.0
+          },
+          "blog_render_queue_total{kind=\"theme\",result=\"admitted\"}": {
+            "first": 84.0,
+            "min": 84.0,
+            "max": 572578.0,
+            "last": 572578.0
+          },
+          "blog_render_waiting{kind=\"comment\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_waiting{kind=\"content\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_waiting{kind=\"theme\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_consecutive_failures{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_consecutive_failures{kind=\"publish_due\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_consecutive_failures{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_due_wait_seconds{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_due_wait_seconds{kind=\"publish_due\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_due_wait_seconds{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"html_rebuild\",status=\"completed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"html_rebuild\",status=\"completed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"html_rebuild\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"html_rebuild\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"html_rebuild\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"html_rebuild\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"publish_due\",status=\"completed\"}": {
+            "first": 0.031024416,
+            "min": 0.031024416,
+            "max": 0.657756446,
+            "last": 0.657756446
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"publish_due\",status=\"completed\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 10.0,
+            "last": 10.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"publish_due\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"publish_due\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"publish_due\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"publish_due\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"retention\",status=\"completed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"retention\",status=\"completed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"retention\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"retention\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"retention\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"retention\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"html_rebuild\",status=\"cancelled\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"html_rebuild\",status=\"completed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"html_rebuild\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"html_rebuild\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"publish_due\",status=\"cancelled\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"publish_due\",status=\"completed\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 10.0,
+            "last": 10.0
+          },
+          "blog_task_finished_total{kind=\"publish_due\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"publish_due\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"retention\",status=\"cancelled\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"retention\",status=\"completed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"retention\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"retention\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_health_snapshot_last_success_timestamp_seconds": {
+            "first": 1791036129.0,
+            "min": 1791036129.0,
+            "max": 1791036430.0,
+            "last": 1791036430.0
+          },
+          "blog_task_last_success_timestamp_seconds{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_last_success_timestamp_seconds{kind=\"publish_due\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 1791036404.0,
+            "last": 1791036404.0
+          },
+          "blog_task_last_success_timestamp_seconds{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_lease_expirations_total{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_lease_expirations_total{kind=\"publish_due\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_lease_expirations_total{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_queue_duration_seconds_sum{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_queue_duration_seconds_count{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_queue_duration_seconds_sum{kind=\"publish_due\"}": {
+            "first": 0.015272,
+            "min": 0.015272,
+            "max": 0.494155,
+            "last": 0.494155
+          },
+          "blog_task_queue_duration_seconds_count{kind=\"publish_due\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 10.0,
+            "last": 10.0
+          },
+          "blog_task_queue_duration_seconds_sum{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_queue_duration_seconds_count{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"html_rebuild\",status=\"expired\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"html_rebuild\",status=\"queued\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"html_rebuild\",status=\"running\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"publish_due\",status=\"expired\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"publish_due\",status=\"queued\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"publish_due\",status=\"running\"}": {
+            "first": 1.0,
+            "min": 0.0,
+            "max": 1.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"retention\",status=\"expired\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"retention\",status=\"queued\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"retention\",status=\"running\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_schedule_enabled{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_schedule_enabled{kind=\"publish_due\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "last": 1.0
+          },
+          "blog_task_schedule_enabled{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_schedule_interval_seconds{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_schedule_interval_seconds{kind=\"publish_due\"}": {
+            "first": 30.0,
+            "min": 30.0,
+            "max": 30.0,
+            "last": 30.0
+          },
+          "blog_task_schedule_interval_seconds{kind=\"retention\"}": {
+            "first": 86400.0,
+            "min": 86400.0,
+            "max": 86400.0,
+            "last": 86400.0
+          },
+          "blog_task_schedule_next_run_timestamp_seconds{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_schedule_next_run_timestamp_seconds{kind=\"publish_due\"}": {
+            "first": 1791036159.0,
+            "min": 1791036159.0,
+            "max": 1791036434.0,
+            "last": 1791036434.0
+          },
+          "blog_task_schedule_next_run_timestamp_seconds{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_scheduler_available": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "last": 1.0
+          },
+          "blog_task_scheduler_checks_total{result=\"error\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_scheduler_checks_total{result=\"success\"}": {
+            "first": 3.0,
+            "min": 3.0,
+            "max": 304.0,
+            "last": 304.0
+          },
+          "blog_task_scheduler_checks_total{result=\"unavailable\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_scheduler_last_success_timestamp_seconds": {
+            "first": 1791036131.0,
+            "min": 1791036131.0,
+            "max": 1791036432.0,
+            "last": 1791036432.0
+          },
+          "blog_task_started_total{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_started_total{kind=\"publish_due\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 10.0,
+            "last": 10.0
+          },
+          "blog_task_started_total{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          }
+        },
+        "resources": {
+          "blog": {
+            "peak_memory_bytes": 103683195,
+            "peak_cpu_percent": 122.95
+          },
+          "db": {
+            "peak_memory_bytes": 96993280,
+            "peak_cpu_percent": 158.27
+          }
+        },
+        "errors": 0
+      },
+      "passed": true,
+      "failed_checks": []
+    },
+    {
+      "pool_size": 5,
+      "background_tasks": true,
+      "build": {
+        "version": "0.1.0",
+        "revision": "9fb6c2425fa5dea132faa9e52bf061054a312788"
+      },
+      "concurrency": 16,
+      "requests": 666323,
+      "errors": 0,
+      "failed_operations": 0,
+      "conflicts": 0,
+      "error_types": {},
+      "status_counts": {
+        "200": 666323
+      },
+      "p50_ms": 6.67,
+      "p95_ms": 11.846,
+      "p99_ms": 16.262,
+      "requests_per_second": 2221.05,
+      "seconds": 300.004,
+      "readyz": {
+        "requests": 5448,
+        "errors": 0,
+        "failed_operations": 0,
+        "conflicts": 0,
+        "error_types": {},
+        "status_counts": {
+          "200": 5448
+        },
+        "p50_ms": 1.916,
+        "p95_ms": 3.831,
+        "p99_ms": 5.582
+      },
+      "connection_lifetime_seconds": 60,
+      "connection_rotations": {
+        "reads": 64,
+        "readyz": 4
+      },
+      "writers": 4,
+      "writes": {
+        "save": {
+          "requests": 3383,
+          "errors": 0,
+          "failed_operations": 0,
+          "conflicts": 0,
+          "error_types": {},
+          "status_counts": {
+            "200": 3383
+          },
+          "p50_ms": 92.892,
+          "p95_ms": 158.556,
+          "p99_ms": 217.664
+        },
+        "series_reorder": {
+          "requests": 0,
+          "errors": 0,
+          "failed_operations": 0,
+          "conflicts": 0,
+          "error_types": {},
+          "status_counts": {},
+          "p50_ms": null,
+          "p95_ms": null,
+          "p99_ms": null
+        }
+      },
+      "foreground_window": [
+        "2026-10-03T14:07:23.296248+00:00",
+        "2026-10-03T14:12:23.496481+00:00"
+      ],
+      "background": {
+        "cycles": 19,
+        "submissions": {
+          "requests": 38,
+          "errors": 0,
+          "failed_operations": 0,
+          "conflicts": 0,
+          "error_types": {},
+          "status_counts": {
+            "200": 38
+          },
+          "p50_ms": 19.434,
+          "p95_ms": 41.245,
+          "p99_ms": 69.02
+        },
+        "runs": [
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.580118,
+            "execution_seconds": 0.014543,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.872397,
+            "execution_seconds": 0.015598,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "html_rebuild",
+            "report": {
+              "html": {
+                "batches": 20,
+                "dry_run": false,
+                "failure": null,
+                "pending": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "rebuilt": {
+                  "pages": 0,
+                  "posts": 1996,
+                  "comments": 0
+                },
+                "skipped": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "has_more": false
+              },
+              "error": null,
+              "retention": null,
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.904587,
+            "execution_seconds": 15.425489,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "html_rebuild",
+            "report": {
+              "html": {
+                "batches": 20,
+                "dry_run": false,
+                "failure": null,
+                "pending": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "rebuilt": {
+                  "pages": 0,
+                  "posts": 1996,
+                  "comments": 0
+                },
+                "skipped": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "has_more": false
+              },
+              "error": null,
+              "retention": null,
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.137906,
+            "execution_seconds": 14.250077,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.263234,
+            "execution_seconds": 0.014986,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.109153,
+            "execution_seconds": 0.01235,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.360044,
+            "execution_seconds": 0.01881,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "html_rebuild",
+            "report": {
+              "html": {
+                "batches": 20,
+                "dry_run": false,
+                "failure": null,
+                "pending": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "rebuilt": {
+                  "pages": 0,
+                  "posts": 1996,
+                  "comments": 0
+                },
+                "skipped": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "has_more": false
+              },
+              "error": null,
+              "retention": null,
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.20415,
+            "execution_seconds": 13.956788,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.169427,
+            "execution_seconds": 0.018274,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.295918,
+            "execution_seconds": 0.01762,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.586748,
+            "execution_seconds": 0.020641,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "html_rebuild",
+            "report": {
+              "html": {
+                "batches": 20,
+                "dry_run": false,
+                "failure": null,
+                "pending": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "rebuilt": {
+                  "pages": 0,
+                  "posts": 1996,
+                  "comments": 0
+                },
+                "skipped": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "has_more": false
+              },
+              "error": null,
+              "retention": null,
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.367948,
+            "execution_seconds": 19.190441,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.170506,
+            "execution_seconds": 0.022785,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "html_rebuild",
+            "report": {
+              "html": {
+                "batches": 20,
+                "dry_run": false,
+                "failure": null,
+                "pending": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "rebuilt": {
+                  "pages": 0,
+                  "posts": 1996,
+                  "comments": 0
+                },
+                "skipped": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "has_more": false
+              },
+              "error": null,
+              "retention": null,
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.199811,
+            "execution_seconds": 18.334577,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.417345,
+            "execution_seconds": 0.015874,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.187515,
+            "execution_seconds": 0.017861,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "html_rebuild",
+            "report": {
+              "html": {
+                "batches": 20,
+                "dry_run": false,
+                "failure": null,
+                "pending": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "rebuilt": {
+                  "pages": 0,
+                  "posts": 1996,
+                  "comments": 0
+                },
+                "skipped": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "has_more": false
+              },
+              "error": null,
+              "retention": null,
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.474886,
+            "execution_seconds": 13.807492,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "html_rebuild",
+            "report": {
+              "html": {
+                "batches": 20,
+                "dry_run": false,
+                "failure": null,
+                "pending": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "rebuilt": {
+                  "pages": 0,
+                  "posts": 1996,
+                  "comments": 0
+                },
+                "skipped": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "has_more": false
+              },
+              "error": null,
+              "retention": null,
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.157166,
+            "execution_seconds": 16.237434,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.488143,
+            "execution_seconds": 0.021256,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.597026,
+            "execution_seconds": 0.015806,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.120004,
+            "execution_seconds": 0.0238,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "html_rebuild",
+            "report": {
+              "html": {
+                "batches": 20,
+                "dry_run": false,
+                "failure": null,
+                "pending": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "rebuilt": {
+                  "pages": 0,
+                  "posts": 1996,
+                  "comments": 0
+                },
+                "skipped": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "has_more": false
+              },
+              "error": null,
+              "retention": null,
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.232826,
+            "execution_seconds": 18.156734,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.447899,
+            "execution_seconds": 0.020244,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.887743,
+            "execution_seconds": 0.016922,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.704884,
+            "execution_seconds": 0.025213,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.926197,
+            "execution_seconds": 0.021366,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.133034,
+            "execution_seconds": 0.013528,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "html_rebuild",
+            "report": {
+              "html": {
+                "batches": 20,
+                "dry_run": false,
+                "failure": null,
+                "pending": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "rebuilt": {
+                  "pages": 0,
+                  "posts": 1996,
+                  "comments": 0
+                },
+                "skipped": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "has_more": false
+              },
+              "error": null,
+              "retention": null,
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.742503,
+            "execution_seconds": 13.399585,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "html_rebuild",
+            "report": {
+              "html": {
+                "batches": 20,
+                "dry_run": false,
+                "failure": null,
+                "pending": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "rebuilt": {
+                  "pages": 0,
+                  "posts": 1996,
+                  "comments": 0
+                },
+                "skipped": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "has_more": false
+              },
+              "error": null,
+              "retention": null,
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.008011,
+            "execution_seconds": 10.670223,
+            "finished_during_foreground": false
+          }
+        ],
+        "requested_unique_runs": 29,
+        "publication": {
+          "expected": 304,
+          "observed": 304,
+          "published": 304,
+          "max_delay_seconds": 26.112302,
+          "p95_delay_seconds": 26.087416549999997,
+          "business_max_delay_seconds": 23.918153
+        },
+        "cleanup": {
+          "seed_ip_preserved": true,
+          "remaining_audit_rows": 0,
+          "remaining_comment_ips": 0,
+          "expired_comments_preserved": 1900
+        },
+        "pending_html": {
+          "posts": 0,
+          "pages": 0,
+          "comments": 0
+        },
+        "skipped_rebuild_fixture_cycles": 9,
+        "fixture_sql": {
+          "requests": 19,
+          "errors": 0,
+          "failed_operations": 0,
+          "conflicts": 0,
+          "error_types": {},
+          "status_counts": {
+            "200": 19
+          },
+          "p50_ms": 870.56,
+          "p95_ms": 1126.162,
+          "p99_ms": 1126.162
+        },
+        "publication_observations": 57,
+        "publication_observation_interval_seconds": 5
+      },
+      "writing": {
+        "mode": "draft_publish_history_cycle",
+        "revision_limit": 50,
+        "completed_cycles_per_writer": [
+          845,
+          846,
+          846,
+          846
+        ],
+        "phases": {
+          "draft_save": {
+            "requests": 3383,
+            "errors": 0,
+            "failed_operations": 0,
+            "conflicts": 0,
+            "error_types": {},
+            "status_counts": {
+              "200": 3383
+            },
+            "p50_ms": 30.045,
+            "p95_ms": 54.422,
+            "p99_ms": 84.135
+          },
+          "draft_visibility": {
+            "requests": 3383,
+            "errors": 0,
+            "failed_operations": 0,
+            "conflicts": 0,
+            "error_types": {},
+            "status_counts": {
+              "200": 3383
+            },
+            "p50_ms": 9.157,
+            "p95_ms": 16.587,
+            "p99_ms": 22.324
+          },
+          "publish": {
+            "requests": 3383,
+            "errors": 0,
+            "failed_operations": 0,
+            "conflicts": 0,
+            "error_types": {},
+            "status_counts": {
+              "200": 3383
+            },
+            "p50_ms": 22.77,
+            "p95_ms": 38.866,
+            "p99_ms": 52.309
+          },
+          "published_visibility": {
+            "requests": 3383,
+            "errors": 0,
+            "failed_operations": 0,
+            "conflicts": 0,
+            "error_types": {},
+            "status_counts": {
+              "200": 3383
+            },
+            "p50_ms": 9.157,
+            "p95_ms": 15.63,
+            "p99_ms": 20.624
+          },
+          "history": {
+            "requests": 3383,
+            "errors": 0,
+            "failed_operations": 0,
+            "conflicts": 0,
+            "error_types": {},
+            "status_counts": {
+              "200": 3383
+            },
+            "p50_ms": 21.886,
+            "p95_ms": 36.624,
+            "p99_ms": 49.292
+          }
+        },
+        "verification": [
+          {
+            "completed_cycles": 845,
+            "newest_version": 1693,
+            "oldest_version": 1644,
+            "retained_revisions": 50,
+            "active_draft_retained": true,
+            "active_draft_differs_from_publication": true,
+            "pending_draft_private": true,
+            "original_revision_pruned": true
+          },
+          {
+            "completed_cycles": 846,
+            "newest_version": 1694,
+            "oldest_version": 1645,
+            "retained_revisions": 50,
+            "active_draft_retained": true,
+            "active_draft_differs_from_publication": true,
+            "pending_draft_private": true,
+            "original_revision_pruned": true
+          },
+          {
+            "completed_cycles": 846,
+            "newest_version": 1694,
+            "oldest_version": 1645,
+            "retained_revisions": 50,
+            "active_draft_retained": true,
+            "active_draft_differs_from_publication": true,
+            "pending_draft_private": true,
+            "original_revision_pruned": true
+          },
+          {
+            "completed_cycles": 846,
+            "newest_version": 1694,
+            "oldest_version": 1645,
+            "retained_revisions": 50,
+            "active_draft_retained": true,
+            "active_draft_differs_from_publication": true,
+            "pending_draft_private": true,
+            "original_revision_pruned": true
+          }
+        ]
+      },
+      "monitor": {
+        "metrics": {
+          "blog_database_pool_connections{state=\"idle\"}": {
+            "first": 5.0,
+            "min": 0.0,
+            "max": 5.0,
+            "last": 5.0
+          },
+          "blog_database_pool_connections{state=\"in_use\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 5.0,
+            "last": 0.0
+          },
+          "blog_database_pool_connections{state=\"max\"}": {
+            "first": 5.0,
+            "min": 5.0,
+            "max": 5.0,
+            "last": 5.0
+          },
+          "blog_database_pool_connections{state=\"size\"}": {
+            "first": 5.0,
+            "min": 5.0,
+            "max": 5.0,
+            "last": 5.0
+          },
+          "blog_render_active{kind=\"comment\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_active{kind=\"content\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_active{kind=\"theme\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 3.0,
+            "last": 0.0
+          },
+          "blog_render_completed_total{kind=\"comment\",result=\"success\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "last": 1.0
+          },
+          "blog_render_completed_total{kind=\"content\",result=\"success\"}": {
+            "first": 2.0,
+            "min": 2.0,
+            "max": 3398.0,
+            "last": 3398.0
+          },
+          "blog_render_completed_total{kind=\"theme\",result=\"success\"}": {
+            "first": 84.0,
+            "min": 84.0,
+            "max": 673177.0,
+            "last": 673177.0
+          },
+          "blog_render_execution_duration_seconds_sum{kind=\"comment\"}": {
+            "first": 8.0042e-05,
+            "min": 8.0042e-05,
+            "max": 8.0042e-05,
+            "last": 8.0042e-05
+          },
+          "blog_render_execution_duration_seconds_count{kind=\"comment\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "last": 1.0
+          },
+          "blog_render_execution_duration_seconds_sum{kind=\"content\"}": {
+            "first": 0.000697042,
+            "min": 0.000697042,
+            "max": 2.140785008999997,
+            "last": 2.140785008999997
+          },
+          "blog_render_execution_duration_seconds_count{kind=\"content\"}": {
+            "first": 2.0,
+            "min": 2.0,
+            "max": 3398.0,
+            "last": 3398.0
+          },
+          "blog_render_execution_duration_seconds_sum{kind=\"theme\"}": {
+            "first": 0.006821581000000002,
+            "min": 0.006821581000000002,
+            "max": 41.102613129002194,
+            "last": 41.102613129002194
+          },
+          "blog_render_execution_duration_seconds_count{kind=\"theme\"}": {
+            "first": 84.0,
+            "min": 84.0,
+            "max": 673177.0,
+            "last": 673177.0
+          },
+          "blog_render_execution_timeouts_total{kind=\"comment\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_execution_timeouts_total{kind=\"content\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_execution_timeouts_total{kind=\"theme\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_queue_duration_seconds_sum{kind=\"comment\"}": {
+            "first": 3.541e-06,
+            "min": 3.541e-06,
+            "max": 3.541e-06,
+            "last": 3.541e-06
+          },
+          "blog_render_queue_duration_seconds_count{kind=\"comment\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "last": 1.0
+          },
+          "blog_render_queue_duration_seconds_sum{kind=\"content\"}": {
+            "first": 9.208e-06,
+            "min": 9.208e-06,
+            "max": 0.00371700600000001,
+            "last": 0.00371700600000001
+          },
+          "blog_render_queue_duration_seconds_count{kind=\"content\"}": {
+            "first": 2.0,
+            "min": 2.0,
+            "max": 3398.0,
+            "last": 3398.0
+          },
+          "blog_render_queue_duration_seconds_sum{kind=\"theme\"}": {
+            "first": 6.353999999999999e-05,
+            "min": 6.353999999999999e-05,
+            "max": 0.4003033379993419,
+            "last": 0.4003033379993419
+          },
+          "blog_render_queue_duration_seconds_count{kind=\"theme\"}": {
+            "first": 84.0,
+            "min": 84.0,
+            "max": 673177.0,
+            "last": 673177.0
+          },
+          "blog_render_queue_total{kind=\"comment\",result=\"admitted\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "last": 1.0
+          },
+          "blog_render_queue_total{kind=\"content\",result=\"admitted\"}": {
+            "first": 2.0,
+            "min": 2.0,
+            "max": 3398.0,
+            "last": 3398.0
+          },
+          "blog_render_queue_total{kind=\"theme\",result=\"admitted\"}": {
+            "first": 84.0,
+            "min": 84.0,
+            "max": 673177.0,
+            "last": 673177.0
+          },
+          "blog_render_waiting{kind=\"comment\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_waiting{kind=\"content\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_waiting{kind=\"theme\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_consecutive_failures{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_consecutive_failures{kind=\"publish_due\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_consecutive_failures{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_due_wait_seconds{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_due_wait_seconds{kind=\"publish_due\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_due_wait_seconds{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"html_rebuild\",status=\"completed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 153.41928621800002,
+            "last": 153.41928621800002
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"html_rebuild\",status=\"completed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 10.0,
+            "last": 10.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"html_rebuild\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"html_rebuild\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"html_rebuild\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"html_rebuild\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"publish_due\",status=\"completed\"}": {
+            "first": 0.010123416,
+            "min": 0.010123416,
+            "max": 0.231498732,
+            "last": 0.231498732
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"publish_due\",status=\"completed\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 11.0,
+            "last": 11.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"publish_due\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"publish_due\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"publish_due\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"publish_due\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"retention\",status=\"completed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.34180978400000006,
+            "last": 0.34180978400000006
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"retention\",status=\"completed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 19.0,
+            "last": 19.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"retention\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"retention\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"retention\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"retention\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"html_rebuild\",status=\"cancelled\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"html_rebuild\",status=\"completed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 10.0,
+            "last": 10.0
+          },
+          "blog_task_finished_total{kind=\"html_rebuild\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"html_rebuild\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"publish_due\",status=\"cancelled\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"publish_due\",status=\"completed\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 11.0,
+            "last": 11.0
+          },
+          "blog_task_finished_total{kind=\"publish_due\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"publish_due\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"retention\",status=\"cancelled\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"retention\",status=\"completed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 19.0,
+            "last": 19.0
+          },
+          "blog_task_finished_total{kind=\"retention\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"retention\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_health_snapshot_last_success_timestamp_seconds": {
+            "first": 1791036442.0,
+            "min": 1791036442.0,
+            "max": 1791036749.0,
+            "last": 1791036749.0
+          },
+          "blog_task_last_success_timestamp_seconds{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 1791036744.0,
+            "last": 1791036744.0
+          },
+          "blog_task_last_success_timestamp_seconds{kind=\"publish_due\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 1791036721.0,
+            "last": 1791036721.0
+          },
+          "blog_task_last_success_timestamp_seconds{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 1791036732.0,
+            "last": 1791036732.0
+          },
+          "blog_task_lease_expirations_total{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_lease_expirations_total{kind=\"publish_due\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_lease_expirations_total{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_queue_duration_seconds_sum{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 3.4297940000000007,
+            "last": 3.4297940000000007
+          },
+          "blog_task_queue_duration_seconds_count{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 10.0,
+            "last": 10.0
+          },
+          "blog_task_queue_duration_seconds_sum{kind=\"publish_due\"}": {
+            "first": 0.00666,
+            "min": 0.00666,
+            "max": 0.08222499999999999,
+            "last": 0.08222499999999999
+          },
+          "blog_task_queue_duration_seconds_count{kind=\"publish_due\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 11.0,
+            "last": 11.0
+          },
+          "blog_task_queue_duration_seconds_sum{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 8.262746,
+            "last": 8.262746
+          },
+          "blog_task_queue_duration_seconds_count{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 19.0,
+            "last": 19.0
+          },
+          "blog_task_runs{kind=\"html_rebuild\",status=\"expired\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"html_rebuild\",status=\"queued\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 1.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"html_rebuild\",status=\"running\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 1.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"publish_due\",status=\"expired\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"publish_due\",status=\"queued\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"publish_due\",status=\"running\"}": {
+            "first": 1.0,
+            "min": 0.0,
+            "max": 1.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"retention\",status=\"expired\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"retention\",status=\"queued\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"retention\",status=\"running\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 1.0,
+            "last": 0.0
+          },
+          "blog_task_schedule_enabled{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_schedule_enabled{kind=\"publish_due\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "last": 1.0
+          },
+          "blog_task_schedule_enabled{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_schedule_interval_seconds{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_schedule_interval_seconds{kind=\"publish_due\"}": {
+            "first": 30.0,
+            "min": 30.0,
+            "max": 30.0,
+            "last": 30.0
+          },
+          "blog_task_schedule_interval_seconds{kind=\"retention\"}": {
+            "first": 86400.0,
+            "min": 86400.0,
+            "max": 86400.0,
+            "last": 86400.0
+          },
+          "blog_task_schedule_next_run_timestamp_seconds{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_schedule_next_run_timestamp_seconds{kind=\"publish_due\"}": {
+            "first": 1791036472.0,
+            "min": 1791036472.0,
+            "max": 1791036751.0,
+            "last": 1791036751.0
+          },
+          "blog_task_schedule_next_run_timestamp_seconds{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_scheduler_available": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "last": 1.0
+          },
+          "blog_task_scheduler_checks_total{result=\"error\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_scheduler_checks_total{result=\"success\"}": {
+            "first": 2.0,
+            "min": 2.0,
+            "max": 312.0,
+            "last": 312.0
+          },
+          "blog_task_scheduler_checks_total{result=\"unavailable\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_scheduler_last_success_timestamp_seconds": {
+            "first": 1791036443.0,
+            "min": 1791036443.0,
+            "max": 1791036753.0,
+            "last": 1791036753.0
+          },
+          "blog_task_started_total{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 10.0,
+            "last": 10.0
+          },
+          "blog_task_started_total{kind=\"publish_due\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 11.0,
+            "last": 11.0
+          },
+          "blog_task_started_total{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 19.0,
+            "last": 19.0
+          }
+        },
+        "resources": {
+          "blog": {
+            "peak_memory_bytes": 75738644,
+            "peak_cpu_percent": 123.45
+          },
+          "db": {
+            "peak_memory_bytes": 95053414,
+            "peak_cpu_percent": 177.57
+          }
+        },
+        "errors": 0
+      },
+      "passed": true,
+      "failed_checks": []
+    },
+    {
+      "pool_size": 10,
+      "background_tasks": false,
+      "build": {
+        "version": "0.1.0",
+        "revision": "9fb6c2425fa5dea132faa9e52bf061054a312788"
+      },
+      "concurrency": 16,
+      "requests": 560423,
+      "errors": 0,
+      "failed_operations": 0,
+      "conflicts": 0,
+      "error_types": {},
+      "status_counts": {
+        "200": 560423
+      },
+      "p50_ms": 7.079,
+      "p95_ms": 17.602,
+      "p99_ms": 30.646,
+      "requests_per_second": 1868.03,
+      "seconds": 300.008,
+      "readyz": {
+        "requests": 5263,
+        "errors": 0,
+        "failed_operations": 0,
+        "conflicts": 0,
+        "error_types": {},
+        "status_counts": {
+          "200": 5263
+        },
+        "p50_ms": 2.63,
+        "p95_ms": 9.527,
+        "p99_ms": 21.036
+      },
+      "connection_lifetime_seconds": 60,
+      "connection_rotations": {
+        "reads": 64,
+        "readyz": 4
+      },
+      "writers": 4,
+      "writes": {
+        "save": {
+          "requests": 2913,
+          "errors": 0,
+          "failed_operations": 0,
+          "conflicts": 0,
+          "error_types": {},
+          "status_counts": {
+            "200": 2913
+          },
+          "p50_ms": 140.794,
+          "p95_ms": 317.095,
+          "p99_ms": 510.028
+        },
+        "series_reorder": {
+          "requests": 0,
+          "errors": 0,
+          "failed_operations": 0,
+          "conflicts": 0,
+          "error_types": {},
+          "status_counts": {},
+          "p50_ms": null,
+          "p95_ms": null,
+          "p99_ms": null
+        }
+      },
+      "foreground_window": [
+        "2026-10-03T14:12:44.770361+00:00",
+        "2026-10-03T14:17:44.960333+00:00"
+      ],
+      "writing": {
+        "mode": "draft_publish_history_cycle",
+        "revision_limit": 50,
+        "completed_cycles_per_writer": [
+          730,
+          727,
+          728,
+          728
+        ],
+        "phases": {
+          "draft_save": {
+            "requests": 2913,
+            "errors": 0,
+            "failed_operations": 0,
+            "conflicts": 0,
+            "error_types": {},
+            "status_counts": {
+              "200": 2913
+            },
+            "p50_ms": 46.449,
+            "p95_ms": 138.033,
+            "p99_ms": 230.987
+          },
+          "draft_visibility": {
+            "requests": 2913,
+            "errors": 0,
+            "failed_operations": 0,
+            "conflicts": 0,
+            "error_types": {},
+            "status_counts": {
+              "200": 2913
+            },
+            "p50_ms": 10.312,
+            "p95_ms": 23.69,
+            "p99_ms": 39.644
+          },
+          "publish": {
+            "requests": 2913,
+            "errors": 0,
+            "failed_operations": 0,
+            "conflicts": 0,
+            "error_types": {},
+            "status_counts": {
+              "200": 2913
+            },
+            "p50_ms": 36.624,
+            "p95_ms": 94.75,
+            "p99_ms": 158.556
+          },
+          "published_visibility": {
+            "requests": 2913,
+            "errors": 0,
+            "failed_operations": 0,
+            "conflicts": 0,
+            "error_types": {},
+            "status_counts": {
+              "200": 2913
+            },
+            "p50_ms": 9.912,
+            "p95_ms": 22.77,
+            "p99_ms": 37.357
+          },
+          "history": {
+            "requests": 2913,
+            "errors": 0,
+            "failed_operations": 0,
+            "conflicts": 0,
+            "error_types": {},
+            "status_counts": {
+              "200": 2913
+            },
+            "p50_ms": 29.456,
+            "p95_ms": 69.02,
+            "p99_ms": 127.521
+          }
+        },
+        "verification": [
+          {
+            "completed_cycles": 730,
+            "newest_version": 1463,
+            "oldest_version": 1414,
+            "retained_revisions": 50,
+            "active_draft_retained": true,
+            "active_draft_differs_from_publication": true,
+            "pending_draft_private": true,
+            "original_revision_pruned": true
+          },
+          {
+            "completed_cycles": 727,
+            "newest_version": 1456,
+            "oldest_version": 1407,
+            "retained_revisions": 50,
+            "active_draft_retained": true,
+            "active_draft_differs_from_publication": true,
+            "pending_draft_private": true,
+            "original_revision_pruned": true
+          },
+          {
+            "completed_cycles": 728,
+            "newest_version": 1458,
+            "oldest_version": 1409,
+            "retained_revisions": 50,
+            "active_draft_retained": true,
+            "active_draft_differs_from_publication": true,
+            "pending_draft_private": true,
+            "original_revision_pruned": true
+          },
+          {
+            "completed_cycles": 728,
+            "newest_version": 1458,
+            "oldest_version": 1409,
+            "retained_revisions": 50,
+            "active_draft_retained": true,
+            "active_draft_differs_from_publication": true,
+            "pending_draft_private": true,
+            "original_revision_pruned": true
+          }
+        ]
+      },
+      "monitor": {
+        "metrics": {
+          "blog_database_pool_connections{state=\"idle\"}": {
+            "first": 10.0,
+            "min": 0.0,
+            "max": 10.0,
+            "last": 10.0
+          },
+          "blog_database_pool_connections{state=\"in_use\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 10.0,
+            "last": 0.0
+          },
+          "blog_database_pool_connections{state=\"max\"}": {
+            "first": 10.0,
+            "min": 10.0,
+            "max": 10.0,
+            "last": 10.0
+          },
+          "blog_database_pool_connections{state=\"size\"}": {
+            "first": 10.0,
+            "min": 10.0,
+            "max": 10.0,
+            "last": 10.0
+          },
+          "blog_render_active{kind=\"comment\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_active{kind=\"content\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_active{kind=\"theme\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 1.0,
+            "last": 0.0
+          },
+          "blog_render_completed_total{kind=\"comment\",result=\"success\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "last": 1.0
+          },
+          "blog_render_completed_total{kind=\"content\",result=\"success\"}": {
+            "first": 2.0,
+            "min": 2.0,
+            "max": 2919.0,
+            "last": 2919.0
+          },
+          "blog_render_completed_total{kind=\"theme\",result=\"success\"}": {
+            "first": 84.0,
+            "min": 84.0,
+            "max": 566337.0,
+            "last": 566337.0
+          },
+          "blog_render_execution_duration_seconds_sum{kind=\"comment\"}": {
+            "first": 8.6999e-05,
+            "min": 8.6999e-05,
+            "max": 8.6999e-05,
+            "last": 8.6999e-05
+          },
+          "blog_render_execution_duration_seconds_count{kind=\"comment\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "last": 1.0
+          },
+          "blog_render_execution_duration_seconds_sum{kind=\"content\"}": {
+            "first": 0.000670283,
+            "min": 0.000670283,
+            "max": 2.5939164949999953,
+            "last": 2.5939164949999953
+          },
+          "blog_render_execution_duration_seconds_count{kind=\"content\"}": {
+            "first": 2.0,
+            "min": 2.0,
+            "max": 2919.0,
+            "last": 2919.0
+          },
+          "blog_render_execution_duration_seconds_sum{kind=\"theme\"}": {
+            "first": 0.006089671000000001,
+            "min": 0.006089671000000001,
+            "max": 56.859917942000244,
+            "last": 56.859917942000244
+          },
+          "blog_render_execution_duration_seconds_count{kind=\"theme\"}": {
+            "first": 84.0,
+            "min": 84.0,
+            "max": 566337.0,
+            "last": 566337.0
+          },
+          "blog_render_execution_timeouts_total{kind=\"comment\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_execution_timeouts_total{kind=\"content\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_execution_timeouts_total{kind=\"theme\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_queue_duration_seconds_sum{kind=\"comment\"}": {
+            "first": 2.625e-06,
+            "min": 2.625e-06,
+            "max": 2.625e-06,
+            "last": 2.625e-06
+          },
+          "blog_render_queue_duration_seconds_count{kind=\"comment\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "last": 1.0
+          },
+          "blog_render_queue_duration_seconds_sum{kind=\"content\"}": {
+            "first": 6.625e-06,
+            "min": 6.625e-06,
+            "max": 0.0057788980000000045,
+            "last": 0.0057788980000000045
+          },
+          "blog_render_queue_duration_seconds_count{kind=\"content\"}": {
+            "first": 2.0,
+            "min": 2.0,
+            "max": 2919.0,
+            "last": 2919.0
+          },
+          "blog_render_queue_duration_seconds_sum{kind=\"theme\"}": {
+            "first": 7.545699999999999e-05,
+            "min": 7.545699999999999e-05,
+            "max": 0.7168461530001428,
+            "last": 0.7168461530001428
+          },
+          "blog_render_queue_duration_seconds_count{kind=\"theme\"}": {
+            "first": 84.0,
+            "min": 84.0,
+            "max": 566337.0,
+            "last": 566337.0
+          },
+          "blog_render_queue_total{kind=\"comment\",result=\"admitted\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "last": 1.0
+          },
+          "blog_render_queue_total{kind=\"content\",result=\"admitted\"}": {
+            "first": 2.0,
+            "min": 2.0,
+            "max": 2919.0,
+            "last": 2919.0
+          },
+          "blog_render_queue_total{kind=\"theme\",result=\"admitted\"}": {
+            "first": 84.0,
+            "min": 84.0,
+            "max": 566337.0,
+            "last": 566337.0
+          },
+          "blog_render_waiting{kind=\"comment\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_waiting{kind=\"content\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_waiting{kind=\"theme\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_consecutive_failures{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_consecutive_failures{kind=\"publish_due\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_consecutive_failures{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_due_wait_seconds{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_due_wait_seconds{kind=\"publish_due\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_due_wait_seconds{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"html_rebuild\",status=\"completed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"html_rebuild\",status=\"completed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"html_rebuild\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"html_rebuild\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"html_rebuild\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"html_rebuild\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"publish_due\",status=\"completed\"}": {
+            "first": 0.016129706,
+            "min": 0.016129706,
+            "max": 0.246879678,
+            "last": 0.246879678
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"publish_due\",status=\"completed\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 10.0,
+            "last": 10.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"publish_due\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"publish_due\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"publish_due\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"publish_due\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"retention\",status=\"completed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"retention\",status=\"completed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"retention\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"retention\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"retention\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"retention\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"html_rebuild\",status=\"cancelled\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"html_rebuild\",status=\"completed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"html_rebuild\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"html_rebuild\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"publish_due\",status=\"cancelled\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"publish_due\",status=\"completed\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 10.0,
+            "last": 10.0
+          },
+          "blog_task_finished_total{kind=\"publish_due\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"publish_due\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"retention\",status=\"cancelled\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"retention\",status=\"completed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"retention\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"retention\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_health_snapshot_last_success_timestamp_seconds": {
+            "first": 1791036763.0,
+            "min": 1791036763.0,
+            "max": 1791037060.0,
+            "last": 1791037060.0
+          },
+          "blog_task_last_success_timestamp_seconds{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_last_success_timestamp_seconds{kind=\"publish_due\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 1791037040.0,
+            "last": 1791037040.0
+          },
+          "blog_task_last_success_timestamp_seconds{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_lease_expirations_total{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_lease_expirations_total{kind=\"publish_due\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_lease_expirations_total{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_queue_duration_seconds_sum{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_queue_duration_seconds_count{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_queue_duration_seconds_sum{kind=\"publish_due\"}": {
+            "first": 0.006309,
+            "min": 0.006309,
+            "max": 0.10292599999999999,
+            "last": 0.10292599999999999
+          },
+          "blog_task_queue_duration_seconds_count{kind=\"publish_due\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 10.0,
+            "last": 10.0
+          },
+          "blog_task_queue_duration_seconds_sum{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_queue_duration_seconds_count{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"html_rebuild\",status=\"expired\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"html_rebuild\",status=\"queued\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"html_rebuild\",status=\"running\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"publish_due\",status=\"expired\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"publish_due\",status=\"queued\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"publish_due\",status=\"running\"}": {
+            "first": 1.0,
+            "min": 0.0,
+            "max": 1.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"retention\",status=\"expired\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"retention\",status=\"queued\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"retention\",status=\"running\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_schedule_enabled{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_schedule_enabled{kind=\"publish_due\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "last": 1.0
+          },
+          "blog_task_schedule_enabled{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_schedule_interval_seconds{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_schedule_interval_seconds{kind=\"publish_due\"}": {
+            "first": 30.0,
+            "min": 30.0,
+            "max": 30.0,
+            "last": 30.0
+          },
+          "blog_task_schedule_interval_seconds{kind=\"retention\"}": {
+            "first": 86400.0,
+            "min": 86400.0,
+            "max": 86400.0,
+            "last": 86400.0
+          },
+          "blog_task_schedule_next_run_timestamp_seconds{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_schedule_next_run_timestamp_seconds{kind=\"publish_due\"}": {
+            "first": 1791036793.0,
+            "min": 1791036793.0,
+            "max": 1791037070.0,
+            "last": 1791037070.0
+          },
+          "blog_task_schedule_next_run_timestamp_seconds{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_scheduler_available": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "last": 1.0
+          },
+          "blog_task_scheduler_checks_total{result=\"error\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_scheduler_checks_total{result=\"success\"}": {
+            "first": 2.0,
+            "min": 2.0,
+            "max": 303.0,
+            "last": 303.0
+          },
+          "blog_task_scheduler_checks_total{result=\"unavailable\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_scheduler_last_success_timestamp_seconds": {
+            "first": 1791036764.0,
+            "min": 1791036764.0,
+            "max": 1791037065.0,
+            "last": 1791037065.0
+          },
+          "blog_task_started_total{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_started_total{kind=\"publish_due\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 10.0,
+            "last": 10.0
+          },
+          "blog_task_started_total{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          }
+        },
+        "resources": {
+          "blog": {
+            "peak_memory_bytes": 69279416,
+            "peak_cpu_percent": 179.34
+          },
+          "db": {
+            "peak_memory_bytes": 117021082,
+            "peak_cpu_percent": 297.51
+          }
+        },
+        "errors": 0
+      },
+      "passed": true,
+      "failed_checks": []
+    },
+    {
+      "pool_size": 10,
+      "background_tasks": true,
+      "build": {
+        "version": "0.1.0",
+        "revision": "9fb6c2425fa5dea132faa9e52bf061054a312788"
+      },
+      "concurrency": 16,
+      "requests": 449130,
+      "errors": 0,
+      "failed_operations": 0,
+      "conflicts": 0,
+      "error_types": {},
+      "status_counts": {
+        "200": 449130
+      },
+      "p50_ms": 8.978,
+      "p95_ms": 22.77,
+      "p99_ms": 39.644,
+      "requests_per_second": 1497.06,
+      "seconds": 300.007,
+      "readyz": {
+        "requests": 5096,
+        "errors": 0,
+        "failed_operations": 0,
+        "conflicts": 0,
+        "error_types": {},
+        "status_counts": {
+          "200": 5096
+        },
+        "p50_ms": 3.206,
+        "p95_ms": 14.157,
+        "p99_ms": 31.259
+      },
+      "connection_lifetime_seconds": 60,
+      "connection_rotations": {
+        "reads": 64,
+        "readyz": 4
+      },
+      "writers": 4,
+      "writes": {
+        "save": {
+          "requests": 2579,
+          "errors": 0,
+          "failed_operations": 0,
+          "conflicts": 0,
+          "error_types": {},
+          "status_counts": {
+            "200": 2579
+          },
+          "p50_ms": 155.448,
+          "p95_ms": 597.579,
+          "p99_ms": 905.731
+        },
+        "series_reorder": {
+          "requests": 0,
+          "errors": 0,
+          "failed_operations": 0,
+          "conflicts": 0,
+          "error_types": {},
+          "status_counts": {},
+          "p50_ms": null,
+          "p95_ms": null,
+          "p99_ms": null
+        }
+      },
+      "foreground_window": [
+        "2026-10-03T14:17:57.341877+00:00",
+        "2026-10-03T14:22:57.497993+00:00"
+      ],
+      "background": {
+        "cycles": 19,
+        "submissions": {
+          "requests": 38,
+          "errors": 0,
+          "failed_operations": 0,
+          "conflicts": 0,
+          "error_types": {},
+          "status_counts": {
+            "200": 38
+          },
+          "p50_ms": 31.259,
+          "p95_ms": 178.56,
+          "p99_ms": 281.572
+        },
+        "runs": [
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.475268,
+            "execution_seconds": 0.038052,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.525783,
+            "execution_seconds": 0.033119,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.702727,
+            "execution_seconds": 0.02767,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "html_rebuild",
+            "report": {
+              "html": {
+                "batches": 20,
+                "dry_run": false,
+                "failure": null,
+                "pending": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "rebuilt": {
+                  "pages": 0,
+                  "posts": 1996,
+                  "comments": 0
+                },
+                "skipped": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "has_more": false
+              },
+              "error": null,
+              "retention": null,
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.557258,
+            "execution_seconds": 26.39874,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.985051,
+            "execution_seconds": 0.026721,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.559605,
+            "execution_seconds": 0.03678,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.398274,
+            "execution_seconds": 0.043919,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "html_rebuild",
+            "report": {
+              "html": {
+                "batches": 20,
+                "dry_run": false,
+                "failure": null,
+                "pending": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "rebuilt": {
+                  "pages": 0,
+                  "posts": 1996,
+                  "comments": 0
+                },
+                "skipped": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "has_more": false
+              },
+              "error": null,
+              "retention": null,
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.463981,
+            "execution_seconds": 22.268858,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "html_rebuild",
+            "report": {
+              "html": {
+                "batches": 20,
+                "dry_run": false,
+                "failure": null,
+                "pending": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "rebuilt": {
+                  "pages": 0,
+                  "posts": 1996,
+                  "comments": 0
+                },
+                "skipped": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "has_more": false
+              },
+              "error": null,
+              "retention": null,
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.027114,
+            "execution_seconds": 21.158338,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.103017,
+            "execution_seconds": 0.031284,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.567535,
+            "execution_seconds": 0.022338,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.265671,
+            "execution_seconds": 0.045378,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.026786,
+            "execution_seconds": 0.03618,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "html_rebuild",
+            "report": {
+              "html": {
+                "batches": 20,
+                "dry_run": false,
+                "failure": null,
+                "pending": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "rebuilt": {
+                  "pages": 0,
+                  "posts": 1996,
+                  "comments": 0
+                },
+                "skipped": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "has_more": false
+              },
+              "error": null,
+              "retention": null,
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.604389,
+            "execution_seconds": 33.71699,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.508571,
+            "execution_seconds": 0.198477,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "html_rebuild",
+            "report": {
+              "html": {
+                "batches": 20,
+                "dry_run": false,
+                "failure": null,
+                "pending": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "rebuilt": {
+                  "pages": 0,
+                  "posts": 1996,
+                  "comments": 0
+                },
+                "skipped": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "has_more": false
+              },
+              "error": null,
+              "retention": null,
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.675387,
+            "execution_seconds": 59.34521,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.843619,
+            "execution_seconds": 0.091183,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.071303,
+            "execution_seconds": 0.097951,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "html_rebuild",
+            "report": {
+              "html": {
+                "batches": 20,
+                "dry_run": false,
+                "failure": null,
+                "pending": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "rebuilt": {
+                  "pages": 0,
+                  "posts": 1996,
+                  "comments": 0
+                },
+                "skipped": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "has_more": false
+              },
+              "error": null,
+              "retention": null,
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.851774,
+            "execution_seconds": 25.914439,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.815599,
+            "execution_seconds": 0.02784,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.193044,
+            "execution_seconds": 0.026668,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.744767,
+            "execution_seconds": 0.04526,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.305795,
+            "execution_seconds": 0.033731,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.998488,
+            "execution_seconds": 0.03395,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "html_rebuild",
+            "report": {
+              "html": {
+                "batches": 20,
+                "dry_run": false,
+                "failure": null,
+                "pending": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "rebuilt": {
+                  "pages": 0,
+                  "posts": 1996,
+                  "comments": 0
+                },
+                "skipped": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "has_more": false
+              },
+              "error": null,
+              "retention": null,
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.218629,
+            "execution_seconds": 25.759356,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "retention",
+            "report": {
+              "html": null,
+              "error": null,
+              "retention": {
+                "batches": 1,
+                "dry_run": false,
+                "has_more": false,
+                "audit_logs": 100,
+                "comment_ips": 100
+              },
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.886161,
+            "execution_seconds": 0.049072,
+            "finished_during_foreground": true
+          },
+          {
+            "kind": "html_rebuild",
+            "report": {
+              "html": {
+                "batches": 20,
+                "dry_run": false,
+                "failure": null,
+                "pending": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "rebuilt": {
+                  "pages": 0,
+                  "posts": 1996,
+                  "comments": 0
+                },
+                "skipped": {
+                  "pages": 0,
+                  "posts": 0,
+                  "comments": 0
+                },
+                "has_more": false
+              },
+              "error": null,
+              "retention": null,
+              "publication": null
+            },
+            "status": "completed",
+            "queue_seconds": 0.906119,
+            "execution_seconds": 17.358489,
+            "finished_during_foreground": false
+          }
+        ],
+        "requested_unique_runs": 27,
+        "publication": {
+          "expected": 304,
+          "observed": 304,
+          "published": 304,
+          "max_delay_seconds": 34.05203,
+          "p95_delay_seconds": 33.02608509999991,
+          "business_max_delay_seconds": 28.836834
+        },
+        "cleanup": {
+          "seed_ip_preserved": true,
+          "remaining_audit_rows": 0,
+          "remaining_comment_ips": 0,
+          "expired_comments_preserved": 1900
+        },
+        "pending_html": {
+          "posts": 0,
+          "pages": 0,
+          "comments": 0
+        },
+        "skipped_rebuild_fixture_cycles": 11,
+        "fixture_sql": {
+          "requests": 19,
+          "errors": 0,
+          "failed_operations": 0,
+          "conflicts": 0,
+          "error_types": {},
+          "status_counts": {
+            "200": 19
+          },
+          "p50_ms": 853.49,
+          "p95_ms": 2800.328,
+          "p99_ms": 2800.328
+        },
+        "publication_observations": 55,
+        "publication_observation_interval_seconds": 5
+      },
+      "writing": {
+        "mode": "draft_publish_history_cycle",
+        "revision_limit": 50,
+        "completed_cycles_per_writer": [
+          646,
+          645,
+          644,
+          644
+        ],
+        "phases": {
+          "draft_save": {
+            "requests": 2579,
+            "errors": 0,
+            "failed_operations": 0,
+            "conflicts": 0,
+            "error_types": {},
+            "status_counts": {
+              "200": 2579
+            },
+            "p50_ms": 52.309,
+            "p95_ms": 240.319,
+            "p99_ms": 418.401
+          },
+          "draft_visibility": {
+            "requests": 2579,
+            "errors": 0,
+            "failed_operations": 0,
+            "conflicts": 0,
+            "error_types": {},
+            "status_counts": {
+              "200": 2579
+            },
+            "p50_ms": 12.083,
+            "p95_ms": 30.045,
+            "p99_ms": 50.278
+          },
+          "publish": {
+            "requests": 2579,
+            "errors": 0,
+            "failed_operations": 0,
+            "conflicts": 0,
+            "error_types": {},
+            "status_counts": {
+              "200": 2579
+            },
+            "p50_ms": 40.436,
+            "p95_ms": 161.728,
+            "p99_ms": 343.234
+          },
+          "published_visibility": {
+            "requests": 2579,
+            "errors": 0,
+            "failed_operations": 0,
+            "conflicts": 0,
+            "error_types": {},
+            "status_counts": {
+              "200": 2579
+            },
+            "p50_ms": 12.083,
+            "p95_ms": 30.045,
+            "p99_ms": 48.325
+          },
+          "history": {
+            "requests": 2579,
+            "errors": 0,
+            "failed_operations": 0,
+            "conflicts": 0,
+            "error_types": {},
+            "status_counts": {
+              "200": 2579
+            },
+            "p50_ms": 33.835,
+            "p95_ms": 138.033,
+            "p99_ms": 270.638
+          }
+        },
+        "verification": [
+          {
+            "completed_cycles": 646,
+            "newest_version": 1295,
+            "oldest_version": 1246,
+            "retained_revisions": 50,
+            "active_draft_retained": true,
+            "active_draft_differs_from_publication": true,
+            "pending_draft_private": true,
+            "original_revision_pruned": true
+          },
+          {
+            "completed_cycles": 645,
+            "newest_version": 1292,
+            "oldest_version": 1243,
+            "retained_revisions": 50,
+            "active_draft_retained": true,
+            "active_draft_differs_from_publication": true,
+            "pending_draft_private": true,
+            "original_revision_pruned": true
+          },
+          {
+            "completed_cycles": 644,
+            "newest_version": 1290,
+            "oldest_version": 1241,
+            "retained_revisions": 50,
+            "active_draft_retained": true,
+            "active_draft_differs_from_publication": true,
+            "pending_draft_private": true,
+            "original_revision_pruned": true
+          },
+          {
+            "completed_cycles": 644,
+            "newest_version": 1290,
+            "oldest_version": 1241,
+            "retained_revisions": 50,
+            "active_draft_retained": true,
+            "active_draft_differs_from_publication": true,
+            "pending_draft_private": true,
+            "original_revision_pruned": true
+          }
+        ]
+      },
+      "monitor": {
+        "metrics": {
+          "blog_database_pool_connections{state=\"idle\"}": {
+            "first": 10.0,
+            "min": 0.0,
+            "max": 10.0,
+            "last": 10.0
+          },
+          "blog_database_pool_connections{state=\"in_use\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 10.0,
+            "last": 0.0
+          },
+          "blog_database_pool_connections{state=\"max\"}": {
+            "first": 10.0,
+            "min": 10.0,
+            "max": 10.0,
+            "last": 10.0
+          },
+          "blog_database_pool_connections{state=\"size\"}": {
+            "first": 10.0,
+            "min": 10.0,
+            "max": 10.0,
+            "last": 10.0
+          },
+          "blog_render_active{kind=\"comment\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_active{kind=\"content\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_active{kind=\"theme\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 1.0,
+            "last": 0.0
+          },
+          "blog_render_completed_total{kind=\"comment\",result=\"success\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "last": 1.0
+          },
+          "blog_render_completed_total{kind=\"content\",result=\"success\"}": {
+            "first": 2.0,
+            "min": 2.0,
+            "max": 2590.0,
+            "last": 2590.0
+          },
+          "blog_render_completed_total{kind=\"theme\",result=\"success\"}": {
+            "first": 84.0,
+            "min": 84.0,
+            "max": 454376.0,
+            "last": 454376.0
+          },
+          "blog_render_execution_duration_seconds_sum{kind=\"comment\"}": {
+            "first": 8.4666e-05,
+            "min": 8.4666e-05,
+            "max": 8.4666e-05,
+            "last": 8.4666e-05
+          },
+          "blog_render_execution_duration_seconds_count{kind=\"comment\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "last": 1.0
+          },
+          "blog_render_execution_duration_seconds_sum{kind=\"content\"}": {
+            "first": 0.000550541,
+            "min": 0.000550541,
+            "max": 2.259962285999998,
+            "last": 2.259962285999998
+          },
+          "blog_render_execution_duration_seconds_count{kind=\"content\"}": {
+            "first": 2.0,
+            "min": 2.0,
+            "max": 2590.0,
+            "last": 2590.0
+          },
+          "blog_render_execution_duration_seconds_sum{kind=\"theme\"}": {
+            "first": 0.006676611000000001,
+            "min": 0.006676611000000001,
+            "max": 53.065300720999595,
+            "last": 53.065300720999595
+          },
+          "blog_render_execution_duration_seconds_count{kind=\"theme\"}": {
+            "first": 84.0,
+            "min": 84.0,
+            "max": 454376.0,
+            "last": 454376.0
+          },
+          "blog_render_execution_timeouts_total{kind=\"comment\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_execution_timeouts_total{kind=\"content\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_execution_timeouts_total{kind=\"theme\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_queue_duration_seconds_sum{kind=\"comment\"}": {
+            "first": 4.542e-06,
+            "min": 4.542e-06,
+            "max": 4.542e-06,
+            "last": 4.542e-06
+          },
+          "blog_render_queue_duration_seconds_count{kind=\"comment\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "last": 1.0
+          },
+          "blog_render_queue_duration_seconds_sum{kind=\"content\"}": {
+            "first": 7.833e-06,
+            "min": 7.833e-06,
+            "max": 0.0051087329999999955,
+            "last": 0.0051087329999999955
+          },
+          "blog_render_queue_duration_seconds_count{kind=\"content\"}": {
+            "first": 2.0,
+            "min": 2.0,
+            "max": 2590.0,
+            "last": 2590.0
+          },
+          "blog_render_queue_duration_seconds_sum{kind=\"theme\"}": {
+            "first": 6.866399999999995e-05,
+            "min": 6.866399999999995e-05,
+            "max": 0.6168771690001928,
+            "last": 0.6168771690001928
+          },
+          "blog_render_queue_duration_seconds_count{kind=\"theme\"}": {
+            "first": 84.0,
+            "min": 84.0,
+            "max": 454376.0,
+            "last": 454376.0
+          },
+          "blog_render_queue_total{kind=\"comment\",result=\"admitted\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "last": 1.0
+          },
+          "blog_render_queue_total{kind=\"content\",result=\"admitted\"}": {
+            "first": 2.0,
+            "min": 2.0,
+            "max": 2590.0,
+            "last": 2590.0
+          },
+          "blog_render_queue_total{kind=\"theme\",result=\"admitted\"}": {
+            "first": 84.0,
+            "min": 84.0,
+            "max": 454376.0,
+            "last": 454376.0
+          },
+          "blog_render_waiting{kind=\"comment\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_waiting{kind=\"content\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_render_waiting{kind=\"theme\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 1.0,
+            "last": 0.0
+          },
+          "blog_task_consecutive_failures{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_consecutive_failures{kind=\"publish_due\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_consecutive_failures{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_due_wait_seconds{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_due_wait_seconds{kind=\"publish_due\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_due_wait_seconds{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"html_rebuild\",status=\"completed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 231.92949814699998,
+            "last": 231.92949814699998
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"html_rebuild\",status=\"completed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 8.0,
+            "last": 8.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"html_rebuild\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"html_rebuild\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"html_rebuild\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"html_rebuild\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"publish_due\",status=\"completed\"}": {
+            "first": 0.017424042,
+            "min": 0.017424042,
+            "max": 0.5831042280000001,
+            "last": 0.5831042280000001
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"publish_due\",status=\"completed\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 11.0,
+            "last": 11.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"publish_due\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"publish_due\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"publish_due\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"publish_due\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"retention\",status=\"completed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 1.0249080689999999,
+            "last": 1.0249080689999999
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"retention\",status=\"completed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 19.0,
+            "last": 19.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"retention\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"retention\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_sum{kind=\"retention\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_execution_duration_seconds_count{kind=\"retention\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"html_rebuild\",status=\"cancelled\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"html_rebuild\",status=\"completed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 8.0,
+            "last": 8.0
+          },
+          "blog_task_finished_total{kind=\"html_rebuild\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"html_rebuild\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"publish_due\",status=\"cancelled\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"publish_due\",status=\"completed\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 11.0,
+            "last": 11.0
+          },
+          "blog_task_finished_total{kind=\"publish_due\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"publish_due\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"retention\",status=\"cancelled\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"retention\",status=\"completed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 19.0,
+            "last": 19.0
+          },
+          "blog_task_finished_total{kind=\"retention\",status=\"failed\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_finished_total{kind=\"retention\",status=\"interrupted\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_health_snapshot_last_success_timestamp_seconds": {
+            "first": 1791037076.0,
+            "min": 1791037076.0,
+            "max": 1791037385.0,
+            "last": 1791037385.0
+          },
+          "blog_task_last_success_timestamp_seconds{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 1791037380.0,
+            "last": 1791037380.0
+          },
+          "blog_task_last_success_timestamp_seconds{kind=\"publish_due\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 1791037354.0,
+            "last": 1791037354.0
+          },
+          "blog_task_last_success_timestamp_seconds{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 1791037376.0,
+            "last": 1791037376.0
+          },
+          "blog_task_lease_expirations_total{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_lease_expirations_total{kind=\"publish_due\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_lease_expirations_total{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_queue_duration_seconds_sum{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 4.304651,
+            "last": 4.304651
+          },
+          "blog_task_queue_duration_seconds_count{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 8.0,
+            "last": 8.0
+          },
+          "blog_task_queue_duration_seconds_sum{kind=\"publish_due\"}": {
+            "first": 0.008035,
+            "min": 0.008035,
+            "max": 0.211609,
+            "last": 0.211609
+          },
+          "blog_task_queue_duration_seconds_count{kind=\"publish_due\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 11.0,
+            "last": 11.0
+          },
+          "blog_task_queue_duration_seconds_sum{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 9.859131999999999,
+            "last": 9.859131999999999
+          },
+          "blog_task_queue_duration_seconds_count{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 19.0,
+            "last": 19.0
+          },
+          "blog_task_runs{kind=\"html_rebuild\",status=\"expired\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"html_rebuild\",status=\"queued\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 1.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"html_rebuild\",status=\"running\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 1.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"publish_due\",status=\"expired\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"publish_due\",status=\"queued\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"publish_due\",status=\"running\"}": {
+            "first": 1.0,
+            "min": 0.0,
+            "max": 1.0,
+            "last": 1.0
+          },
+          "blog_task_runs{kind=\"retention\",status=\"expired\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"retention\",status=\"queued\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_runs{kind=\"retention\",status=\"running\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 1.0,
+            "last": 0.0
+          },
+          "blog_task_schedule_enabled{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_schedule_enabled{kind=\"publish_due\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "last": 1.0
+          },
+          "blog_task_schedule_enabled{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_schedule_interval_seconds{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_schedule_interval_seconds{kind=\"publish_due\"}": {
+            "first": 30.0,
+            "min": 30.0,
+            "max": 30.0,
+            "last": 30.0
+          },
+          "blog_task_schedule_interval_seconds{kind=\"retention\"}": {
+            "first": 86400.0,
+            "min": 86400.0,
+            "max": 86400.0,
+            "last": 86400.0
+          },
+          "blog_task_schedule_next_run_timestamp_seconds{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_schedule_next_run_timestamp_seconds{kind=\"publish_due\"}": {
+            "first": 1791037106.0,
+            "min": 1791037106.0,
+            "max": 1791037415.0,
+            "last": 1791037415.0
+          },
+          "blog_task_schedule_next_run_timestamp_seconds{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_scheduler_available": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "last": 1.0
+          },
+          "blog_task_scheduler_checks_total{result=\"error\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_scheduler_checks_total{result=\"success\"}": {
+            "first": 2.0,
+            "min": 2.0,
+            "max": 311.0,
+            "last": 311.0
+          },
+          "blog_task_scheduler_checks_total{result=\"unavailable\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "last": 0.0
+          },
+          "blog_task_scheduler_last_success_timestamp_seconds": {
+            "first": 1791037077.0,
+            "min": 1791037077.0,
+            "max": 1791037386.0,
+            "last": 1791037386.0
+          },
+          "blog_task_started_total{kind=\"html_rebuild\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 8.0,
+            "last": 8.0
+          },
+          "blog_task_started_total{kind=\"publish_due\"}": {
+            "first": 1.0,
+            "min": 1.0,
+            "max": 11.0,
+            "last": 11.0
+          },
+          "blog_task_started_total{kind=\"retention\"}": {
+            "first": 0.0,
+            "min": 0.0,
+            "max": 19.0,
+            "last": 19.0
+          }
+        },
+        "resources": {
+          "blog": {
+            "peak_memory_bytes": 78181827,
+            "peak_cpu_percent": 168.94
+          },
+          "db": {
+            "peak_memory_bytes": 118489088,
+            "peak_cpu_percent": 300.26
+          }
+        },
+        "errors": 0
+      },
+      "passed": true,
+      "failed_checks": []
+    }
+  ],
+  "runner_sha256": "cf8d3d8ba4eeadd36fbcbe1b32a412190a5d6ebf13b26800df470edabb23cc4d",
+  "load_runner_sha256": "c01b5bdf08535c7f5bd7b7a91902e523b8dc8cf391eee049dfe216772e0b6bc8",
+  "support_sha256": {
+    "scripts/benchmark_writing.py": "94c9b3001ad0f9234e3d14c30d410ed7708734dc0c66abcaaeed8768e2c52cbf",
+    "scripts/acceptance_support.py": "b880b34011345e114f1803e2a079b8597a6ab3c7f44f2aa9e2a3894ab94f6789",
+    "scripts/compose_recovery.py": "00e75388983127e51e04936f9eeacb0e89fb53bedf84170d7b6276730c23efe9",
+    "compose.yaml": "61dbd0152dfce978006e973037eab08f51f4b9727d8937975845cfc493f1e841",
+    "ops/postgres-init.sh": "54e45149ae534995b93f578787784852393ed2de122bc59cd28e7dd30b4b55eb"
+  },
+  "threshold_scope": "local regression gates, not production SLA; CAS conflicts counted separately",
+  "platform": "macOS-27.0.1-arm64-arm-64bit",
+  "image_metadata": {
+    "id": "sha256:e7cbc8b96fa511d181f533a318f76316d526ba13374952dcc913e4f20cbe2445",
+    "os": "linux",
+    "architecture": "arm64",
+    "revision": "9fb6c2425fa5dea132faa9e52bf061054a312788"
+  },
+  "finished_at": "2026-10-03T14:23:09.438252+00:00"
+}

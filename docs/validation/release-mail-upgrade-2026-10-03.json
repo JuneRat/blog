@@ -1,0 +1,59 @@
+{
+  "started_at": "2026-10-03T15:24:26.579961+00:00",
+  "status": "passed",
+  "script_sha256": "850165d6bd65803a4745e9d721059b7b8928fefeed4f8b26b05b638a8ec053af",
+  "images": {
+    "from": {
+      "name": "codex-blog-task-health:9057c1c",
+      "id": "sha256:439e5af6f07a45b11c91c7db56a298de245b49f557f811bc63786470c5d7b94e",
+      "architecture": "arm64",
+      "revision": "9057c1c485556e3d98592875a81cf79c3f58dc86"
+    },
+    "to": {
+      "name": "codex-blog-release:e610be9625a2",
+      "id": "sha256:d6eab006dbc274da91aecd76bdcf1b88e5ce1dc1676214929f6762164384cd7c",
+      "architecture": "arm64",
+      "revision": "e610be9625a276b11885ea73b4e202de5b9d575c"
+    }
+  },
+  "before": {
+    "version": "0.1.0",
+    "revision": "9057c1c485556e3d98592875a81cf79c3f58dc86"
+  },
+  "migrations_before": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6
+  ],
+  "after": {
+    "version": "0.1.0",
+    "revision": "e610be9625a276b11885ea73b4e202de5b9d575c"
+  },
+  "migrations_after": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10
+  ],
+  "checks": [
+    "legacy theme volume ownership and content",
+    "non-root HTTP process",
+    "site identity and session",
+    "media bytes",
+    "existing post/page drafts",
+    "post/page editing isolation",
+    "first-edit history",
+    "publish and restore legacy history"
+  ],
+  "cleanup": "passed",
+  "seconds": 15.168
+}

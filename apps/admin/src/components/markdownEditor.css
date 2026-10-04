@@ -1,0 +1,40 @@
+.markdown-editor { border: 1px solid var(--editor-border); background: var(--editor-surface); min-width: 0; }
+.markdown-editor-toolbar { padding: 8px; border-bottom: 1px solid var(--editor-border); }
+.markdown-editor-workspace { height: clamp(400px, 65vh, 720px); min-width: 0; }
+.markdown-editor .markdown-editor-vditor { height: 100%; border: 0; border-radius: 0; }
+.markdown-editor [hidden] { display: none !important; }
+.markdown-editor .vditor-toolbar { padding: 4px !important; border-color: var(--editor-border); }
+.markdown-editor .vditor-toolbar > .vditor-toolbar__item:last-child { display: none; }
+.markdown-editor .vditor-content { min-height: 0; }
+.markdown-editor .vditor-sv { padding: 16px !important; min-width: 0; font: 14px/1.8 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+.markdown-editor .vditor-ir > .vditor-reset { padding: 16px !important; }
+.markdown-editor .vditor-preview { padding: 0; border-left: 1px solid var(--editor-border); }
+.markdown-editor .vditor-preview > .vditor-reset { padding: 16px; }
+.markdown-editor .vditor-reset { font-size: 15px; overflow-wrap: anywhere; }
+.markdown-editor .vditor-reset svg { max-width: 100%; }
+.markdown-editor .markdown-editor-math-error { white-space: pre-wrap; text-align: left; }
+.markdown-editor .markdown-editor-render-error { display: block; margin-top: 4px; color: var(--ant-color-error, #ff4d4f); font-size: 12px; white-space: normal; }
+.markdown-editor-fallback { display: flex; flex-direction: column; height: 100%; gap: 8px; padding: 12px; box-sizing: border-box; }
+.markdown-editor-fallback textarea { flex: 1; resize: none; }
+.markdown-editor-footer { padding: 8px 12px; border-top: 1px solid var(--editor-border); font-size: 12px; }
+.markdown-editor-footer .ant-typography { font-size: inherit; }
+@media (max-width: 767px) {
+  .markdown-editor .vditor-toolbar { flex-wrap: wrap; }
+  .markdown-editor .vditor-hint { max-width: min(300px, 80vw); }
+}
+.markdown-editor--fullscreen {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100dvh;
+  /* Below Ant Design dialogs so the media picker remains interactive. */
+  z-index: 900;
+  border: 0;
+  display: flex;
+  flex-direction: column;
+}
+.markdown-editor--fullscreen .markdown-editor-workspace {
+  flex: 1 1 0%;
+  height: auto;
+  min-height: 0;
+}

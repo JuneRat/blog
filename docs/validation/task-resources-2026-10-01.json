@@ -1,0 +1,26 @@
+{
+  "existing_database": {
+    "id": "cdc3bb6dcb4be31ab85d3f0020f9243e712a37a0d3939ff444ea7d831b226e4e",
+    "started_at": "2026-09-21T11:52:48.151638362Z",
+    "running": true
+  },
+  "images": {
+    "codex-blog-task-health:9057c1c": {
+      "id": "sha256:439e5af6f07a45b11c91c7db56a298de245b49f557f811bc63786470c5d7b94e",
+      "os": "linux",
+      "architecture": "arm64",
+      "revision": "9057c1c485556e3d98592875a81cf79c3f58dc86"
+    },
+    "codex-blog-task-health:9057c1c-ops": {
+      "id": "sha256:e5d6fa57e40b43c7c727d011e2cdbea947605f3e6b1387469c2c811408ed56b8",
+      "os": "linux",
+      "architecture": "arm64",
+      "revision": null
+    }
+  },
+  "temporary_resources": {
+    "containers": [],
+    "volumes": [],
+    "networks": []
+  }
+}

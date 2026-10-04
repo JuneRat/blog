@@ -1,0 +1,11 @@
+==> Compose: fresh installation
+==> Compose: bundled assets, migration paths and persistent content
+==> Compose: telemetry, JSON logs and dependency failure
+==> Compose: persistent task queue, retry, periodic retention and publication
+==> Compose: default and optional dedicated retention connections
+==> Compose: automatic startup migration and persistent content
+==> Compose: complete backup and encrypted repository round trip
+==> Compose: backup failure restarts the source and preserves previous backups
+==> Compose: fresh deployment restore, isolation, login/media verification and release
+==> Compose: optional restricted accounts survive a second recovery
+Compose installation, telemetry, persistence, backup, encrypted copy and isolated recovery passed.

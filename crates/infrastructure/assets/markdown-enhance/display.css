@@ -1,0 +1,30 @@
+[data-content-root] .math-display {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  padding: 0.25em 0;
+}
+[data-content-root] .math-inline { overflow-wrap: normal; }
+[data-content-root] .md-enhance-diagram {
+  background: #fff;
+  color: #1f2937;
+  border-radius: 6px;
+  margin: 1.25em 0;
+  padding: 1em;
+  max-width: 100%;
+  overflow-x: auto;
+  box-sizing: border-box;
+  font-family: system-ui, sans-serif;
+}
+[data-content-root] .md-enhance-diagram svg {
+  display: block;
+  height: auto;
+  margin: auto;
+}
+[data-content-root] .md-enhance-error {
+  display: block;
+  color: inherit;
+  opacity: 0.8;
+  font: 0.85em/1.6 system-ui, sans-serif;
+  margin: 0.25em 0 1em;
+}

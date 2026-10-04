@@ -1,0 +1,32 @@
+# Verified Linux amd64 image. Replace public URL and installation code before starting.
+# This file is complete: no source checkout, .env or configuration bundle needed.
+name: blog
+services:
+  blog:
+    image: ghcr.io/junerat/blog@sha256:08641a14123c345fee6e66d08003fbd7b4dc543ef9bc0a11a731549f6b4a264e
+    pull_policy: missing
+    init: true
+    restart: unless-stopped
+    environment:
+      BLOG_PUBLIC_BASE_URL: https://blog.example.com
+      BLOG_INSTALL_TOKEN: "" # Set your own private code, 20–256 ASCII characters.
+      BLOG_LOG_FORMAT: json
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - blog-config:/var/lib/blog/config
+      - blog-media:/var/lib/blog/media
+      - blog-themes:/opt/blog/themes
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=2g
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    stop_grace_period: 35s
+    logging:
+      driver: local
+      options: {max-size: 10m, max-file: "3"}
+volumes:
+  blog-config:
+  blog-media:
+  blog-themes:

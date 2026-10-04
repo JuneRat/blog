@@ -1,0 +1,451 @@
+import script from '../../../crates/interfaces/assets/comments.js?raw';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { fireEvent, isInaccessible, screen, waitFor, within } from '@testing-library/dom';
+const response = (data: unknown, status=200) => ({ ok:status<400,status,json:async()=>data });
+let fetcher: ReturnType<typeof vi.fn>;
+const comment = (text: string) => screen.getByText(text, { exact: true }).closest('article')!;
+const mainForm = () => screen.getByRole('textbox', { name: '评论（最多 2,000 字）' }).closest('form')!;
+const replyForm = (text: string) => within(comment(text)).getByRole('textbox', { name: '回复（最多 2,000 字）' }).closest('form')!;
+const draftBody = (form: HTMLFormElement) => within(form).getByRole('textbox', { name: /^(评论|回复)（/ }) as HTMLTextAreaElement;
+const nickname = (form: HTMLFormElement) => within(form).getByRole('textbox', { name: '昵称' }) as HTMLInputElement;
+const submitButton = (form: HTMLFormElement) => within(form).getByRole('button', { name: '提交评论' }) as HTMLButtonElement;
+beforeEach(() => {
+  document.body.innerHTML='<section data-comments-slug="hello"></section>';
+  fetcher=vi.fn();vi.stubGlobal('fetch',fetcher);
+});
+afterEach(()=>{vi.unstubAllGlobals();document.body.replaceChildren();});
+it('renders server-sanitized HTML while keeping malicious nicknames as text', async()=>{
+  fetcher.mockResolvedValueOnce(response({},401)).mockResolvedValueOnce(response({enabled:true,guest_comments_enabled:true,total:1,items:[{
+    id:'root',nickname:'<img src=x onerror=alert(1)>',content_html:'&lt;script&gt;alert(1)&lt;/script&gt;\nSecond line',created_at:'today',is_author:false,
+  }]}));
+  window.eval(script);
+  const discussion = document.querySelector('[data-comments-slug]')!;
+  expect(isInaccessible(discussion)).toBe(true);
+  await waitFor(()=>expect(document.querySelector('.comment-body')?.textContent).toBe('<script>alert(1)</script>\nSecond line'));
+  expect(isInaccessible(discussion)).toBe(false);
+  expect(document.querySelector('img,script')).toBeNull();
+  expect(document.querySelector('strong')?.textContent).toBe('<img src=x onerror=alert(1)>');
+});
+it('keeps draft after network failure, shows pending receipt and never publishes optimistically', async()=>{
+  fetcher.mockResolvedValueOnce(response({},401)).mockResolvedValueOnce(response({enabled:true,guest_comments_enabled:true,total:0,items:[]}));
+  window.eval(script);
+  await waitFor(()=>expect(document.querySelector('form')).not.toBeNull());
+  (document.querySelector('input') as HTMLInputElement).value='Guest';
+  (document.querySelector('textarea') as HTMLTextAreaElement).value='Hello';
+  fetcher.mockRejectedValueOnce(new Error('offline'));
+  fireEvent.submit(document.querySelector('form')!);
+  await waitFor(()=>expect(document.body.textContent).toContain('offline'));
+  fetcher.mockResolvedValueOnce(response({message:'已提交，等待审核'},202));
+  fireEvent.submit(document.querySelector('form')!);
+  await waitFor(()=>expect(document.body.textContent).toContain('已提交，等待审核'));
+  const first=JSON.parse(fetcher.mock.calls[2][1].body as string);
+  const second=JSON.parse(fetcher.mock.calls[3][1].body as string);
+  expect(first).toEqual(second);
+  expect(first).not.toHaveProperty('request_id');
+
+  expect(document.querySelector('.comment-item')).toBeNull();
+});
+it('removes discussion and submission form after withdrawn post returns 404', async()=>{
+  fetcher.mockResolvedValueOnce(response({},401)).mockResolvedValueOnce(response({enabled:true,guest_comments_enabled:true,total:21,items:[]}));
+  window.eval(script);
+  await waitFor(()=>expect(document.querySelector('form')).not.toBeNull());
+  fetcher.mockResolvedValueOnce(response({error:'文章不存在'},404));
+  const next=[...document.querySelectorAll('button')].find(b=>b.textContent==='下一页')!;
+  fireEvent.click(next);
+  await waitFor(()=>expect(document.querySelector('form')).toBeNull());
+  expect(document.body.textContent).toContain('文章不存在');
+});
+it('hides the entire discussion when a refresh reports comments are closed', async () => {
+  const history = { total: 1, guest_comments_enabled: true, items: [
+    { id: 'root', nickname: 'Reader', content_html: 'Historical comment', created_at: 'today', is_author: false },
+  ] };
+  fetcher.mockResolvedValueOnce(response({}, 401)).mockResolvedValueOnce(response({ ...history, enabled: true }));
+  window.eval(script);
+  const discussion = document.querySelector('[data-comments-slug]')!;
+  await waitFor(() => expect(isInaccessible(discussion)).toBe(false));
+  fetcher.mockResolvedValueOnce(response({ ...history, enabled: false }));
+  fireEvent.click([...document.querySelectorAll('button')].find(button => button.textContent === '查看回复')!);
+  await waitFor(() => expect(isInaccessible(discussion)).toBe(true));
+});
+
+it('renders the trusted author badge separately from visitor-controlled nicknames', async()=>{
+  fetcher.mockResolvedValueOnce(response({},401)).mockResolvedValueOnce(response({enabled:true,guest_comments_enabled:true,total:2,items:[
+    {id:'guest',nickname:'Sun · 作者',content_html:'Guest',created_at:'today',is_author:false},
+    {id:'author',nickname:'Sun',content_html:'Author',created_at:'today',is_author:true},
+  ]}));
+  window.eval(script);
+  await screen.findByText('Author');
+  expect(within(comment('Guest')).getByText('Sun · 作者')).toBeTruthy();
+  expect(within(comment('Guest')).queryByLabelText('文章作者')).toBeNull();
+  expect(within(comment('Author')).getByText('Sun')).toBeTruthy();
+  expect(within(comment('Author')).getByLabelText('文章作者')).toBeTruthy();
+});
+
+it('preserves the main draft while paging through comments', async()=>{
+  const page = {enabled:true,guest_comments_enabled:true,total:21,items:[]};
+  fetcher.mockResolvedValueOnce(response({},401)).mockResolvedValueOnce(response(page));
+  window.eval(script);
+  await screen.findByRole('textbox', { name: '评论（最多 2,000 字）' });
+  nickname(mainForm()).value = 'Guest';
+  draftBody(mainForm()).value = '需要保留的评论草稿';
+  fetcher.mockRejectedValueOnce(new Error('offline'));
+  fireEvent.submit(mainForm());
+  await screen.findByText(/offline/);
+
+  fetcher.mockResolvedValueOnce(response(page));
+  fireEvent.click(screen.getByRole('button', { name: '下一页' }));
+  await screen.findByText(/第 2 页/);
+  expect(nickname(mainForm()).value).toBe('Guest');
+  expect(draftBody(mainForm()).value).toBe('需要保留的评论草稿');
+  fetcher.mockResolvedValueOnce(response({message:'已提交，等待审核'},202));
+  fireEvent.submit(mainForm());
+  await screen.findByText('已提交，等待审核');
+  const attempts = fetcher.mock.calls.filter(([,options])=>options?.method==='POST');
+  expect(JSON.parse(attempts.at(-1)![1].body)).toMatchObject({ nickname: 'Guest', body: '需要保留的评论草稿', parent_id: null });
+});
+
+it('preserves reply drafts when reopening the form and returning from another page', async()=>{
+  const firstPage = {enabled:true,guest_comments_enabled:true,total:21,items:[{id:'root',nickname:'Reader',content_html:'Root',created_at:'today',is_author:false}]};
+  fetcher.mockResolvedValueOnce(response({},401)).mockResolvedValueOnce(response(firstPage));
+  window.eval(script);
+  await screen.findByText('Root');
+  fireEvent.click(within(comment('Root')).getByRole('button', { name: '回复' }));
+  nickname(replyForm('Root')).value = 'Guest';
+  draftBody(replyForm('Root')).value = '回复草稿';
+  fireEvent.click(within(comment('Root')).getByRole('button', { name: '回复' }));
+  expect(draftBody(replyForm('Root')).value).toBe('回复草稿');
+
+  fetcher.mockResolvedValueOnce(response({enabled:true,guest_comments_enabled:true,total:21,items:[]}));
+  fireEvent.click(screen.getByRole('button', { name: '下一页' }));
+  await screen.findByText(/第 2 页/);
+  fetcher.mockResolvedValueOnce(response(firstPage));
+  fireEvent.click(screen.getByRole('button', { name: '上一页' }));
+  await screen.findByText('Root');
+  expect(nickname(replyForm('Root')).value).toBe('Guest');
+  expect(draftBody(replyForm('Root')).value).toBe('回复草稿');
+});
+
+it('keeps the draft on session expiry and waits for explicit guest resubmission', async()=>{
+  fetcher.mockResolvedValueOnce(response({display_name:'Author',csrf_token:'old-token'}))
+    .mockResolvedValueOnce(response({enabled:true,guest_comments_enabled:true,total:0,items:[]}));
+  window.eval(script);
+  await waitFor(()=>expect(document.querySelector('form')).not.toBeNull());
+  const form = document.querySelector('form')!;
+  const nickname = form.querySelector('input')!;
+  const body = form.querySelector('textarea')!;
+  body.value = '登录过期时也应保留';
+  fetcher.mockResolvedValueOnce(response({error:'未登录'},401)).mockResolvedValueOnce(response({},401));
+  fireEvent.submit(form);
+  await waitFor(()=>expect(form.textContent).toContain('请确认昵称后再次提交'));
+  expect(body.value).toBe('登录过期时也应保留');
+  expect(nickname.disabled).toBe(false);
+  expect(fetcher.mock.calls.filter(([,options])=>options?.method==='POST')).toHaveLength(1);
+
+  fetcher.mockResolvedValueOnce(response({message:'已提交，等待审核'},202));
+  fireEvent.submit(form);
+  await waitFor(()=>expect(form.textContent).toContain('已提交，等待审核'));
+  const attempts = fetcher.mock.calls.filter(([,options])=>options?.method==='POST');
+  expect(attempts).toHaveLength(2);
+  expect(attempts[0][1].headers['X-CSRF-Token']).toBe('old-token');
+  expect(attempts[1][1].headers['X-CSRF-Token']).toBeUndefined();
+  expect(JSON.parse(attempts[1][1].body)).not.toHaveProperty('request_id');
+});
+
+it('does not switch to a guest identity when rechecking the session fails', async()=>{
+  fetcher.mockResolvedValueOnce(response({display_name:'Author',csrf_token:'old-token'}))
+    .mockResolvedValueOnce(response({enabled:true,guest_comments_enabled:true,total:0,items:[]}));
+  window.eval(script);
+  await waitFor(()=>expect(document.querySelector('form')).not.toBeNull());
+  const form = document.querySelector('form')!;
+  form.querySelector('textarea')!.value = '保留正文';
+  fetcher.mockResolvedValueOnce(response({error:'未登录'},401)).mockResolvedValueOnce(response({},500));
+  fireEvent.submit(form);
+  await waitFor(()=>expect(form.textContent).toContain('身份校验失败'));
+  expect(form.querySelector('input')!.disabled).toBe(true);
+  expect(form.querySelector('textarea')!.value).toBe('保留正文');
+  expect(fetcher.mock.calls.filter(([,options])=>options?.method==='POST')).toHaveLength(1);
+});
+
+it('refreshes a changed login without losing the draft or automatically resubmitting', async () => {
+  fetcher.mockResolvedValueOnce(response({ display_name: 'Old reader', csrf_token: 'old-token' }))
+    .mockResolvedValueOnce(response({ enabled: true, guest_comments_enabled: true, total: 0, items: [] }));
+  window.eval(script);
+  await screen.findByRole('textbox', { name: '评论（最多 2,000 字）' });
+  const form = mainForm();
+  draftBody(form).value = '切换登录后仍保留的正文';
+  fetcher.mockResolvedValueOnce(response({ error: 'CSRF 校验失败' }, 400));
+  fireEvent.submit(form);
+  await screen.findByText('CSRF 校验失败');
+
+  fetcher.mockResolvedValueOnce(response({ display_name: 'New reader', csrf_token: 'new-token' }));
+  fireEvent.click(screen.getByRole('button', { name: '刷新登录状态' }));
+  await screen.findByText('登录状态已更新，请确认身份后再次提交。');
+  expect((within(form).getByRole('textbox', { name: '已登录身份' }) as HTMLInputElement).value).toBe('New reader');
+  expect(draftBody(form).value).toBe('切换登录后仍保留的正文');
+  expect(submitButton(form).disabled).toBe(false);
+  expect(fetcher.mock.calls.filter(([, options]) => options?.method === 'POST')).toHaveLength(1);
+
+  fetcher.mockResolvedValueOnce(response({ message: '已提交，等待审核' }, 202));
+  fireEvent.submit(form);
+  await screen.findByText('已提交，等待审核');
+  const attempts = fetcher.mock.calls.filter(([, options]) => options?.method === 'POST');
+  expect(attempts).toHaveLength(2);
+  expect(attempts[0][1].headers['X-CSRF-Token']).toBe('old-token');
+  expect(attempts[1][1].headers['X-CSRF-Token']).toBe('new-token');
+  expect(JSON.parse(attempts[1][1].body)).toMatchObject({ body: '切换登录后仍保留的正文', parent_id: null });
+  expect(draftBody(form).value).toBe('');
+});
+
+it.each([500, 'offline', 'pending'] as const)('loads public comments independently when identity is %s and allows retry', async failure => {
+  if (failure === 'pending') fetcher.mockImplementationOnce(() => new Promise(() => {}));
+  else if (failure === 'offline') fetcher.mockRejectedValueOnce(new Error('offline'));
+  else fetcher.mockResolvedValueOnce(response({}, failure));
+  fetcher.mockResolvedValueOnce(response({enabled:true,guest_comments_enabled:true,total:1,items:[
+    {id:'root',nickname:'Reader',content_html:'Public comment',created_at:'today'},
+  ]}));
+  window.eval(script);
+  await waitFor(()=>expect(document.querySelector('.comment-body')?.textContent).toBe('Public comment'));
+  const form = document.querySelector('form')!;
+  form.querySelector('textarea')!.value = '保留正文';
+  expect(form.querySelector<HTMLButtonElement>('button[type=submit]')!.disabled).toBe(true);
+  fireEvent.submit(form);
+  expect(fetcher.mock.calls.some(([,options]) => options?.method === 'POST')).toBe(false);
+  if (failure === 'pending') return;
+  const retry = [...document.querySelectorAll('button')].find(b=>b.textContent==='重试身份校验')!;
+  expect(retry.hidden).toBe(false);
+  fetcher.mockResolvedValueOnce(response({},401));
+  fireEvent.click(retry);
+  await waitFor(()=>expect(form.querySelector<HTMLButtonElement>('button[type=submit]')!.disabled).toBe(false));
+  expect(form.querySelector('textarea')!.value).toBe('保留正文');
+  expect(retry.hidden).toBe(false);
+  expect(retry.textContent).toBe('刷新登录状态');
+});
+
+it.each(['load', 'submit', 'page'])('isolates unavailable threads during %s and preserves every draft', async action => {
+  fetcher.mockResolvedValueOnce(response({},401)).mockResolvedValueOnce(response({enabled:true,guest_comments_enabled:true,total:2,items:[
+    {id:'one',nickname:'One',content_html:'First',created_at:'today'},
+    {id:'two',nickname:'Two',content_html:'Second',created_at:'today'},
+  ]}));
+  window.eval(script);
+  await screen.findByText('Second');
+  for (const text of ['First', 'Second']) {
+    fireEvent.click(within(comment(text)).getByRole('button', { name: '回复' }));
+  }
+  const drafts = [
+    { form: () => replyForm('First'), body: '第一条回复草稿', disabled: true },
+    { form: () => replyForm('Second'), body: '第二条回复草稿', disabled: false },
+    { form: mainForm, body: '主评论草稿', disabled: false },
+  ];
+  for (const { form, body } of drafts) {
+    draftBody(form()).value = body;
+    nickname(form()).value = 'Guest';
+  }
+  if (action === 'page') {
+    fetcher.mockResolvedValueOnce(response({enabled:true,guest_comments_enabled:true,total:21,items:[]}));
+    fireEvent.click(within(comment('First')).getByRole('button', { name: '查看回复' }));
+    await within(comment('First')).findByRole('button', { name: '下一页' });
+  }
+  fetcher.mockResolvedValueOnce(response({error:'评论不存在'},404));
+  if (action === 'submit') fireEvent.submit(replyForm('First'));
+  else fireEvent.click(within(comment('First')).getByRole('button', { name: action === 'page' ? '下一页' : '查看回复' }));
+  await waitFor(()=>expect(document.body.textContent).toContain('评论不存在'));
+  for (const { form, body, disabled } of drafts) {
+    expect(draftBody(form()).value).toBe(body);
+    expect(nickname(form()).value).toBe('Guest');
+    expect(submitButton(form()).disabled).toBe(disabled);
+  }
+});
+
+it.each(['replies', 'root list'])('restores an unavailable root reply only after refreshing its visible node (%s)', async recovery => {
+  const firstPage = {enabled:true,guest_comments_enabled:true,total:1,items:[
+    {id:'root',nickname:'Reader',content_html:'Root',created_at:'today'},
+  ]};
+  fetcher.mockResolvedValueOnce(response({},401)).mockResolvedValueOnce(response(firstPage));
+  window.eval(script);
+  await waitFor(()=>expect(document.querySelector('.comment-item')).not.toBeNull());
+  fireEvent.click([...document.querySelectorAll('button')].find(b=>b.textContent==='回复')!);
+  const form = () => replyForm('Root');
+  form().querySelector('input')!.value = 'Guest';
+  form().querySelector('textarea')!.value = '恢复后继续提交的草稿';
+
+  fetcher.mockResolvedValueOnce(response({error:'评论不存在'},404));
+  if (recovery === 'replies') fireEvent.click(screen.getByRole('button', { name: '查看回复' }));
+  else fireEvent.submit(form());
+  await waitFor(()=>expect(form().textContent).toContain('该评论已不可用'));
+  expect(form().querySelector<HTMLButtonElement>('button[type=submit]')!.disabled).toBe(true);
+  fireEvent.submit(form());
+  expect(fetcher.mock.calls.filter(([,options])=>options?.method==='POST')).toHaveLength(recovery === 'replies' ? 0 : 1);
+
+  if (recovery === 'replies') {
+    fetcher.mockResolvedValueOnce(response({enabled:true,guest_comments_enabled:true,total:1,items:[
+      {id:'child',root_id:'root',parent_id:'root',nickname:'Reader',content_html:'Recovered child',created_at:'today'},
+    ]}));
+    fireEvent.click([...document.querySelectorAll('button')].find(b=>b.textContent==='查看回复')!);
+    await screen.findByText('Recovered child');
+    expect(submitButton(form()).disabled).toBe(true);
+  }
+  fetcher.mockResolvedValueOnce(response(firstPage));
+  fireEvent.click(screen.getByRole('button', { name: '刷新评论' }));
+  await waitFor(()=>expect(form().querySelector<HTMLButtonElement>('button[type=submit]')!.disabled).toBe(false));
+  expect(form().querySelector('input')!.value).toBe('Guest');
+  expect(form().querySelector('textarea')!.value).toBe('恢复后继续提交的草稿');
+  expect(document.body.textContent).not.toContain('该评论已不可用');
+  expect(document.body.textContent).not.toContain('评论不存在');
+
+  fetcher.mockResolvedValueOnce(response({message:'已提交，等待审核'},202));
+  fireEvent.submit(form());
+  await waitFor(()=>expect(form().textContent).toContain('已提交，等待审核'));
+  const attempts = fetcher.mock.calls.filter(([,options])=>options?.method==='POST');
+  expect(attempts).toHaveLength(recovery === 'replies' ? 1 : 2);
+  expect(JSON.parse(attempts.at(-1)![1].body)).toMatchObject({ parent_id: 'root', body: '恢复后继续提交的草稿' });
+  expect(form().querySelector('textarea')!.value).toBe('');
+});
+
+it('restores an unavailable nested reply without unlocking its hidden root or losing drafts', async () => {
+  const replies = { enabled: true, guest_comments_enabled: true, total: 1, items: [
+    { id: 'child', root_id: 'root', parent_id: 'root', nickname: 'Child reader', content_html: 'Child', created_at: 'today' },
+  ] };
+  fetcher.mockResolvedValueOnce(response({}, 401)).mockResolvedValueOnce(response({
+    enabled: true, guest_comments_enabled: true, total: 1,
+    items: [{ id: 'root', nickname: 'Reader', content_html: 'Root', created_at: 'today' }],
+  }));
+  window.eval(script);
+  await screen.findByText('Root');
+  fireEvent.click(within(comment('Root')).getByRole('button', { name: '回复' }));
+  const rootForm = replyForm('Root');
+  nickname(rootForm).value = 'Guest';
+  draftBody(rootForm).value = '暂不可用根评论的草稿';
+  fetcher.mockResolvedValueOnce(response(replies));
+  fireEvent.click(within(comment('Root')).getByRole('button', { name: '查看回复' }));
+  await screen.findByText('Child');
+  fireEvent.click(within(comment('Child')).getByRole('button', { name: '回复' }));
+  const form = replyForm('Child');
+  nickname(form).value = 'Guest';
+  draftBody(form).value = '子评论恢复后继续提交的草稿';
+  fetcher.mockResolvedValueOnce(response({ error: '评论不存在' }, 404));
+  fireEvent.submit(rootForm);
+  await within(rootForm).findByText('该评论已不可用，回复草稿已保留。');
+  fetcher.mockResolvedValueOnce(response({ error: '评论不存在' }, 404));
+  fireEvent.submit(form);
+  await within(form).findByText('该评论已不可用，回复草稿已保留。');
+  expect(submitButton(form).disabled).toBe(true);
+
+  fetcher.mockResolvedValueOnce(response(replies));
+  fireEvent.click(within(comment('Root')).getByRole('button', { name: '查看回复' }));
+  await waitFor(() => expect(submitButton(replyForm('Child')).disabled).toBe(false));
+  expect(submitButton(rootForm).disabled).toBe(true);
+  expect(draftBody(rootForm).value).toBe('暂不可用根评论的草稿');
+  expect(nickname(replyForm('Child')).value).toBe('Guest');
+  expect(draftBody(replyForm('Child')).value).toBe('子评论恢复后继续提交的草稿');
+  fetcher.mockResolvedValueOnce(response({ message: '已提交，等待审核' }, 202));
+  fireEvent.submit(replyForm('Child'));
+  await screen.findByText('已提交，等待审核');
+  const attempts = fetcher.mock.calls.filter(([, options]) => options?.method === 'POST');
+  expect(attempts).toHaveLength(3);
+  expect(JSON.parse(attempts[2][1].body)).toEqual(JSON.parse(attempts[1][1].body));
+  expect(JSON.parse(attempts[2][1].body).parent_id).toBe('child');
+  expect(draftBody(replyForm('Child')).value).toBe('');
+});
+
+it('keeps a deleted root anonymous and replies to the selected nested comment', async()=>{
+  fetcher.mockResolvedValueOnce(response({},401)).mockResolvedValueOnce(response({enabled:true,guest_comments_enabled:true,total:1,items:[
+    {id:'root',nickname:'must not display',content_html:'must not display',placeholder:true,deleted:true,is_author:true,created_at:'today'},
+  ]}));
+  window.eval(script);
+  await waitFor(()=>expect(document.body.textContent).toContain('该评论已删除'));
+  expect(document.body.textContent).not.toContain('must not display');
+  expect(document.querySelector('.comment-author-badge')).toBeNull();
+  expect([...document.querySelector('.comment-item')!.querySelectorAll('button')].some(b=>b.textContent==='回复')).toBe(false);
+  fetcher.mockResolvedValueOnce(response({enabled:true,guest_comments_enabled:true,total:2,items:[
+    {id:'child',root_id:'root',parent_id:'root',parent_nickname:null,nickname:'A',content_html:'<p>Child</p>',created_at:'today'},
+    {id:'nested',root_id:'root',parent_id:'child',parent_nickname:'A',nickname:'B',content_html:'<p><strong>Nested</strong></p>',created_at:'today'},
+  ]}));
+  fireEvent.click([...document.querySelectorAll('button')].find(b=>b.textContent==='查看回复')!);
+  await screen.findByText('Nested');
+  expect(screen.getByText('Child')).toBeTruthy();
+  expect(fetcher.mock.calls[2][0]).toContain('root_id=root');
+  const nested = comment('Nested');
+  expect(nested.textContent).toContain('回复 A');
+  expect(nested.querySelector('.comment-body strong')?.textContent).toBe('Nested');
+  fireEvent.click([...nested.querySelectorAll('button')].find(b=>b.textContent==='回复')!);
+  const form = nested.querySelector('form')!;
+  form.querySelector('input')!.value='Guest'; form.querySelector('textarea')!.value='Fourth level';
+  fetcher.mockResolvedValueOnce(response({message:'已提交，等待审核'},202));
+  fireEvent.submit(form);
+  await waitFor(()=>expect(form.textContent).toContain('已提交，等待审核'));
+  expect(JSON.parse(fetcher.mock.calls[3][1].body).parent_id).toBe('nested');
+});
+
+it('previews with the server renderer and preserves optional private email', async()=>{
+  fetcher.mockResolvedValueOnce(response({},401)).mockResolvedValueOnce(response({enabled:true,guest_comments_enabled:true,total:0,items:[]}));
+  window.eval(script);
+  await waitFor(()=>expect(document.querySelector('form')).not.toBeNull());
+  const form = document.querySelector('form')!;
+  const textarea = form.querySelector('textarea')!;
+  form.querySelector('input[name=nickname]')!.setAttribute('value','Guest');
+  (form.querySelector('input[name=email]') as HTMLInputElement).value='private@example.com';
+  textarea.value='Hello'; textarea.setSelectionRange(0,5);
+  fireEvent.click([...form.querySelectorAll('button')].find(b=>b.textContent==='粗体')!);
+  expect(textarea.value).toBe('**Hello**');
+  fetcher.mockResolvedValueOnce(response({content_html:'<p><strong>Hello</strong></p>'}));
+  fireEvent.click([...form.querySelectorAll('button')].find(b=>b.textContent==='预览')!);
+  await waitFor(()=>expect(form.querySelector('.comment-preview strong')?.textContent).toBe('Hello'));
+  expect(fetcher.mock.calls[2][0]).toBe('/api/v1/comments/preview');
+  expect(JSON.parse(fetcher.mock.calls[2][1].body)).toEqual({body:'**Hello**'});
+  fetcher.mockResolvedValueOnce(response({message:'已提交，等待审核'},202));
+  fireEvent.submit(form);
+  await waitFor(()=>expect(form.textContent).toContain('已提交，等待审核'));
+  expect(JSON.parse(fetcher.mock.calls[3][1].body).email).toBe('private@example.com');
+});
+
+it('formats comment timestamps in the server site zone for anonymous readers', async()=>{
+  fetcher.mockResolvedValueOnce(response({},401)).mockResolvedValueOnce(response({enabled:true,guest_comments_enabled:false,total:1,time_zone:'Asia/Shanghai',items:[{
+    id:'root',nickname:'Guest',content_html:'Hello',created_at:'2026-09-28T17:30:00Z',is_author:false,
+  }]}));
+  window.eval(script);
+  await waitFor(()=>expect(document.querySelector('time')?.textContent).toContain('2026/9/29'));
+  expect(document.querySelector('time')?.textContent).toContain('01:30:00');
+  expect(document.querySelector('time')?.textContent).toContain('(Asia/Shanghai)');
+  expect(document.querySelector('time')?.dateTime).toBe('2026-09-28T17:30:00Z');
+});
+
+it('refreshes published comments from the server and retains the publication receipt if refresh fails', async () => {
+  fetcher.mockResolvedValueOnce(response({}, 401)).mockResolvedValueOnce(response({ enabled: true, guest_comments_enabled: true, total: 0, items: [] }));
+  window.eval(script);
+  await waitFor(() => expect(document.querySelector('form')).not.toBeNull());
+  const form = document.querySelector('form')!;
+  form.querySelector('input')!.value = 'Guest';
+  form.querySelector('textarea')!.value = '**Published**';
+  fetcher.mockResolvedValueOnce(response({ message: '评论已发布', status: 'approved' }, 201))
+    .mockResolvedValueOnce(response({ enabled: true, guest_comments_enabled: true, total: 1, items: [
+      { id: 'published', nickname: 'Guest', content_html: '<p><strong>Published</strong></p>', created_at: 'today', is_author: false },
+    ] }));
+  fireEvent.submit(form);
+  await waitFor(() => expect(document.querySelector('.comment-body')?.textContent).toBe('Published'));
+  expect(form.textContent).toContain('评论已发布');
+  expect(form.querySelector('textarea')!.value).toBe('');
+  form.querySelector('textarea')!.value = 'Another comment';
+  fetcher.mockResolvedValueOnce(response({ message: '评论已发布', status: 'approved' }, 201)).mockRejectedValueOnce(new Error('offline'));
+  fireEvent.submit(form);
+  await waitFor(() => expect(form.textContent).toContain('评论已发布，但列表刷新失败'));
+  expect(form.querySelector('textarea')!.value).toBe('');
+});
+
+it('opens the reply list when a reply is published immediately', async () => {
+  fetcher.mockResolvedValueOnce(response({}, 401)).mockResolvedValueOnce(response({ enabled: true, guest_comments_enabled: true, total: 1, items: [
+    { id: 'root', nickname: 'Reader', content_html: 'Discussion', created_at: 'today', is_author: false },
+  ] }));
+  window.eval(script);
+  await waitFor(() => expect(document.querySelector('.comment-body')?.textContent).toBe('Discussion'));
+  fireEvent.click([...document.querySelectorAll('button')].find(b => b.textContent === '回复')!);
+  const form = document.querySelector('.comment-item form')!;
+  form.querySelector('input')!.value = 'Guest';
+  form.querySelector('textarea')!.value = 'Published reply';
+  fetcher.mockResolvedValueOnce(response({ message: '评论已发布', status: 'approved' }, 201))
+    .mockResolvedValueOnce(response({ enabled: true, guest_comments_enabled: true, total: 1, items: [
+      { id: 'child', parent_id: 'root', parent_nickname: 'Reader', nickname: 'Guest', content_html: '<p>Published reply</p>', created_at: 'today', is_author: false },
+    ] }));
+  fireEvent.submit(form);
+  await waitFor(() => expect(document.querySelector('.comment-replies')?.textContent).toContain('Published reply'));
+  expect(fetcher).toHaveBeenLastCalledWith('/api/v1/posts/hello/comments?page=1&root_id=root', expect.objectContaining({ cache: 'no-store' }));
+});

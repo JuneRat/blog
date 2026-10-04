@@ -1,0 +1,59 @@
+version: 2
+# Group routine version updates by ecosystem; major upgrades stay in separate
+# PRs. Security updates remain independent of these weekly version groups.
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 5
+    groups:
+      rust-routine:
+        applies-to: version-updates
+        patterns: ["*"]
+        update-types: [minor, patch]
+  # GitHub's supported pnpm versions currently stop at v10. Keep this rule for
+  # npm manifests, but require pnpm 12's native audit and frozen install in CI;
+  # do not assume Dependabot can update its multi-document lockfile yet.
+  - package-ecosystem: npm
+    directory: /apps/admin
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 5
+    groups:
+      frontend-routine:
+        applies-to: version-updates
+        patterns: ["*"]
+        update-types: [minor, patch]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 5
+    groups:
+      actions-routine:
+        applies-to: version-updates
+        patterns: ["*"]
+        update-types: [minor, patch]
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 5
+    groups:
+      docker-routine:
+        applies-to: version-updates
+        patterns: ["*"]
+        update-types: [minor, patch]

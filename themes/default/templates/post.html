@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block content %}
+<article class="post">
+  <h1>{{ post.title }}</h1>
+  <p class="meta">
+    {% if post.published_at %}<time>{{ post.published_at }}</time>{% endif %}
+    <span class="author">{% if post.author_avatar_url %}<img class="avatar" src="{{ post.author_avatar_url | url }}" alt="">{% endif %}<a href="{{ post.author_url | url }}">{{ post.author_display }}</a></span>
+  </p>
+  {% if post.cover_url %}<img class="cover" src="{{ post.cover_url | url }}" alt="{{ post.title }}">{% endif %}
+  {% if post.excerpt %}<p class="excerpt">{{ post.excerpt }}</p>{% endif %}
+  {% for series in post.series %}
+  <p class="category-link">
+    系列：<a href="/series/{{ series.slug }}">{{ series.name }}</a>
+  </p>
+  {% endfor %}
+  {% if post.category %}
+  <p class="category-link">
+    分类：<a href="/categories/{{ post.category.slug }}">{{ post.category.name }}</a>
+  </p>
+  {% endif %}
+  {% if post.tags %}
+  <p class="tags">
+    {% for tag in post.tags %}<a class="tag" href="/tags/{{ tag.slug }}"># {{ tag.name }}</a>{% endfor %}
+  </p>
+  {% endif %}
+  <div class="content" data-content-root>{{ post.content_html | safe }}</div>
+</article>
+<section class="comments" data-comments-slug="{{ post.slug }}" aria-label="文章评论" hidden></section>
+<link rel="stylesheet" href="/assets/comments.css">
+<script src="/assets/comments.js" defer></script>
+{% endblock %}

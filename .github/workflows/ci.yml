@@ -1,0 +1,322 @@
+name: ci
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_call:
+  schedule:
+    - cron: "0 3 * * 3"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873
+        env:
+          POSTGRES_USER: blog
+          POSTGRES_PASSWORD: blog
+          POSTGRES_DB: blog
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U blog"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+      postgres_tls:
+        image: postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873
+        env:
+          POSTGRES_USER: blog
+          POSTGRES_PASSWORD: blog
+          POSTGRES_DB: postgres
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U blog -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgres://blog:blog@127.0.0.1:5432/blog
+      BLOG_TEST_ADMIN_URL: postgres://blog:blog@127.0.0.1:5432/postgres
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Immutable migrations and generated schema artifacts
+        env:
+          SCHEMA_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          python3 -B scripts/schema_contract.py --base-ref "$SCHEMA_BASE_REF"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.98.1
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Dependency boundaries
+        run: |
+          python3 -B scripts/check_dependencies.py
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Generated admin HTTP contract
+        run: cargo run -p interfaces --example export_admin_contract -- --check
+
+      - name: Configure the disposable PostgreSQL service for TLS verification
+        env:
+          PG_CONTAINER: ${{ job.services.postgres_tls.id }}
+        run: |
+          set -euo pipefail
+          umask 077
+          tls_dir="$RUNNER_TEMP/postgres-tls"
+          mkdir "$tls_dir"
+          openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 1 \
+            -subj '/CN=blog-test-ca' -keyout "$tls_dir/ca.key" -out "$tls_dir/ca.crt"
+          openssl req -newkey rsa:2048 -nodes -sha256 -subj '/CN=localhost' \
+            -keyout "$tls_dir/server.key" -out "$tls_dir/server.csr"
+          printf '%s\n' 'subjectAltName=DNS:localhost,IP:127.0.0.1' \
+            'basicConstraints=CA:FALSE' 'extendedKeyUsage=serverAuth' > "$tls_dir/server.ext"
+          openssl x509 -req -sha256 -days 1 -in "$tls_dir/server.csr" \
+            -CA "$tls_dir/ca.crt" -CAkey "$tls_dir/ca.key" -CAcreateserial \
+            -extfile "$tls_dir/server.ext" -out "$tls_dir/server.crt"
+          docker cp "$tls_dir/server.key" "$PG_CONTAINER:/tmp/blog-test-server.key"
+          docker cp "$tls_dir/server.crt" "$PG_CONTAINER:/tmp/blog-test-server.crt"
+          docker exec --user root "$PG_CONTAINER" \
+            chown postgres /tmp/blog-test-server.key /tmp/blog-test-server.crt
+          docker exec --user root "$PG_CONTAINER" chmod 600 /tmp/blog-test-server.key
+          docker exec "$PG_CONTAINER" psql -U blog -d postgres -v ON_ERROR_STOP=1 \
+            -c "ALTER SYSTEM SET ssl_cert_file='/tmp/blog-test-server.crt'" \
+            -c "ALTER SYSTEM SET ssl_key_file='/tmp/blog-test-server.key'" \
+            -c "ALTER SYSTEM SET ssl=on" -c 'SELECT pg_reload_conf()'
+          printf 'BLOG_TEST_TLS_URL=postgres://blog:blog@127.0.0.1:5433/postgres?sslmode=verify-full&sslrootcert=%s/ca.crt\n' \
+            "$tls_dir" >> "$GITHUB_ENV"
+
+      - name: Tests
+        run: cargo test --workspace --no-fail-fast
+
+      - name: Verify PostgreSQL TLS, certificate rejection and cancellation recovery
+        run: |
+          cargo test -p infrastructure --features sqlx-test-support --test pool_policy \
+            database_tls_verifies_the_server_when_requested -- --ignored --exact
+          cargo test -p server --test request_deadlines cancelled_tls -- --ignored
+
+      - name: Script unit tests
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes age
+          BLOG_RECOVERY_TEST=0 PYTHONPATH=scripts python3 -B -m unittest discover -s scripts -p 'test_*.py'
+
+      - name: Isolated recovery, schema upgrade and database roles drill
+        env:
+          BLOG_RECOVERY_TEST: "1"
+          BLOG_TEST_PG_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          cargo build -p server --bin blog
+          PYTHONPATH=scripts python3 -B -m unittest scripts/test_recovery_postgres.py
+
+  web:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: apps/admin
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # 版本取 package.json 的 packageManager 字段。
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: apps/admin/package.json
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: apps/admin/pnpm-lock.yaml
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Tests
+        run: pnpm test
+
+      - name: Check bundled Markdown plugin assets
+        run: pnpm check:plugins
+
+      # tsc --noEmit + vite build：类型与产物同时自检。
+      - name: Build
+        run: pnpm build
+
+      - name: Share the production admin build with acceptance
+        uses: actions/upload-artifact@v4
+        with:
+          name: admin-dist
+          path: apps/admin/dist
+          retention-days: 1
+
+  acceptance:
+    if: github.event_name != 'schedule'
+    needs: web
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873
+        env:
+          POSTGRES_USER: blog
+          POSTGRES_PASSWORD: blog
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U blog -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      BLOG_TEST_ADMIN_URL: postgres://blog:blog@127.0.0.1:5432/postgres
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.98.1
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: admin-dist
+          path: apps/admin/dist
+
+      - name: Build server
+        run: BLOG_BUILD_REVISION="$GITHUB_SHA" cargo build -p server --bin blog
+
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: apps/admin/package.json
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: apps/admin/pnpm-lock.yaml
+
+      - name: Install browser tests
+        run: |
+          pnpm --dir apps/admin install --frozen-lockfile
+          pnpm --dir apps/admin exec playwright install --with-deps chromium
+
+      - name: First install, browser writing/tasks, durable scheduling and isolated recovery
+        env:
+          BLOG_TEST_PG_CONTAINER: ${{ job.services.postgres.id }}
+        run: python3 -B scripts/acceptance.py --browser --report acceptance-report.json
+
+      - name: SMTP TLS, STARTTLS, authentication, certificate rejection and delivery deadlines
+        env:
+          BLOG_TEST_PG_CONTAINER: ${{ job.services.postgres.id }}
+        run: python3 -B scripts/acceptance_smtp_tls.py --expected-revision "$GITHUB_SHA" --report smtp-tls-report.json
+
+      - name: Save browser failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-results
+          path: apps/admin/test-results
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Save acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: acceptance-report
+          path: acceptance-report.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Save SMTP acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smtp-tls-report
+          path: smtp-tls-report.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+  security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.98.1
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install the pinned RustSec scanner in the runner's temporary directory
+        run: cargo install cargo-audit --version 0.22.2 --locked --root "$RUNNER_TEMP/cargo-audit"
+
+      - name: Download the public RustSec advisory database
+        run: git clone --depth 1 https://github.com/RustSec/advisory-db.git "$RUNNER_TEMP/rustsec-advisory-db"
+
+      - name: RustSec audit with full lockfile and all-platform feature evidence
+        run: |
+          python3 -B scripts/audit_dependencies.py \
+            --cargo-audit "$RUNNER_TEMP/cargo-audit/bin/cargo-audit" \
+            --advisory-db "$RUNNER_TEMP/rustsec-advisory-db" \
+            --report-dir "$RUNNER_TEMP/dependency-audit"
+
+      - uses: pnpm/action-setup@v4
+        if: ${{ !cancelled() }}
+        with:
+          package_json_file: apps/admin/package.json
+
+      - uses: actions/setup-node@v4
+        if: ${{ !cancelled() }}
+        with:
+          node-version: 22
+
+      # Native pnpm understands every YAML document, including pinned pnpm itself.
+      # Registry errors fail the gate; do not add --ignore-registry-errors.
+      - name: Audit the complete pnpm lockfile
+        if: ${{ !cancelled() }}
+        run: pnpm --dir apps/admin audit --audit-level low
+
+      - name: Save the full RustSec report and dependency graph
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rustsec-audit
+          path: ${{ runner.temp }}/dependency-audit
+          if-no-files-found: error
+          retention-days: 14

@@ -1,0 +1,16 @@
+[Unit]
+Description=Blog Compose backup and encrypted remote copy
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+User=blog
+# Adjust to the deployment directory. The script reads that directory's existing .env.
+WorkingDirectory=/opt/blog
+ExecStart=/bin/sh /opt/blog/scripts/compose-backup.sh backup
+UMask=0077
+# A timed-out dump must not leave the application stopped; the script handles TERM.
+TimeoutStartSec=2h
+TimeoutStopSec=180
+KillMode=mixed

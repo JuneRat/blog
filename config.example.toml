@@ -1,0 +1,80 @@
+# 新部署可用 install -m 600 config.example.toml config.toml 创建私有配置。
+# 相对路径以进程工作目录为基准，运行数据保存在 data/。
+# 优先级：CLI > 环境变量 > TOML > 默认值；不会自动加载 .env。
+config_version = 1
+
+[database]
+# 推荐通过 DATABASE_URL 注入。留空（不设置 url）时 serve 进入安装向导。
+# url = "postgres://blog:change-me@127.0.0.1:5432/blog"
+migrations_dir = "migrations/postgres"
+# serve 未配置查询期限时使用有界 HTTP 默认；CLI/维护未配置时沿用数据库限制。
+# 显式 0 沿用数据库角色/DSN 设置，部署方须确认服务器仍有执行期限。
+# max_connections = 5
+# min_connections = 0
+# acquire_timeout_ms = 5000
+# idle_timeout_secs = 600
+# max_lifetime_secs = 1800
+# statement_timeout_ms = 20000 # serve 默认；须短于 HTTP 请求期限
+# lock_timeout_ms = 3000      # serve 默认；须短于语句期限
+# idle_in_transaction_timeout_ms = 60000 # serve 默认
+# connect_retries = 3
+# connect_retry_backoff_ms = 250
+
+[server]
+bind = "127.0.0.1:8080"
+# 站点时区在后台「站点设置」中保存；日志时区使用环境变量 TZ（默认 UTC）。
+# 首次安装可在向导填写；生产环境使用真实 HTTPS 域名。
+# public_base_url = "https://blog.example.com"
+trusted_proxies = []
+# HTTP 处理/上传期限与连接保护，秒；关闭总预算应小于容器的 stop_grace_period。
+# request_timeout_secs = 30
+# upload_timeout_secs = 120
+# header_timeout_secs = 10
+# io_idle_timeout_secs = 30
+# connection_max_age_secs = 300
+# shutdown_timeout_secs = 25
+# max_http_connections = 1024
+# 缺省根据公开 URL 是否使用 HTTPS 推导；环境布尔值接受 true/false、1/0。
+# secure_cookies = true
+
+[paths]
+theme_dir = "themes/default"
+admin_dist = "apps/admin/dist"
+media_dir = "data/media"
+
+[logging]
+filter = "info,sqlx=warn"
+format = "text" # json for structured stderr; Compose defaults to json.
+
+# Separate management listener; absent by default for native processes.
+# [metrics]
+# bind = "127.0.0.1:9090"
+
+[recovery]
+enabled = false
+
+# 维护任务默认复用 database.url / DATABASE_URL；需要分离权限时才设置独立连接。
+# BLOG_MAINTENANCE_DATABASE_URL 优先于下列字段，显式配置无效时不会回退。
+# HTTP 服务不需要此凭据，维护连接不回退到 database.url。
+# [maintenance]
+# database_url = "postgres://blog_maintenance:change-me@127.0.0.1:5432/blog"
+
+# 仅首次安装写入数据库；之后通过后台修改，重启不会重新应用。
+[bootstrap]
+# title = "我的博客"
+# description = ""
+
+# 账号邀请和自助找回。未配置 host 时关闭；修改后重启服务。
+# 建议凭据通过环境变量注入；config show 对用户名和密码脱敏。
+# [mail]
+# host = "smtp.example.com"
+# port = 587
+# security = "starttls" # 强制升级 TLS；隐式 TLS 使用 tls（通常 465）
+# from = "我的博客 <noreply@example.com>"
+# username = "smtp-user"
+# password = "smtp-password"
+# 可选私有 CA 的完整 PEM 文本，可用 TOML 多行字符串；不是证书路径。
+# ca_pem = """-----BEGIN CERTIFICATE-----
+# ...
+# -----END CERTIFICATE-----"""
+# 本地开发可用 security="local"，仅允许回环地址且不发送认证凭据。

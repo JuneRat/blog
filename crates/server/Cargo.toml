@@ -1,0 +1,37 @@
+[package]
+name = "server"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "blog"
+path = "src/main.rs"
+
+[dependencies]
+application = { path = "../application" }
+infrastructure = { path = "../infrastructure" }
+interfaces = { path = "../interfaces" }
+tokio.workspace = true
+axum.workspace = true
+time.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+serde.workspace = true
+toml.workspace = true
+toml_edit.workspace = true
+async-trait.workspace = true
+uuid.workspace = true
+tower = { version = "0.5", features = ["util"] }
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+
+serde_json.workspace = true
+
+[dev-dependencies]
+infrastructure = { path = "../infrastructure", features = ["sqlx-test-support"] }
+sqlx.workspace = true
+http-body-util = "0.1"
+reqwest.workspace = true
+url.workspace = true
+domain = { path = "../domain" }
+zip = { version = "8.6", default-features = false }

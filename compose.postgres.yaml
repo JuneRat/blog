@@ -1,0 +1,73 @@
+# Verified Linux amd64 image. Replace public URL, installation code and database passwords.
+# This file is complete: no source checkout, .env or configuration bundle needed.
+name: blog
+services:
+  blog:
+    depends_on:
+      db:
+        condition: service_healthy
+    image: ghcr.io/junerat/blog@sha256:08641a14123c345fee6e66d08003fbd7b4dc543ef9bc0a11a731549f6b4a264e
+    pull_policy: missing
+    init: true
+    restart: unless-stopped
+    environment:
+      BLOG_PUBLIC_BASE_URL: https://blog.example.com
+      BLOG_INSTALL_TOKEN: "" # Set your own private code, 20–256 ASCII characters.
+      BLOG_LOG_FORMAT: json
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - blog-config:/var/lib/blog/config
+      - blog-media:/var/lib/blog/media
+      - blog-themes:/opt/blog/themes
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=2g
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    stop_grace_period: 35s
+    logging:
+      driver: local
+      options: {max-size: 10m, max-file: "3"}
+  db:
+    image: postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: blog
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: "" # Set the database administrator password.
+      BLOG_OWNER_PASSWORD: "" # Set the blog_owner password; enter it in /install.
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    configs:
+      - source: database-init
+        target: /docker-entrypoint-initdb.d/10-blog.sh
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -h 127.0.0.1 -U postgres -d blog"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    logging:
+      driver: local
+      options: {max-size: 10m, max-file: "3"}
+volumes:
+  postgres-data:
+  blog-config:
+  blog-media:
+  blog-themes:
+configs:
+  database-init:
+    content: |
+      #!/bin/sh
+      # Sourced by the official PostgreSQL entrypoint, only for a new data volume.
+      # Keep cluster administration separate from the application's schema owner.
+      (set -eu
+      psql --username "$$POSTGRES_USER" --dbname "$$POSTGRES_DB" \
+          --set ON_ERROR_STOP=1 --set owner_password="$$BLOG_OWNER_PASSWORD" <<'SQL'
+      CREATE ROLE blog_owner LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION
+          PASSWORD :'owner_password';
+      ALTER DATABASE blog OWNER TO blog_owner;
+      ALTER SCHEMA public OWNER TO blog_owner;
+      REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+      SQL
+      )

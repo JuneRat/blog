@@ -1,0 +1,9 @@
+{
+  "config_schema_version": 1,
+  "fields": [
+    {"key":"accent_color","type":"color","label":"主题色","description":"链接的强调颜色。","group":"外观","default":"#0969da"},
+    {"key":"show_description","type":"boolean","label":"显示站点描述","group":"外观","default":true},
+    {"key":"footer_note","type":"textarea","label":"页脚文字","description":"留空可隐藏附加文字。","group":"文字","default":"","max_length":500},
+    {"key":"header_image","type":"media","label":"页眉图片","description":"独立于站点 logo 的主题图片。","group":"外观","default":null}
+  ]
+}

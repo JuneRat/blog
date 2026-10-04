@@ -1,0 +1,187 @@
+{
+  "format": 1,
+  "status": "passed",
+  "started_at": "2026-09-28T06:54:59.907344+00:00",
+  "platform": "macOS-27.0-arm64-arm-64bit",
+  "cpu_count": 10,
+  "measurements": [
+    {
+      "pool_size": 5,
+      "min_connections": 5,
+      "concurrency": 1,
+      "requests": 20000,
+      "errors": 0,
+      "p50_ms": 0.96,
+      "p95_ms": 1.33,
+      "p99_ms": 1.86,
+      "requests_per_second": 1002.23,
+      "seconds": 19.956,
+      "readyz": {
+        "requests": 366,
+        "errors": 0,
+        "p50_ms": 0.39,
+        "p95_ms": 0.77,
+        "p99_ms": 0.98
+      }
+    },
+    {
+      "pool_size": 5,
+      "min_connections": 5,
+      "concurrency": 8,
+      "requests": 20000,
+      "errors": 0,
+      "p50_ms": 3.2,
+      "p95_ms": 4.18,
+      "p99_ms": 5.03,
+      "requests_per_second": 2427.6,
+      "seconds": 8.239,
+      "readyz": {
+        "requests": 152,
+        "errors": 0,
+        "p50_ms": 1.22,
+        "p95_ms": 1.65,
+        "p99_ms": 2.48
+      }
+    },
+    {
+      "pool_size": 5,
+      "min_connections": 5,
+      "concurrency": 32,
+      "requests": 20000,
+      "errors": 0,
+      "p50_ms": 12.85,
+      "p95_ms": 15.03,
+      "p99_ms": 16.22,
+      "requests_per_second": 2453.9,
+      "seconds": 8.15,
+      "readyz": {
+        "requests": 142,
+        "errors": 0,
+        "p50_ms": 4.43,
+        "p95_ms": 5.58,
+        "p99_ms": 6.79
+      }
+    },
+    {
+      "pool_size": 10,
+      "min_connections": 10,
+      "concurrency": 1,
+      "requests": 20000,
+      "errors": 0,
+      "p50_ms": 0.97,
+      "p95_ms": 1.24,
+      "p99_ms": 1.42,
+      "requests_per_second": 1015.59,
+      "seconds": 19.693,
+      "readyz": {
+        "requests": 361,
+        "errors": 0,
+        "p50_ms": 0.38,
+        "p95_ms": 0.57,
+        "p99_ms": 0.74
+      }
+    },
+    {
+      "pool_size": 10,
+      "min_connections": 10,
+      "concurrency": 8,
+      "requests": 20000,
+      "errors": 0,
+      "p50_ms": 2.6,
+      "p95_ms": 3.57,
+      "p99_ms": 4.07,
+      "requests_per_second": 2997.16,
+      "seconds": 6.673,
+      "readyz": {
+        "requests": 123,
+        "errors": 0,
+        "p50_ms": 0.99,
+        "p95_ms": 1.49,
+        "p99_ms": 1.74
+      }
+    },
+    {
+      "pool_size": 10,
+      "min_connections": 10,
+      "concurrency": 32,
+      "requests": 20000,
+      "errors": 0,
+      "p50_ms": 10.3,
+      "p95_ms": 12.15,
+      "p99_ms": 13.25,
+      "requests_per_second": 3066.42,
+      "seconds": 6.522,
+      "readyz": {
+        "requests": 115,
+        "errors": 0,
+        "p50_ms": 3.61,
+        "p95_ms": 4.58,
+        "p99_ms": 5.2
+      }
+    },
+    {
+      "pool_size": 20,
+      "min_connections": 20,
+      "concurrency": 1,
+      "requests": 20000,
+      "errors": 0,
+      "p50_ms": 0.95,
+      "p95_ms": 1.2,
+      "p99_ms": 1.37,
+      "requests_per_second": 1026.36,
+      "seconds": 19.486,
+      "readyz": {
+        "requests": 356,
+        "errors": 0,
+        "p50_ms": 0.4,
+        "p95_ms": 0.62,
+        "p99_ms": 0.8
+      }
+    },
+    {
+      "pool_size": 20,
+      "min_connections": 20,
+      "concurrency": 8,
+      "requests": 20000,
+      "errors": 0,
+      "p50_ms": 2.5,
+      "p95_ms": 3.32,
+      "p99_ms": 3.68,
+      "requests_per_second": 3124.11,
+      "seconds": 6.402,
+      "readyz": {
+        "requests": 118,
+        "errors": 0,
+        "p50_ms": 0.99,
+        "p95_ms": 1.44,
+        "p99_ms": 1.52
+      }
+    },
+    {
+      "pool_size": 20,
+      "min_connections": 20,
+      "concurrency": 32,
+      "requests": 20000,
+      "errors": 0,
+      "p50_ms": 8.07,
+      "p95_ms": 9.74,
+      "p99_ms": 10.65,
+      "requests_per_second": 3927.76,
+      "seconds": 5.092,
+      "readyz": {
+        "requests": 91,
+        "errors": 0,
+        "p50_ms": 2.99,
+        "p95_ms": 3.88,
+        "p99_ms": 4.08
+      }
+    }
+  ],
+  "fixture": "200 published posts, 1 page, default theme; mixed index/post/page, 30 warmup requests",
+  "evidence": {
+    "server_sha256": "13a179c5e377ee7b9710de99c66455bf1a7488f54bb0cfa24ef6ac73af7d62ec",
+    "admin_entry_sha256": "35695717227632d4e930e78f35ff88a7640b263541f6798d11b454ce4bea9672",
+    "runner_sha256": "830838f16902a32b1d9cd0ad91cf053ce5af6038627147beffb32136b519a209",
+    "benchmark_sha256": "f4590bb0cae064bcfbd59d1312f24f245398c6b79ebd70dc0658fd11b40fbadf"
+  }
+}

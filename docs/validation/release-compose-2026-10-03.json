@@ -1,0 +1,105 @@
+{
+  "started_at": "2026-10-03T09:34:58.727922+00:00",
+  "status": "passed",
+  "steps": [
+    {
+      "name": "fresh installation",
+      "status": "passed",
+      "seconds": 7.261
+    },
+    {
+      "name": "bundled assets, migration paths and persistent content",
+      "status": "passed",
+      "seconds": 0.45
+    },
+    {
+      "name": "SMTP invitation, recovery and revoked credentials",
+      "status": "passed",
+      "seconds": 61.286
+    },
+    {
+      "name": "editing drafts, revision history and theme releases",
+      "status": "passed",
+      "seconds": 1.523
+    },
+    {
+      "name": "telemetry, JSON logs and dependency failure",
+      "status": "passed",
+      "seconds": 10.105
+    },
+    {
+      "name": "persistent task queue, retry, periodic retention and publication",
+      "status": "passed",
+      "seconds": 13.581
+    },
+    {
+      "name": "default and optional dedicated retention connections",
+      "status": "passed",
+      "seconds": 18.123
+    },
+    {
+      "name": "automatic startup migration and persistent content",
+      "status": "passed",
+      "seconds": 15.268
+    },
+    {
+      "name": "complete backup and encrypted repository round trip",
+      "status": "passed",
+      "seconds": 33.34
+    },
+    {
+      "name": "backup failure restarts the source and preserves previous backups",
+      "status": "passed",
+      "seconds": 9.487
+    },
+    {
+      "name": "fresh deployment restore, isolation, login/media verification and release",
+      "status": "passed",
+      "seconds": 22.875
+    },
+    {
+      "name": "optional restricted accounts survive a second recovery",
+      "status": "passed",
+      "seconds": 27.722
+    }
+  ],
+  "images": {
+    "application": {
+      "name": "codex-blog-release:9fb6c2425fa5",
+      "id": "sha256:e7cbc8b96fa511d181f533a318f76316d526ba13374952dcc913e4f20cbe2445",
+      "architecture": "arm64",
+      "revision": "9fb6c2425fa5dea132faa9e52bf061054a312788"
+    },
+    "ops": {
+      "name": "codex-blog-release:9fb6c2425fa5-ops",
+      "id": "sha256:031096b0f6a1fcd3338594a2006ff21e910f2488b9ce9851d9dba7bbcb114a6f",
+      "architecture": "arm64",
+      "revision": "9fb6c2425fa5dea132faa9e52bf061054a312788"
+    }
+  },
+  "scripts_sha256": {
+    "test_compose.py": "2d05dc1a017321f8885952f832642e6fcb9273f45dab145f11deebf459407764",
+    "acceptance_support.py": "b880b34011345e114f1803e2a079b8597a6ab3c7f44f2aa9e2a3894ab94f6789",
+    "acceptance_smtp.py": "36466061e8b157aeddd0076828dd6f7f53226a5cfbc113e0ab805743514149f8",
+    "compose_recovery.py": "00e75388983127e51e04936f9eeacb0e89fb53bedf84170d7b6276730c23efe9"
+  },
+  "build": {
+    "version": "0.1.0",
+    "revision": "9fb6c2425fa5dea132faa9e52bf061054a312788"
+  },
+  "smtp": {
+    "transport": "loopback SMTP sink",
+    "deliveries": 2,
+    "invitation_replay_rejected": true,
+    "old_session_revoked": true
+  },
+  "recovery_check": {
+    "login": true,
+    "pages": 3,
+    "media": 0,
+    "isolated": true,
+    "mail_disabled": true
+  },
+  "cleanup": "passed",
+  "seconds": 224.038
+}

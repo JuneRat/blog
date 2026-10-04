@@ -1,0 +1,152 @@
+{
+  "format": 1,
+  "status": "passed",
+  "started_at": "2026-10-01T01:07:33.850480+00:00",
+  "steps": [
+    {
+      "name": "fresh database",
+      "status": "passed",
+      "seconds": 0.422
+    },
+    {
+      "name": "first-run installation",
+      "status": "passed",
+      "seconds": 1.882
+    },
+    {
+      "name": "identity and persistent sessions",
+      "status": "passed",
+      "seconds": 2.998
+    },
+    {
+      "name": "production browser writing and tasks",
+      "status": "passed",
+      "seconds": 29.816
+    },
+    {
+      "name": "media, taxonomy and writing",
+      "status": "passed",
+      "seconds": 0.621
+    },
+    {
+      "name": "content and media trash",
+      "status": "passed",
+      "seconds": 0.226
+    },
+    {
+      "name": "nested comments and moderation",
+      "status": "passed",
+      "seconds": 0.219
+    },
+    {
+      "name": "persistent tasks, retry, periodic retention and publication",
+      "status": "passed",
+      "seconds": 5.962
+    },
+    {
+      "name": "scheduled publication and writer shutdown",
+      "status": "passed",
+      "seconds": 0.075
+    },
+    {
+      "name": "backup and isolated restore",
+      "status": "passed",
+      "seconds": 2.817
+    },
+    {
+      "name": "isolated HTTP verification",
+      "status": "passed",
+      "seconds": 5.806
+    },
+    {
+      "name": "release and recovered site",
+      "status": "passed",
+      "seconds": 21.972
+    },
+    {
+      "name": "cleanup",
+      "status": "passed",
+      "seconds": 0.311
+    }
+  ],
+  "evidence": {
+    "server_sha256": "98c081fa1bda36af826531129f2b132ba7b0dab67e85449728a733131b039864",
+    "admin_entry_sha256": "469fccee7abc75fad909228a03814bd1500cf4f41ef5c2df5c72b6aea15bd86e",
+    "scenarios_sha256": "a095225c5edc6fa3357c9e21d7d7fc85b0bfb33d1fc8343931d70ef43cebf857",
+    "runner_sha256": "beab2b68cf9fb81f600c4bb2ec1bafd0423285ccb7f569872629b26d733f47cd",
+    "task_lifecycle": {
+      "cancelled_id": "01a0f501-2d4f-771a-ad2e-0339455ad257",
+      "restarted_queue_id": "01a0f501-2da4-7252-adcc-a7b8c6c0d17c",
+      "failed_id": "01a0f501-3217-7582-84cd-b74e0a1c5f1a",
+      "retry_id": "01a0f501-33dd-7001-8f76-b4575cd23791",
+      "retention_id": "01a0f501-3aaf-73eb-b449-2c478a41aa8f",
+      "publication_id": "01a0f501-4280-764b-9046-b41cc8015e80",
+      "test_clock_advanced": true
+    },
+    "schema": "blog-20-v1",
+    "migrations": [
+      {
+        "version": 1,
+        "checksum": "37e7a5cb07b483990436f88bcaab81fa96c8d8bc210130b3322cb16724671531cd3c86b95d84f415060a57e7caf1c0a4"
+      },
+      {
+        "version": 2,
+        "checksum": "ab5c19a56f489afa5f2ac30704b49e0b7277f2443d11e8513691cecfc1bf5f029e458adbf0b299024b6c89879855bee9"
+      },
+      {
+        "version": 3,
+        "checksum": "7f67ad83363c131f54e042628c146a4af1da1d7c7309d2159eb41e51011d87032aa70e0544fc41da6e2e754da522d185"
+      },
+      {
+        "version": 4,
+        "checksum": "4c019801f7a5d532630f22d742853946252c072b18c19c27e72e23e8c96cbcda1096d8b62b489750573c214029063681"
+      },
+      {
+        "version": 5,
+        "checksum": "eda909f18428745430291aed3ff9d7a5a503dbebcce44a4a87122ec71fa50fa037d92e5e7d2d1cb02769d4b5727af694"
+      },
+      {
+        "version": 6,
+        "checksum": "5384fab741cc094bb987fd73d40bb488bcf23819082769cdfd9a73ac88cbf93fc68500b013b71c1baded0fab8a332fc5"
+      }
+    ],
+    "backup_counts": {
+      "tags": 1,
+      "media": 1,
+      "pages": 3,
+      "posts": 10,
+      "roles": 4,
+      "users": 1,
+      "series": 2,
+      "comments": 5,
+      "sessions": 6,
+      "settings": 5,
+      "post_tags": 1,
+      "task_runs": 11,
+      "audit_logs": 93,
+      "categories": 2,
+      "media_refs": 7,
+      "user_roles": 1,
+      "pages_draft": 0,
+      "pages_trash": 0,
+      "permissions": 33,
+      "post_series": 2,
+      "posts_draft": 5,
+      "posts_trash": 0,
+      "oauth_accounts": 0,
+      "pages_archived": 0,
+      "posts_archived": 0,
+      "task_schedules": 2,
+      "pages_published": 2,
+      "pages_scheduled": 1,
+      "posts_published": 4,
+      "posts_scheduled": 1,
+      "role_permissions": 67
+    },
+    "verified_media": 1,
+    "verified_references": 7
+  },
+  "seconds": 73.137,
+  "git_commit": "2d563113b5245cf30797eca2a92660b795660b7f",
+  "tracked_changes": true
+}

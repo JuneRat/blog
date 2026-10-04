@@ -1,0 +1,214 @@
+:root {
+  --text: #1f2328;
+  --muted: #6a737d;
+  --link: #0969da;
+  --border: #e1e4e8;
+  --bg: #ffffff;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --link: #58a6ff;
+    --border: #30363d;
+    --bg: #0d1117;
+  }
+}
+
+body {
+  margin: 0;
+  font-family: -apple-system, "PingFang SC", "Noto Sans CJK SC", "Segoe UI", sans-serif;
+  color: var(--text);
+  background: var(--bg);
+  line-height: 1.7;
+}
+
+.site-header, main, .site-footer {
+  max-width: 46rem;
+  margin: 0 auto;
+  padding: 1rem 1.25rem;
+}
+
+.site-header h1 a {
+  color: var(--text);
+  text-decoration: none;
+}
+
+.site-description, .site-footer, .meta, .excerpt {
+  color: var(--muted);
+}
+
+.post-list {
+  list-style: none;
+  padding: 0;
+}
+
+.post-item {
+  padding: 1rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.post-item h2 {
+  margin: 0 0 0.25rem;
+}
+
+a {
+  color: var(--link);
+}
+
+.content pre,
+.post .content pre {
+  overflow-x: auto;
+  padding: 1rem 1.1rem;
+  border-radius: 6px;
+  background: rgba(127, 127, 127, 0.08);
+  border: 1px solid var(--border);
+  line-height: 1.5;
+}
+
+.content code,
+.post .content code {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.9em;
+}
+
+.content :not(pre) > code,
+.post .content :not(pre) > code {
+  padding: 0.2em 0.4em;
+  border-radius: 4px;
+  background: rgba(127, 127, 127, 0.12);
+  font-size: 0.88em;
+}
+
+.content blockquote,
+.post .content blockquote {
+  margin: 1.5rem 0;
+  padding: 0.5rem 1rem;
+  border-left: 4px solid var(--link);
+  background: rgba(127, 127, 127, 0.05);
+  color: var(--muted);
+  border-radius: 0 4px 4px 0;
+}
+
+.content blockquote p,
+.post .content blockquote p {
+  margin: 0.25rem 0;
+}
+
+.content table,
+.post .content table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1.5rem 0;
+  overflow-x: auto;
+  display: block;
+}
+
+.content th,
+.content td,
+.post .content th,
+.post .content td {
+  padding: 0.6rem 1rem;
+  border: 1px solid var(--border);
+  text-align: left;
+}
+
+.content th,
+.post .content th {
+  background: rgba(127, 127, 127, 0.08);
+  font-weight: 600;
+}
+
+.content tr:nth-child(2n),
+.post .content tr:nth-child(2n) {
+  background: rgba(127, 127, 127, 0.03);
+}
+
+.content hr,
+.post .content hr {
+  border: 0;
+  height: 1px;
+  background: var(--border);
+  margin: 2rem 0;
+}
+
+.content img,
+.post .content img {
+  max-width: 100%;
+  border-radius: 4px;
+}
+
+/* 标签链接（文章详情）与标签页分页 */
+.tags {
+  margin: 0.25rem 0 0.5rem;
+}
+
+.tag {
+  display: inline-block;
+  margin-right: 0.5rem;
+  padding: 0.1rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.85em;
+  text-decoration: none;
+  background: rgba(127, 127, 127, 0.12);
+}
+
+.tag:hover {
+  background: rgba(127, 127, 127, 0.22);
+}
+
+.pagination {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin: 1.5rem 0 0;
+}
+
+.pagination-state {
+  color: var(--muted, inherit);
+  font-size: 0.9em;
+}
+
+/* 封面：单列、限高，避免原图尺寸撑破版心。 */
+.cover,
+.series-cover {
+  display: block;
+  width: 100%;
+  max-height: 420px;
+  object-fit: cover;
+  border-radius: 4px;
+  margin: 1rem 0;
+}
+
+/* 站点 logo 与作者头像：后者跟随署名行，尺寸用 em 以随字号缩放。 */
+.site-logo {
+  display: block;
+  max-height: 64px;
+  width: auto;
+  margin-bottom: 0.5rem;
+}
+
+.avatar {
+  width: 1.5em;
+  height: 1.5em;
+  border-radius: 50%;
+  object-fit: cover;
+  vertical-align: -0.4em;
+  margin-right: 0.35em;
+}
+
+.page-navigation, .pagination { display: flex; flex-wrap: wrap; gap: 1rem; align-items: center; margin-block: 1rem; }
+.page-navigation:empty { display: none; }
+
+.theme-header-image { display: block; max-width: 100%; height: auto; }
+
+.discovery-form { margin: 1.5rem 0; }
+.discovery-form label { display: block; margin-bottom: .5rem; }
+.discovery-form > div { display: flex; flex-wrap: wrap; align-items: center; gap: .75rem; }
+.discovery-form input { padding: .6rem .75rem; border: 1px solid #9b9b9b; border-radius: .3rem; font: inherit; max-width: 100%; box-sizing: border-box; }
+.discovery-form input[type="search"] { flex: 1; min-width: 12rem; }
+.discovery-form button { padding: .6rem 1rem; font: inherit; cursor: pointer; }
+.archive-months { margin: 1rem 0; }
+.archive-months ul { columns: 3 10rem; }
+.discovery .article-list { padding: 0; list-style: none; }

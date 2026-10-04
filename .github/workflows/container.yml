@@ -1,0 +1,216 @@
+name: container
+
+on:
+  push:
+    branches: [master, main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: container-${{ github.repository }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-checks:
+    # A tag/manual publication must pass the same complete checks as main.
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    uses: ./.github/workflows/ci.yml
+
+  compose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Validate the release tag and application versions
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: python3 -B scripts/github_release.py validate --tag "$RELEASE_TAG"
+
+      - name: Verify schema artifacts
+        run: |
+          python3 -B scripts/schema_contract.py
+
+      - name: Verify registry delivery tooling
+        run: PYTHONPATH=scripts python3 -B -m unittest scripts/test_registry_release.py scripts/test_github_release.py scripts/test_container_images.py scripts/test_compose_init.py scripts/test_browser_recovery.py
+
+      - name: Build deployable image
+        run: >-
+          docker build --build-arg VCS_REF="$GITHUB_SHA"
+          --label "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
+          --tag blog:ci --tag "blog:$GITHUB_SHA" .
+
+      - name: Pull the database image
+        run: |
+          db_image=$(sed -n 's/^    image: \(postgres:.*\)$/\1/p' compose.postgres.yaml)
+          test -n "$db_image"
+          docker pull "$db_image"
+
+      - name: Verify installation, STARTTLS mail, publishing, themes and isolated restore with Compose
+        env:
+          BLOG_EXPECT_REVISION: ${{ github.sha }}
+        run: python3 -B scripts/test_compose.py --image blog:ci --ops-image blog:ci --smtp-security starttls --report compose-verification-starttls.json
+
+      - name: Verify implicit TLS mail before and after a complete Compose restore
+        env:
+          BLOG_EXPECT_REVISION: ${{ github.sha }}
+        run: python3 -B scripts/test_compose.py --image blog:ci --ops-image blog:ci --smtp-security tls --report compose-verification-tls.json
+
+      - name: Verify browser backup, interruption rollback and guided deployment
+        run: python3 -B scripts/test_browser_compose.py --image blog:ci --report compose-verification-browser.json
+
+      - name: Save Compose verification report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compose-verification-${{ github.sha }}
+          path: compose-verification-*.json
+          if-no-files-found: warn
+
+      # Internal job handoff only; users deploy by pulling the published image.
+      - name: Save the verified image for publication without rebuilding
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        run: |
+          mkdir verified
+          docker save "blog:$GITHUB_SHA" | gzip > verified/blog.tar.gz
+          printf '%s\n' "blog:$GITHUB_SHA" > verified/IMAGE
+          docker image inspect "blog:$GITHUB_SHA" --format '{{.Id}}' > verified/IMAGE_ID
+          cd verified
+          sha256sum blog.tar.gz IMAGE IMAGE_ID > SHA256SUMS
+
+      - name: Save the internal image handoff
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: verified-blog-image-${{ github.sha }}
+          path: verified/
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    # PRs and ordinary branch pushes never receive package write permission.
+    needs: [compose, release-checks]
+    if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    concurrency:
+      group: registry-${{ github.repository }}-${{ github.sha }}
+      cancel-in-progress: false
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Download the image that passed Compose verification
+        uses: actions/download-artifact@v4
+        with:
+          name: verified-blog-image-${{ github.sha }}
+          path: verified
+
+      - name: Verify and load the tested images without rebuilding
+        working-directory: verified
+        run: |
+          sha256sum -c SHA256SUMS
+          docker load -i blog.tar.gz
+
+      - name: Sign in to GitHub Container Registry
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+
+      - name: Publish the verified image
+        env:
+          RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+        run: >-
+          python3 -B scripts/registry_release.py --verified-dir verified --output published-image.json
+          --repository "$GITHUB_REPOSITORY" --revision "$GITHUB_SHA" --tag "$RELEASE_TAG"
+
+      - name: Prepare the versioned Compose files and release notes
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: >-
+          python3 -B scripts/github_release.py prepare --manifest published-image.json --output release
+          --repository "$GITHUB_REPOSITORY" --revision "$GITHUB_SHA" --tag "$RELEASE_TAG"
+
+      - name: Save the release attachments
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v4
+        with:
+          name: blog-release-${{ github.sha }}
+          path: release/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Save the publication report
+        uses: actions/upload-artifact@v4
+        with:
+          name: published-image-${{ github.sha }}
+          path: published-image.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Show the image reference for Compose
+        run: |
+          python3 - <<'PYTHON'
+          import json, os
+          from pathlib import Path
+          result = json.loads(Path("published-image.json").read_text())
+          image = result["images"]["blog"]["reference"]
+          repository = os.environ["GITHUB_REPOSITORY"]
+          revision = os.environ["GITHUB_SHA"]
+          source = f"https://github.com/{repository}/blob/{revision}"
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+              summary.write(f"Published the verified Linux amd64 blog image.\n\n```yaml\nimage: {image}\n```\n\n")
+              summary.write(f"Copy [compose.yaml]({source}/compose.yaml) for an existing database, or [compose.postgres.yaml]({source}/compose.postgres.yaml) to include PostgreSQL. Replace its image line with the reference above.\n\n")
+              summary.write(f"Start the service and finish database setup at `/install`. See the [1Panel guide]({source}/docs/1panel.md). No deployment package is required.\n")
+              if result.get("release_tag"):
+                  tag = result["release_tag"]
+                  version_tag = result["images"]["blog"]["version_tag"]
+                  summary.write(f"\nVersion image: `{version_tag}`. The final job publishes [GitHub Release {tag}](https://github.com/{repository}/releases/tag/{tag}) with ready-to-use Compose files.\n")
+          PYTHON
+
+      - name: Sign out of the registry
+        if: always()
+        run: docker logout ghcr.io
+
+  release:
+    needs: publish
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: blog-release-${{ github.sha }}
+          path: release
+
+      - name: Publish the Release after verifying all attachments
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: >-
+          python3 -B scripts/github_release.py publish --directory release
+          --repository "$GITHUB_REPOSITORY" --revision "$GITHUB_SHA" --tag "$RELEASE_TAG"

@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  {#- SEO 元数据全部来自应用层的 seo 上下文：标题/描述/canonical 只有一处规则，模板不再各自拼 <title>。 #}
+  {#- URL 用 `url` 过滤器输出，以免 MiniJinja 把 `/` 转义成 &#x2f;（详见渲染适配器说明）。 #}
+  {#- RSS 自动发现：阅读器与浏览器据此找到 /feed.xml。 #}
+  <title>{{ seo.title }}</title>
+  <meta name="description" content="{{ seo.description }}">
+  <link rel="canonical" href="{{ seo.canonical_url | url }}">
+  <link rel="alternate" type="application/rss+xml" title="{{ site.title }}" href="{{ seo.feed_url | url }}">
+  <meta property="og:type" content="{{ seo.og_type }}">
+  <meta property="og:site_name" content="{{ site.title }}">
+  <meta property="og:title" content="{{ seo.title }}">
+  <meta property="og:description" content="{{ seo.description }}">
+  <meta property="og:url" content="{{ seo.canonical_url | url }}">
+  <link rel="stylesheet" href="{{ asset_url(path='style.css') | url }}">
+  {{ plugin_head() }}
+</head>
+<body style="--link: {{ theme.config.accent_color }}">
+  <header class="site-header">
+    {% if site.logo_url %}<img class="site-logo" src="{{ site.logo_url | url }}" alt="{{ site.title }}">{% endif %}
+    <h1><a href="/">{{ site.title }}</a></h1>
+    {% if theme.config.show_description %}<p class="site-description">{{ site.description }}</p>{% endif %}
+    {% if theme.config.header_image %}<img class="theme-header-image" src="{{ ('/media/' ~ theme.config.header_image) | url }}" alt="">{% endif %}
+    <nav class="page-navigation" aria-label="页面导航">{% for item in site.navigation %}{% if item.placement == 'header' %}<a href="{{ item.url | url }}">{{ item.label }}</a>{% endif %}{% endfor %}<a href="/search/">搜索</a><a href="/archive/">归档</a><a href="/admin/">账号</a>
+</nav>
+  </header>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+  <footer class="site-footer">
+    <p><a href="/feed.xml">RSS</a> · <a href="/sitemap.xml">Sitemap</a></p>
+    {% if theme.config.footer_note %}<p class="theme-footer-note">{{ theme.config.footer_note }}</p>{% endif %}
+    <p>Powered by blog（Rust / PostgreSQL / MiniJinja）</p>
+    <nav class="page-navigation" aria-label="页脚导航">{% for item in site.navigation %}{% if item.placement == 'footer' %}<a href="{{ item.url | url }}">{{ item.label }}</a>{% endif %}{% endfor %}</nav>
+  </footer>
+</body>
+</html>

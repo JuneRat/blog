@@ -1,0 +1,578 @@
+{
+  "format": 1,
+  "recorded_at_utc": "2026-09-30T10:40:34.092531+00:00",
+  "status": "passed",
+  "target": "Local Docker on Apple Silicon; disposable PostgreSQL 18 and independent Compose projects",
+  "tested_implementation_commit": "1b460fc4c531948782a0e9c60c0e040908f36881",
+  "implementation_commits": [
+    {
+      "commit": "44af11d63d2e74a11f1ab0b83ee11e0a67e71ca5",
+      "subject": "fix(persistence): batch tag deletion audits within the transaction"
+    },
+    {
+      "commit": "0075a118cc0cee71f1ba06ab88deb53a2b10f231",
+      "subject": "fix(auth): preserve active throttle budgets under capacity pressure"
+    },
+    {
+      "commit": "ef0810b7bcf79c05b674ad6d9d4fcb016d699b3f",
+      "subject": "fix(admin): coalesce draft persistence and flush the latest editor state"
+    },
+    {
+      "commit": "2e599ffc4bfb3a9b4f6903678f3e69172293882d",
+      "subject": "refactor(application): depend on narrow taxonomy lookup ports"
+    },
+    {
+      "commit": "9754e1a5f58b6dd3d66ccde885f64f438fdf51bc",
+      "subject": "docs(application): align content and tag comments with current behavior"
+    },
+    {
+      "commit": "efa13864ec5a8ae9223a32f7ae65b1c7bfbbb7be",
+      "subject": "fix(media): stream downloads and serve HEAD without reading image bytes"
+    },
+    {
+      "commit": "c95e14399b052d3177a4e19e4965493983943042",
+      "subject": "fix(server): bound PostgreSQL work beneath HTTP request deadlines"
+    },
+    {
+      "commit": "b6b49c752e8b7dfc1e5303392400d8231a581888",
+      "subject": "fix(observability): expose site settings read failures and recovery"
+    },
+    {
+      "commit": "9561de3657f9a0a939a1656cccd3915ba2baec43",
+      "subject": "perf(admin): split API schemas and defer account editor dependencies"
+    },
+    {
+      "commit": "387b47305a2b3083ba2a0c8d7dc0d5bbdaa7d65f",
+      "subject": "test(server): align local deployment drills with HTTP database deadlines"
+    },
+    {
+      "commit": "a92f2566b2402f05860f57a3689e6d4d6e488d1e",
+      "subject": "perf(persistence): index literal admin content search and list ordering"
+    },
+    {
+      "commit": "a32067dfdd5e4420c216b8376d9d0848f265e28c",
+      "subject": "docs(architecture): describe narrow taxonomy lookup dependencies"
+    },
+    {
+      "commit": "8c72d58ed6642c48ce753c342c1e50c77f0288a9",
+      "subject": "refactor(admin): separate page and settings controllers and guard theme edits"
+    },
+    {
+      "commit": "6813c4d1e8ea7143c27a864f3359721c256c0778",
+      "subject": "ci(security): audit dependency locks and pin the reviewed Rust toolchain"
+    },
+    {
+      "commit": "1b460fc4c531948782a0e9c60c0e040908f36881",
+      "subject": "feat(admin): manage local drafts with active writer and revision protection"
+    }
+  ],
+  "source_identity": {
+    "compose": "Clean git archive of the exact implementation commit; pre-existing user edits excluded",
+    "native": "Working tree including the three preserved user edits; binary/admin SHA256 recorded by the acceptance runner",
+    "preexisting_user_edits": [
+      {
+        "path": "crates/server/src/main.rs",
+        "preserved": true,
+        "committed": false,
+        "working_file_sha256": "121f462fd0924eeab43dac2a6cc6784d5aba53a596599a4f426c0073a60c1a72"
+      },
+      {
+        "path": "crates/server/src/logging.rs",
+        "preserved": true,
+        "committed": false,
+        "working_file_sha256": "d0b17ae8dc0ecd56794fd7db5933921fe594c86cd7b70ea3b88cb0bd89893fdf"
+      },
+      {
+        "path": "docs/observability.md",
+        "preserved": true,
+        "committed": false,
+        "working_file_sha256": "079f709667f38ef5db189b968a6a893b89913c1cb113df677e220a00fa341224"
+      }
+    ]
+  },
+  "checks": {
+    "rust_format": "passed",
+    "cargo_dependency_boundaries": "passed",
+    "schema_history_and_generated_artifacts": "passed",
+    "clippy_workspace_all_targets_deny_warnings": "passed",
+    "generated_admin_http_contract": "passed",
+    "rust_workspace_tests": {
+      "passed": 685,
+      "failed": 0,
+      "ignored": 0,
+      "suites": 64,
+      "log_sha256": "16b09ef630791c5fd607c7ccde4cfb88a89bc57ea261bd5119453904f4691df5"
+    },
+    "admin_tests": {
+      "files": 35,
+      "passed": 334,
+      "failed": 0,
+      "log_sha256": "21f2b2c902ae1d42510a62b0978e112ab803624a68e1568b1cb4498a7dfec2db"
+    },
+    "admin_typecheck_and_production_build": {
+      "status": "passed",
+      "native_node_version": "26.9.0",
+      "docker_node_major": 22,
+      "log_sha256": "071908e131e74caf39aa63fa62fb31666b4767d3152d31cc610c710194f2731d"
+    },
+    "python_unit_tests": {
+      "total": 93,
+      "failed": 0,
+      "skipped_in_native_run": 3,
+      "log_sha256": "0e299adfceec2395b4c5b862234839bca9408407f18ba55f442339a90d811e92",
+      "skipped_cases_completed_separately": {
+        "postgres_recovery_and_upgrade": {
+          "passed": 2,
+          "seconds": 18.39,
+          "log_sha256": "ab846172c900549b6caa25f96be79f4b67dd64d7e2d6f9e65ad18419bb8ae78b"
+        },
+        "real_age_encryption_authentication": {
+          "passed": 1,
+          "environment": "read-only ops container, network disabled",
+          "log_sha256": "eca96ce03e1eba73b4956876e004b1259e6df50d8197873be50df6b62170df6b"
+        }
+      }
+    },
+    "dependency_audit": {
+      "evidence": "dependency-audit-2026-09-30.json",
+      "cargo_lock_entries": 336,
+      "blocking_rustsec_findings": 0,
+      "explained_unreachable_findings": 1,
+      "npm_package_versions_offline": 210,
+      "npm_osv_vulnerabilities": 0,
+      "native_pnpm_audit_executed": false
+    }
+  },
+  "admin_static_javascript": {
+    "method": "Complete entry static import graph, each chunk counted once; lazy chunks excluded",
+    "before": {
+      "chunks": 19,
+      "bytes": 1241351,
+      "gzip_bytes": 398766
+    },
+    "after": {
+      "chunks": 18,
+      "bytes": 946316,
+      "gzip_bytes": 305809
+    },
+    "reduction_percent": {
+      "bytes": 23.8,
+      "gzip": 23.3
+    },
+    "remaining_build_warning": "One shared JS chunk is 504.43 kB; the size warning remains visible"
+  },
+  "admin_query_evidence": "admin-query-plans-2026-09-30.json",
+  "native_http_and_browser_acceptance": {
+    "format": 1,
+    "status": "passed",
+    "started_at": "2026-09-30T10:34:19.857385+00:00",
+    "steps": [
+      {
+        "name": "fresh database",
+        "status": "passed",
+        "seconds": 0.273
+      },
+      {
+        "name": "first-run installation",
+        "status": "passed",
+        "seconds": 0.691
+      },
+      {
+        "name": "identity and persistent sessions",
+        "status": "passed",
+        "seconds": 1.733
+      },
+      {
+        "name": "production browser writing",
+        "status": "passed",
+        "seconds": 14.3
+      },
+      {
+        "name": "media, taxonomy and writing",
+        "status": "passed",
+        "seconds": 1.224
+      },
+      {
+        "name": "content and media trash",
+        "status": "passed",
+        "seconds": 0.465
+      },
+      {
+        "name": "nested comments and moderation",
+        "status": "passed",
+        "seconds": 0.422
+      },
+      {
+        "name": "scheduled publication and writer shutdown",
+        "status": "passed",
+        "seconds": 0.092
+      },
+      {
+        "name": "backup and isolated restore",
+        "status": "passed",
+        "seconds": 2.687
+      },
+      {
+        "name": "isolated HTTP verification",
+        "status": "passed",
+        "seconds": 6.132
+      },
+      {
+        "name": "release and recovered site",
+        "status": "passed",
+        "seconds": 1.301
+      },
+      {
+        "name": "cleanup",
+        "status": "passed",
+        "seconds": 0.223
+      }
+    ],
+    "evidence": {
+      "server_sha256": "dede706c896bd8794e41868247a4e9c5dd64ef7e020b368ff70b1b78e77243d9",
+      "admin_entry_sha256": "ca7cdef59e81c8afdb7e7d54e313023b97377629c1375b433dbb3d4d3afe2b63",
+      "scenarios_sha256": "64dcc08e8c5b7264e18e49fae4129fd84bb3397b573201bcd11f4a91133fd141",
+      "runner_sha256": "c38a88b5e68235ae824bcf14695ae121b7d735d2194fb334b9d3ac424c566b91",
+      "schema": "blog-19-v1",
+      "migrations": [
+        {
+          "version": 1,
+          "checksum": "37e7a5cb07b483990436f88bcaab81fa96c8d8bc210130b3322cb16724671531cd3c86b95d84f415060a57e7caf1c0a4"
+        },
+        {
+          "version": 2,
+          "checksum": "ab5c19a56f489afa5f2ac30704b49e0b7277f2443d11e8513691cecfc1bf5f029e458adbf0b299024b6c89879855bee9"
+        },
+        {
+          "version": 3,
+          "checksum": "7f67ad83363c131f54e042628c146a4af1da1d7c7309d2159eb41e51011d87032aa70e0544fc41da6e2e754da522d185"
+        },
+        {
+          "version": 4,
+          "checksum": "4c019801f7a5d532630f22d742853946252c072b18c19c27e72e23e8c96cbcda1096d8b62b489750573c214029063681"
+        },
+        {
+          "version": 5,
+          "checksum": "eda909f18428745430291aed3ff9d7a5a503dbebcce44a4a87122ec71fa50fa037d92e5e7d2d1cb02769d4b5727af694"
+        }
+      ],
+      "backup_counts": {
+        "tags": 1,
+        "media": 1,
+        "pages": 2,
+        "posts": 6,
+        "roles": 4,
+        "users": 1,
+        "series": 2,
+        "comments": 3,
+        "sessions": 4,
+        "settings": 5,
+        "post_tags": 1,
+        "audit_logs": 47,
+        "categories": 2,
+        "media_refs": 7,
+        "user_roles": 1,
+        "pages_draft": 0,
+        "pages_trash": 0,
+        "permissions": 33,
+        "post_series": 2,
+        "posts_draft": 2,
+        "posts_trash": 0,
+        "oauth_accounts": 0,
+        "pages_archived": 0,
+        "posts_archived": 0,
+        "pages_published": 1,
+        "pages_scheduled": 1,
+        "posts_published": 3,
+        "posts_scheduled": 1,
+        "role_permissions": 67
+      },
+      "verified_media": 1,
+      "verified_references": 7
+    },
+    "seconds": 29.552,
+    "git_commit": "1b460fc4c531948782a0e9c60c0e040908f36881",
+    "tracked_changes": true
+  },
+  "docker_compose_acceptance": {
+    "commit": "1b460fc4c531948782a0e9c60c0e040908f36881",
+    "images": {
+      "runtime": "codex-blog-review:1b460fc4c531-bc6d59",
+      "ops": "codex-blog-review:1b460fc4c531-bc6d59-ops"
+    },
+    "stages": {
+      "build_runtime": {
+        "command": [
+          "docker",
+          "build",
+          "--progress",
+          "plain",
+          "--target",
+          "runtime",
+          "--build-arg",
+          "VCS_REF=1b460fc4c531948782a0e9c60c0e040908f36881",
+          "--tag",
+          "codex-blog-review:1b460fc4c531-bc6d59",
+          "."
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 45.152,
+        "log_sha256": "89ab4c0fb808ec7b91d46ea3aa8c73244ab5a75e10dadb7a6030606bc0f718d6"
+      },
+      "build_ops": {
+        "command": [
+          "docker",
+          "build",
+          "--progress",
+          "plain",
+          "--target",
+          "ops",
+          "--build-arg",
+          "VCS_REF=1b460fc4c531948782a0e9c60c0e040908f36881",
+          "--tag",
+          "codex-blog-review:1b460fc4c531-bc6d59-ops",
+          "."
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 5.599,
+        "log_sha256": "7dc90607eaa041157a9d99e72847e874b5bb3470f76ced9730c0ed6f154059e0"
+      },
+      "compose_acceptance": {
+        "command": [
+          "python3",
+          "-B",
+          "scripts/test_compose.py",
+          "--image",
+          "codex-blog-review:1b460fc4c531-bc6d59",
+          "--ops-image",
+          "codex-blog-review:1b460fc4c531-bc6d59-ops"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 125.54,
+        "log_sha256": "5fac436e9bfa835cff22fe369065f9f621bde552a03311a295ca1c1e559ebe46"
+      }
+    },
+    "source": "git archive exact commit",
+    "status": "passed",
+    "docker_version": {
+      "Version": "29.4.0",
+      "Os": "linux",
+      "Arch": "arm64",
+      "KernelVersion": "7.0.14-orbstack-00380-ga7e0a2dc9535"
+    },
+    "compose_version": "5.1.2",
+    "resources_before": {
+      "containers": [],
+      "volumes": [],
+      "networks": []
+    },
+    "blog_postgres_before": "cdc3bb6dcb4be31ab85d3f0020f9243e712a37a0d3939ff444ea7d831b226e4e\trunning\t2026-09-21T11:52:48.151638362Z",
+    "image_metadata": {
+      "runtime": {
+        "id": "sha256:5fabb7f30366e4dc587b3589409b8c608d3f1f00157752d19051c68186f07d14",
+        "os": "linux",
+        "architecture": "arm64",
+        "size_bytes": 46458496,
+        "revision_label": "1b460fc4c531948782a0e9c60c0e040908f36881",
+        "binary_sha256": "1325a980e0f82710e5f32e73318ef720e4ddee3449e513f5f66a8273fe5a2657"
+      },
+      "ops": {
+        "id": "sha256:45cc05869ec2b8f31bb59b7e0773f3e7d7507b68faf2ac40d84005ed3cad6dc7",
+        "os": "linux",
+        "architecture": "arm64",
+        "size_bytes": 193701350,
+        "revision_label": null,
+        "binary_sha256": "1325a980e0f82710e5f32e73318ef720e4ddee3449e513f5f66a8273fe5a2657"
+      }
+    },
+    "resources_after": {
+      "containers": [],
+      "volumes": [],
+      "networks": []
+    },
+    "new_remaining_resources": {
+      "containers": [],
+      "volumes": [],
+      "networks": []
+    },
+    "blog_postgres_after": "cdc3bb6dcb4be31ab85d3f0020f9243e712a37a0d3939ff444ea7d831b226e4e\trunning\t2026-09-21T11:52:48.151638362Z",
+    "removed_existing_resources": {
+      "containers": [],
+      "volumes": [],
+      "networks": []
+    },
+    "blog_postgres_unchanged": true,
+    "cleaned_up": true,
+    "existing_resources_preserved": true
+  },
+  "mixed_capacity_smoke": {
+    "format": 2,
+    "status": "passed",
+    "started_at": "2026-09-30T10:31:13.130149+00:00",
+    "platform": "macOS-27.0-arm64-arm-64bit",
+    "cpu_count": 10,
+    "measurements": [
+      {
+        "pool_size": 5,
+        "min_connections": 5,
+        "concurrency": 8,
+        "requests": 11324,
+        "errors": 0,
+        "failed_operations": 0,
+        "conflicts": 0,
+        "error_types": {},
+        "status_counts": {
+          "200": 11324
+        },
+        "p50_ms": 3.081,
+        "p95_ms": 5.807,
+        "p99_ms": 8.46,
+        "requests_per_second": 2263.02,
+        "seconds": 5.004,
+        "readyz": {
+          "requests": 91,
+          "errors": 0,
+          "failed_operations": 0,
+          "conflicts": 0,
+          "error_types": {},
+          "status_counts": {
+            "200": 91
+          },
+          "p50_ms": 1.264,
+          "p95_ms": 3.683,
+          "p99_ms": 22.324
+        },
+        "writers": 4,
+        "writes": {
+          "save": {
+            "requests": 132,
+            "errors": 0,
+            "failed_operations": 20,
+            "conflicts": 20,
+            "error_types": {
+              "http_409": 20
+            },
+            "status_counts": {
+              "200": 112,
+              "409": 20
+            },
+            "p50_ms": 19.823,
+            "p95_ms": 31.884,
+            "p99_ms": 42.911
+          },
+          "series_reorder": {
+            "requests": 132,
+            "errors": 0,
+            "failed_operations": 78,
+            "conflicts": 78,
+            "error_types": {
+              "http_409": 78
+            },
+            "status_counts": {
+              "200": 54,
+              "409": 78
+            },
+            "p50_ms": 29.456,
+            "p95_ms": 52.309,
+            "p99_ms": 98.578
+          }
+        }
+      },
+      {
+        "pool_size": 5,
+        "min_connections": 5,
+        "concurrency": 32,
+        "requests": 12310,
+        "errors": 0,
+        "failed_operations": 0,
+        "conflicts": 0,
+        "error_types": {},
+        "status_counts": {
+          "200": 12310
+        },
+        "p50_ms": 12.571,
+        "p95_ms": 16.919,
+        "p99_ms": 26.156,
+        "requests_per_second": 2458.14,
+        "seconds": 5.008,
+        "readyz": {
+          "requests": 87,
+          "errors": 0,
+          "failed_operations": 0,
+          "conflicts": 0,
+          "error_types": {},
+          "status_counts": {
+            "200": 87
+          },
+          "p50_ms": 4.315,
+          "p95_ms": 7.972,
+          "p99_ms": 16.587
+        },
+        "writers": 4,
+        "writes": {
+          "save": {
+            "requests": 88,
+            "errors": 0,
+            "failed_operations": 0,
+            "conflicts": 0,
+            "error_types": {},
+            "status_counts": {
+              "200": 88
+            },
+            "p50_ms": 47.378,
+            "p95_ms": 66.34,
+            "p99_ms": 111.015
+          },
+          "series_reorder": {
+            "requests": 88,
+            "errors": 0,
+            "failed_operations": 66,
+            "conflicts": 66,
+            "error_types": {
+              "http_409": 66
+            },
+            "status_counts": {
+              "200": 22,
+              "409": 66
+            },
+            "p50_ms": 74.71,
+            "p95_ms": 87.534,
+            "p99_ms": 104.612
+          }
+        }
+      }
+    ],
+    "fixture": {
+      "posts": 500,
+      "pages": 1,
+      "theme": "default",
+      "warmup_requests": 30
+    },
+    "workload": {
+      "mode": "mixed",
+      "duration_seconds": 5.0,
+      "requests": null,
+      "writers": 4,
+      "write_interval_ms": 100,
+      "series_reorder": true,
+      "series_members": 20
+    },
+    "pass_rule": "no read/readiness failures or non-409 write errors; assess write conflicts against deployment thresholds",
+    "latency_method": "logarithmic histogram upper bounds, <=2% error (1us floor, rounded to 1us)",
+    "evidence": {
+      "server_sha256": "2c52e53c55c9a3ef3d0b7d1aea11e523ab0c338b417f82ced52c0a0c49590039",
+      "admin_entry_sha256": "80a8843bf48323a79ba1a71fe5208db836ba00ca8c641b88add25cd70b667261",
+      "scenarios_sha256": "64dcc08e8c5b7264e18e49fae4129fd84bb3397b573201bcd11f4a91133fd141",
+      "runner_sha256": "c38a88b5e68235ae824bcf14695ae121b7d735d2194fb334b9d3ac424c566b91",
+      "benchmark_sha256": "8c3bb8b7012a433144e5bf62a42af6fe66b3c823bfa181b241195c9a04ff9797"
+    }
+  },
+  "limits": [
+    "Local validation only; production capacity, latency targets and RPO/RTO were not specified or certified.",
+    "Mixed load used 500 synthetic posts, 4 writers, 20 shared series members, pool size 5, read concurrency 8/32 and 5 seconds per case. This is a short correctness smoke test, not sustained capacity evidence.",
+    "Shared-series concurrent writes produced CAS 409 conflicts, recorded separately from system errors. Read/readiness failures and non-409 write errors were zero.",
+    "Native pnpm audit was rejected by automatic approval before execution because it sends dependency names/versions to npm registry. Full public npm catalog was downloaded and checked offline instead; the configured CI native pnpm gate has not been run in GitHub.",
+    "The full Cargo lockfile retains rsa 0.9.10 advisory RUSTSEC-2023-0071 as an optional, unreachable SQLx MySQL dependency. Precise exception and all-platform reachability evidence are retained in the audit record.",
+    "Forward migration 0005 installs pg_trgm in public and creates indexes in a transaction. Deploy through the documented schema-owner, stop-write migration procedure; short/punctuation-only searches and page-number OFFSET retain their existing scaling limits."
+  ]
+}

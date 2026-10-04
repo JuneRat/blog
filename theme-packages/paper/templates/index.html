@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="section-heading"><span>01 / Journal</span><h1>最新文章</h1></div>
+{% if posts %}
+<div class="article-list">
+  {% for post in posts %}
+  <article class="article-card">
+    <p class="article-meta"><time>{{ post.published_at }}</time><span>·</span><span>{% if post.author_avatar_url %}<img class="avatar" src="{{ post.author_avatar_url | url }}" alt="">{% endif %}{{ post.author_display }}</span></p>
+    <h2><a href="{{ post.url | url }}">{{ post.title }}</a></h2>
+    {% if post.excerpt %}<p>{{ post.excerpt }}</p>{% endif %}
+    <a class="read-more" href="{{ post.url | url }}">阅读文章 <span aria-hidden="true">↗</span></a>
+  </article>
+  {% endfor %}
+</div>
+{% else %}<p class="empty">还没有公开文章。</p>{% endif %}
+<nav class="pagination" aria-label="文章分页">
+  {% if pagination.previous_url %}<a rel="prev" href="{{ pagination.previous_url | url }}">上一页</a>{% endif %}
+  <span>第 {{ pagination.page }} 页</span>
+  {% if pagination.next_url %}<a rel="next" href="{{ pagination.next_url | url }}">下一页</a>{% endif %}
+</nav>
+{% endblock %}

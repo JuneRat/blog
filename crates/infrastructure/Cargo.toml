@@ -1,0 +1,160 @@
+[package]
+name = "infrastructure"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+# Only integration fixtures may inject/inspect a raw pool. Not enabled at runtime.
+sqlx-test-support = []
+
+[dependencies]
+application = { path = "../application" }
+domain = { path = "../domain" }
+sqlx.workspace = true
+tokio.workspace = true
+minijinja.workspace = true
+pulldown-cmark.workspace = true
+ammonia.workspace = true
+# HTML5 分词器：从**清洗后**的正文 HTML 里读 <img src>，与 ammonia 用的是同一个
+# 解析器（已作为 ammonia 的传递依赖存在，这里只是提升为直接依赖）。
+# 不用手写扫描：注释、属性值里的 `>`、实体转义与 script/style 原始文本都不是
+# 字符串查找能正确处理的东西，而这里判断错会直接变成破图或幽灵占用。
+html5ever = "0.40"
+# Match Axum's single percent-decoding pass for media path parameters.
+percent-encoding = "2"
+url.workspace = true
+time.workspace = true
+# Bundle IANA rules so containers do not depend on host tzdata or TZ.
+jiff = { version = "0.2", default-features = false, features = ["std", "tzdb-bundle-always"] }
+uuid.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+async-trait.workspace = true
+tracing.workspace = true
+reqwest.workspace = true
+jsonwebtoken.workspace = true
+sha2.workspace = true
+getrandom.workspace = true
+base64.workspace = true
+argon2.workspace = true
+lettre = { version = "0.11.23", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls-tls"] }
+zip = { version = "8.6", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+
+[dev-dependencies]
+# 测试用 `tokio::time` 断言「操作确实阻塞在身份锁上」。
+tokio = { workspace = true, features = ["time", "test-util"] }
+
+# Standalone database tests: cargo test -p infrastructure --features sqlx-test-support.
+# Workspace tests also enable this feature through server dev-dependencies.
+
+[[test]]
+name = "plugins"
+required-features = ["sqlx-test-support"]
+
+[[test]]
+name = "plugins_persistence"
+required-features = ["sqlx-test-support"]
+
+[[test]]
+name = "admin_content_queries"
+required-features = ["sqlx-test-support"]
+
+[[test]]
+name = "audit_query"
+required-features = ["sqlx-test-support"]
+
+[[test]]
+name = "business_audit"
+required-features = ["sqlx-test-support"]
+
+[[test]]
+name = "comments"
+required-features = ["sqlx-test-support"]
+
+[[test]]
+name = "content_html"
+required-features = ["sqlx-test-support"]
+
+[[test]]
+name = "content_lifecycle"
+required-features = ["sqlx-test-support"]
+
+[[test]]
+name = "database"
+required-features = ["sqlx-test-support"]
+
+[[test]]
+name = "html_rebuild"
+required-features = ["sqlx-test-support"]
+
+[[test]]
+name = "tasks"
+required-features = ["sqlx-test-support"]
+
+[[test]]
+name = "home_pagination"
+required-features = ["sqlx-test-support"]
+
+[[test]]
+name = "identity_baseline"
+required-features = ["sqlx-test-support"]
+
+[[test]]
+name = "oauth_config"
+required-features = ["sqlx-test-support"]
+
+[[test]]
+name = "oauth_login"
+required-features = ["sqlx-test-support"]
+
+[[test]]
+name = "media"
+required-features = ["sqlx-test-support"]
+
+[[test]]
+name = "media_cleanup"
+required-features = ["sqlx-test-support"]
+
+[[test]]
+name = "media_reference_urls"
+required-features = ["sqlx-test-support"]
+
+[[test]]
+name = "migration_permissions"
+required-features = ["sqlx-test-support"]
+
+[[test]]
+name = "pool_policy"
+required-features = ["sqlx-test-support"]
+
+[[test]]
+name = "postgres"
+required-features = ["sqlx-test-support"]
+
+[[test]]
+name = "retention"
+required-features = ["sqlx-test-support"]
+
+[[test]]
+name = "session_postgres"
+required-features = ["sqlx-test-support"]
+
+[[test]]
+name = "user_status"
+required-features = ["sqlx-test-support"]
+
+[[test]]
+name = "write_invariants"
+required-features = ["sqlx-test-support"]
+
+[[test]]
+name = "themes"
+required-features = ["sqlx-test-support"]
+
+[[test]]
+name = "account_links"
+required-features = ["sqlx-test-support"]
+
+[[test]]
+name = "write_authorization"
+required-features = ["sqlx-test-support"]

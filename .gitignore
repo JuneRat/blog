@@ -1,0 +1,28 @@
+/target
+/.pnpm-store
+/apps/admin/node_modules
+/apps/admin/dist
+/apps/admin/test-results
+/apps/admin/playwright-report
+# 媒体库文件根目录（默认 BLOG_MEDIA_DIR=data/media）：运行期数据，不入库。
+/data/media
+# 安装配置包含数据库凭据。
+/config.toml
+/*.install-state.json
+/.blog-config-*.tmp
+# 旧位置也继续忽略，避免升级时意外提交已有凭据。
+/data/config.toml
+/data/*.install-state.json
+/.env
+/.env.*
+!/.env.example
+/backups/
+/data/.blog-config-*.tmp
+# 已移除实验工程的本地构建残留不入库。
+/spikes/template-bridge/target
+/spikes/template-bridge/Cargo.lock
+# 后台安装的主题属于运行期数据，只保留内置 Default。
+/themes/*
+!/themes/default/
+# 主题 ZIP 按需生成，不提交分发包。
+/theme-packages/*.zip
