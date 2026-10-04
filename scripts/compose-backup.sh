@@ -194,6 +194,9 @@ case "$action" in
         cp "$COMPOSE_FILE_PATH" "$target/compose.yaml"
         cp scripts/compose-backup.sh scripts/compose-init.sh "$target/scripts/"
         cp ops/postgres-init.sh "$target/ops/"
+        # This public script is bind-mounted into PostgreSQL, whose UID differs
+        # from the host owner. Keep generated credentials under umask 077.
+        chmod 644 "$target/ops/postgres-init.sh"
         cp .env.example "$target/.env.example"
         phase=isolated-restore
         # A clean environment prevents source COMPOSE_PROJECT_NAME/DATABASE_URL or

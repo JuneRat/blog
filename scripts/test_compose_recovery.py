@@ -318,6 +318,54 @@ class EncryptionTests(unittest.TestCase):
             self.assertEqual(list(root.glob("blog-verify-*")), [])
 
 
+class RestoreDeploymentTests(unittest.TestCase):
+    def test_restore_initialization_is_readable_by_database_user_but_secrets_stay_private(self):
+        project = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in ("scripts", "ops", "bin"):
+                (root / name).mkdir()
+            for name in ("scripts/compose-backup.sh", "scripts/compose-init.sh",
+                         "ops/postgres-init.sh", "compose.legacy.yaml", ".env.example"):
+                shutil.copyfile(project / name, root / name)
+            (root / ".env").write_text("SOURCE_TEST=value\n")
+            archive = root / "blog-test.tar.gz.age"
+            make_transport(archive)
+            identity = root / "identity"
+            identity.write_text("test identity")
+            target = root / "restored"
+            docker = root / "bin/docker"
+            docker.write_text(f"#!{sys.executable}\n" + '''
+from pathlib import Path
+import sys
+args = sys.argv[1:]
+if args[0] == 'inspect':
+    sys.exit(1)
+if 'prepare' in args:
+    target = Path(next(value[:-8] for value in args if value.endswith(':/target')))
+    (target / '.env').write_text('RESTORE_TEST=private-value\\n')
+    (target / '.restore.json').write_text('{}')
+elif 'up' in args:
+    root = Path(args[args.index('--project-directory') + 1])
+    # The PostgreSQL UID differs from the host user that copied this bind mount.
+    if not (root / 'ops/postgres-init.sh').stat().st_mode & 0o004:
+        sys.exit('database user cannot read its initialization script')
+''')
+            docker.chmod(0o755)
+            result = subprocess.run(
+                ["sh", str(root / "scripts/compose-backup.sh"), "restore",
+                 str(archive), str(target), str(identity)],
+                capture_output=True, text=True, timeout=15,
+                env={**os.environ, "PATH": str(root / "bin") + ":" + os.environ["PATH"]})
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((target / "ops/postgres-init.sh").read_bytes(),
+                             (project / "ops/postgres-init.sh").read_bytes())
+            self.assertEqual((target / "ops/postgres-init.sh").stat().st_mode & 0o777, 0o644)
+            self.assertEqual(target.stat().st_mode & 0o777, 0o700)
+            for name in (".env", ".restore.json"):
+                self.assertEqual((target / name).stat().st_mode & 0o777, 0o600)
+
+
 class InterruptedBackupTests(unittest.TestCase):
     def test_interruption_stops_operation_before_restart_or_keeps_source_stopped(self):
         for stop_fails, legacy in ((False, False), (True, False), (False, True), (True, True)):
