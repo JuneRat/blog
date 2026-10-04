@@ -1,6 +1,6 @@
 # 在 1Panel 中部署
 
-准备一份 Compose，填好镜像地址并启动博客，再通过安装向导连接数据库。无需下载配置包、克隆源码或在服务器执行初始化脚本。
+复制一份 Compose，填写域名、安装码并启动博客，再通过安装向导连接数据库。示例已固定经过验收的 `ghcr.io/junerat/blog` 镜像，适用于 x86_64 / amd64 服务器。无需下载配置包、克隆源码或在服务器执行初始化脚本。
 
 ## 选择编排
 
@@ -15,13 +15,16 @@
 
 在 1Panel“容器 → 编排”中创建编排，粘贴所选文件，修改这些值：[1Panel 编排说明](https://1panel.pro/docs/v2/user_manual/containers/composes/)
 
-- `blog.image`：填已发布的完整博客镜像地址。发布工作流的结果页直接给出可复制的 `image:` 行；目前源码中的地址是占位示例。
 - `BLOG_PUBLIC_BASE_URL`：填写实际访问地址，例如 `https://blog.example.com`。
 - `BLOG_INSTALL_TOKEN`：填写自己保存的私有安装码，20–256 个 ASCII 字符。
 - `ports`：默认宿主机端口为 `8080`；多站点分别选择未占用的端口。
 - 使用带数据库示例时，还需填写 `POSTGRES_PASSWORD`（数据库管理密码）与 `BLOG_OWNER_PASSWORD`（博客数据库账号密码），二者不要相同。
 
-启动编排后，Docker 会在本机缺少对应镜像时自动拉取。私有仓库需要先在 1Panel 配置访问凭据；公开仓库可直接拉取。当前发布流程支持 Linux amd64，ARM 服务器需使用相应架构的本地构建。镜像发布方法见 [GHCR 发布](docker-compose.md#从-ghcr-拉取镜像并部署到-1panel)。
+`blog.image` 已填写完整镜像地址，首次部署保持原值即可。本项目镜像已公开，Docker 会在本机缺少对应版本时自动拉取，无需登录镜像仓库。
+
+自行发布到其他 GHCR 仓库时，公开源码不会自动公开镜像；包所有者需单独设为 Public，或在 1Panel 配置私有仓库凭据。如果拉取提示 `unauthorized` 或 `denied`，先检查镜像包的可见性与地址。[GHCR 访问说明](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry)
+
+当前发布流程支持 Linux amd64，ARM 服务器需使用相应架构的本地构建。镜像发布方法见 [GHCR 发布](docker-compose.md#从-ghcr-拉取镜像并部署到-1panel)。
 
 每个站点使用独立编排名和数据卷。首次安装前健康检查显示未就绪是正常的，安装页面仍然可访问。
 

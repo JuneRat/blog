@@ -7,7 +7,7 @@
 - [compose.yaml](../compose.yaml)：只启动博客，连接已有 PostgreSQL。
 - [compose.postgres.yaml](../compose.postgres.yaml)：完整的博客 + PostgreSQL 示例。初次数据库初始化使用文件内嵌的配置，创建非超级用户 `blog_owner`，无需额外脚本文件。
 
-选择一个文件，在 1Panel 中粘贴，或保存为部署目录的 `compose.yaml`。填写镜像地址、域名与私有安装码；带数据库示例还需设置两个数据库密码。Compose 2.24 或更新版本可使用内嵌数据库初始化配置。镜像采用 `pull_policy: missing`，启动时会自动拉取本地缺少的版本。[Docker 镜像拉取规则](https://docs.docker.com/reference/compose-file/services/#pull_policy)、[内嵌配置支持](https://docs.docker.com/reference/compose-file/configs/)
+选择一个文件，在 1Panel 中粘贴，或保存为部署目录的 `compose.yaml`。示例已固定经过验收的 `ghcr.io/junerat/blog` 镜像，无需自行构建；填写域名与私有安装码，带数据库示例还需设置两个数据库密码。Compose 2.24 或更新版本可使用内嵌数据库初始化配置。镜像采用 `pull_policy: missing`，启动时会自动拉取本地缺少的版本。[Docker 镜像拉取规则](https://docs.docker.com/reference/compose-file/services/#pull_policy)、[内嵌配置支持](https://docs.docker.com/reference/compose-file/configs/)
 
 ```sh
 docker compose up -d
@@ -17,7 +17,7 @@ docker compose up -d
 
 ## 从 GHCR 拉取镜像并部署到 1Panel
 
-代码推送到自己的 GitHub 仓库后，运行 **Actions → container → Run workflow**，或推送 `v*` 标签。普通分支推送与 PR 只构建验收。发布镜像使用：
+直接部署本项目时，使用上述 Compose 内的固定镜像地址即可。需要发布新版本或维护自己的仓库时，将代码推送到 GitHub，运行 **Actions → container → Run workflow**，或推送 `v*` 标签。普通分支推送与 PR 只构建验收。发布镜像使用：
 
 ```text
 ghcr.io/<github-owner>/<repository>:sha-<完整提交 SHA>
@@ -25,9 +25,9 @@ ghcr.io/<github-owner>/<repository>:sha-<完整提交 SHA>
 
 验收后，发布任务加载同一个已测试的镜像，检查 ID、提交、来源和 Linux amd64 架构，然后推送 GHCR；再通过 digest 拉取核对。结果页直接给出 `image: ghcr.io/…@sha256:…`，复制到所选 Compose 的 `blog.image` 即可。固定 digest 保证拉取对应构建。当前没有用户配置包或离线部署包，部署无需下载 Actions artifact。
 
-发布只使用该仓库的 `GITHUB_TOKEN`，仅 publish job 有 `packages: write`。私有镜像需在 1Panel 配置仓库凭据，公开镜像可匿名拉取；流程不自动改变镜像可见性。[GitHub 包发布权限](https://docs.github.com/en/packages/managing-github-packages-using-github-actions-workflows/publishing-and-installing-a-package-with-github-actions)、[GHCR 访问说明](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry)
+发布只使用该仓库的 `GITHUB_TOKEN`，仅 publish job 有 `packages: write`。本项目镜像已公开并验证匿名拉取。自行发布的私有镜像需在 1Panel 配置仓库凭据，或由包所有者在 **Package settings → Change visibility → Public** 设置公开；发布流程不自动改变镜像可见性，源码公开也不代表镜像公开。本项目的管理入口为[镜像包设置](https://github.com/users/JuneRat/packages/container/blog/settings)。[GitHub 包发布权限](https://docs.github.com/en/packages/managing-github-packages-using-github-actions-workflows/publishing-and-installing-a-package-with-github-actions)、[GHCR 访问说明](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry)
 
-流水线当前发布 Linux amd64。ARM 主机可以从源码原生构建；尚未提供经过 CI 验收的 ARM 发布镜像。配置自己的 GitHub 仓库前，示例中的 `your-github-owner/your-repository` 只是需要替换的地址。
+流水线当前发布 Linux amd64。ARM 主机可以从源码原生构建；尚未提供经过 CI 验收的 ARM 发布镜像。使用自己仓库发布的镜像时，将两个示例中的 `blog.image` 替换为对应发布结果。
 
 ## 从源码构建并首次安装
 
@@ -58,7 +58,7 @@ python3 -B scripts/test_browser_compose.py --image blog:local --report browser.j
 python3 -B scripts/test_compose.py --image blog:local --ops-image blog:local --smtp-security starttls --report compose.json
 ```
 
-验收使用随机项目、密码、端口与独立卷，结束后只清理自己的资源。S3 与邮件使用本地协议服务，真实存储供应商、互联网邮件、域名证书和服务器容量仍需在目标环境验证。历史记录见[网页恢复验收](validation/browser-recovery-2026-10-04.md)，简化后的流程见[安装部署验收](validation/simple-deployment-2026-10-04.md)。
+验收使用随机项目、密码、端口与独立卷，结束后只清理自己的资源。S3 与邮件使用本地协议服务，真实存储供应商、互联网邮件、域名证书和服务器容量仍需在目标环境验证。本次镜像的提交、digest 与云端结果见 [GHCR 交付验收](validation/github-release-2026-10-04.md)；历史记录见[网页恢复验收](validation/browser-recovery-2026-10-04.md)与[安装部署验收](validation/simple-deployment-2026-10-04.md)。
 
 基础镜像与 PostgreSQL 示例固定 digest。更新 PostgreSQL 时同步 `compose.postgres.yaml`、`compose.legacy.yaml`、CI 服务及 `scripts/dev-db.sh`，并运行验收。基础镜像固定不等于整个构建逐字节可复现，APT 软件源仍会更新。
 

@@ -1,4 +1,4 @@
-# Replace image, public URL and installation code before starting.
+# Verified Linux amd64 image. Replace public URL, installation code and database passwords.
 # This file is complete: no source checkout, .env or configuration bundle needed.
 name: blog
 services:
@@ -6,7 +6,7 @@ services:
     depends_on:
       db:
         condition: service_healthy
-    image: ghcr.io/your-github-owner/your-repository:sha-your-commit
+    image: ghcr.io/junerat/blog@sha256:08641a14123c345fee6e66d08003fbd7b4dc543ef9bc0a11a731549f6b4a264e
     pull_policy: missing
     init: true
     restart: unless-stopped

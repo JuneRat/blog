@@ -8,7 +8,7 @@ Rust 模块化单体博客，公开站点使用服务端渲染，管理后台使
 
 ## 快速开始
 
-使用 1Panel 时，复制 [compose.yaml](compose.yaml)，填写博客镜像、域名与安装码并启动，再通过安装向导验证已有 PostgreSQL 连接、创建管理员并保存配置。如果希望数据库也由同一编排运行，选择完整的 [compose.postgres.yaml](compose.postgres.yaml)。部署无需配置包，具体见 [网页部署指南](docs/1panel.md)。GitHub Actions 发布一个包含网站、后台和备份恢复工具的博客镜像，Docker 在启动时自动拉取本地缺少的镜像。
+使用 1Panel 时，复制 [compose.yaml](compose.yaml)，填写域名与安装码并启动，再通过安装向导验证已有 PostgreSQL 连接、创建管理员并保存配置。如果希望数据库也由同一编排运行，选择完整的 [compose.postgres.yaml](compose.postgres.yaml)，同时填写数据库密码。两个示例均已固定经过验收的 `ghcr.io/junerat/blog` 镜像，适用于 x86_64 / amd64 服务器；镜像包含网站、后台和备份恢复工具，Docker 在启动时自动拉取本地缺少的版本。部署无需配置包，具体见 [网页部署指南](docs/1panel.md)。
 
 日常操作位于后台“系统 → 备份与恢复”：下载恢复密钥、立即或定时备份、配置 S3 远程存储、上传副本和原地恢复。数据库故障时仍可访问应急页面；操作步骤见[后台备份与恢复](docs/browser-backup.md)。
 
