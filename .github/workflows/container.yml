@@ -71,7 +71,7 @@ jobs:
 
       - name: Save Compose verification report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: compose-verification-${{ github.sha }}
           path: compose-verification-*.json
@@ -90,7 +90,7 @@ jobs:
 
       - name: Save the internal image handoff
         if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: verified-blog-image-${{ github.sha }}
           path: verified/
@@ -151,7 +151,7 @@ jobs:
 
       - name: Save the release attachments
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: blog-release-${{ github.sha }}
           path: release/
@@ -159,7 +159,7 @@ jobs:
           retention-days: 14
 
       - name: Save the publication report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: published-image-${{ github.sha }}
           path: published-image.json

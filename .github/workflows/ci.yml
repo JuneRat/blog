@@ -171,7 +171,7 @@ jobs:
         run: pnpm build
 
       - name: Share the production admin build with acceptance
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: admin-dist
           path: apps/admin/dist
@@ -245,7 +245,7 @@ jobs:
 
       - name: Save browser failure evidence
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: browser-results
           path: apps/admin/test-results
@@ -254,7 +254,7 @@ jobs:
 
       - name: Save acceptance evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: acceptance-report
           path: acceptance-report.json
@@ -263,7 +263,7 @@ jobs:
 
       - name: Save SMTP acceptance evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: smtp-tls-report
           path: smtp-tls-report.json
@@ -314,7 +314,7 @@ jobs:
 
       - name: Save the full RustSec report and dependency graph
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: rustsec-audit
           path: ${{ runner.temp }}/dependency-audit
