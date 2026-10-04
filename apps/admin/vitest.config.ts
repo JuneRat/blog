@@ -21,8 +21,8 @@ export default defineConfig({
   },
   test: {
     // 多屏渲染较重；限制 CPU 争用，并给慢速 CI 留出余量，不用重试掩盖失败。
-    maxWorkers: 4,
-    testTimeout: 15_000,
+    maxWorkers: process.env.CI ? 2 : 4,
+    testTimeout: 30_000,
     environment: "jsdom",
     setupFiles: ["src/testSetup.ts"],
     include: ["src/**/*.test.{ts,tsx}", "tests/**/*.test.{ts,tsx}"],

@@ -190,8 +190,14 @@ def exercise(image, root, ops_image, report, smtp_security="starttls"):
     def operation(*args, directory=root, data=None, success=True):
         result = subprocess.run(["sh", str(directory / "scripts/compose-backup.sh"), *args],
                                 cwd=directory, env=env, input=data, capture_output=True, text=True, timeout=240)
+        # The container wrapper emits sanitized status lines. Keep arbitrary
+        # Docker output and application stderr (which can include secrets) private.
+        diagnostic = next((line for line in result.stderr.splitlines()
+                           if line.startswith(f"Compose {args[0]}:")
+                           or line.startswith(f"Compose {args[0]} failed (")), "")
         require((result.returncode == 0) == success,
-                f"Compose recovery {args[0]} unexpected exit {result.returncode}")
+                f"Compose recovery {args[0]} unexpected exit {result.returncode}"
+                + (f"; {diagnostic}" if diagnostic else ""))
         return result.stdout
 
     def restored_compose(*args, data=None):

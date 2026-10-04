@@ -1,4 +1,9 @@
 import { beforeEach, vi } from "vitest";
+import { configure } from "@testing-library/react";
+
+// Lazy screens and Ant Design rendering can exceed Testing Library's default
+// one-second deadline on a shared CI runner. Still wait for the actual UI state.
+configure({ asyncUtilTimeout: 5_000 });
 
 vi.mock("./components/vditorRuntime", async () => ({
   editorCdn: "/admin/assets/vditor-test",

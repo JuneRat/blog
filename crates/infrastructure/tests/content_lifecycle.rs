@@ -163,7 +163,8 @@ async fn due_publishing_is_atomic_idempotent_and_does_not_revive_cancelled_or_tr
     );
     let public_posts = PostgresPublishedPostQuery::new(common::database(pool.clone()));
     let public_pages = PostgresPublishedPageQuery::new(common::database(pool.clone()));
-    let now = OffsetDateTime::now_utc() - Duration::hours(2);
+    // PostgreSQL persists microseconds; Linux's nanosecond clock cannot round-trip.
+    let now = OffsetDateTime::now_utc().replace_nanosecond(0).unwrap() - Duration::hours(2);
     let at = now + Duration::hours(1);
     let mut scheduled_ids = Vec::new();
     for slug in ["due", "cancelled", "trashed"] {
@@ -337,6 +338,7 @@ async fn purge_deletes_entire_comment_tree_and_audit_failure_rolls_back_content(
     repo.insert_post(&post, &[], Some(author).into())
         .await
         .unwrap();
+    let before = repo.find_record_by_id(id).await.unwrap().unwrap();
     let root = uuid::Uuid::now_v7();
     let reply = uuid::Uuid::now_v7();
     let leaf = uuid::Uuid::now_v7();
@@ -362,7 +364,7 @@ async fn purge_deletes_entire_comment_tree_and_audit_failure_rolls_back_content(
             .is_err()
     );
     let unchanged = repo.find_record_by_id(id).await.unwrap().unwrap();
-    assert_eq!(unchanged.snapshot, post.snapshot());
+    assert_eq!(unchanged.snapshot, before.snapshot);
     assert!(matches!(
         repo.purge(id, 1, Some(author).into()).await.unwrap(),
         application::ports::SaveOutcome::Gone

@@ -158,7 +158,7 @@ describe("写入后跨屏一致性（先访问旧缓存，再提交，再返回�
     await screen.findByText(/0\/1 篇公开/);
     await usage();
     await screen.findByText(/草稿；不公开/);
-  }, 15_000);
+  }, 30_000);
 
   it("页面移除图片后，媒体列表与已看过的使用位置一起刷新", async () => {
     page.content = "![图片](/media/image)";
