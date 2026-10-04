@@ -7,7 +7,7 @@ ghcr.io/junerat/blog:sha-dd38b0e3f2f3e294b2e3c872b212092ec45ebc5f
 ghcr.io/junerat/blog@sha256:08641a14123c345fee6e66d08003fbd7b4dc543ef9bc0a11a731549f6b4a264e
 ```
 
-镜像 ID 为 `sha256:290c9d7f2e77a9229cd15184491513de2557c0262f82c48107bf083c6016e023`。[发布工作流](https://github.com/JuneRat/blog/actions/runs/37189679951)在同一个镜像通过全部容器验收后，将它交给发布任务，核对校验和、镜像 ID、提交、来源及架构，推送 GHCR，并使用 digest 拉取确认镜像 ID 一致。没有重新构建发布镜像。
+云端验收记录的镜像 ID（config digest）为 `sha256:290c9d7f2e77a9229cd15184491513de2557c0262f82c48107bf083c6016e023`。[发布工作流](https://github.com/JuneRat/blog/actions/runs/37189679951)在同一个镜像通过全部容器验收后，将它交给发布任务，核对校验和、镜像 ID、提交、来源及架构，推送 GHCR，并使用 digest 拉取确认镜像 ID 一致。没有重新构建发布镜像。
 
 ## 验收结果
 
@@ -24,6 +24,8 @@ ghcr.io/junerat/blog@sha256:08641a14123c345fee6e66d08003fbd7b4dc543ef9bc0a11a731
 
 [compose.yaml](../../compose.yaml)用于已有数据库，[compose.postgres.yaml](../../compose.postgres.yaml)包含 PostgreSQL。两份模板已将占位镜像替换为本次发布的 digest；数据库和安装配置继续由部署者填写。最终模板使用 Compose 2.38.2 解析验证，部署步骤见 [1Panel 指南](../1panel.md)。
 
-发布工作流先验证登录 GHCR 后按 digest 拉取。本地随后使用临时空 Docker 认证配置，实际匿名拉取完整的 `linux/amd64` 镜像，并再次核对镜像 ID、架构和提交一致，确认目前可免登录拉取。此检查没有更改包的可见性。
+发布工作流先验证登录 GHCR 后按 digest 拉取。本地随后使用临时空 Docker 认证配置，实际匿名拉取完整的 `linux/amd64` 镜像，并核对仓库 digest、架构和提交一致，确认目前可免登录拉取。匿名取得的 manifest 内容 SHA-256 与固定 digest 一致，其中 `config.digest` 与云端验收记录的镜像 ID 一致。此检查没有更改包的可见性。
+
+本地 Docker 29.4.0 的 `image inspect .Id` 返回 manifest digest，云端 Docker 28 使用 config digest，因此不能直接跨这两个环境比较 `.Id` 字段；应核对上述 manifest 与 config 的对应关系。[Docker containerd 镜像检查实现](https://github.com/moby/moby/blob/master/daemon/containerd/image_inspect.go)
 
 真实 1Panel 服务器、域名证书、互联网 SMTP 和实际 S3 供应商不在本次隔离验收范围内。
