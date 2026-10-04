@@ -10,15 +10,9 @@ use application::{
 };
 use axum::{Router, extract::Request};
 use std::sync::{Arc, RwLock, Weak};
-use tokio::sync::{Mutex, watch};
-use tower::ServiceExt;
+use tokio::sync::Mutex;
 
-struct LiveSite {
-    router: RwLock<Router>,
-    pool: watch::Sender<Option<infrastructure::Database>>,
-    telemetry: interfaces::observability::Telemetry,
-    tasks: Arc<crate::tasks::TaskSupervisor>,
-}
+use crate::managed::LiveSite;
 
 struct Setup {
     saved: RwLock<Option<InstallJournal>>,
@@ -33,7 +27,13 @@ impl Installer for Setup {
     fn info(&self) -> InstallInfo {
         let saved = self.saved.read().expect("saved config lock");
         InstallInfo {
-            database_configured: saved.is_some(),
+            database_configured: saved.is_some()
+                || self
+                    .config
+                    .configured_database_url()
+                    .ok()
+                    .flatten()
+                    .is_some(),
             public_base_url: self
                 .config
                 .configured_public_url()
@@ -73,7 +73,12 @@ impl Installer for Setup {
         let saved = match previous.clone() {
             Some(saved) => saved,
             None => {
-                validate_database_url(&input.database_url)?;
+                let database_url = self
+                    .config
+                    .configured_database_url()
+                    .map_err(UseCaseError::Invalid)?
+                    .unwrap_or(input.database_url.clone());
+                validate_database_url(&database_url)?;
                 let public_base_url = self
                     .config
                     .configured_public_url()
@@ -85,7 +90,7 @@ impl Installer for Setup {
                     .to_owned();
                 InstallJournal::prepare(
                     &self.config,
-                    &input.database_url,
+                    &database_url,
                     &public_base_url,
                     infrastructure::SystemSecureRandom.token_hex()?,
                 )
@@ -155,7 +160,7 @@ impl Installer for Setup {
             ),
             &live.telemetry,
             crate::website::TaskEnvironment {
-                supervisor: live.tasks.clone(),
+                supervisor: live.tasks(),
                 maintenance: crate::tasks::maintenance_pool(
                     &deployment,
                     &database_url,
@@ -187,9 +192,7 @@ impl Installer for Setup {
         // Cleanup must not turn a committed installation into an HTTP failure.
         // A crash or failed unlink leaves the journal for startup to retry.
         cleanup_completed(&deployment, &saved);
-        *live.router.write().expect("live router lock") = app.router;
-        live.pool.send_replace(Some(runtime_pool));
-        live.tasks.activate(app.tasks);
+        live.publish(deployment, app, runtime_pool);
         crate::notice(format_args!(
             "安装完成，安装入口已关闭。登录地址：{}/admin/",
             site.public_base_url.as_str().trim_end_matches('/')
@@ -219,45 +222,20 @@ pub async fn serve(
     let bind = site.bind.clone();
     let metrics_listener = crate::observability::bind(config.metrics_bind()?).await?;
     let telemetry = interfaces::observability::Telemetry::new(&crate::observability::build_info());
-    let token = infrastructure::SystemSecureRandom
-        .token_hex()
-        .map_err(|e| e.to_string())?;
-    let (pool, _) = watch::channel(None);
-    let live = Arc::new(LiveSite {
-        router: RwLock::new(Router::new()),
-        pool,
-        telemetry: telemetry.clone(),
-        tasks: Arc::new(crate::tasks::TaskSupervisor::default()),
-    });
-    let setup = Arc::new(Setup {
-        saved: RwLock::new(saved),
-        config,
-        bind: bind.clone(),
-        gate: Mutex::new(()),
-        live: Arc::downgrade(&live),
-    });
+    let live = Arc::new(LiveSite::new(
+        config.clone(),
+        bind.clone(),
+        telemetry.clone(),
+    ));
+    prepare_router(live.clone(), config, saved)?;
     let metrics_pool = live.pool.subscribe();
-    let tasks = live.tasks.clone();
-    *live.router.write().expect("live router lock") =
-        interfaces::http_install::install_router(interfaces::http_install::InstallState {
-            installer: setup,
-            token: token.clone(),
-        })
-        .layer(axum::Extension(telemetry.clone()))
-        .layer(axum::Extension(crate::observability::build_info()))
-        .layer(axum::Extension(interfaces::http_client_ip::TrustedProxies(
-            site.trusted_proxies,
-        )));
-    let app = Router::new().fallback(move |request: Request| {
-        let router = live.router.read().expect("live router lock").clone();
-        async move { router.oneshot(request).await }
-    });
+    let tasks = live.tasks();
+    let app = Router::new().fallback(move |request: Request| live.clone().dispatch(request));
     let listener = tokio::net::TcpListener::bind(&bind)
         .await
         .map_err(|e| format!("绑定 {bind} 失败：{e}"))?;
     let address = listener.local_addr().map_err(|e| e.to_string())?;
     crate::notice(format_args!("首次安装：http://{address}/install"));
-    crate::notice(format_args!("安装码：{token}"));
     let server = crate::serve_http(
         listener,
         app,
@@ -271,4 +249,45 @@ pub async fn serve(
         },
     );
     server.await
+}
+
+/// Build the installer on either the legacy or the managed database-independent listener.
+pub(crate) fn prepare_router(
+    live: Arc<LiveSite>,
+    config: DeploymentConfig,
+    saved: Option<InstallJournal>,
+) -> Result<(), String> {
+    use std::sync::atomic::Ordering;
+    let token = match std::env::var("BLOG_INSTALL_TOKEN") {
+        Ok(token) if token.len() >= 20 && token.len() <= 256 => token,
+        Ok(_) => return Err("BLOG_INSTALL_TOKEN 至少需要 20 个字符".into()),
+        Err(_) => {
+            let token = infrastructure::SystemSecureRandom
+                .token_hex()
+                .map_err(|e| e.to_string())?;
+            crate::notice(format_args!("安装码：{token}"));
+            token
+        }
+    };
+    let site = config.site(Some(live.bind.clone()))?;
+    let setup = Arc::new(Setup {
+        saved: RwLock::new(saved),
+        config,
+        bind: live.bind.clone(),
+        gate: Mutex::new(()),
+        live: Arc::downgrade(&live),
+    });
+    live.installing.store(true, Ordering::Release);
+    *live.installation_token.write().expect("installation lock") = Some(token.clone());
+    *live.router.write().expect("live router lock") =
+        interfaces::http_install::install_router(interfaces::http_install::InstallState {
+            installer: setup,
+            token,
+        })
+        .layer(axum::Extension(live.telemetry.clone()))
+        .layer(axum::Extension(crate::observability::build_info()))
+        .layer(axum::Extension(interfaces::http_client_ip::TrustedProxies(
+            site.trusted_proxies,
+        )));
+    Ok(())
 }

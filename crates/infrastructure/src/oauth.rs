@@ -46,6 +46,17 @@ impl SecretSource for EnvSecretSource {
     }
 }
 
+/// Recovered secrets are fallback values; explicit deployment environment wins.
+pub struct RecoveredSecretSource(pub std::collections::BTreeMap<String, String>);
+impl SecretSource for RecoveredSecretSource {
+    fn secret_for(&self, secret_ref: &str) -> Result<String, UseCaseError> {
+        std::env::var(secret_ref)
+            .ok()
+            .or_else(|| self.0.get(secret_ref).cloned())
+            .ok_or_else(|| UseCaseError::External("OAuth 密钥未配置".into()))
+    }
+}
+
 // ---------------------------------------------------------------------------
 // 外部身份客户端（OIDC + GitHub）
 // ---------------------------------------------------------------------------

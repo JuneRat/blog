@@ -24,6 +24,7 @@ pub struct DatabaseConfig {
 
 pub struct SiteConfig {
     pub mail: Option<infrastructure::mail::SmtpConfig>,
+    pub recovered_secrets: BTreeMap<String, String>,
     pub http: crate::transport::HttpLimits,
     pub theme_dir: PathBuf,
     pub site: SiteInfo,
@@ -41,6 +42,7 @@ pub struct DeploymentConfig {
     original: Option<String>,
     values: toml::Table,
     env: BTreeMap<String, String>,
+    recovered: BTreeMap<String, String>,
 }
 
 impl DeploymentConfig {
@@ -93,12 +95,33 @@ impl DeploymentConfig {
                 )
             })?;
         schema::check_keys(&values)?;
+        let recovered = if let Some(parent) = path.parent() {
+            files::read_private(&parent.join("recovered-secrets.json"))?
+                .map(|text| {
+                    serde_json::from_str::<BTreeMap<String, String>>(&text)
+                        .map_err(|_| "恢复的密钥配置无效".to_string())
+                })
+                .transpose()?
+                .unwrap_or_default()
+        } else {
+            BTreeMap::new()
+        };
         Ok(Self {
             path,
             original,
             values,
             env,
+            recovered,
         })
+    }
+
+    pub fn save_recovery_target(&self, database_url: &str, origin: &str) -> Result<Self, String> {
+        application::installation::validate_database_url(database_url)
+            .map_err(|e| e.to_string())?;
+        let origin = application::seo::PublicBaseUrl::parse(origin).map_err(|e| e.to_string())?;
+        let text = self.installation_config(database_url, origin.as_str())?;
+        files::replace_checked(&self.path, self.original.as_deref(), &text)?;
+        self.reload()
     }
 
     pub fn reload(&self) -> Result<Self, String> {
@@ -118,6 +141,15 @@ impl DeploymentConfig {
             && let Some(value) = self.env.get(name)
         {
             return Ok((Some(field.parse_env(value)?), format!("env:{name}")));
+        }
+        if key.starts_with("mail.")
+            && let Some(name) = field.env
+            && let Some(value) = self.recovered.get(name)
+        {
+            return Ok((
+                Some(field.parse_env(value)?),
+                "recovered configuration".into(),
+            ));
         }
         let (section, name) = key.split_once('.').expect("sectioned field");
         if let Some(value) = self.values.get(section).and_then(|s| s.get(name)) {
@@ -382,6 +414,7 @@ impl DeploymentConfig {
             })
             .collect::<Result<Vec<_>, _>>()?;
         Ok(SiteConfig {
+            recovered_secrets: self.recovered.clone(),
             mail: self.mail()?,
             http: self.http_limits()?,
             secure_cookies,

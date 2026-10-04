@@ -1,0 +1,35 @@
+import { test, expect } from "@playwright/test";
+import { chmod } from "node:fs/promises";
+
+test("saved recovery key enables browser backup and validates a downloaded archive", async ({ page }) => {
+  const output = process.env.BLOG_BROWSER_RECOVERY_KEY_OUTPUT;
+  test.skip(!output, "Runs against the disposable Docker recovery deployment");
+  const password = process.env.BLOG_BROWSER_PASSWORD;
+  test.setTimeout(120_000);
+  await page.goto("/recovery");
+  await page.getByLabel("管理员用户名").fill("acceptance-owner");
+  await page.getByLabel("密码", { exact: true }).fill(password!);
+  await page.getByRole("button", { name: "进入备份与恢复" }).click();
+  await expect(page.getByRole("heading", { name: "保存恢复密钥" })).toBeVisible();
+  const downloadPromise = page.waitForEvent("download");
+  await page.getByRole("button", { name: "生成并下载恢复密钥" }).click();
+  const download = await downloadPromise;
+  await download.saveAs(output!);
+  await chmod(output!, 0o600);
+  await expect(page.getByRole("button", { name: "立即备份", exact: true })).toBeDisabled();
+  await page.locator("#confirm-key").setInputFiles(output!);
+  await page.getByRole("button", { name: "确认密钥已保存" }).click();
+  await expect(page.locator("#key-setup")).toBeHidden();
+  await page.getByRole("button", { name: "立即备份", exact: true }).click();
+  await expect(page.locator("#backups tr")).toHaveCount(1, { timeout: 60_000 });
+  await page.locator("#backups tr").first().getByRole("button", { name: "恢复", exact: true }).click();
+  await page.locator("#restore-key").setInputFiles(output!);
+  await page.getByRole("button", { name: "验证备份", exact: true }).click();
+  await expect(page.locator("#restore-confirmation")).toBeVisible({ timeout: 60_000 });
+  await expect(page.locator("#preview")).toContainText("检查通过");
+  await page.setViewportSize({ width: 1280, height: 1000 });
+  await page.screenshot({ path: process.env.BLOG_BROWSER_RECOVERY_SCREENSHOT || "/tmp/blog-recovery-ui.png", fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.locator("h1")).toHaveText("备份与恢复");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
+});

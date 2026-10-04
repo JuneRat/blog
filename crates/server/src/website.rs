@@ -31,6 +31,7 @@ pub struct TaskEnvironment {
     pub installation_preflight: bool,
 }
 pub struct WebsiteSetup {
+    pub admin: AdminState,
     pub router: axum::Router,
     pub tasks: Arc<crate::tasks::TaskRuntime>,
     pub theme_packages: Arc<infrastructure::theme_packages::LocalThemePackages>,
@@ -132,11 +133,12 @@ pub async fn build_router(
     } else {
         assembly::passwords_with_mail(pool, sessions.clone(), config)?
     };
-    let auth = assembly::auth(
+    let auth = assembly::auth_with_secrets(
         pool,
         users.clone(),
         sessions,
         config.public_base_url.as_str().into(),
+        config.recovered_secrets.clone(),
     );
     let auth_state = AuthState {
         registration: assembly::registration(pool),
@@ -207,6 +209,7 @@ pub async fn build_router(
         )),
     );
     Ok(WebsiteSetup {
+        admin: admin.clone(),
         theme_packages,
         tasks: task_runtime,
         router: interfaces::http::app_router(

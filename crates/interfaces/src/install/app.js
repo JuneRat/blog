@@ -32,7 +32,7 @@ async function refreshInfo(installToken) {
     return false;
   }
   if (!response.ok) throw new Error(response.status === 403
-    ? "安装码无效或请求来源不正确，请核对终端中的安装码。"
+    ? "安装码无效或请求来源不正确，请核对部署时设置的安装码或启动日志。"
     : "暂时无法读取安装状态，请重试。");
   const info = await response.json();
   if (token.value !== installToken) return false;
@@ -86,7 +86,7 @@ form.addEventListener("submit", async event => {
     if (response.status === 404) { location.replace("/admin/"); return; }
     const result = await response.json();
     if (!response.ok) {
-      throw new Error(response.status === 403 ? "安装码无效或请求来源不正确，请核对终端中的安装码。" : result.error || "安装未完成，请重试。");
+      throw new Error(response.status === 403 ? "安装码无效或请求来源不正确，请核对部署时设置的安装码或启动日志。" : result.error || "安装未完成，请重试。");
     }
     form.reset();
     location.replace(result.redirect);

@@ -32,3 +32,5 @@ pub mod http_registration;
 mod http_theme_config;
 
 pub mod http_account_links;
+
+pub mod http_backup;

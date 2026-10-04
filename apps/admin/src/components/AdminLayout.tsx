@@ -54,6 +54,7 @@ const NAV: MenuProps["items"] = [
       { key: paths.themes, label: "主题管理" },
       { key: paths.plugins, label: "插件管理" },
       { key: paths.tasks, label: "任务管理" },
+      { key: "/recovery", label: "备份与恢复" },
       { key: paths.auditLogs, label: "审计日志" },
     ],
   },
@@ -153,7 +154,7 @@ export function AdminLayout({ children, readerOnly = false }: { children: ReactN
    */
   function goTo(key: string): void {
     if (key === window.location.pathname) return;
-    confirmLeave(() => navigate(key));
+    confirmLeave(() => { if (key === "/recovery") window.location.assign(key); else navigate(key); });
   }
 
   return (

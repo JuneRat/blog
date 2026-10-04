@@ -231,3 +231,19 @@ async fn ensure_empty(
     }
     Ok(())
 }
+
+/// Fresh panel deployments already have a database connection, but no account.
+pub async fn needs_installation(database: &crate::Database) -> Result<bool, UseCaseError> {
+    let exists: bool = sqlx::query_scalar("SELECT to_regclass('public.users') IS NOT NULL")
+        .fetch_one(&database.pool)
+        .await
+        .map_err(database_error)?;
+    if !exists {
+        return Ok(true);
+    }
+    let any: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM public.users)")
+        .fetch_one(&database.pool)
+        .await
+        .map_err(database_error)?;
+    Ok(!any)
+}

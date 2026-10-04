@@ -2,10 +2,12 @@
 //! process listener and shutdown lifecycle. Business rules live in application.
 
 mod assembly;
+mod backup;
 mod config;
 mod html_rebuild;
 mod installation;
 mod logging;
+mod managed;
 mod observability;
 mod recovery;
 mod tasks;
@@ -69,6 +71,12 @@ async fn run(command: Command, mut config: config::DeploymentConfig) -> Result<(
             dry_run,
         )
         .await;
+    }
+    if let Command::Serve { addr } = &command
+        && std::env::var("BLOG_BROWSER_RECOVERY").is_ok_and(|value| value == "1")
+        && !config.recovery_mode()?
+    {
+        return managed::serve(config, addr.clone()).await;
     }
     let journal = if matches!(command, Command::Serve { .. }) {
         config::InstallJournal::read(&config.path)?

@@ -178,11 +178,12 @@ pub fn media_cleanup(
 
 /// Browser authentication is assembled only for the HTTP server. OAuth CLI
 /// maintenance uses `oauth_commands`, with no login client or callback URL.
-pub fn auth(
+pub fn auth_with_secrets(
     pool: &Database,
     users: Arc<UserInteractor>,
     sessions: Arc<dyn SessionStore>,
     base_url: String,
+    recovered: std::collections::BTreeMap<String, String>,
 ) -> Arc<AuthInteractor> {
     Arc::new(AuthInteractor::new(
         AuthDeps {
@@ -191,7 +192,7 @@ pub fn auth(
             configs: Arc::new(infrastructure::PostgresOAuthConfigStore::new(pool.clone())),
             accounts: Arc::new(infrastructure::PostgresOAuthAccountStore::new(pool.clone())),
             identity_client: Arc::new(infrastructure::ReqwestIdentityClient::new(Arc::new(
-                infrastructure::EnvSecretSource,
+                infrastructure::oauth::RecoveredSecretSource(recovered),
             ))),
             random: Arc::new(infrastructure::SystemSecureRandom),
         },

@@ -213,7 +213,11 @@ pub(super) fn publish_new(path: &Path, bytes: &[u8]) -> Result<(), String> {
     sync_parent(path)
 }
 
-fn replace_checked(path: &Path, before: Option<&str>, after: &str) -> Result<(), String> {
+pub(super) fn replace_checked(
+    path: &Path,
+    before: Option<&str>,
+    after: &str,
+) -> Result<(), String> {
     if before.is_none() {
         return publish_new(path, after.as_bytes());
     }

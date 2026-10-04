@@ -80,6 +80,7 @@ services:
       - BLOG_TRUSTED_PROXIES
       - BLOG_SECURE_COOKIES
       - BLOG_RECOVERY_MODE
+      - BLOG_INSTALL_TOKEN
       - RUST_LOG
       - TZ=${TZ:-UTC}
       - BLOG_LOG_FORMAT=${BLOG_LOG_FORMAT:-json}
@@ -104,7 +105,7 @@ services:
       - blog-themes:/opt/blog/themes
     read_only: true
     tmpfs:
-      - /tmp:rw,noexec,nosuid,size=64m
+      - /tmp:rw,noexec,nosuid,size=${BLOG_BACKUP_TMPFS_SIZE:-2g}
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     stop_grace_period: 30s

@@ -22,7 +22,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 # Runtime and recovery share one release image and PostgreSQL client version.
 FROM postgres:18@sha256:5a5a84b19854a9ffaa54082c166ff4ec27473a361e496e5ea167f298f2da9722 AS runtime-tools
 RUN apt-get update \
-    && apt-get install --yes --no-install-recommends ca-certificates curl python3 python3-toml restic age \
+    && apt-get install --yes --no-install-recommends ca-certificates curl python3 python3-toml python3-boto3 restic age \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 10001 blog \
     && useradd --uid 10001 --gid blog --no-create-home --home-dir /nonexistent blog \
@@ -36,7 +36,7 @@ WORKDIR /opt/blog
 COPY --from=server /out/blog /usr/local/bin/blog
 COPY --from=admin /build/apps/admin/dist/ ./admin/
 COPY migrations/ ./migrations/
-COPY scripts/recovery.py scripts/recovery_inventory.py scripts/schema_contract.py scripts/deployment_config.py scripts/compose_recovery.py scripts/database-roles.sql ./scripts/
+COPY scripts/recovery.py scripts/recovery_inventory.py scripts/schema_contract.py scripts/deployment_config.py scripts/compose_recovery.py scripts/browser_recovery.py scripts/panel_init.py scripts/database-roles.sql ./scripts/
 COPY --chown=10001:10001 themes/default/ ./themes/default/
 # Local editor-created files may be 0600; public assets must be readable by USER.
 RUN chmod -R a+rX /opt/blog
@@ -46,6 +46,8 @@ LABEL org.opencontainers.image.title="blog" \
 ENV PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/lib/postgresql/18/bin \
     LANG=C.UTF-8 \
     PYTHONDONTWRITEBYTECODE=1 \
+    BLOG_BROWSER_RECOVERY=1 \
+    BLOG_BACKUP_DIR=/var/lib/blog/config/recovery \
     BLOG_BIND=0.0.0.0:8080 \
     BLOG_CONFIG_FILE=/var/lib/blog/config/config.toml \
     BLOG_MEDIA_DIR=/var/lib/blog/media \
