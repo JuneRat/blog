@@ -35,7 +35,7 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 jsonwebtoken = { version = "10", features = ["aws_lc_rs"] }
 sha2 = "0.10"
 getrandom = "0.3"
-base64 = "0.22"
+base64 = "0.23"
 # 本地密码凭据：Argon2id（PHC 字符串自描述参数，便于按策略升级重哈希）。
 argon2 = { version = "0.5", features = ["std"] }
 # 受控 CLI 的隐藏口令输入（不回显、不进入 argv 与 shell 历史）。
