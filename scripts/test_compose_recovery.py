@@ -353,7 +353,8 @@ if args[0] == 'compose':
     if 'config' in args: print('{}'); sys.exit(0)
     if 'exec' in args: print('hash  /usr/local/bin/blog'); sys.exit(0)
     if args[0] == 'stop': event('stop-blog'); sys.exit(0)
-    if args[0] == 'start':
+    if args[0] == 'up':
+        assert args[1:] == ['-d', '--no-deps', '--no-recreate', '--no-build', '--pull', 'never', '--wait', '--wait-timeout', '90', 'blog']
         event('start-blog')
         sys.exit(99 if active.exists() else 0)
     if args[0] == 'run':

@@ -402,9 +402,12 @@ def exercise(image, root, ops_image, report, smtp_security="starttls"):
         require(plan_file.stat().st_mode & 0o777 == 0o600, "media plan must be private")
         operation("media-apply", "purge.json", success=False)
         guest.request("GET", removable["url"])
+        source_container = compose("ps", "-q", "blog")
         for attempt in range(2):
             result = json.loads(operation("media-apply", "purge.json",
                                           "--maintenance-confirmed", "--break-links-confirmed"))
+            require(compose("ps", "-q", "blog") == source_container,
+                    "maintenance must resume the same application container")
             require(result["records_purged"] == 1 and not result["failures"], "media purge did not finish")
             require(result["files_deleted"] == 1 - attempt and result["files_already_absent"] == attempt,
                     "retry must use the original durable receipt")

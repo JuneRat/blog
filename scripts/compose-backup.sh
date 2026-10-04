@@ -44,6 +44,11 @@ chmod 700 backups
 COMPOSE_FILE_PATH=compose.yaml
 if [ -f compose.legacy.yaml ]; then COMPOSE_FILE_PATH=compose.legacy.yaml; fi
 dc() { docker compose --project-directory "$ROOT" -f "$COMPOSE_FILE_PATH" "$@"; }
+restart_blog() {
+    # Compose 2 supports waiting on `up`, but not on `start`. Resume only the
+    # existing blog container, preserving its image, environment and volumes.
+    dc up -d --no-deps --no-recreate --no-build --pull never --wait --wait-timeout 90 blog
+}
 ops() {
     dc run --name "$OPS_CONTAINER" --rm --no-deps -T \
         -e "BLOG_HOST_UID=$(id -u)" -e "BLOG_HOST_GID=$(id -g)" "$@"
@@ -111,7 +116,7 @@ cleanup() {
         fi
     fi
     if [ "$restart" = 1 ]; then
-        if ! dc start --wait --wait-timeout 90 blog; then code=1; phase=restart-failed; fi
+        if ! restart_blog; then code=1; phase=restart-failed; fi
     fi
     if [ "$code" = 0 ]; then write_status success; else write_status failed; fi
     if [ "$phase" != ops-stop-failed ]; then
@@ -160,7 +165,7 @@ case "$action" in
         archive_name=$(context_input | ops ops backup)
         case "$archive_name" in blog-*.tar.gz.age) ;; *) echo 'Unexpected backup result.' >&2; exit 1 ;; esac
         phase=restart
-        dc start --wait --wait-timeout 90 blog
+        restart_blog
         restart=0
         phase=remote-and-retention
         ops ops finalize "$archive_name"
