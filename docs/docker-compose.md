@@ -1,6 +1,6 @@
 # Docker Compose 部署
 
-单机常驻服务为 `blog` 和 `db`；备份恢复和媒体清理使用按需启动的 `ops` 服务，保留期维护使用独立的 `maintenance` 服务。主机只需 Docker Engine/Desktop 与 Docker Compose 2.24 或更新版本；构建及备份所需工具均在镜像内。运行镜像包含 release 二进制、后台生产资源、Default 主题和 PostgreSQL 迁移，全部资源使用容器内绝对路径。Paper 通过[第三方主题包](../theme-packages/README.md#paper)上传安装。
+单机常驻服务为 `blog` 和 `db`；备份恢复和媒体清理使用使用同一个博客镜像、按需启动的 `ops` 服务，保留期维护使用独立的 `maintenance` 服务。主机只需 Docker Engine/Desktop 与 Docker Compose 2.24 或更新版本；构建及备份所需工具均在镜像内。统一博客镜像包含 release 二进制、后台生产资源、Default 主题、PostgreSQL 客户端与迁移，以及备份加密、恢复工具，全部资源使用容器内绝对路径。Paper 通过[第三方主题包](../theme-packages/README.md#paper)上传安装。
 
 ## 从 GHCR 拉取镜像并部署到 1Panel
 
@@ -10,22 +10,21 @@
 
 将包含本流程的代码推送到自己的 GitHub 仓库，并使 `.github/workflows/container.yml` 位于默认分支。进入 **Actions → container → Run workflow**，选择要部署的分支后运行；也可推送 `v*` 标签触发发布。普通 `main` / `master` 推送与 PR 只执行构建验收。手动入口要求 workflow 已存在于默认分支，见 [GitHub 手动运行说明](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow)。
 
-通过两套完整 Compose 验收后，独立的 `publish` job 从离线 artifact 加载原镜像，核对镜像 ID、提交、来源和架构，再发布以下一对镜像（仓库名转为小写）：
+通过两套完整 Compose 验收后，独立的 `publish` job 从离线 artifact 加载原镜像，核对镜像 ID、提交、来源和架构，再发布一个博客镜像（仓库名转为小写）：
 
 ```text
 ghcr.io/<github-owner>/<repository>:sha-<完整提交 SHA>
-ghcr.io/<github-owner>/<repository>-ops:sha-<完整提交 SHA>
 ```
 
 发布使用该仓库的 `GITHUB_TOKEN`，仅发布 job 请求 `packages: write`，无需另外保存推送用的 PAT。镜像带仓库来源标签；若相同名称的包此前由别处创建，须在包设置中授予当前仓库 Actions 访问权限。[GitHub 包发布权限](https://docs.github.com/en/packages/managing-github-packages-using-github-actions-workflows/publishing-and-installing-a-package-with-github-actions)
 
-两个镜像均发布且按 digest 拉取核验成功后，下载本次运行的 **`blog-compose-registry-linux-amd64-<commit>`** artifact。内含 Compose、初始化及运维脚本、文档、镜像身份清单和校验和；`.env.example` 已填好双方的 `ghcr.io/...@sha256:...` 地址。提交标签在重跑构建时可能变化，部署包固定 digest，因此不会随标签变化切换版本。另存此配置包及同次运行的离线镜像包，便于日后恢复。
+镜像发布且按 digest 拉取核验成功后，下载本次运行的 **`blog-compose-registry-linux-amd64-<commit>`** artifact。内含 Compose、初始化及运维脚本、文档、镜像身份清单和校验和；`.env.example` 已填好`ghcr.io/...@sha256:...` 地址。提交标签在重跑构建时可能变化，部署包固定 digest，因此不会随标签变化切换版本。另存此配置包及同次运行的离线镜像包，便于日后恢复。
 
 ### 2. 在服务器拉取并启动
 
 在 1Panel 终端或 SSH 中操作。将配置包完整解压到一个固定目录，例如 `/opt/blog`，保留 `.env.example` 等隐藏文件与子目录。
 
-GHCR 新建包默认私有。私有镜像需先登录，密码提示处输入具有 `read:packages` 权限、可访问这两个包的 **PAT classic**；组织启用 SSO 时也需授权该 token。若你主动将两个包设为公开，服务器可匿名拉取。镜像可见性不会由本流程自动更改。[GHCR 认证与可见性](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry)
+GHCR 新建包默认私有。私有镜像需先登录，密码提示处输入具有 `read:packages` 权限、可访问该包的 **PAT classic**；组织启用 SSO 时也需授权该 token。若你主动将该包设为公开，服务器可匿名拉取。镜像可见性不会由本流程自动更改。[GHCR 认证与可见性](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry)
 
 ```sh
 docker login ghcr.io -u YOUR_GITHUB_USERNAME
@@ -67,7 +66,7 @@ postgres://blog_owner:<.env 中 BLOG_OWNER_PASSWORD 的值>@db:5432/blog
 
 ### 后续更新
 
-发布新版本，下载它的配置包到临时目录并核对 `SHA256SUMS`。先按[升级与备份边界](#升级维护与备份边界)做好备份、停用维护调度并保存旧镜像身份，再同步新包的部署脚本与 Compose；保留原部署目录、项目名和 `.env`。将新包 `IMAGE` / `OPS_IMAGE` 的值成对填回原 `.env`，初始化脚本不会覆盖已有镜像配置或密码。拉取时无需停止网站：
+发布新版本，下载它的配置包到临时目录并核对 `SHA256SUMS`。先按[升级与备份边界](#升级维护与备份边界)做好备份、停用维护调度并保存旧镜像身份，再同步新包的部署脚本与 Compose；保留原部署目录、项目名和 `.env`。将新包 `IMAGE` 的值填回原 `.env` 的 `BLOG_IMAGE`，初始化脚本不会覆盖已有镜像配置或密码。拉取时无需停止网站：
 
 ```sh
 docker compose --profile ops pull
@@ -106,7 +105,7 @@ postgres://blog_owner:<BLOG_OWNER_PASSWORD 的值>@db:5432/blog
 
 ## 镜像交付与验证
 
-`container` workflow 构建匹配的应用与 ops 镜像，分别以 STARTTLS 和隐式 TLS 验证安装、SMTP 邀请和密码找回、修改草稿与历史发布、主题升级回滚、媒体/页面持久化、备份、加密仓库存取、失败恢复和独立项目恢复。每种模式在恢复开放后再次实际投递邀请和找回邮件。每次运行保存 `compose-verification-<commit>` artifact 内的两份报告，记录镜像 ID、编译提交、脚本指纹、协议计数和各阶段结果。`v*` 标签或手动触发另产出 `blog-compose-linux-amd64-<commit>` artifact，包含应用、ops 和 PostgreSQL 镜像归档、部署脚本、定时任务单元、`IMAGE` / `OPS_IMAGE`、对应 `*_ID` 和 `SHA256SUMS`；随后按上节发布 GHCR 镜像及单独的 registry 配置包。迁移与恢复工具随匹配镜像交付，宿主机无需再保留重复副本。流程不创建 GitHub Release；两类发布 artifact 保留 90 天，正式发布应将它们与对应备份保存到长期存储。
+`container` workflow 构建一个包含应用和运维工具的博客镜像，分别以 STARTTLS 和隐式 TLS 验证安装、SMTP 邀请和密码找回、修改草稿与历史发布、主题升级回滚、媒体/页面持久化、备份、加密仓库存取、失败恢复和独立项目恢复。每种模式在恢复开放后再次实际投递邀请和找回邮件。每次运行保存 `compose-verification-<commit>` artifact 内的两份报告，记录镜像 ID、编译提交、脚本指纹、协议计数和各阶段结果。`v*` 标签或手动触发另产出 `blog-compose-linux-amd64-<commit>` artifact，包含博客和 PostgreSQL 镜像归档、部署脚本、定时任务单元、`IMAGE`、对应 `IMAGE_ID` 和 `SHA256SUMS`；随后按上节发布 GHCR 镜像及单独的 registry 配置包。迁移与恢复工具随匹配镜像交付，宿主机无需再保留重复副本。流程不创建 GitHub Release；两类发布 artifact 保留 90 天，正式发布应将它们与对应备份保存到长期存储。
 
 下载并解压 artifact 后，在解压目录执行：
 
@@ -116,7 +115,7 @@ docker load -i blog-linux-amd64.tar.gz
 sh scripts/compose-init.sh
 ```
 
-在 `.env` 中将 `BLOG_IMAGE` / `BLOG_OPS_IMAGE` 分别设置为 `IMAGE` / `OPS_IMAGE` 文件内的值；数据库密码已由初始化脚本生成。随后执行 `docker compose up -d --no-build --pull never` 并按上述步骤安装。部署归档不包含源码或 Dockerfile，不能使用 `--build`。CI 归档面向 Linux amd64；ARM 主机可从源码原生构建。
+在 `.env` 中将 `BLOG_IMAGE` 设置为 `IMAGE` 文件内的值；数据库密码已由初始化脚本生成。随后执行 `docker compose up -d --no-build --pull never` 并按上述步骤安装。部署归档不包含源码或 Dockerfile，不能使用 `--build`。CI 归档面向 Linux amd64；ARM 主机可从源码原生构建。
 
 源码中的基础镜像和 PostgreSQL 部署镜像均使用 `tag@sha256:...`，Dockerfile frontend 也固定 digest。发布包记录数据库的 `DATABASE_IMAGE` 和 `DATABASE_IMAGE_ID`，包内 Compose 直接引用已导入的数据库 image ID，避免旧版 Docker save/load 丢失 RepoDigests 后要求联网拉取。`SHA256SUMS` 用于核对交付文件；基础镜像固定不等于整个构建逐字节可复现，APT 软件源仍会更新。
 
@@ -129,12 +128,11 @@ release_revision=$(git rev-parse HEAD)
 release_source=$(mktemp -d)
 git archive "$release_revision" | tar -x -C "$release_source"
 docker build --build-arg VCS_REF="$release_revision" -t blog:local "$release_source"
-docker build --target ops --build-arg VCS_REF="$release_revision" -t blog-ops:local "$release_source"
 docker pull "$(sed -n 's/^    image: \(postgres:.*\)$/\1/p' compose.yaml)"
 BLOG_EXPECT_REVISION="$release_revision" python3 -B "$release_source/scripts/test_compose.py" \
-  --image blog:local --ops-image blog-ops:local --smtp-security starttls --report compose-verification-starttls.json
+  --image blog:local --ops-image blog:local --smtp-security starttls --report compose-verification-starttls.json
 BLOG_EXPECT_REVISION="$release_revision" python3 -B "$release_source/scripts/test_compose.py" \
-  --image blog:local --ops-image blog-ops:local --smtp-security tls --report compose-verification-tls.json
+  --image blog:local --ops-image blog:local --smtp-security tls --report compose-verification-tls.json
 rm -rf "$release_source"
 ```
 
@@ -204,7 +202,7 @@ docker compose logs --tail 100 -f blog
 升级前先完成匹配版本的备份恢复演练并保存旧镜像标识。停止外部 CLI 与定时维护任务后，源码部署执行下列命令；发布包部署跳过 `build`，先加载或拉取匹配镜像并更新 `.env` 的镜像标识：
 
 ```sh
-docker compose build blog ops
+docker compose build blog
 docker compose stop blog
 docker compose up -d --no-build --wait blog
 ```
@@ -242,3 +240,5 @@ docker compose exec -T db \
 连接池与超时可直接在现有 `.env` 配置 `BLOG_DB_*`，字段与边界见[配置参考](configuration.md#连接池查询超时与数据库-tls)。修改后执行 `docker compose up -d blog` 重建服务配置；备份恢复保留这些参数。
 
 反代部署必须将实际连接应用的代理 IP 配入 `BLOG_TRUSTED_PROXIES`；只接受精确 IP，容器重建后代理地址变化需同步更新。代理正确传递 `X-Forwarded-For` 后，登录和自助改密按真实客户端分桶。不要把所有客户端地址都设成可信代理，也不要仅靠增加限流阈值解决共享代理桶。当前认证仍按单实例部署。
+
+统一镜像仍保留 `ops` 构建目标和旧 `BLOG_OPS_IMAGE` 覆盖项，供旧版隔离恢复使用；新部署和新发布只需 `BLOG_IMAGE`。后台备份与原地恢复正在接入，完成前仍使用本文的运维入口。

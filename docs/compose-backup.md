@@ -1,16 +1,16 @@
 # Compose 备份与恢复
 
-入口为 `sh scripts/compose-backup.sh`。所有配置沿用部署目录的 `.env`，脚本自动设置私有文件权限。常驻应用不安装 Python/数据库管理工具；按需运行的 ops 镜像包含同版本博客、PostgreSQL 18 客户端、恢复脚本、age 和 restic，不挂载 Docker socket。
+入口为 `sh scripts/compose-backup.sh`。所有配置沿用部署目录的 `.env`，脚本自动设置私有文件权限。博客镜像统一包含 PostgreSQL 18 客户端、恢复脚本、age 和 restic；按需运行的 ops 服务复用该镜像，不挂载 Docker socket。
 
 ## 先准备匹配的镜像
 
 源码部署在原部署目录执行一次：
 
 ```sh
-docker compose build blog ops
+docker compose build blog
 ```
 
-离线交付包通过 `docker load` 加载镜像，并将包内 `IMAGE`、`OPS_IMAGE` 的值填入 `.env` 的 `BLOG_IMAGE`、`BLOG_OPS_IMAGE`。[GHCR 配置包](docker-compose.md#从-ghcr-拉取镜像并部署到-1panel)在首次初始化时自动填好两者的 registry digest，运行 `docker compose --profile ops pull` 即可下载。升级时二者一起更换。恢复校验二进制 SHA-256 和迁移校验和；旧备份先用匹配版本恢复，再执行升级，不能通过忽略校验跨版本导入。
+离线交付包通过 `docker load` 加载镜像，并将包内 `IMAGE` 的值填入 `.env` 的 `BLOG_IMAGE`。[GHCR 配置包](docker-compose.md#从-ghcr-拉取镜像并部署到-1panel)在首次初始化时自动填好统一镜像的 registry digest，运行 `docker compose --profile ops pull` 即可下载。升级时仅更新 `BLOG_IMAGE`。旧部署若设置了 `BLOG_OPS_IMAGE`，升级到统一镜像后应移除该覆盖项。恢复校验二进制 SHA-256 和迁移校验和；旧备份先用匹配版本恢复，再执行升级，不能通过忽略校验跨版本导入。
 
 ## 备份和状态
 

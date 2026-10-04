@@ -8,7 +8,7 @@ Rust 模块化单体博客，公开站点使用服务端渲染，管理后台使
 
 ## 快速开始
 
-使用 Docker Compose 部署时，只需 Docker，无需在主机安装 Rust 或 Node.js。可通过 GitHub Actions 发布到 GHCR，在服务器直接拉取已验收的应用和运维镜像，具体见 [GHCR 与 1Panel 部署](docs/docker-compose.md#从-ghcr-拉取镜像并部署到-1panel)。从源码构建时，先运行 `sh scripts/compose-init.sh` 初始化根目录 `.env`（自动补齐随机密码和私有权限，保留已有值），再运行 `docker compose up -d --build`。镜像包含后台、主题和迁移，数据库、安装配置与媒体分别持久化。
+使用 Docker Compose 部署时，只需 Docker，无需在主机安装 Rust 或 Node.js。可通过 GitHub Actions 发布到 GHCR，在服务器直接拉取已验收的统一博客镜像，具体见 [GHCR 与 1Panel 部署](docs/docker-compose.md#从-ghcr-拉取镜像并部署到-1panel)。从源码构建时，先运行 `sh scripts/compose-init.sh` 初始化根目录 `.env`（自动补齐随机密码和私有权限，保留已有值），再运行 `docker compose up -d --build`。镜像包含后台、主题和迁移，数据库、安装配置与媒体分别持久化。
 
 默认使用一个非超级用户的博客专用数据库账号，启动时自动迁移，保留期维护复用安装连接；无需额外创建运行或维护账号。需要数据库强制权限隔离时，可选择分离账号部署。
 

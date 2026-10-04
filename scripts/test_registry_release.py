@@ -29,7 +29,7 @@ class RegistryReleaseTests(unittest.TestCase):
         self.calls = []
         self.bad_digest = False
         self.bad_pull = False
-        self.fail_ops_push = False
+        self.fail_push = False
         for index, (role, filename, _) in enumerate(release.IMAGE_ROLES, 1):
             image_id = "sha256:" + str(index) * 64
             (self.bundle / filename).write_text(f"{role}:{REVISION}\n")
@@ -58,7 +58,7 @@ class RegistryReleaseTests(unittest.TestCase):
                 if self.bad_pull and "@" in reference:
                     info["Id"] = "sha256:" + "f" * 64
             return json.dumps([info])
-        if arguments[0] == "push" and "blog-ops" in arguments[1] and self.fail_ops_push:
+        if arguments[0] == "push" and self.fail_push:
             raise subprocess.CalledProcessError(1, ["docker", *arguments])
         self.assertIn(arguments[0], ("tag", "push", "pull"))
         return ""
@@ -74,8 +74,8 @@ class RegistryReleaseTests(unittest.TestCase):
         self.assertFalse([call for call in self.calls if call[0] in ("tag", "push")])
         self.assertFalse(self.output.exists())
 
-    def test_both_images_are_checked_before_publishing_either(self):
-        self.images["blog-ops"]["Id"] = "sha256:" + "f" * 64
+    def test_image_must_match_verified_artifact_before_publishing(self):
+        self.images["blog"]["Id"] = "sha256:" + "f" * 64
         with self.assertRaisesRegex(ValueError, "differs from the verified"):
             self.publish()
         self.assert_no_registry_writes()
@@ -86,15 +86,15 @@ class RegistryReleaseTests(unittest.TestCase):
             with self.subTest(failure=failure):
                 self.images = copy.deepcopy(original)
                 if failure == "architecture":
-                    self.images["blog-ops"]["Architecture"] = "arm64"
+                    self.images["blog"]["Architecture"] = "arm64"
                 else:
-                    self.images["blog-ops"]["Config"]["Labels"][f"org.opencontainers.image.{failure}"] = "incorrect"
+                    self.images["blog"]["Config"]["Labels"][f"org.opencontainers.image.{failure}"] = "incorrect"
                 with self.assertRaises(ValueError):
                     self.publish()
                 self.assert_no_registry_writes()
 
     def test_artifact_tag_must_match_full_commit(self):
-        (self.bundle / "OPS_IMAGE").write_text("blog-ops:latest\n")
+        (self.bundle / "IMAGE").write_text("blog:latest\n")
         with self.assertRaisesRegex(ValueError, "does not match the release commit"):
             self.publish()
         self.assert_no_registry_writes()
@@ -118,8 +118,8 @@ class RegistryReleaseTests(unittest.TestCase):
             self.publish()
         self.assertFalse(self.output.exists())
 
-    def test_partial_push_does_not_create_a_deployment_artifact(self):
-        self.fail_ops_push = True
+    def test_failed_push_does_not_create_a_deployment_artifact(self):
+        self.fail_push = True
         with self.assertRaises(subprocess.CalledProcessError):
             self.publish()
         self.assertFalse(self.output.exists())
@@ -132,14 +132,13 @@ class RegistryReleaseTests(unittest.TestCase):
         self.assertEqual((self.output / ".env").read_text(), "keep credentials\n")
         self.assertEqual(self.calls, [])
 
-    def test_success_delivers_pinned_pair_and_initializes_without_source_or_secrets(self):
+    def test_success_delivers_pinned_image_and_initializes_without_source_or_secrets(self):
         # An offline bundle's local DB image ID must never leak into online Compose.
         (self.bundle / "compose.yaml").write_text("image: sha256:" + "c" * 64)
         (self.bundle / ".env").write_text("PRIVATE_VALUE=must-not-be-copied\n")
         self.publish()
         pushes = [call[1] for call in self.calls if call[0] == "push"]
-        self.assertEqual(pushes, [f"ghcr.io/example/blog:sha-{REVISION}",
-                                  f"ghcr.io/example/blog-ops:sha-{REVISION}"])
+        self.assertEqual(pushes, [f"ghcr.io/example/blog:sha-{REVISION}"])
         checksums = (self.output / "SHA256SUMS").read_text().splitlines()
         checked = set()
         for line in checksums:

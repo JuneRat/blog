@@ -1,4 +1,4 @@
-"""Publish the already-tested image pair and package a digest-pinned deployment.
+"""Publish the already-tested application image and package a digest-pinned deployment.
 
 Run only after verifying/loading the offline artifact. Registry authentication is
 provided by the caller; this script does not read or package Docker credentials.
@@ -19,7 +19,7 @@ DELIVERY_FILES = (
     "ops/blog-maintenance.service", "ops/blog-maintenance.timer",
     "scripts/database-roles.sql", "scripts/compose-init.sh", "scripts/compose-backup.sh",
 )
-IMAGE_ROLES = (("blog", "IMAGE", "BLOG_IMAGE"), ("blog-ops", "OPS_IMAGE", "BLOG_OPS_IMAGE"))
+IMAGE_ROLES = (("blog", "IMAGE", "BLOG_IMAGE"),)
 
 
 def docker(*arguments):
@@ -31,7 +31,7 @@ def inspect(reference):
 
 
 def verified_images(bundle, repository, revision):
-    """Check the entire pair before permitting the first registry write."""
+    """Check the verified image before permitting a registry write."""
     if not re.fullmatch(r"[0-9a-f]{40}", revision):
         raise ValueError("revision must be a full Git commit SHA")
     if not re.fullmatch(r"[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._-]*", repository.lower()):
@@ -55,7 +55,7 @@ def verified_images(bundle, repository, revision):
             raise ValueError(f"{role} source label does not match the GitHub repository")
         if f"{info['Os']}/{info['Architecture']}" != PLATFORM:
             raise ValueError(f"{role} must be {PLATFORM}")
-        destination = f"ghcr.io/{repository.lower()}" + ("-ops" if role == "blog-ops" else "")
+        destination = f"ghcr.io/{repository.lower()}"
         images[role] = {"id": expected_id, "tag": f"{destination}:sha-{revision}"}
     return images
 
@@ -113,7 +113,7 @@ def publish(bundle, output, repository, revision, source=ROOT):
         if inspect(reference)["Id"] != info["id"]:
             raise ValueError(f"published {role} does not match the tested image")
         info["reference"] = reference
-    # There is no deployment artifact until BOTH published images are verified.
+    # There is no deployment artifact until the published image is verified.
     package(source, output, repository, revision, images)
     for info in images.values():
         print(info["reference"])

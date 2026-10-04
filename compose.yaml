@@ -140,12 +140,11 @@ services:
   # Only run through scripts/compose-backup.sh; never started by ordinary `up`.
   ops:
     profiles: [ops]
-    image: ${BLOG_OPS_IMAGE:-blog-ops:local}
-    build:
-      context: .
-      target: ops
-      args:
-        VCS_REF: ${BLOG_SOURCE_REVISION:-unknown}
+    # BLOG_OPS_IMAGE is accepted only for old isolated recovery deployments.
+    image: ${BLOG_OPS_IMAGE:-${BLOG_IMAGE:-blog:local}}
+    user: "0:0"
+    entrypoint: [python3, -B, /opt/blog/scripts/compose_recovery.py]
+    command: []
     init: true
     env_file: .env
     environment:
