@@ -1,5 +1,7 @@
 # Compose 备份与恢复
 
+日常备份与原地恢复请使用[后台入口](browser-backup.md)。本文保留旧 Compose 脚本、独立恢复及受限数据库账号的高级操作。新发布只需一个博客镜像。
+
 入口为 `sh scripts/compose-backup.sh`。所有配置沿用部署目录的 `.env`，脚本自动设置私有文件权限。博客镜像统一包含 PostgreSQL 18 客户端、恢复脚本、age 和 restic；按需运行的 ops 服务复用该镜像，不挂载 Docker socket。
 
 ## 先准备匹配的镜像

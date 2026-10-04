@@ -8,11 +8,11 @@ Rust 模块化单体博客，公开站点使用服务端渲染，管理后台使
 
 ## 快速开始
 
-使用 Docker Compose 部署时，只需 Docker，无需在主机安装 Rust 或 Node.js。可通过 GitHub Actions 发布到 GHCR，在服务器直接拉取已验收的统一博客镜像，具体见 [GHCR 与 1Panel 部署](docs/docker-compose.md#从-ghcr-拉取镜像并部署到-1panel)。从源码构建时，先运行 `sh scripts/compose-init.sh` 初始化根目录 `.env`（自动补齐随机密码和私有权限，保留已有值），再运行 `docker compose up -d --build`。镜像包含后台、主题和迁移，数据库、安装配置与媒体分别持久化。
+使用 1Panel 时，按 [网页部署指南](docs/1panel.md)导入编排模板、填写域名与安装码并启动，即可在浏览器创建管理员。数据库连接与密码自动配置。GitHub Actions 发布一个包含网站、后台和备份恢复工具的博客镜像，服务器直接从 GHCR 拉取；官方 PostgreSQL 镜像由编排自动管理。
 
-默认使用一个非超级用户的博客专用数据库账号，启动时自动迁移，保留期维护复用安装连接；无需额外创建运行或维护账号。需要数据库强制权限隔离时，可选择分离账号部署。
+日常操作位于后台“系统 → 备份与恢复”：下载恢复密钥、立即或定时备份、配置 S3 远程存储、上传副本和原地恢复。数据库故障时仍可访问应急页面；操作步骤见[后台备份与恢复](docs/browser-backup.md)。
 
-Compose 备份使用 `sh scripts/compose-backup.sh backup`，首次从源码部署需先 `docker compose build ops`。它沿用 `.env`，自动编排停写、重新启动原服务、完整备份与保留清理；独立项目恢复、登录/媒体验证、定时和加密异地副本见 [Compose 备份恢复](docs/compose-backup.md)。
+从源码使用普通 Compose 构建时，运行 `sh scripts/compose-init.sh`，再运行 `docker compose up -d --build`。高级连接、分离数据库账号和旧脚本入口见 [Docker Compose 部署](docs/docker-compose.md)与 [Compose 备份恢复](docs/compose-backup.md)。
 
 以下是源码开发启动方式：
 

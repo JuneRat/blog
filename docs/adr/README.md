@@ -10,7 +10,7 @@ ADR 记录问题、选择、理由和代价。每篇页首说明决策状态与�
 | [0002 MiniJinja 与受控数据函数](0002-template-data-functions.md) | 已采纳 | 桥接可行结论见[原型报告](../template-bridge-experiment.md)，执行边界由 [0015](0015-rendered-content-runtime-and-module-boundaries.md) 细化 |
 | [0003 产品与外部接入基线](0003-product-baseline.md) | 已采纳 | [0008](0008-thirteen-table-blog-core.md) 细化存储与开通方式；功能分期见[路线图](../product-roadmap.md) |
 | [0004 公开内容 generation](0004-public-cache-generation.md) | 提议 | 页面缓存启用前仍需单独验证，桥接原型不替代其验收 |
-| [0005 跨资源备份与隔离恢复](0005-consistent-backup-and-recovery.md) | 提议 | 工具部分落地，完整恢复与生产验收见[运维文档](../operations-and-recovery.md) |
+| [0005 跨资源备份与隔离恢复](0005-consistent-backup-and-recovery.md) | 部分被替代 | 0021 采纳一致性要求并扩展网页原地恢复；旧独立恢复流程保留 |
 | [0006 共享内容存储与引用](0006-relational-content-storage.md) | 已被替代 | 被 [0007](0007-simple-separated-content-schema.md) 替代 |
 | [0007 精简核心表与 Post/Page 分表](0007-simple-separated-content-schema.md) | 已被替代 | 替代 [0006](0006-relational-content-storage.md)，后被 [0008](0008-thirteen-table-blog-core.md) 替代 |
 | [0008 采用 13 表博客核心](0008-thirteen-table-blog-core.md) | 部分被替代 | 密码与会话由 [0009](0009-local-password-authentication.md)、[0010](0010-persistent-postgres-sessions.md) 更新；[0016](0016-confirmed-blog-schema.md) 更新关系、生命周期和表结构 |
@@ -26,6 +26,7 @@ ADR 记录问题、选择、理由和代价。每篇页首说明决策状态与�
 | [0018 有界 HTML 维护与只读预检](0018-bounded-html-maintenance.md) | 已采纳 | 细化 0017 的执行控制，由应用层编排预算、游标与部分完成结果；0019 扩展后台异步任务 |
 | [0019 后台显式 HTML 重建与服务进程单任务](0019-admin-html-maintenance.md) | 部分被替代 | 显式维护和事务契约保留；0020 替代内存状态、进程内去重和重启边界 |
 | [0020 固定后台任务、持久计划与跨进程租约](0020-persistent-admin-tasks.md) | 已采纳 | 追加任务运行/计划两表，统一三种白名单任务，提供有界历史、一次性计划和跨进程执行协调；CLI 仍独立 |
+| [0021 统一镜像、网页备份与原地恢复](0021-browser-backup-and-in-place-recovery.md) | 已采纳 | 单实例数据库外控制器、加密副本、持久阻断与网页恢复，补充 0005/0020 |
 
 ## 状态含义
 

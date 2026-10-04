@@ -14,7 +14,7 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[1]
 PLATFORM = "linux/amd64"
 DELIVERY_FILES = (
-    "compose.yaml", ".env.example", "ops/postgres-init.sh",
+    "compose.yaml", ".env.example", "ops/postgres-init.sh", "ops/1panel/compose.yaml", "ops/1panel/.env.example",
     "ops/blog-backup.service", "ops/blog-backup.timer",
     "ops/blog-maintenance.service", "ops/blog-maintenance.timer",
     "scripts/database-roles.sql", "scripts/compose-init.sh", "scripts/compose-backup.sh",
@@ -78,6 +78,14 @@ def package(source, output, repository, revision, images):
         (output / filename).write_text(reference + "\n")
         (output / f"{filename}_ID").write_text(images[role]["id"] + "\n")
     (output / ".env.example").write_text(example)
+    panel = output / "ops/1panel/compose.yaml"
+    template = panel.read_text()
+    placeholder = "${BLOG_IMAGE:?请选择博客镜像及版本}"
+    if template.count(placeholder) != 2:
+        raise ValueError("expected both 1Panel services to use the verified blog image")
+    panel.write_text(template.replace(placeholder, images["blog"]["reference"]))
+    panel_env = output / "ops/1panel/.env.example"
+    panel_env.write_text(re.sub(r"^BLOG_IMAGE=.*$", "BLOG_IMAGE=" + images["blog"]["reference"], panel_env.read_text(), flags=re.M))
     (output / "REVISION").write_text(revision + "\n")
     (output / "PLATFORM").write_text(PLATFORM + "\n")
     # Use the source Compose file, not the offline file which pins a local DB ID.

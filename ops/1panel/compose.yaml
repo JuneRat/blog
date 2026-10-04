@@ -1,0 +1,75 @@
+# In 1Panel: Containers → Compose → Create → paste this file and set the four
+# variables below in the environment editor. No repository checkout is needed.
+name: ${BLOG_PROJECT:-blog}
+services:
+  initialize:
+    image: ${BLOG_IMAGE:?请选择博客镜像及版本}
+    user: "0:0"
+    entrypoint: [python3, -B, /opt/blog/scripts/panel_init.py]
+    command: []
+    environment:
+      BLOG_PUBLIC_BASE_URL: ${BLOG_PUBLIC_BASE_URL:?请填写站点地址}
+      BLOG_INSTALL_TOKEN: ${BLOG_INSTALL_TOKEN:?请设置至少20个字符的安装码}
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
+    security_opt: ["no-new-privileges:true"]
+    volumes:
+      - setup:/var/lib/blog/panel-init
+      - config:/var/lib/blog/config
+      - media:/var/lib/blog/media
+      - themes:/opt/blog/themes
+  db:
+    image: postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873
+    restart: unless-stopped
+    depends_on:
+      initialize:
+        condition: service_completed_successfully
+    environment:
+      POSTGRES_DB: blog
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD_FILE: /docker-entrypoint-initdb.d/postgres-password
+    volumes:
+      - database:/var/lib/postgresql
+      - setup:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -h 127.0.0.1 -U postgres -d blog"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    logging:
+      driver: local
+      options: {max-size: 10m, max-file: "3"}
+  blog:
+    image: ${BLOG_IMAGE:?请选择博客镜像及版本}
+    init: true
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      BLOG_PUBLIC_BASE_URL: ${BLOG_PUBLIC_BASE_URL:?请填写站点地址}
+      BLOG_INSTALL_TOKEN: ${BLOG_INSTALL_TOKEN:?请设置至少20个字符的安装码}
+      BLOG_LOG_FORMAT: json
+    ports:
+      - "127.0.0.1:${BLOG_HTTP_PORT:-8080}:8080"
+    volumes:
+      - config:/var/lib/blog/config
+      - media:/var/lib/blog/media
+      - themes:/opt/blog/themes
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=${BLOG_BACKUP_TMPFS_SIZE:-2g}
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    stop_grace_period: 35s
+    logging:
+      driver: local
+      options: {max-size: 10m, max-file: "3"}
+volumes:
+  setup:
+  database:
+  config:
+  media:
+  themes:

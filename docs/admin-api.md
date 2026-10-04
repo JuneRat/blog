@@ -35,6 +35,25 @@
 
 retention 默认间隔 86,400 秒且禁用，publish_due 固定 30 秒启用、没有可编辑计划入口。保留期不可用不阻止其他任务或网站登录。旧 `GET/POST /maintenance/html-rebuild` 保留为同一持久任务的兼容投影，queued 映射为 running、cancelled 映射为 interrupted；完整计划和历史使用新路由。生命周期、专用维护连接及 CLI 边界见[任务操作](operations-and-recovery.md#后台任务管理)。
 
+## 备份与应急恢复
+
+统一镜像默认启用独立入口 `/recovery`，后台“系统 → 备份与恢复”链接到该页面。以下路径不使用管理 API 前缀或业务会话；即使业务数据库离线，恢复控制器仍可响应。操作说明见[后台备份与恢复](browser-backup.md)，实现入口为 [http_backup.rs](../crates/interfaces/src/http_backup.rs)。
+
+| 方法与路径 | 载荷与结果 |
+|---|---|
+| `POST /api/recovery/session` | 使用 `{username,password}` 验证受保护的 `admin` 角色账号，或 `{key}` 验证保存的恢复密钥；安装期间也可使用 `{installation_token}`。返回 `{csrf}` 并设置独立 HttpOnly、SameSite=Strict cookie |
+| `GET /api/recovery/session` | 返回 `csrf`、备份/最近 50 项任务、脱敏配置、`initialized/maintenance/installing/busy/recovery_required/database_configured` 和上传上限；不返回存储凭据或私钥 |
+| `DELETE /api/recovery/session` | 撤销当前恢复会话，成功返回 204 |
+| `POST /api/recovery/action` | `{action,input:{…}}`；短操作直接返回结果，长任务返回 `{job_id}`，通过 session 状态轮询结果 |
+| `POST /api/recovery/upload?offset=0&complete=false` | 直接发送加密字节，每块最多 4 MiB；响应含 `id/name/offset/complete`。后续块携带返回的 `id` 和精确 `offset`，末块设 `complete=true`；单文件最多 2 GiB |
+| `GET /api/recovery/download/{name}` | 下载已完成的本地加密备份，不允许任意路径；流式返回 attachment |
+
+写请求需同源校验；已认证写入另带 `X-CSRF-Token`。普通 JSON 上限 64 KiB；上传在缓冲请求体之前校验会话。敏感操作授权 15 分钟，读授权最长 1 小时，重启即失效。数据库在线时每次操作重新核验账号认证版本和 Admin 角色；改密、禁用或撤权后不能继续使用旧恢复会话。维护期间使用独立短期授权，不依赖正在恢复的数据库。
+
+`action` 包括 `keygen/key-confirm/backup/inspect/restore/resume/delete/discard-upload/schedule/remote-save/remote-list/remote-upload/remote-download`。备份、校验、恢复及远程存储操作均为后台任务；一次只允许一个任务。任务记录保存在配置卷，状态为 `running/succeeded/failed/interrupted`，包含阶段、结果、请求者及脱敏错误；浏览器关闭不取消任务。
+
+`inspect/restore` 的 input 使用 `{name,imported,key}`：`name` 必须来自本地列表或上传结果；上传及远程取回的文件设 `imported:true`。恢复另外要求 `confirm:"恢复此站点"`，仅在明确接受缺少恢复前副本时设置 `allow_without_snapshot:true`。恢复过程再次完整验证文件，成功后撤销旧业务会话与邮件账号链接。`resume` 只会重新加载可用站点，不能绕过未完成的恢复。完整备份格式和维护边界见 [ADR-0021](adr/0021-browser-backup-and-in-place-recovery.md)。
+
 ## 首次安装
 
 仅安装模式提供以下入口，不使用管理会话。正常站点 `/api/install` 返回 404，`/install` 跳转 `/admin/`；完整启动条件见[首次安装](installation.md)。
@@ -44,7 +63,7 @@ retention 默认间隔 86,400 秒且禁用，publish_due 固定 30 秒启用、�
 | `GET /api/install` | 需 `X-Install-Token`；`{ "database_configured": false, "public_base_url": null }`；续装时仅说明配置已保存，不返回数据库地址、账号密码或安装码 |
 | `POST /api/install` | `{ "database_url": "postgres://…", "public_base_url": "https://blog.example.com", "username": "sun", "password": "…" }`；成功返回 `{ "redirect": "/admin/" }` |
 
-GET 和 POST 都必须带启动终端显示的 `X-Install-Token`，并执行 Origin 检查（请求带 Origin 时必须同源）。未知字段、无效 JSON、超过 16 KiB、弱密码、非空库等返回 400 `invalid_request`；错误安装码/跨源返回 403；同时正在处理安装时返回 429 `rate_limited`。响应均 no-store，包含请求编号。续装沿用已保存数据库和站点地址，输入不能覆盖；部署设置的 `BLOG_PUBLIC_BASE_URL` 优先。配置文件不保存账号明文密码或安装码，Admin 与安装完成审计同事务提交。
+GET 和 POST 都必须带 `X-Install-Token`：使用部署设置的 `BLOG_INSTALL_TOKEN`，或未设置时启动终端显示的随机码，并执行 Origin 检查（请求带 Origin 时必须同源）。未知字段、无效 JSON、超过 16 KiB、弱密码、非空库等返回 400 `invalid_request`；错误安装码/跨源返回 403；同时正在处理安装时返回 429 `rate_limited`。响应均 no-store，包含请求编号。预配置数据库或续装时沿用已保存数据库和站点地址，输入不能覆盖；部署设置的 `BLOG_PUBLIC_BASE_URL` 优先。配置文件不保存账号明文密码或安装码，Admin 与安装完成审计同事务提交。
 
 ## 审计日志
 

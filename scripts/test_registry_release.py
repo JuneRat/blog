@@ -74,6 +74,15 @@ class RegistryReleaseTests(unittest.TestCase):
         self.assertFalse([call for call in self.calls if call[0] in ("tag", "push")])
         self.assertFalse(self.output.exists())
 
+    def test_panel_template_uses_one_verified_image_and_needs_no_repository_files(self):
+        self.publish()
+        template = (self.output / "ops/1panel/compose.yaml").read_text()
+        reference = "ghcr.io/" + REPOSITORY.lower() + "@sha256:" + "d" * 64
+        self.assertEqual(template.count("image: " + reference), 2)
+        self.assertNotIn("${BLOG_IMAGE", template)
+        self.assertNotIn("./ops/", template)
+        self.assertIn("BLOG_IMAGE=" + reference, (self.output / "ops/1panel/.env.example").read_text())
+
     def test_image_must_match_verified_artifact_before_publishing(self):
         self.images["blog"]["Id"] = "sha256:" + "f" * 64
         with self.assertRaisesRegex(ValueError, "differs from the verified"):

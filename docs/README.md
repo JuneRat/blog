@@ -7,7 +7,9 @@
 | 你要做什么 | 从这里开始 |
 |---|---|
 | 首次运行项目 | [项目首页](../README.md) → [开发指南](development.md) |
-| 用容器部署单机站点 | [Docker Compose 部署](docker-compose.md) |
+| 用 1Panel 网页部署单机站点 | [1Panel 部署](1panel.md) |
+| 在后台备份、定时、远程存储和原地恢复 | [后台备份与恢复](browser-backup.md) |
+| 从源码构建或管理高级容器配置 | [Docker Compose 部署](docker-compose.md) |
 | Compose 停写备份、独立恢复、定时与加密异地副本 | [Compose 备份恢复](compose-backup.md) |
 | 配置环境、域名、数据库或媒体目录 | [配置参考](configuration.md) |
 | 修改后端或判断代码应放在哪一层 | [架构](architecture.md) → [领域模型](domain.md) |
@@ -35,6 +37,8 @@
 |---|---|
 | [开发指南](development.md) | 本地环境、CLI、前端联调、检查命令与测试库 |
 | [首次安装](installation.md) | 安装向导、初始 Admin、连接配置保存与中断恢复 |
+| [1Panel 部署](1panel.md) | 面板编排、自动配置数据库、域名和首次安装 |
+| [后台备份与恢复](browser-backup.md) | 密钥、备份、计划、远程存储、原地恢复与应急入口 |
 | [Docker Compose 部署](docker-compose.md) | 镜像构建与交付、持久卷、安装、健康检查和部署维护 |
 | [Compose 备份恢复](compose-backup.md) | 容器内工具、完整备份包、隔离核验、加密仓库与定时任务 |
 | [后台开发指南](admin-development.md) | 组件、表单、查询缓存、失效与前端测试约定 |

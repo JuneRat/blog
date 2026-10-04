@@ -1,8 +1,10 @@
 # 保留期、媒体清理与备份恢复
 
+日常备份、计划、远程存储及原地恢复请使用[后台备份与恢复](browser-backup.md)。本文说明保留期维护、媒体清理和高级工具；下文的独立环境恢复规则适用于这些旧工具。
+
 当前工具依据[共享结构清单](../migrations/postgres/schema.json)核对当前版本，初始结构为 [19 表基线](database-design.md)，后续任务管理追加 `task_runs` 与 `task_schedules`，主题配置追加 `themes`，插件配置追加 `plugins` 与 `plugin_runtime`，账号邮件与修订历史追加 `account_links`、`content_revisions`，当前为 26 张应用表。备份包含服务端编辑稿、历史及对应媒体引用，恢复不会自动发布编辑稿。迁移不可变与跨版本恢复步骤见[迁移演进](schema-migrations.md)。采用维护窗口备份和隔离恢复；部署验收仍见[路线图](product-roadmap.md)，不提供在线一致备份或零数据丢失承诺。
 
-Docker Compose 部署优先使用[Compose 备份恢复入口](compose-backup.md)：自动编排停写、命名卷读取、age 公钥加密、独立项目恢复和 HTTP 核验，并支持定时执行及 restic 异地副本。先在现有 `.env` 配置备份公钥，私钥单独保存；新归档不携带原数据库或异地仓库凭据。下文保留通用宿主机工具的操作方式。
+需要脚本化的 Docker Compose 部署可使用[Compose 备份恢复入口](compose-backup.md)：自动编排停写、命名卷读取、age 公钥加密、独立项目恢复和 HTTP 核验，并支持定时执行及 restic 异地副本。先在现有 `.env` 配置备份公钥，私钥单独保存；新归档不携带原数据库或异地仓库凭据。下文保留通用宿主机工具的操作方式。
 
 ## 数据库账号与保留期
 

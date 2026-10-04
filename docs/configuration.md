@@ -1,10 +1,12 @@
 # 配置参考
 
-部署参数使用 **TOML + 环境变量覆盖**；运行期业务设置保存在 PostgreSQL `settings`；安装恢复记录仅在安装期间临时保存。配置入口位于 [server/config.rs](../crates/server/src/config.rs)，业务层不读取 TOML 或部署环境。
+部署参数使用 **TOML + 环境变量覆盖**；运行期业务设置保存在 PostgreSQL `settings`；安装记录仅在安装期间临时保存，备份控制器状态独立保存在配置卷。配置入口位于 [server/config.rs](../crates/server/src/config.rs)，业务层不读取 TOML 或部署环境。
 
 ## 加载与优先级
 
 配置文件位置：`--config` > `BLOG_CONFIG_FILE` > `config.toml`。字段优先级：**命令行参数 > 进程环境变量 > TOML > 内置默认值**。例如 `serve --addr` 覆盖 `BLOG_BIND` 和 `server.bind`。程序不自动读取 `.env`，需要 shell、开发工具或容器注入；修改父进程环境不会更新已启动服务。
+
+浏览器恢复会在 TOML 同目录写入私有的 `recovered-secrets.json`，用于恢复备份时的邮件环境配置与 OAuth 密钥。邮件配置优先级为进程环境变量 > 恢复配置 > TOML > 默认值；OAuth 密钥也优先使用当前环境，缺省才取恢复值。该文件要求普通文件及 `600` 权限，不能公开下载。数据库连接、当前域名及挂载路径始终取当前部署，备份不会替换这些值。
 
 完整模板见 [config.example.toml](../config.example.toml)，变量参考见 [.env.example](../.env.example)。所有来源的相对资源路径都以**进程工作目录**为基准；生产环境建议使用绝对路径并固定工作目录。
 
@@ -44,6 +46,17 @@ TOML 可以先只配置路径、代理或 `[bootstrap]`：没有数据库连接�
 | `logging.format` | `BLOG_LOG_FORMAT` | 原生默认 `text`，可选 `json`；Compose 默认 `json` |
 | `metrics.bind` | `BLOG_METRICS_BIND` | 原生默认不监听；例如 `127.0.0.1:9090`，只对 serve 生效 |
 | `recovery.enabled` | `BLOG_RECOVERY_MODE` | `false`；恢复核验只监听 loopback，停用自动发布 |
+
+以下为安装和浏览器备份控制器的环境变量，与高级恢复核验模式 `BLOG_RECOVERY_MODE` 独立：
+
+| 环境变量 | 用途 |
+|---|---|
+| `BLOG_BROWSER_RECOVERY` | 精确设为 `1` 时启用独立恢复页面、后台任务及数据库故障时的应急入口；统一镜像已设置，源码原生启动默认不启用 |
+| `BLOG_BACKUP_DIR` | 备份、策略和恢复日志目录，默认在配置文件同目录的 `recovery/`；镜像为 `/var/lib/blog/config/recovery`，必须持久保存 |
+| `BLOG_INSTALL_TOKEN` | 可选预设安装码，至少 20 个字符；1Panel 模板要求填写。仅安装未完成时有效，不设置则由进程生成随机码 |
+| `BLOG_BACKUP_TMPFS_SIZE` | Compose 模板使用的临时空间大小，默认 `2g`；不是应用配置字段。较大备份需同时规划容器可用内存与备份卷容量 |
+
+备份密钥、每日/每周计划、本地及远程保留数量、S3 连接均在网页配置，无需手工修改 TOML。配置卷须保留控制器目录与恢复密钥配置；加密副本和解密密钥分别保存在服务器外。完整流程见[后台备份与恢复](browser-backup.md)。
 
 迁移目录须同时包含匹配的 SQL 文件与 `schema.json`；自定义路径应成套复制整个目录。路径按进程工作目录解析，生产部署可用绝对路径；Compose 镜像已设置为 `/opt/blog/migrations/postgres`。迁移文件不可改写，新增结构见[迁移演进](schema-migrations.md)。
 

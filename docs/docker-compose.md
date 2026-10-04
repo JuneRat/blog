@@ -1,6 +1,6 @@
 # Docker Compose 部署
 
-单机常驻服务为 `blog` 和 `db`；备份恢复和媒体清理使用使用同一个博客镜像、按需启动的 `ops` 服务，保留期维护使用独立的 `maintenance` 服务。主机只需 Docker Engine/Desktop 与 Docker Compose 2.24 或更新版本；构建及备份所需工具均在镜像内。统一博客镜像包含 release 二进制、后台生产资源、Default 主题、PostgreSQL 客户端与迁移，以及备份加密、恢复工具，全部资源使用容器内绝对路径。Paper 通过[第三方主题包](../theme-packages/README.md#paper)上传安装。
+推荐使用 [1Panel 网页部署模板](1panel.md)，备份与原地恢复在[后台管理](browser-backup.md)。本文保留源码构建及高级部署方式。单机常驻服务为 `blog` 和 `db`；旧备份脚本复用博客镜像运行 `ops` 服务，外部保留期维护使用 `maintenance` 服务。主机只需 Docker Engine/Desktop 与 Docker Compose 2.24 或更新版本；构建及备份所需工具均在镜像内。统一博客镜像包含 release 二进制、后台生产资源、Default 主题、PostgreSQL 客户端与迁移，以及备份加密、恢复工具，全部资源使用容器内绝对路径。Paper 通过[第三方主题包](../theme-packages/README.md#paper)上传安装。
 
 ## 从 GHCR 拉取镜像并部署到 1Panel
 
@@ -241,4 +241,4 @@ docker compose exec -T db \
 
 反代部署必须将实际连接应用的代理 IP 配入 `BLOG_TRUSTED_PROXIES`；只接受精确 IP，容器重建后代理地址变化需同步更新。代理正确传递 `X-Forwarded-For` 后，登录和自助改密按真实客户端分桶。不要把所有客户端地址都设成可信代理，也不要仅靠增加限流阈值解决共享代理桶。当前认证仍按单实例部署。
 
-统一镜像仍保留 `ops` 构建目标和旧 `BLOG_OPS_IMAGE` 覆盖项，供旧版隔离恢复使用；新部署和新发布只需 `BLOG_IMAGE`。后台备份与原地恢复正在接入，完成前仍使用本文的运维入口。
+统一镜像仍保留 `ops` 构建目标和旧 `BLOG_OPS_IMAGE` 覆盖项，供旧版隔离恢复使用；新部署和新发布只需 `BLOG_IMAGE`。新镜像已提供[后台备份与原地恢复](browser-backup.md)，日常使用无需启动 `ops`。

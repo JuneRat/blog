@@ -27,7 +27,7 @@ jobs:
           python3 -B scripts/schema_contract.py
 
       - name: Verify registry delivery tooling
-        run: PYTHONPATH=scripts python3 -B -m unittest scripts/test_registry_release.py scripts/test_container_images.py scripts/test_compose_init.py
+        run: PYTHONPATH=scripts python3 -B -m unittest scripts/test_registry_release.py scripts/test_container_images.py scripts/test_compose_init.py scripts/test_browser_recovery.py
 
       - name: Build deployable image
         run: >-
@@ -51,6 +51,9 @@ jobs:
           BLOG_EXPECT_REVISION: ${{ github.sha }}
         run: python3 -B scripts/test_compose.py --image blog:ci --ops-image blog:ci --smtp-security tls --report compose-verification-tls.json
 
+      - name: Verify browser backup, interruption rollback and guided deployment
+        run: python3 -B scripts/test_browser_compose.py --image blog:ci --report compose-verification-browser.json
+
       - name: Save Compose verification report
         if: always()
         uses: actions/upload-artifact@v4
@@ -62,7 +65,7 @@ jobs:
       - name: Package the verified image and deployment files
         if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         run: |
-          mkdir -p release/ops release/docs release/scripts
+          mkdir -p release/ops/1panel release/docs release/scripts
           db_image=$(sed -n 's/^    image: \(postgres:.*\)$/\1/p' compose.yaml)
           db_image_id=$(docker image inspect "$db_image" --format '{{.Id}}')
           # Classic docker save/load may discard RepoDigests. Use the exact saved
@@ -73,6 +76,8 @@ jobs:
           printf '%s\n' "$db_image" > release/DATABASE_IMAGE
           printf '%s\n' "$db_image_id" > release/DATABASE_IMAGE_ID
           cp ops/postgres-init.sh release/ops/
+          cp ops/1panel/compose.yaml ops/1panel/.env.example release/ops/1panel/
+          sed "s|image: $db_image|image: $db_image_id|" ops/1panel/compose.yaml > release/ops/1panel/compose.yaml
           cp ops/blog-backup.service ops/blog-backup.timer release/ops/
           cp ops/blog-maintenance.service ops/blog-maintenance.timer release/ops/
           cp -R docs/. release/docs/
@@ -146,9 +151,9 @@ jobs:
       - name: Show deployment references
         run: |
           {
-            printf 'Published the verified Linux amd64 images. Download **blog-compose-registry-linux-amd64-%s** for server deployment.\n\n' "$GITHUB_SHA"
+            printf 'Published the verified Linux amd64 blog image. Download **blog-compose-registry-linux-amd64-%s** for server deployment.\n\n' "$GITHUB_SHA"
             printf 'Application: `%s`\n\n' "$(cat registry-release/IMAGE)"
-            printf 'The deployment files pin the registry digest. See `docs/docker-compose.md` in the artifact for installation and private-registry login.\n'
+            printf 'The deployment files pin the registry digest. Use `ops/1panel/compose.yaml` and `docs/1panel.md` for panel deployment; see `docs/docker-compose.md` for private-registry access.\n'
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Sign out of the registry

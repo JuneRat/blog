@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 class ContainerImageTests(unittest.TestCase):
     def test_database_image_matches_across_deployment_and_checks(self):
         references = set()
-        for file in ("compose.yaml", ".github/workflows/ci.yml", "scripts/dev-db.sh"):
+        for file in ("compose.yaml", "ops/1panel/compose.yaml", ".github/workflows/ci.yml", "scripts/dev-db.sh"):
             matches = re.findall(r"\bpostgres:(?!//)[^\s\"']+", (ROOT / file).read_text())
             self.assertTrue(matches, file)
             for match in matches:
