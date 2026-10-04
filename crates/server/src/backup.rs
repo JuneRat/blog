@@ -174,9 +174,9 @@ impl Controller {
         if mutation && bootstrap && !self.live.installing.load(Ordering::Acquire) {
             return Err(UseCaseError::Unauthenticated);
         }
-        // Keep read access to job progress after old business sessions are revoked.
-        if mutation
-            && !self.live.paused.load(Ordering::Acquire)
+        // During maintenance the database is offline; otherwise recheck every
+        // capability against the current account, including progress/downloads.
+        if !self.live.paused.load(Ordering::Acquire)
             && let Some((id, version)) = owner
         {
             let _reader = self.live.gate.read().await;
@@ -191,13 +191,19 @@ impl Controller {
                 .users
                 .actor_with_revision(id, application::identity::ActorChannel::Session)
                 .await?;
-            if current != version
-                || !admin
-                    .users
-                    .roles_of_user(id)
-                    .await?
-                    .iter()
-                    .any(|role| role == "admin")
+            if current != version {
+                self.sessions
+                    .lock()
+                    .expect("session lock")
+                    .remove(&credential.token);
+                return Err(UseCaseError::Unauthenticated);
+            }
+            if !admin
+                .users
+                .roles_of_user(id)
+                .await?
+                .iter()
+                .any(|role| role == "admin")
             {
                 self.sessions
                     .lock()
@@ -416,9 +422,9 @@ impl RecoveryControl for Controller {
                     None,
                 )
                 .await?;
-            let actor = admin.auth.session_actor(&session.token).await;
+            let authenticated = admin.auth.session_actor(&session.token).await;
             admin.auth.logout(&session.token).await?;
-            let (_, actor) = actor?;
+            let (record, _) = authenticated?;
             if !admin
                 .users
                 .roles_of_user(session.user_id)
@@ -428,15 +434,9 @@ impl RecoveryControl for Controller {
             {
                 return Err(UseCaseError::Forbidden);
             }
-            let (_, version) = admin
-                .users
-                .actor_with_revision(
-                    session.user_id,
-                    application::identity::ActorChannel::Session,
-                )
-                .await?;
-            let _ = actor;
-            owner = Some((session.user_id, version));
+            // Keep the version against which the password was verified. Reading
+            // a newer revision here would upgrade a concurrently revoked login.
+            owner = Some((session.user_id, record.auth_version));
         }
         let token = random()?;
         let csrf = random()?;
