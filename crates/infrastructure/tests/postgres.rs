@@ -877,7 +877,8 @@ async fn page_repository_crud_version_and_public_query() {
         common::database(pool.clone()),
     ));
 
-    let now = OffsetDateTime::now_utc();
+    // PostgreSQL stores microseconds; keep aggregate and persisted snapshots exact.
+    let now = OffsetDateTime::now_utc().replace_nanosecond(0).unwrap();
     let mut page = Page::create_draft(
         Slug::new("about").unwrap(),
         "关于".into(),

@@ -172,7 +172,8 @@ async fn media_trash_restore_matches_aggregate_and_version_checks() {
     let pool = common::fresh_database("blog_test_media_transitions").await;
     let owner = common::seed_user(&pool, "media_rules").await;
     let repo = PostgresMediaRepository::new(common::database(pool.clone()));
-    let now = OffsetDateTime::now_utc();
+    // PostgreSQL stores microseconds; keep aggregate and persisted snapshots exact.
+    let now = OffsetDateTime::now_utc().replace_nanosecond(0).unwrap();
     let id = Uuid::now_v7();
     let mut media = Media::uploaded(
         id,
