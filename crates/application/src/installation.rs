@@ -24,9 +24,17 @@ pub struct InstallInfo {
     pub public_base_url: Option<String>,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InstallConnection {
+    #[serde(default)]
+    pub database_url: String,
+}
+
 #[async_trait]
 pub trait Installer: Send + Sync {
     fn info(&self) -> InstallInfo;
+    async fn check_connection(&self, input: InstallConnection) -> Result<(), UseCaseError>;
     async fn install(&self, input: InstallInput, audit: AuditContext) -> Result<(), UseCaseError>;
 }
 

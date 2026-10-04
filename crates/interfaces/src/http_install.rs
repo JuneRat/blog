@@ -7,7 +7,7 @@ use crate::{
 use application::{
     UseCaseError,
     audit::AuditContext,
-    installation::{InstallInput, Installer},
+    installation::{InstallConnection, InstallInput, Installer},
 };
 use axum::{
     Json, Router,
@@ -15,7 +15,7 @@ use axum::{
     http::{HeaderMap, HeaderValue, Method, StatusCode, header},
     middleware::{self, Next},
     response::{Html, IntoResponse, Redirect, Response},
-    routing::get,
+    routing::{get, post},
 };
 use std::sync::Arc;
 
@@ -50,6 +50,7 @@ pub fn install_router(state: InstallState) -> Router {
             }),
         )
         .route("/api/install", get(info).post(install))
+        .route("/api/install/check", post(check_connection))
         .route("/livez", get(crate::observability::livez))
         .route("/version", get(crate::observability::version))
         .route(
@@ -125,6 +126,27 @@ async fn install(
         .await
     {
         Ok(()) => Json(serde_json::json!({"redirect":"/admin/"})).into_response(),
+        Err(error) => http_support::admin_error(error, &request_id),
+    }
+}
+
+async fn check_connection(
+    State(state): State<InstallState>,
+    request_id: RequestId,
+    headers: HeaderMap,
+    input: Result<Json<InstallConnection>, axum::extract::rejection::JsonRejection>,
+) -> Response {
+    if !authorized(&state, &headers) {
+        return http_support::admin_error(UseCaseError::Forbidden, &request_id);
+    }
+    let Ok(Json(input)) = input else {
+        return http_support::admin_error(
+            UseCaseError::Invalid("数据库连接参数无效或过大".into()),
+            &request_id,
+        );
+    };
+    match state.installer.check_connection(input).await {
+        Ok(()) => Json(serde_json::json!({"ready": true})).into_response(),
         Err(error) => http_support::admin_error(error, &request_id),
     }
 }

@@ -28,6 +28,7 @@
         <label for="public-url">站点地址</label>
         <input id="public-url" type="url" required spellcheck="false" placeholder="https://blog.example.com" aria-describedby="url-help">
         <p class="hint" id="url-help">访客实际访问的完整地址，使用独立域名或本地地址。</p>
+        <fieldset id="admin-fields" disabled hidden>
         <hr>
         <h2>首个管理员</h2>
         <label for="username">用户名</label>
@@ -38,6 +39,7 @@
         <p class="hint" id="password-help">12–128 个字符，不能包含用户名或使用常见密码。</p>
         <label for="confirm">确认密码</label>
         <input id="confirm" type="password" autocomplete="new-password" required>
+        </fieldset>
       </fieldset>
       <p id="message" role="status" aria-live="polite"></p>
       <button id="submit" type="submit">验证安装码</button>

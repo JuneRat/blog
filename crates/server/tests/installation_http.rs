@@ -35,6 +35,8 @@ fn command(dir: &Path) -> Command {
         .env_remove("BLOG_PUBLIC_BASE_URL")
         .env_remove("BLOG_SECURE_COOKIES")
         .env_remove("BLOG_RECOVERY_MODE")
+        .env_remove("BLOG_BROWSER_RECOVERY")
+        .env_remove("BLOG_INSTALL_TOKEN")
         .env_remove("BLOG_TRUSTED_PROXIES")
         .env_remove("BLOG_METRICS_BIND")
         .env("BLOG_LOG_FORMAT", "text")
@@ -130,6 +132,16 @@ async fn submit(server: &Server, value: Value) -> reqwest::Response {
         .await
         .unwrap()
 }
+async fn check_connection(server: &Server, database_url: &str) -> reqwest::Response {
+    client()
+        .post(format!("{}/api/install/check", server.url))
+        .header("x-install-token", &server.token)
+        .header("origin", &server.url)
+        .json(&json!({"database_url": database_url}))
+        .send()
+        .await
+        .unwrap()
+}
 async fn empty_database(name: &str) -> (sqlx::PgPool, String) {
     let pool = common::fresh_database(name).await;
     sqlx::raw_sql("DROP SCHEMA public CASCADE; CREATE SCHEMA public")
@@ -187,6 +199,22 @@ async fn empty_database_installs_once_logs_in_and_restarts_from_saved_config() {
         info.json::<Value>().await.unwrap()["database_configured"],
         false
     );
+    let checked = check_connection(&server, &url).await;
+    assert_eq!(checked.status(), StatusCode::OK);
+    assert_eq!(checked.headers()["cache-control"], "no-store");
+    assert_eq!(
+        checked.json::<Value>().await.unwrap(),
+        json!({"ready":true})
+    );
+    assert!(!dir.join("config.toml").exists());
+    assert!(!dir.join("config.install-state.json").exists());
+    let tables: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM information_schema.tables WHERE table_schema='public'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(tables, 0, "connection check must not initialize schema");
     let (first, second) = tokio::join!(submit(&server, input(&url)), submit(&server, input(&url)));
     let statuses = [first.status(), second.status()];
     assert_eq!(
@@ -209,6 +237,10 @@ async fn empty_database_installs_once_logs_in_and_restarts_from_saved_config() {
     );
     assert_eq!(
         submit(&server, input(&url)).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        check_connection(&server, &url).await.status(),
         StatusCode::NOT_FOUND
     );
     let cookie = login(&server).await;
@@ -423,6 +455,27 @@ async fn authorization_and_input_failures_never_save_configuration_or_mutate_dat
     assert_eq!(bad.status(), StatusCode::BAD_REQUEST);
     let error = bad.text().await.unwrap();
     assert!(!error.contains("private-password"));
+    for origin in [None, Some("https://evil.invalid")] {
+        let mut request = client()
+            .post(format!("{endpoint}/check"))
+            .json(&json!({"database_url":url}));
+        if let Some(origin) = origin {
+            request = request
+                .header("x-install-token", &server.token)
+                .header("origin", origin);
+        }
+        assert_eq!(
+            request.send().await.unwrap().status(),
+            StatusCode::FORBIDDEN
+        );
+    }
+    let checked = check_connection(
+        &server,
+        "postgres://secret-user:private-password@127.0.0.1:1/missing",
+    )
+    .await;
+    assert_eq!(checked.status(), StatusCode::BAD_REQUEST);
+    assert!(!checked.text().await.unwrap().contains("private-password"));
     assert!(!dir.join("config.toml").exists());
     let count: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM information_schema.tables WHERE table_schema='public'",
@@ -432,6 +485,57 @@ async fn authorization_and_input_failures_never_save_configuration_or_mutate_dat
     .unwrap();
     assert_eq!(count, 0);
     drop(server);
+    pool.close().await;
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn connection_preflight_rejects_missing_permissions_and_install_rechecks_them() {
+    let (pool, url) = empty_database("blog_install_permissions_test").await;
+    let role = format!("install_check_{}", uuid::Uuid::now_v7().simple());
+    let role_password = uuid::Uuid::now_v7().simple().to_string();
+    sqlx::raw_sql(&format!(
+        "CREATE ROLE {role} LOGIN PASSWORD '{role_password}'; GRANT USAGE ON SCHEMA public TO {role}"
+    )).execute(&pool).await.unwrap();
+    let mut limited_url = url::Url::parse(&url).unwrap();
+    limited_url.set_username(&role).unwrap();
+    limited_url.set_password(Some(&role_password)).unwrap();
+    let dir = common::media_dir("installation-permissions");
+    let server = start(&dir, false).await;
+    let denied = check_connection(&server, limited_url.as_str()).await;
+    assert_eq!(denied.status(), StatusCode::BAD_REQUEST);
+    assert!(denied.text().await.unwrap().contains("权限"));
+    assert!(!dir.join("config.toml").exists());
+    sqlx::raw_sql(&format!(
+        "GRANT CREATE ON SCHEMA public TO {role}; GRANT CREATE ON DATABASE blog_install_permissions_test TO {role}"
+    )).execute(&pool).await.unwrap();
+    assert_eq!(
+        check_connection(&server, limited_url.as_str())
+            .await
+            .status(),
+        StatusCode::OK
+    );
+    sqlx::raw_sql(&format!("REVOKE CREATE ON SCHEMA public FROM {role}"))
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        submit(&server, input(limited_url.as_str())).await.status(),
+        StatusCode::BAD_REQUEST
+    );
+    assert!(!dir.join("config.toml").exists());
+    let tables: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM information_schema.tables WHERE table_schema='public'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(tables, 0);
+    drop(server);
+    sqlx::raw_sql(&format!("DROP OWNED BY {role}; DROP ROLE {role}"))
+        .execute(&pool)
+        .await
+        .unwrap();
     pool.close().await;
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -539,6 +643,10 @@ async fn existing_and_recovery_databases_are_refused_without_cleaning_them() {
         .unwrap();
     let dir = common::media_dir("installation-existing");
     let server = start(&dir, false).await;
+    assert_eq!(
+        check_connection(&server, &url).await.status(),
+        StatusCode::BAD_REQUEST
+    );
     let response = submit(&server, input(&url)).await;
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     assert!(response.text().await.unwrap().contains("空数据库"));

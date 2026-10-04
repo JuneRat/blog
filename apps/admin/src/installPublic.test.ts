@@ -57,16 +57,47 @@ it("安装失败后带安装码重读续装状态，保留填写内容", async (
   submit();
   await waitFor(() => expect(fields().disabled).toBe(false));
   input("database").value = "postgres://user:password@db/blog";
+  fetcher.mockResolvedValueOnce(response({ ready: true }));
+  submit();
+  await waitFor(() => expect(document.querySelector<HTMLFieldSetElement>("#admin-fields")!.disabled).toBe(false));
   input("username").value = "owner";
   input("password").value = input("confirm").value = "long test password";
   fetcher.mockResolvedValueOnce(response({ error: "主题尚未就绪" }, 400));
   fetcher.mockResolvedValueOnce(response({ database_configured: true, public_base_url: "https://blog.example.test" }));
   submit();
   await waitFor(() => expect(fields().disabled).toBe(false));
-  expect(fetcher.mock.calls[1][1]).toMatchObject({ method: "POST", headers: { "X-Install-Token": "valid" } });
-  expect(fetcher.mock.calls[2][1]).toEqual({ cache: "no-store", headers: { "X-Install-Token": "valid" } });
+  expect(fetcher.mock.calls[2][1]).toMatchObject({ method: "POST", headers: { "X-Install-Token": "valid" } });
+  expect(fetcher.mock.calls[3][1]).toEqual({ cache: "no-store", headers: { "X-Install-Token": "valid" } });
   expect(input("username").value).toBe("owner");
   expect(input("password").value).toBe("long test password");
   expect(input("database").value).toBe("");
   expect(document.querySelector("#message")?.textContent).toBe("主题尚未就绪");
+});
+
+it("连接通过才显示管理员表单；更换连接必须重新检查且不提交安装", async () => {
+  input("token").value = "valid";
+  fetcher.mockResolvedValueOnce(response({ database_configured: false, public_base_url: null }));
+  submit();
+  await waitFor(() => expect(fields().disabled).toBe(false));
+  const admin = document.querySelector<HTMLFieldSetElement>("#admin-fields")!;
+  expect(admin.hidden).toBe(true);
+  expect(admin.disabled).toBe(true);
+  input("database").value = "postgres://user:password@db/blog";
+  fetcher.mockResolvedValueOnce(response({ ready: true }));
+  submit();
+  await waitFor(() => expect(admin.hidden).toBe(false));
+  expect(fetcher).toHaveBeenLastCalledWith("/api/install/check", expect.objectContaining({
+    method: "POST", body: JSON.stringify({ database_url: "postgres://user:password@db/blog" }),
+  }));
+  expect(document.querySelector("#submit")?.textContent).toBe("安装博客");
+  fireEvent.input(input("database"), { target: { value: "postgres://user:password@db/other" } });
+  expect(admin.hidden).toBe(true);
+  expect(admin.disabled).toBe(true);
+  expect(document.querySelector("#submit")?.textContent).toBe("验证数据库连接");
+  fetcher.mockResolvedValueOnce(response({ error: "安装仅支持空数据库" }, 400));
+  submit();
+  await waitFor(() => expect(document.querySelector("#message")?.textContent).toContain("空数据库"));
+  expect(fields().hidden).toBe(false);
+  expect(admin.hidden).toBe(true);
+  expect(fetcher).toHaveBeenCalledTimes(3);
 });

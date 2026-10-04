@@ -61,9 +61,12 @@ retention 默认间隔 86,400 秒且禁用，publish_due 固定 30 秒启用、�
 | 方法与路径 | 用途 / 载荷 |
 |---|---|
 | `GET /api/install` | 需 `X-Install-Token`；`{ "database_configured": false, "public_base_url": null }`；续装时仅说明配置已保存，不返回数据库地址、账号密码或安装码 |
+| `POST /api/install/check` | `{ "database_url": "postgres://…" }`；验证连接、空库及建表/扩展权限，通过返回 `{ "ready": true }`，不写配置或创建表；预配置或续装时使用已保存连接 |
 | `POST /api/install` | `{ "database_url": "postgres://…", "public_base_url": "https://blog.example.com", "username": "sun", "password": "…" }`；成功返回 `{ "redirect": "/admin/" }` |
 
 GET 和 POST 都必须带 `X-Install-Token`：使用部署设置的 `BLOG_INSTALL_TOKEN`，或未设置时启动终端显示的随机码，并执行 Origin 检查（请求带 Origin 时必须同源）。未知字段、无效 JSON、超过 16 KiB、弱密码、非空库等返回 400 `invalid_request`；错误安装码/跨源返回 403；同时正在处理安装时返回 429 `rate_limited`。响应均 no-store，包含请求编号。预配置数据库或续装时沿用已保存数据库和站点地址，输入不能覆盖；部署设置的 `BLOG_PUBLIC_BASE_URL` 优先。配置文件不保存账号明文密码或安装码，Admin 与安装完成审计同事务提交。
+
+连接检查使用同一安装码、来源校验、请求体限制与安装互斥门闩。页面仅在检查通过后展开管理员表单，编辑数据库地址使检查结果失效。正式安装重新检查目标和权限，不能借用此前的成功结果绕过空库或权限要求。
 
 ## 审计日志
 

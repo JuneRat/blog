@@ -209,9 +209,13 @@ impl DeploymentConfig {
             url: self
                 .configured_database_url()?
                 .ok_or("请配置 database.url 或 DATABASE_URL")?,
-            migrations_dir: self.path_value("database.migrations_dir")?,
+            migrations_dir: self.migrations_dir()?,
             pool: self.database_pool()?,
         })
+    }
+
+    pub fn migrations_dir(&self) -> Result<PathBuf, String> {
+        self.path_value("database.migrations_dir")
     }
 
     pub fn database_pool(&self) -> Result<infrastructure::DatabasePoolConfig, String> {

@@ -84,6 +84,33 @@ pub async fn check_target(
     if comment.is_some_and(|s| s.starts_with("blog:recovery-isolated:")) {
         return Err(UseCaseError::Invalid("恢复隔离数据库不能用于安装".into()));
     }
+    // Check privileges without creating any tables or persisting configuration.
+    // Installation repeats this preflight; a prior browser check is not authority.
+    let allowed: bool = sqlx::query_scalar(
+        "SELECT has_schema_privilege('public', 'USAGE') \
+         AND has_schema_privilege('public', 'CREATE') \
+         AND (EXISTS(SELECT 1 FROM pg_extension WHERE extname='pg_trgm') \
+              OR has_database_privilege(current_database(), 'CREATE'))",
+    )
+    .fetch_one(pool)
+    .await
+    .map_err(database_error)?;
+    if !allowed {
+        return Err(UseCaseError::Invalid(
+            "连接成功，但账号没有安装所需的建表或扩展权限；请使用该数据库的所有者账号".into(),
+        ));
+    }
+    let extension_available: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM pg_available_extensions WHERE name='pg_trgm')",
+    )
+    .fetch_one(pool)
+    .await
+    .map_err(database_error)?;
+    if !extension_available {
+        return Err(UseCaseError::Invalid(
+            "数据库缺少 pg_trgm 扩展，请先在 PostgreSQL 中安装该扩展支持".into(),
+        ));
+    }
     let objects: Vec<(String, String, String)> = sqlx::query_as(
         "SELECT n.nspname,c.relname,c.relkind::text FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace \
          WHERE n.nspname <> 'information_schema' AND n.nspname !~ '^pg_' AND c.relkind IN ('r','p','v','m','f','S')",

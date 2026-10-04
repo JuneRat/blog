@@ -5,7 +5,10 @@ use crate::config::{DeploymentConfig, InstallJournal};
 use application::{
     UseCaseError,
     audit::AuditContext,
-    installation::{InitialAdmin, InstallInfo, InstallInput, Installer, validate_database_url},
+    installation::{
+        InitialAdmin, InstallConnection, InstallInfo, InstallInput, Installer,
+        validate_database_url,
+    },
     ports::SecureRandom,
 };
 use axum::{Router, extract::Request};
@@ -46,6 +49,51 @@ impl Installer for Setup {
                         .and_then(|config| config.configured_public_url().ok().flatten())
                 }),
         }
+    }
+
+    async fn check_connection(&self, input: InstallConnection) -> Result<(), UseCaseError> {
+        let _gate = self
+            .gate
+            .try_lock()
+            .map_err(|_| UseCaseError::RateLimited {
+                retry_after_secs: 2,
+            })?;
+        let live = self
+            .live
+            .upgrade()
+            .ok_or_else(|| UseCaseError::NotFound("安装入口".into()))?;
+        if live.pool.borrow().is_some() {
+            return Err(UseCaseError::NotFound("安装入口已关闭".into()));
+        }
+        let saved = self.saved.read().expect("saved config lock").clone();
+        let url = match &saved {
+            Some(saved) => saved
+                .pending_database_url()
+                .map_err(UseCaseError::Invalid)?,
+            None => self
+                .config
+                .configured_database_url()
+                .map_err(UseCaseError::Invalid)?
+                .unwrap_or(input.database_url),
+        };
+        validate_database_url(&url)?;
+        let migrations = self
+            .config
+            .migrations_dir()
+            .map_err(UseCaseError::Invalid)?;
+        let contract = infrastructure::schema_contract::SchemaContract::load(&migrations)?;
+        let pool = infrastructure::installation::connect(&url).await?;
+        let result = async {
+            if let Some(saved) = &saved
+                && infrastructure::installation::is_complete(&pool, &saved.installation_id).await?
+            {
+                return Ok(());
+            }
+            infrastructure::installation::check_target(&pool, &contract, saved.is_some()).await
+        }
+        .await;
+        pool.close().await;
+        result
     }
 
     async fn install(&self, input: InstallInput, audit: AuditContext) -> Result<(), UseCaseError> {
