@@ -2,6 +2,8 @@
 
 日常备份与原地恢复请使用[后台入口](browser-backup.md)。本文保留旧 Compose 脚本、独立恢复及受限数据库账号的高级操作。新发布只需一个博客镜像。
 
+仓库中的对应编排现为 [compose.legacy.yaml](../compose.legacy.yaml)，脚本会自动选择它。旧部署目录只含 `compose.yaml` 时继续使用原文件。本页手工 Docker Compose 命令均指对应的旧编排；在新仓库根目录运行时增加 `-f compose.legacy.yaml`。
+
 入口为 `sh scripts/compose-backup.sh`。所有配置沿用部署目录的 `.env`，脚本自动设置私有文件权限。博客镜像统一包含 PostgreSQL 18 客户端、恢复脚本、age 和 restic；按需运行的 ops 服务复用该镜像，不挂载 Docker socket。
 
 ## 先准备匹配的镜像
@@ -9,10 +11,10 @@
 源码部署在原部署目录执行一次：
 
 ```sh
-docker compose build blog
+docker compose -f compose.legacy.yaml build blog
 ```
 
-离线交付包通过 `docker load` 加载镜像，并将包内 `IMAGE` 的值填入 `.env` 的 `BLOG_IMAGE`。[GHCR 配置包](docker-compose.md#从-ghcr-拉取镜像并部署到-1panel)在首次初始化时自动填好统一镜像的 registry digest，运行 `docker compose --profile ops pull` 即可下载。升级时仅更新 `BLOG_IMAGE`。旧部署若设置了 `BLOG_OPS_IMAGE`，升级到统一镜像后应移除该覆盖项。恢复校验二进制 SHA-256 和迁移校验和；旧备份先用匹配版本恢复，再执行升级，不能通过忽略校验跨版本导入。
+新发布直接提供 [GHCR 镜像地址](docker-compose.md#从-ghcr-拉取镜像并部署到-1panel)，不再生成配置包。高级旧编排仍需匹配版本的源码脚本；将已发布的镜像地址填入 `.env` 的 `BLOG_IMAGE`，执行 `docker compose -f compose.legacy.yaml --profile ops pull`。旧部署若设置了 `BLOG_OPS_IMAGE`，升级到统一镜像后应移除该覆盖项。恢复校验二进制 SHA-256 和迁移校验和；旧备份先用匹配版本恢复，再执行升级，不能通过忽略校验跨版本导入。
 
 ## 备份和状态
 
@@ -96,7 +98,7 @@ sh scripts/compose-backup.sh fetch 快照ID
 sh scripts/compose-backup.sh restore backups/取回的文件名.tar.gz.age /srv/blog-restored /安全位置/blog-backup.key
 ```
 
-fetch 取回 restic 内的 age 密文和完成标记，检查文件名、大小、SHA-256 与 age 文件头后发布本地文件，拒绝覆盖已有文件。sync / fetch 不使用 age 私钥，也不声称已验证解密后的内容；公开校验和用于发现传输损坏，不能代替 age 认证解密及 `verify` / `restore` 的清单校验。备份不嵌入应用镜像，必须独立保留相应交付包。加密仓库也可以是挂载磁盘，但同机副本不能覆盖整机丢失的场景。
+fetch 取回 restic 内的 age 密文和完成标记，检查文件名、大小、SHA-256 与 age 文件头后发布本地文件，拒绝覆盖已有文件。sync / fetch 不使用 age 私钥，也不声称已验证解密后的内容；公开校验和用于发现传输损坏，不能代替 age 认证解密及 `verify` / `restore` 的清单校验。备份不嵌入应用镜像，需要独立保留匹配镜像及这些旧恢复脚本。加密仓库也可以是挂载磁盘，但同机副本不能覆盖整机丢失的场景。
 
 ## 定时运行
 

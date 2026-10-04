@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Exercise browser backup and in-place recovery through disposable 1Panel deployments."""
+"""Exercise plain Compose installation, backup and recovery in disposable deployments."""
 import argparse
 import datetime as dt
 import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import secrets
-import shutil
 import socket
 import subprocess
 import tempfile
@@ -70,40 +70,79 @@ def upload(client, data):
 
 
 @contextmanager
-def deployment(image, directory, suffix, *, snapshot=None):
+def deployment(image, directory, suffix, *, external_database=False):
     project = "codex-browser-" + suffix + "-" + secrets.token_hex(5)
     directory.mkdir()
     compose = directory / "compose.yaml"
-    shutil.copy(ROOT / "ops/1panel/compose.yaml", compose)
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0)); port = listener.getsockname()[1]
     origin = f"http://127.0.0.1:{port}"
     token = secrets.token_hex(32)
-    env = os.environ.copy()
-    env.update(BLOG_IMAGE=image, BLOG_PROJECT=project, BLOG_PUBLIC_BASE_URL=origin, BLOG_INSTALL_TOKEN=token,
-               BLOG_HTTP_PORT=str(port), BLOG_BACKUP_TMPFS_SIZE="2g")
+    template = ROOT / ("compose.yaml" if external_database else "compose.postgres.yaml")
+    compose.write_text(template.read_text().replace("127.0.0.1:8080:8080", f"127.0.0.1:{port}:8080"))
+    env = {k:v for k,v in os.environ.items() if not k.startswith(("BLOG_", "COMPOSE_"))}
+    owner_password = secrets.token_hex(32)
+    db_environment = {"POSTGRES_DB":"blog", "POSTGRES_USER":"postgres",
+                      "POSTGRES_PASSWORD":secrets.token_hex(32), "BLOG_OWNER_PASSWORD":owner_password}
+    database_url = f"postgres://blog_owner:{owner_password}@db:5432/blog"
     override = directory / "test-overrides.json"
-    override.write_text(json.dumps({"services":{"blog":{"environment":{"BLOG_BACKUP_WORKER":"/fixtures/browser_recovery_fault_fixture.py"},
-        "volumes":[str(ROOT / "scripts") + ":/fixtures:ro"]}}}))
+    overrides = {"services":{"blog":{"image":image, "environment":{"BLOG_PUBLIC_BASE_URL":origin,
+        "BLOG_INSTALL_TOKEN":token, "BLOG_BACKUP_WORKER":"/fixtures/browser_recovery_fault_fixture.py"},
+        "volumes":[str(ROOT / "scripts") + ":/fixtures:ro"]}}}
+    if not external_database:
+        overrides["services"]["db"] = {"environment":db_environment}
+    override.write_text(json.dumps(overrides)); override.chmod(0o600)
     args = ["docker", "compose", "-f", str(compose), "-f", str(override), "-p", project]
     def compose_cmd(*words, data=None): return command([*args, *words], env=env, data=data)
+    database_name = project + "-prepared-db"
+    database_started = False
     try:
         compose_cmd("up", "-d", "blog")
         guest = Client(origin)
         wait(lambda: guest.request("GET", "/install")[0], "installer unavailable")
-        require(guest.json("GET", "/api/install", headers={"X-Install-Token":token})["database_configured"],
-                "panel initializer did not configure the database")
-        yield guest, token, compose_cmd, project
+        require(not guest.json("GET", "/api/install", headers={"X-Install-Token":token})["database_configured"],
+                "deployment unexpectedly preconfigured the application database")
+        if external_database:
+            # The blog is already serving the installer before a DB is prepared.
+            env_file = directory / "database.env"
+            env_file.write_text("".join(k + "=" + v + "\n" for k,v in db_environment.items())); env_file.chmod(0o600)
+            database_image = re.search(r"^    image: (postgres:[^\s]+)$", (ROOT / "compose.postgres.yaml").read_text(), re.M)[1]
+            command(["docker", "run", "-d", "--name", database_name, "--network", project + "_default", "--network-alias", "db",
+                "--env-file", str(env_file), "--mount", "type=bind,src=" + str(ROOT / "ops/postgres-init.sh") + ",dst=/docker-entrypoint-initdb.d/10-blog.sh,readonly", database_image])
+            database_started = True
+            wait(lambda: command(["docker", "exec", database_name, "pg_isready", "-h", "127.0.0.1", "-U", "postgres", "-d", "blog"]), "prepared database unavailable")
+        yield guest, token, compose_cmd, project, database_url
     finally:
+        if database_started:
+            command(["docker", "rm", "-f", "-v", database_name])
         compose_cmd("down", "--volumes", "--remove-orphans")
 
 
 def exercise(image, directory, report, browser=False):
-    with deployment(image, directory / "source", "source") as (guest, token, compose, project):
-        print("==> Browser: panel installation and protected recovery access", flush=True)
+    with deployment(image, directory / "source", "source") as (guest, token, compose, project, database_url):
+        print("==> Browser: user-configured database check, installation and saved configuration", flush=True)
         password = "Browser-" + secrets.token_hex(16) + "!"
-        guest.json("POST", "/api/install", {"database_url":"", "public_base_url":guest.origin,
-                   "username":"acceptance-owner", "password":password}, headers={"X-Install-Token":token})
+        guest.request("POST", "/api/install/check", {"database_url":database_url}, status=403)
+        guest.request("POST", "/api/install/check", {"database_url":"postgres://unused:unused@127.0.0.1:1/missing"},
+                      status=400, headers={"X-Install-Token":token})
+        require(guest.json("POST", "/api/install/check", {"database_url":database_url}, headers={"X-Install-Token":token})["ready"], "database check failed")
+        compose("exec", "-T", "blog", "python3", "-c", "from pathlib import Path; assert not Path('/var/lib/blog/config/config.toml').exists()")
+        if browser:
+            env = os.environ.copy()
+            env.update(BLOG_BROWSER_URL=guest.origin, BLOG_BROWSER_PASSWORD=password, BLOG_BROWSER_INSTALL_TOKEN=token,
+                       BLOG_BROWSER_DATABASE_URL=database_url)
+            result = subprocess.run(["pnpm", "--dir", str(ROOT / "apps/admin"), "exec", "playwright", "test", "installation.spec.ts"],
+                                    env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            require(result.returncode == 0, "installation UI verification failed (see Playwright report)")
+            report["installation_ui"] = True
+        else:
+            guest.json("POST", "/api/install", {"database_url":database_url, "public_base_url":guest.origin,
+                       "username":"acceptance-owner", "password":password}, headers={"X-Install-Token":token})
+        compose("exec", "-T", "blog", "python3", "-c",
+                "import json,os,sys,tomllib; from pathlib import Path; p=Path('/var/lib/blog/config/config.toml'); "
+                "assert tomllib.loads(p.read_text())['database']['url']==json.load(sys.stdin)['url']; "
+                "assert p.stat().st_mode & 0o777==0o600; assert 'DATABASE_URL' not in os.environ", data=json.dumps({"url":database_url}).encode())
+        report["database_check_and_saved_config"] = True
         owner = Client(guest.origin); owner.login(password)
         scenario = SiteScenario(owner, guest, None)
         scenario.assert_installed()
@@ -231,11 +270,12 @@ def exercise(image, directory, report, browser=False):
         require(status(recovery)["settings"]["keep"] == 3, "schedule settings lost after restart")
         report["emergency_access"] = True
         print("==> Browser: fresh deployment restored entirely through HTTP", flush=True)
-        with deployment(image, directory / "fresh", "fresh") as (fresh, fresh_token, fresh_compose, fresh_project):
+        with deployment(image, directory / "fresh", "fresh", external_database=True) as (fresh, fresh_token, fresh_compose, fresh_project, fresh_database_url):
             other = Client(fresh.origin); login(other, token=fresh_token)
             imported = upload(other, raw)
             action(other, "inspect", {"name":imported["name"], "imported":True, "key":key})
-            action(other, "restore", {"name":imported["name"], "imported":True, "key":key, "confirm":"恢复此站点", "allow_without_snapshot":True})
+            action(other, "restore", {"name":imported["name"], "imported":True, "key":key, "confirm":"恢复此站点", "allow_without_snapshot":True,
+                   "database_url":fresh_database_url,"public_base_url":fresh.origin})
             fresh.request("GET", "/readyz")
             fresh_owner = Client(fresh.origin); fresh_owner.login(password)
             require(fresh_owner.json("GET", API + "/posts/" + post["id"])["content"] == "Before the backup", "fresh restore lost data")
@@ -244,6 +284,7 @@ def exercise(image, directory, report, browser=False):
             fresh_recovery = Client(fresh.origin); login(fresh_recovery, key=key)
             require(status(fresh_recovery)["initialized"], "fresh restore did not pair its emergency key")
             report["fresh_restore"] = True
+            report["external_database"] = True
         # Keep only public evidence: never include keys, login tokens or deployment passwords.
         logs = compose("logs", "--no-color", "blog")
         for secret in (password, key, json.loads(key)["emergency_token"], json.loads(key)["identity"].strip()):
@@ -266,7 +307,9 @@ def main():
         report["image"] = {"id":info["Id"], "revision":info.get("Config", {}).get("Labels", {}).get("org.opencontainers.image.revision"),
                            "architecture":info["Architecture"], "os":info["Os"]}
         report["scripts_sha256"] = {name:hashlib.sha256((ROOT / "scripts" / name).read_bytes()).hexdigest()
-                                    for name in ("browser_recovery.py", "panel_init.py", "test_browser_compose.py")}
+                                    for name in ("browser_recovery.py", "test_browser_compose.py")}
+        report["compose_sha256"] = {name:hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
+                                    for name in ("compose.yaml", "compose.postgres.yaml")}
         with tempfile.TemporaryDirectory(prefix="blog-browser-acceptance-") as directory:
             exercise(info["Id"], Path(directory), report, args.browser)
         report["status"] = "passed"

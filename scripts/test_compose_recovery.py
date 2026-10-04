@@ -320,11 +320,13 @@ class EncryptionTests(unittest.TestCase):
 
 class InterruptedBackupTests(unittest.TestCase):
     def test_interruption_stops_operation_before_restart_or_keeps_source_stopped(self):
-        for stop_fails in (False, True):
-            with self.subTest(stop_fails=stop_fails), tempfile.TemporaryDirectory() as directory:
+        for stop_fails, legacy in ((False, False), (True, False), (False, True), (True, True)):
+            with self.subTest(stop_fails=stop_fails, legacy=legacy), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 (root / "scripts").mkdir()
                 (root / "bin").mkdir()
+                compose_file = "compose.legacy.yaml" if legacy else "compose.yaml"
+                (root / compose_file).write_text("services: {}\n")
                 (root / ".env").write_text("BLOG_POSTGRES_PASSWORD=test\n")
                 shutil.copyfile(Path(__file__).parent / "compose-backup.sh", root / "scripts/compose-backup.sh")
                 fake = root / "bin/docker"
@@ -345,6 +347,8 @@ if args[0] == 'stop':
     active.unlink(); sys.exit(0)
 if args[0] == 'compose':
     args = args[3:]  # --project-directory PATH
+    assert args[:2] == ['-f', os.environ['FAKE_COMPOSE_FILE']]
+    args = args[2:]
     if 'ps' in args: print('test-blog'); sys.exit(0)
     if 'config' in args: print('{}'); sys.exit(0)
     if 'exec' in args: print('hash  /usr/local/bin/blog'); sys.exit(0)
@@ -364,7 +368,8 @@ sys.exit(2)
                 result = subprocess.run(["sh", str(root / "scripts/compose-backup.sh"), "backup"],
                                         capture_output=True, timeout=15,
                                         env={**os.environ, "PATH": str(root / "bin") + ":" + os.environ["PATH"],
-                                             "FAKE_DOCKER_ROOT": str(root), "STOP_FAILS": "1" if stop_fails else "0"})
+                                             "FAKE_DOCKER_ROOT": str(root), "FAKE_COMPOSE_FILE":compose_file,
+                                             "STOP_FAILS": "1" if stop_fails else "0"})
                 self.assertNotEqual(result.returncode, 0)
                 events = (root / "events").read_text().splitlines()
                 self.assertEqual(events, ["stop-blog", "stop-operation"] + ([] if stop_fails else ["start-blog"]))

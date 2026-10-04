@@ -37,8 +37,8 @@ def exercise(root, old, new, report):
     env = {key: value for key, value in os.environ.items()
            if not key.startswith(("BLOG_", "COMPOSE_", "PG"))
            and key not in ("DATABASE_URL", "IDP_SECRET", "GH_SECRET", "RUST_LOG")}
-    for filename in ("compose.yaml", ".env.example", "scripts/compose-init.sh", "ops/postgres-init.sh"):
-        target = root / filename
+    for filename in ("compose.legacy.yaml", ".env.example", "scripts/compose-init.sh", "ops/postgres-init.sh"):
+        target = root / ("compose.yaml" if filename == "compose.legacy.yaml" else filename)
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(PROJECT / filename, target)
     initialized = subprocess.run(["sh", str(root / "scripts/compose-init.sh")], cwd=root, env=env,

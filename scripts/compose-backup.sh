@@ -41,7 +41,9 @@ chmod 600 .env
 mkdir -p backups
 chmod 700 backups
 
-dc() { docker compose --project-directory "$ROOT" "$@"; }
+COMPOSE_FILE_PATH=compose.yaml
+if [ -f compose.legacy.yaml ]; then COMPOSE_FILE_PATH=compose.legacy.yaml; fi
+dc() { docker compose --project-directory "$ROOT" -f "$COMPOSE_FILE_PATH" "$@"; }
 ops() {
     dc run --name "$OPS_CONTAINER" --rm --no-deps -T \
         -e "BLOG_HOST_UID=$(id -u)" -e "BLOG_HOST_GID=$(id -g)" "$@"
@@ -184,7 +186,7 @@ case "$action" in
         phase=prepare-restore
         archive_ops -v "$target:/target" ops prepare "/input/$ARCHIVE_NAME"
         mkdir "$target/scripts" "$target/ops"
-        cp compose.yaml "$target/compose.yaml"
+        cp "$COMPOSE_FILE_PATH" "$target/compose.yaml"
         cp scripts/compose-backup.sh scripts/compose-init.sh "$target/scripts/"
         cp ops/postgres-init.sh "$target/ops/"
         cp .env.example "$target/.env.example"

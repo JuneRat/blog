@@ -1,179 +1,32 @@
+# Replace image, public URL and installation code before starting.
+# This file is complete: no source checkout, .env or configuration bundle needed.
 name: blog
-
 services:
-  # Existing pre-theme-management volumes belong to root. Repair only the mount
-  # root; keep every theme file intact and the HTTP process unprivileged.
-  theme-volume-init:
-    image: ${BLOG_IMAGE:-blog:local}
-    user: "0:0"
-    entrypoint: [chown, "10001:10001", /opt/blog/themes]
-    command: []
-    network_mode: none
-    read_only: true
-    cap_drop: [ALL]
-    cap_add: [CHOWN]
-    security_opt: [no-new-privileges:true]
-    volumes:
-      - blog-themes:/opt/blog/themes
-
-  db:
-    image: postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: blog
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: ${BLOG_POSTGRES_PASSWORD:?Run sh scripts/compose-init.sh to initialize .env}
-      BLOG_OWNER_PASSWORD: ${BLOG_OWNER_PASSWORD:?Run sh scripts/compose-init.sh to initialize .env}
-    volumes:
-      # PostgreSQL 18 stores versioned PGDATA under this directory.
-      - postgres-data:/var/lib/postgresql
-      - ./ops/postgres-init.sh:/docker-entrypoint-initdb.d/10-blog.sh:ro
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d blog"]
-      interval: 5s
-      timeout: 5s
-      retries: 12
-      start_period: 15s
-    logging:
-      driver: local
-      options:
-        max-size: "10m"
-        max-file: "5"
-
   blog:
-    image: ${BLOG_IMAGE:-blog:local}
-    build:
-      context: .
-      args:
-        VCS_REF: ${BLOG_SOURCE_REVISION:-unknown}
+    image: ghcr.io/your-github-owner/your-repository:sha-your-commit
+    pull_policy: missing
     init: true
     restart: unless-stopped
-    depends_on:
-      db:
-        condition: service_healthy
-      theme-volume-init:
-        condition: service_completed_successfully
-    # Compose reads .env; the site account is stored in config or DATABASE_URL.
-    # Never pass the PostgreSQL cluster administrator password to the application.
-    # A key without a value stays unset when absent from .env/the shell.
     environment:
-      - DATABASE_URL
-      - BLOG_REQUEST_TIMEOUT_SECS
-      - BLOG_UPLOAD_TIMEOUT_SECS
-      - BLOG_HEADER_TIMEOUT_SECS
-      - BLOG_IO_IDLE_TIMEOUT_SECS
-      - BLOG_CONNECTION_MAX_AGE_SECS
-      - BLOG_SHUTDOWN_TIMEOUT_SECS
-      - BLOG_MAX_HTTP_CONNECTIONS
-      - BLOG_DB_MAX_CONNECTIONS
-      - BLOG_DB_MIN_CONNECTIONS
-      - BLOG_DB_ACQUIRE_TIMEOUT_MS
-      - BLOG_DB_IDLE_TIMEOUT_SECS
-      - BLOG_DB_MAX_LIFETIME_SECS
-      - BLOG_DB_STATEMENT_TIMEOUT_MS
-      - BLOG_DB_LOCK_TIMEOUT_MS
-      - BLOG_DB_IDLE_IN_TRANSACTION_TIMEOUT_MS
-      - BLOG_DB_CONNECT_RETRIES
-      - BLOG_DB_CONNECT_RETRY_BACKOFF_MS
-      - BLOG_PUBLIC_BASE_URL
-      - BLOG_TIME_ZONE
-      - BLOG_TRUSTED_PROXIES
-      - BLOG_SECURE_COOKIES
-      - BLOG_RECOVERY_MODE
-      - BLOG_INSTALL_TOKEN
-      - RUST_LOG
-      - TZ=${TZ:-UTC}
-      - BLOG_LOG_FORMAT=${BLOG_LOG_FORMAT:-json}
-      - BLOG_METRICS_BIND=0.0.0.0:9090
-      - BLOG_THEME_DIR=${BLOG_THEME_DIR:-/opt/blog/themes/default}
-      - IDP_SECRET
-      - GH_SECRET
-      - BLOG_SMTP_HOST
-      - BLOG_SMTP_PORT
-      - BLOG_SMTP_SECURITY
-      - BLOG_SMTP_USERNAME
-      - BLOG_SMTP_PASSWORD
-      - BLOG_SMTP_FROM
-      - BLOG_SMTP_CA_PEM
+      BLOG_PUBLIC_BASE_URL: https://blog.example.com
+      BLOG_INSTALL_TOKEN: "" # Set your own private code, 20–256 ASCII characters.
+      BLOG_LOG_FORMAT: json
     ports:
-      - "${BLOG_HTTP_HOST:-127.0.0.1}:${BLOG_HTTP_PORT:-8080}:8080"
-      # Management is reachable only from this host and the trusted Compose network.
-      - "127.0.0.1:${BLOG_METRICS_PORT:-9090}:9090"
+      - "127.0.0.1:8080:8080"
     volumes:
       - blog-config:/var/lib/blog/config
       - blog-media:/var/lib/blog/media
       - blog-themes:/opt/blog/themes
     read_only: true
     tmpfs:
-      - /tmp:rw,noexec,nosuid,size=${BLOG_BACKUP_TMPFS_SIZE:-2g}
+      - /tmp:rw,noexec,nosuid,size=2g
     cap_drop: [ALL]
-    security_opt: [no-new-privileges:true]
-    stop_grace_period: 30s
+    security_opt: ["no-new-privileges:true"]
+    stop_grace_period: 35s
     logging:
       driver: local
-      options:
-        max-size: "10m"
-        max-file: "5"
-
-  # Use compose-backup.sh maintenance so retention and backup share the operation lock.
-  maintenance:
-    profiles: [ops]
-    image: ${BLOG_IMAGE:-blog:local}
-    init: true
-    command: [maintenance, --batch-size, "1000", --max-batches, "100"]
-    environment:
-      - DATABASE_URL
-      - BLOG_MAINTENANCE_DATABASE_URL
-      - BLOG_RECOVERY_MODE
-      - TZ=${TZ:-UTC}
-      - BLOG_LOG_FORMAT=${BLOG_LOG_FORMAT:-json}
-      - BLOG_DB_MAX_CONNECTIONS=2
-      - BLOG_DB_STATEMENT_TIMEOUT_MS=60000
-      - BLOG_DB_LOCK_TIMEOUT_MS=5000
-    volumes:
-      - blog-config:/var/lib/blog/config:ro
-    read_only: true
-    tmpfs:
-      - /tmp:rw,noexec,nosuid,size=16m
-    cap_drop: [ALL]
-    security_opt: [no-new-privileges:true]
-
-  # Only run through scripts/compose-backup.sh; never started by ordinary `up`.
-  ops:
-    profiles: [ops]
-    # BLOG_OPS_IMAGE is accepted only for old isolated recovery deployments.
-    image: ${BLOG_OPS_IMAGE:-${BLOG_IMAGE:-blog:local}}
-    user: "0:0"
-    entrypoint: [python3, -B, /opt/blog/scripts/compose_recovery.py]
-    command: []
-    init: true
-    env_file: .env
-    environment:
-      BLOG_POSTGRES_PASSWORD: ${BLOG_POSTGRES_PASSWORD:?Initialize .env first}
-      BLOG_OWNER_PASSWORD: ${BLOG_OWNER_PASSWORD:?Initialize .env first}
-      BLOG_BACKUP_KEEP: ${BLOG_BACKUP_KEEP:-7}
-      BLOG_BACKUP_REMOTE_KEEP: ${BLOG_BACKUP_REMOTE_KEEP:-30}
-      BLOG_THEME_DIR: ${BLOG_THEME_DIR:-/opt/blog/themes/default}
-    volumes:
-      - blog-config:/var/lib/blog/config
-      - blog-media:/var/lib/blog/media
-      - blog-themes:/opt/blog/themes:ro
-      - ./backups:/backups
-    read_only: true
-    tmpfs:
-      # Plaintext backup/restore staging disappears with the one-off container.
-      - /tmp:rw,nosuid,size=${BLOG_BACKUP_TMPFS_SIZE:-2g}
-    cap_drop: [ALL]
-    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETUID, SETGID, KILL]
-    security_opt: [no-new-privileges:true]
-    logging:
-      driver: local
-      options:
-        max-size: "10m"
-        max-file: "5"
-
+      options: {max-size: 10m, max-file: "3"}
 volumes:
-  postgres-data:
   blog-config:
   blog-media:
   blog-themes:

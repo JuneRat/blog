@@ -1,24 +1,15 @@
-"""Publish the already-tested application image and package a digest-pinned deployment.
+"""Publish the already-tested application image and record its registry identity.
 
-Run only after verifying/loading the offline artifact. Registry authentication is
+Run only after verifying/loading the internal CI image artifact. Registry authentication is
 provided by the caller; this script does not read or package Docker credentials.
 """
 import argparse
-import hashlib
 import json
 from pathlib import Path
 import re
-import shutil
 import subprocess
 
-ROOT = Path(__file__).resolve().parents[1]
 PLATFORM = "linux/amd64"
-DELIVERY_FILES = (
-    "compose.yaml", ".env.example", "ops/postgres-init.sh", "ops/1panel/compose.yaml", "ops/1panel/.env.example",
-    "ops/blog-backup.service", "ops/blog-backup.timer",
-    "ops/blog-maintenance.service", "ops/blog-maintenance.timer",
-    "scripts/database-roles.sql", "scripts/compose-init.sh", "scripts/compose-backup.sh",
-)
 IMAGE_ROLES = (("blog", "IMAGE", "BLOG_IMAGE"),)
 
 
@@ -60,53 +51,10 @@ def verified_images(bundle, repository, revision):
     return images
 
 
-def package(source, output, repository, revision, images):
-    """Copy only deployment inputs; never copy a workstation's .env or data."""
-    output.mkdir(parents=True, exist_ok=False)
-    for filename in DELIVERY_FILES:
-        target = output / filename
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(source / filename, target)
-    shutil.copytree(source / "docs", output / "docs")
-    example = (output / ".env.example").read_text()
-    for role, filename, variable in IMAGE_ROLES:
-        reference = images[role]["reference"]
-        placeholder = f"# {variable}={role}:local"
-        if example.count(placeholder) != 1:
-            raise ValueError(f"expected one {variable} placeholder in .env.example")
-        example = example.replace(placeholder, f"{variable}={reference}")
-        (output / filename).write_text(reference + "\n")
-        (output / f"{filename}_ID").write_text(images[role]["id"] + "\n")
-    (output / ".env.example").write_text(example)
-    panel = output / "ops/1panel/compose.yaml"
-    template = panel.read_text()
-    placeholder = "${BLOG_IMAGE:?请选择博客镜像及版本}"
-    if template.count(placeholder) != 2:
-        raise ValueError("expected both 1Panel services to use the verified blog image")
-    panel.write_text(template.replace(placeholder, images["blog"]["reference"]))
-    panel_env = output / "ops/1panel/.env.example"
-    panel_env.write_text(re.sub(r"^BLOG_IMAGE=.*$", "BLOG_IMAGE=" + images["blog"]["reference"], panel_env.read_text(), flags=re.M))
-    (output / "REVISION").write_text(revision + "\n")
-    (output / "PLATFORM").write_text(PLATFORM + "\n")
-    # Use the source Compose file, not the offline file which pins a local DB ID.
-    database = re.findall(r"^    image: (postgres:[^\s]+@sha256:[0-9a-f]{64})$",
-                          (output / "compose.yaml").read_text(), re.M)
-    if len(database) != 1:
-        raise ValueError("expected one registry-pinned PostgreSQL image")
-    (output / "DATABASE_IMAGE").write_text(database[0] + "\n")
-    manifest = {"repository": repository, "revision": revision, "platform": PLATFORM, "images": images}
-    (output / "REGISTRY_IMAGES.json").write_text(json.dumps(manifest, indent=2) + "\n")
-    checksums = []
-    for file in sorted(output.rglob("*")):
-        if file.is_file():
-            checksums.append(f"{hashlib.sha256(file.read_bytes()).hexdigest()}  ./{file.relative_to(output).as_posix()}\n")
-    (output / "SHA256SUMS").write_text("".join(checksums))
-
-
-def publish(bundle, output, repository, revision, source=ROOT):
+def publish(verified_dir, output, repository, revision):
     if output.exists():
-        raise ValueError("output directory already exists; refusing to overwrite a deployment")
-    images = verified_images(bundle, repository, revision)
+        raise ValueError("output directory already exists; refusing to overwrite a publication report")
+    images = verified_images(verified_dir, repository, revision)
     for role, info in images.items():
         docker("tag", info["id"], info["tag"])
         print(docker("push", info["tag"]), end="", flush=True)
@@ -121,21 +69,23 @@ def publish(bundle, output, repository, revision, source=ROOT):
         if inspect(reference)["Id"] != info["id"]:
             raise ValueError(f"published {role} does not match the tested image")
         info["reference"] = reference
-    # There is no deployment artifact until the published image is verified.
-    package(source, output, repository, revision, images)
+    # This CI-only report contains image identities, never deployment files.
+    manifest = {"repository": repository, "revision": revision, "platform": PLATFORM, "images": images}
+    with output.open("x") as stream:
+        stream.write(json.dumps(manifest, indent=2) + "\n")
     for info in images.values():
         print(info["reference"])
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--bundle", type=Path, required=True)
+    parser.add_argument("--verified-dir", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--repository", required=True)
     parser.add_argument("--revision", required=True)
     args = parser.parse_args()
     try:
-        publish(args.bundle, args.output, args.repository, args.revision)
+        publish(args.verified_dir, args.output, args.repository, args.revision)
     except (OSError, ValueError, subprocess.CalledProcessError) as error:
         parser.exit(1, f"Registry release failed: {error}\n")
 

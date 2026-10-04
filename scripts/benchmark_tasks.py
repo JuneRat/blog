@@ -57,7 +57,7 @@ class ComposeSite(SiteScenario):
         self.prepared = False
         root.mkdir()
         (root / "ops").mkdir()
-        shutil.copyfile(PROJECT / "compose.yaml", root / "compose.yaml")
+        shutil.copyfile(PROJECT / "compose.legacy.yaml", root / "compose.yaml")
         shutil.copyfile(PROJECT / "ops/postgres-init.sh", root / "ops/postgres-init.sh")
         values = {
             "COMPOSE_PROJECT_NAME": self.project, "BLOG_IMAGE": args.image,
@@ -441,7 +441,7 @@ def main():
               "load_runner_sha256": hashlib.sha256((PROJECT / "scripts/benchmark_public.py").read_bytes()).hexdigest(),
               "support_sha256": {name: hashlib.sha256((PROJECT / name).read_bytes()).hexdigest() for name in
                                  ("scripts/benchmark_writing.py", "scripts/acceptance_support.py",
-                                  "scripts/compose_recovery.py", "compose.yaml", "ops/postgres-init.sh")},
+                                  "scripts/compose_recovery.py", "compose.legacy.yaml", "ops/postgres-init.sh")},
               "threshold_scope": "local regression gates, not production SLA; CAS conflicts counted separately"}
     try:
         require(not args.report.exists(), "report exists; choose a new path")

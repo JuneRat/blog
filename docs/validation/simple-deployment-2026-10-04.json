@@ -1,0 +1,32 @@
+{
+  "started_at": "2026-10-04T05:21:13.553718+00:00",
+  "status": "passed",
+  "image": {
+    "id": "sha256:df3372afcade584d74898faecf26f474258b1b7af7dc21b7207a6898349eba47",
+    "revision": "942ef03",
+    "architecture": "arm64",
+    "os": "linux"
+  },
+  "scripts_sha256": {
+    "browser_recovery.py": "35f7780e1efd01626a522f6b08c0daef7b861adebad91efbfaeeb07ba77513f1",
+    "test_browser_compose.py": "1411bcf487d955142b5b0001ff85b4937ef782d95c1141cc05f1266876d025ac"
+  },
+  "compose_sha256": {
+    "compose.yaml": "5a67680917c86fc45f5e1e99dcf28d9ac1976931fc6262d15b66caa9bf13730e",
+    "compose.postgres.yaml": "ab726b6fcd2caa3341295e7e6977aa66ce4a95f8ab0e2918bb0d46aa58592aa6"
+  },
+  "installation_ui": true,
+  "database_check_and_saved_config": true,
+  "browser_ui": true,
+  "recovery_session_revocation": true,
+  "in_place_restore": true,
+  "interruption_and_rollback": true,
+  "s3_protocol_round_trip": true,
+  "emergency_access": true,
+  "fresh_restore": true,
+  "external_database": true,
+  "credentials_not_logged": true,
+  "archive_bytes": 40917,
+  "archive_sha256": "c90e2dc29a469f7af60b42e6ee388245556d47c12fe5b6e5abdc2f7495fdcb4c",
+  "seconds": 64.61
+}

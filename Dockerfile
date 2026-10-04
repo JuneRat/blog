@@ -36,7 +36,7 @@ WORKDIR /opt/blog
 COPY --from=server /out/blog /usr/local/bin/blog
 COPY --from=admin /build/apps/admin/dist/ ./admin/
 COPY migrations/ ./migrations/
-COPY scripts/recovery.py scripts/recovery_inventory.py scripts/schema_contract.py scripts/deployment_config.py scripts/compose_recovery.py scripts/browser_recovery.py scripts/panel_init.py scripts/database-roles.sql ./scripts/
+COPY scripts/recovery.py scripts/recovery_inventory.py scripts/schema_contract.py scripts/deployment_config.py scripts/compose_recovery.py scripts/browser_recovery.py scripts/database-roles.sql ./scripts/
 COPY --chown=10001:10001 themes/default/ ./themes/default/
 # Local editor-created files may be 0600; public assets must be readable by USER.
 RUN chmod -R a+rX /opt/blog

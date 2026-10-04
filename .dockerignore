@@ -23,4 +23,3 @@ apps/admin/dist
 !scripts/compose_recovery.py
 !scripts/database-roles.sql
 !scripts/browser_recovery.py
-!scripts/panel_init.py

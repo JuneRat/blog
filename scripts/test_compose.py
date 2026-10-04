@@ -153,7 +153,7 @@ def exercise(image, root, ops_image, report, smtp_security="starttls"):
         stream.write(f"\nBLOG_IMAGE={image}\nBLOG_OPS_IMAGE={ops_image}\nCOMPOSE_PROJECT_NAME={project}\nBLOG_HTTP_HOST=127.0.0.1\nBLOG_HTTP_PORT=0\nBLOG_METRICS_PORT=0\nRUST_LOG=info,sqlx=warn\n")
         stream.write(dotenv({"GH_SECRET": special_secret, "BLOG_DB_MAX_CONNECTIONS": "9", "BLOG_DB_STATEMENT_TIMEOUT_MS": "20000"}))
         stream.write(dotenv(smtp_environment))
-    shutil.copyfile(PROJECT / "compose.yaml", root / "compose.yaml")
+    shutil.copyfile(PROJECT / "compose.legacy.yaml", root / "compose.yaml")
     (root / "ops").mkdir()
     shutil.copyfile(PROJECT / "ops/postgres-init.sh", root / "ops/postgres-init.sh")
     env = {key: value for key, value in os.environ.items()

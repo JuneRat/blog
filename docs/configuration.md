@@ -54,7 +54,7 @@ TOML 可以先只配置路径、代理或 `[bootstrap]`：没有数据库连接�
 | `BLOG_BROWSER_RECOVERY` | 精确设为 `1` 时启用独立恢复页面、后台任务及数据库故障时的应急入口；统一镜像已设置，源码原生启动默认不启用 |
 | `BLOG_BACKUP_DIR` | 备份、策略和恢复日志目录，默认在配置文件同目录的 `recovery/`；镜像为 `/var/lib/blog/config/recovery`，必须持久保存 |
 | `BLOG_INSTALL_TOKEN` | 可选预设安装码，至少 20 个字符；1Panel 模板要求填写。仅安装未完成时有效，不设置则由进程生成随机码 |
-| `BLOG_BACKUP_TMPFS_SIZE` | Compose 模板使用的临时空间大小，默认 `2g`；不是应用配置字段。较大备份需同时规划容器可用内存与备份卷容量 |
+| `BLOG_BACKUP_TMPFS_SIZE` | 旧 `compose.legacy.yaml` 使用的临时空间大小，默认 `2g`；新单文件模板直接修改 `tmpfs` 大小。不是应用配置字段，较大备份需同时规划可用内存与备份卷容量 |
 
 备份密钥、每日/每周计划、本地及远程保留数量、S3 连接均在网页配置，无需手工修改 TOML。配置卷须保留控制器目录与恢复密钥配置；加密副本和解密密钥分别保存在服务器外。完整流程见[后台备份与恢复](browser-backup.md)。
 
@@ -72,7 +72,7 @@ TOML 可以先只配置路径、代理或 `[bootstrap]`：没有数据库连接�
 
 数据库继续保存绝对时刻，API 使用带偏移的 RFC 3339；修改站点时区只改变显示和后续输入的解释，不改变已预约的时刻。CLI 结果、备份名称及 RSS/sitemap 继续使用 UTC。`/me` 和匿名评论列表返回当前站点 `time_zone`。Rust 二进制内置 IANA 规则，无需给容器额外安装 tzdata；前端使用浏览器的 IANA 规则。
 
-进程日志（服务和 CLI）独立读取环境变量 `TZ`，未设置时为 UTC，支持相同的 IANA 名称；时间保留毫秒及显式偏移。Compose 可在现有 `.env` 中设置 `TZ=Asia/Shanghai` 后运行 `docker compose up -d blog`，恢复工具会保留该值。原生启动不自动读取 `.env`，使用 `TZ=Asia/Shanghai cargo run`，或在终端/进程管理器中导出 `TZ`。修改 `TZ` 需重启进程，后台站点设置不会改变日志时区。
+进程日志（服务和 CLI）独立读取环境变量 `TZ`，未设置时为 UTC，支持相同的 IANA 名称；时间保留毫秒及显式偏移。Compose 可在 `blog.environment` 中加入 `TZ: Asia/Shanghai` 后重新创建博客容器；旧编排也可在 `.env` 中设置。原生启动不自动读取 `.env`，使用 `TZ=Asia/Shanghai cargo run`，或在终端/进程管理器中导出 `TZ`。修改 `TZ` 需重启进程，后台站点设置不会改变日志时区。
 
 兼容过渡：已有 `server.time_zone` / `BLOG_TIME_ZONE` 仍作为数据库缺少时区字段时的回退值，保留升级前的显示。后台第一次保存时将所选时区写入数据库，之后以数据库为准，可删除旧配置。旧 API 客户端省略 `time_zone` 时保留已保存的值。该字段是现有 JSON 设置的向后兼容扩展，无需拆分或重写初始迁移；随数据库备份恢复。
 

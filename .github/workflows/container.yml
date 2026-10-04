@@ -37,7 +37,7 @@ jobs:
 
       - name: Pull the database image
         run: |
-          db_image=$(sed -n 's/^    image: \(postgres:.*\)$/\1/p' compose.yaml)
+          db_image=$(sed -n 's/^    image: \(postgres:.*\)$/\1/p' compose.postgres.yaml)
           test -n "$db_image"
           docker pull "$db_image"
 
@@ -62,40 +62,25 @@ jobs:
           path: compose-verification-*.json
           if-no-files-found: warn
 
-      - name: Package the verified image and deployment files
+      # Internal job handoff only; users deploy by pulling the published image.
+      - name: Save the verified image for publication without rebuilding
         if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         run: |
-          mkdir -p release/ops/1panel release/docs release/scripts
-          db_image=$(sed -n 's/^    image: \(postgres:.*\)$/\1/p' compose.yaml)
-          db_image_id=$(docker image inspect "$db_image" --format '{{.Id}}')
-          # Classic docker save/load may discard RepoDigests. Use the exact saved
-          # config ID in the offline bundle instead of relying on a registry lookup.
-          docker save "blog:$GITHUB_SHA" "$db_image_id" | gzip > release/blog-linux-amd64.tar.gz
-          cp compose.yaml .env.example release/
-          sed "s|image: $db_image|image: $db_image_id|" compose.yaml > release/compose.yaml
-          printf '%s\n' "$db_image" > release/DATABASE_IMAGE
-          printf '%s\n' "$db_image_id" > release/DATABASE_IMAGE_ID
-          cp ops/postgres-init.sh release/ops/
-          cp ops/1panel/compose.yaml ops/1panel/.env.example release/ops/1panel/
-          sed "s|image: $db_image|image: $db_image_id|" ops/1panel/compose.yaml > release/ops/1panel/compose.yaml
-          cp ops/blog-backup.service ops/blog-backup.timer release/ops/
-          cp ops/blog-maintenance.service ops/blog-maintenance.timer release/ops/
-          cp -R docs/. release/docs/
-          cp scripts/database-roles.sql scripts/compose-init.sh scripts/compose-backup.sh release/scripts/
-          printf '%s\n' "blog:$GITHUB_SHA" > release/IMAGE
-          docker image inspect "blog:$GITHUB_SHA" --format '{{.Id}}' > release/IMAGE_ID
-          cd release
-          find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+          mkdir verified
+          docker save "blog:$GITHUB_SHA" | gzip > verified/blog.tar.gz
+          printf '%s\n' "blog:$GITHUB_SHA" > verified/IMAGE
+          docker image inspect "blog:$GITHUB_SHA" --format '{{.Id}}' > verified/IMAGE_ID
+          cd verified
+          sha256sum blog.tar.gz IMAGE IMAGE_ID > SHA256SUMS
 
-      - name: Save the release bundle
+      - name: Save the internal image handoff
         if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
-          name: blog-compose-linux-amd64-${{ github.sha }}
-          path: release/
-          include-hidden-files: true
+          name: verified-blog-image-${{ github.sha }}
+          path: verified/
           if-no-files-found: error
-          retention-days: 90
+          retention-days: 1
 
   publish:
     # PRs and ordinary branch pushes never receive package write permission.
@@ -117,44 +102,43 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Download the images that passed Compose verification
+      - name: Download the image that passed Compose verification
         uses: actions/download-artifact@v4
         with:
-          name: blog-compose-linux-amd64-${{ github.sha }}
-          path: release
+          name: verified-blog-image-${{ github.sha }}
+          path: verified
 
       - name: Verify and load the tested images without rebuilding
-        working-directory: release
+        working-directory: verified
         run: |
           sha256sum -c SHA256SUMS
-          docker load -i blog-linux-amd64.tar.gz
+          docker load -i blog.tar.gz
 
       - name: Sign in to GitHub Container Registry
         env:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
 
-      - name: Publish the verified image and prepare the pull-based deployment
+      - name: Publish the verified image
         run: >-
-          python3 -B scripts/registry_release.py --bundle release --output registry-release
+          python3 -B scripts/registry_release.py --verified-dir verified --output published-image.json
           --repository "$GITHUB_REPOSITORY" --revision "$GITHUB_SHA"
 
-      - name: Save the registry deployment files
-        uses: actions/upload-artifact@v4
-        with:
-          name: blog-compose-registry-linux-amd64-${{ github.sha }}
-          path: registry-release/
-          include-hidden-files: true
-          if-no-files-found: error
-          retention-days: 90
-
-      - name: Show deployment references
+      - name: Show the image reference for Compose
         run: |
-          {
-            printf 'Published the verified Linux amd64 blog image. Download **blog-compose-registry-linux-amd64-%s** for server deployment.\n\n' "$GITHUB_SHA"
-            printf 'Application: `%s`\n\n' "$(cat registry-release/IMAGE)"
-            printf 'The deployment files pin the registry digest. Use `ops/1panel/compose.yaml` and `docs/1panel.md` for panel deployment; see `docs/docker-compose.md` for private-registry access.\n'
-          } >> "$GITHUB_STEP_SUMMARY"
+          python3 - <<'PYTHON'
+          import json, os
+          from pathlib import Path
+          result = json.loads(Path("published-image.json").read_text())
+          image = result["images"]["blog"]["reference"]
+          repository = os.environ["GITHUB_REPOSITORY"]
+          revision = os.environ["GITHUB_SHA"]
+          source = f"https://github.com/{repository}/blob/{revision}"
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+              summary.write(f"Published the verified Linux amd64 blog image.\n\n```yaml\nimage: {image}\n```\n\n")
+              summary.write(f"Copy [compose.yaml]({source}/compose.yaml) for an existing database, or [compose.postgres.yaml]({source}/compose.postgres.yaml) to include PostgreSQL. Replace its image line with the reference above.\n\n")
+              summary.write(f"Start the service and finish database setup at `/install`. See the [1Panel guide]({source}/docs/1panel.md). No deployment package is required.\n")
+          PYTHON
 
       - name: Sign out of the registry
         if: always()

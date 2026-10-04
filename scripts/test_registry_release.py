@@ -1,11 +1,9 @@
-"""Exercise release identity checks and the deployable registry artifact."""
+"""Exercise release identity checks without generating deployment packages."""
 import contextlib
 import copy
-import hashlib
 import io
 import json
 from pathlib import Path
-import re
 import subprocess
 import tempfile
 import unittest
@@ -64,7 +62,7 @@ class RegistryReleaseTests(unittest.TestCase):
         return ""
 
     def publish(self, **overrides):
-        arguments = dict(bundle=self.bundle, output=self.output,
+        arguments = dict(verified_dir=self.bundle, output=self.output,
                          repository=REPOSITORY, revision=REVISION)
         arguments.update(overrides)
         with patch.object(release, "docker", side_effect=self.docker), contextlib.redirect_stdout(io.StringIO()):
@@ -73,15 +71,6 @@ class RegistryReleaseTests(unittest.TestCase):
     def assert_no_registry_writes(self):
         self.assertFalse([call for call in self.calls if call[0] in ("tag", "push")])
         self.assertFalse(self.output.exists())
-
-    def test_panel_template_uses_one_verified_image_and_needs_no_repository_files(self):
-        self.publish()
-        template = (self.output / "ops/1panel/compose.yaml").read_text()
-        reference = "ghcr.io/" + REPOSITORY.lower() + "@sha256:" + "d" * 64
-        self.assertEqual(template.count("image: " + reference), 2)
-        self.assertNotIn("${BLOG_IMAGE", template)
-        self.assertNotIn("./ops/", template)
-        self.assertIn("BLOG_IMAGE=" + reference, (self.output / "ops/1panel/.env.example").read_text())
 
     def test_image_must_match_verified_artifact_before_publishing(self):
         self.images["blog"]["Id"] = "sha256:" + "f" * 64
@@ -141,39 +130,19 @@ class RegistryReleaseTests(unittest.TestCase):
         self.assertEqual((self.output / ".env").read_text(), "keep credentials\n")
         self.assertEqual(self.calls, [])
 
-    def test_success_delivers_pinned_image_and_initializes_without_source_or_secrets(self):
-        # An offline bundle's local DB image ID must never leak into online Compose.
-        (self.bundle / "compose.yaml").write_text("image: sha256:" + "c" * 64)
+    def test_success_publishes_only_the_verified_blog_image(self):
         (self.bundle / ".env").write_text("PRIVATE_VALUE=must-not-be-copied\n")
         self.publish()
-        pushes = [call[1] for call in self.calls if call[0] == "push"]
-        self.assertEqual(pushes, [f"ghcr.io/example/blog:sha-{REVISION}"])
-        checksums = (self.output / "SHA256SUMS").read_text().splitlines()
-        checked = set()
-        for line in checksums:
-            expected, filename = line.split("  ", 1)
-            checked.add(filename.removeprefix("./"))
-            self.assertEqual(hashlib.sha256((self.output / filename).read_bytes()).hexdigest(), expected)
-        delivered = {str(file.relative_to(self.output)) for file in self.output.rglob("*") if file.is_file()}
-        self.assertEqual(checked, delivered - {"SHA256SUMS"})
-        self.assertFalse((self.output / ".env").exists())
-        self.assertFalse((self.output / "Dockerfile").exists())
-        self.assertFalse((self.output / "fixtures").exists())
-        database = (self.output / "DATABASE_IMAGE").read_text().strip()
-        self.assertRegex(database, r"^postgres:.*@sha256:[a-f0-9]{64}$")
-        self.assertIn("image: " + database, (self.output / "compose.yaml").read_text())
-        subprocess.run(["sh", str(self.output / "scripts/compose-init.sh")],
-                       cwd="/tmp", check=True, capture_output=True)
-        env = (self.output / ".env").read_text()
-        for role, filename, variable in release.IMAGE_ROLES:
-            reference = (self.output / filename).read_text().strip()
-            self.assertRegex(reference, r"^ghcr.io/example/blog(?:-ops)?@sha256:[a-f0-9]{64}$")
-            self.assertIn(f"{variable}={reference}\n", env)
-            self.assertIn(("pull", reference), self.calls)
-        self.assertEqual(len(re.findall(r"^BLOG_(?:POSTGRES|OWNER)_PASSWORD=[a-f0-9]{64}$", env, re.M)), 2)
-        manifest = json.loads((self.output / "REGISTRY_IMAGES.json").read_text())
+        self.assertEqual([call[1] for call in self.calls if call[0] == "push"],
+                         [f"ghcr.io/example/blog:sha-{REVISION}"])
+        manifest = json.loads(self.output.read_text())
         self.assertEqual(manifest["revision"], REVISION)
         self.assertEqual(manifest["platform"], "linux/amd64")
+        reference = "ghcr.io/example/blog@sha256:" + "d" * 64
+        self.assertEqual(manifest["images"]["blog"]["reference"], reference)
+        self.assertIn(("pull", reference), self.calls)
+        self.assertNotIn("PRIVATE_VALUE", self.output.read_text())
+        self.assertEqual({p.name for p in self.root.iterdir()}, {self.bundle.name, self.output.name})
 
 
 if __name__ == "__main__":

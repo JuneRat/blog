@@ -37,7 +37,7 @@
 |---|---|
 | [开发指南](development.md) | 本地环境、CLI、前端联调、检查命令与测试库 |
 | [首次安装](installation.md) | 安装向导、初始 Admin、连接配置保存与中断恢复 |
-| [1Panel 部署](1panel.md) | 面板编排、自动配置数据库、域名和首次安装 |
+| [1Panel 部署](1panel.md) | 单文件编排、选择数据库、域名和安装向导 |
 | [后台备份与恢复](browser-backup.md) | 密钥、备份、计划、远程存储、原地恢复与应急入口 |
 | [Docker Compose 部署](docker-compose.md) | 镜像构建与交付、持久卷、安装、健康检查和部署维护 |
 | [Compose 备份恢复](compose-backup.md) | 容器内工具、完整备份包、隔离核验、加密仓库与定时任务 |
