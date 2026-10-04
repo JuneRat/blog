@@ -9,12 +9,14 @@ from pathlib import Path
 import re
 import subprocess
 
+from github_release import release_version
+
 PLATFORM = "linux/amd64"
 IMAGE_ROLES = (("blog", "IMAGE", "BLOG_IMAGE"),)
 
 
 def docker(*arguments):
-    return subprocess.check_output(["docker", *arguments], text=True)
+    return subprocess.check_output(["docker", *arguments], text=True, stderr=subprocess.PIPE)
 
 
 def inspect(reference):
@@ -51,9 +53,24 @@ def verified_images(bundle, repository, revision):
     return images
 
 
-def publish(verified_dir, output, repository, revision):
+def remote_digest(tag):
+    try:
+        manifest = json.loads(docker("manifest", "inspect", "--verbose", tag))
+    except subprocess.CalledProcessError as error:
+        # Authentication/network errors must never be mistaken for an unused tag.
+        if re.search(r"no such manifest|manifest unknown", error.stderr or "", re.I):
+            return None
+        raise
+    digest = manifest.get("Descriptor", {}).get("digest") if isinstance(manifest, dict) else None
+    if not isinstance(digest, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+        raise ValueError("version tag is not a supported single-platform image")
+    return digest
+
+
+def publish(verified_dir, output, repository, revision, tag="", project=None):
     if output.exists():
         raise ValueError("output directory already exists; refusing to overwrite a publication report")
+    version = release_version(tag, project or Path(__file__).resolve().parents[1]) if tag else None
     images = verified_images(verified_dir, repository, revision)
     for role, info in images.items():
         docker("tag", info["id"], info["tag"])
@@ -69,8 +86,22 @@ def publish(verified_dir, output, repository, revision):
         if inspect(reference)["Id"] != info["id"]:
             raise ValueError(f"published {role} does not match the tested image")
         info["reference"] = reference
+        if version:
+            version_tag = f"{destination}:{version}"
+            digest = reference.split("@", 1)[1]
+            existing = remote_digest(version_tag)
+            if existing is not None and existing != digest:
+                raise ValueError(f"{version_tag} already points to another image; use a new version")
+            if existing is None:
+                docker("tag", info["id"], version_tag)
+                print(docker("push", version_tag), end="", flush=True)
+            if remote_digest(version_tag) != digest:
+                raise ValueError("version tag does not resolve to the verified registry digest")
+            info["version_tag"] = version_tag
     # This CI-only report contains image identities, never deployment files.
     manifest = {"repository": repository, "revision": revision, "platform": PLATFORM, "images": images}
+    if version:
+        manifest.update(release_tag=tag, version=version)
     with output.open("x") as stream:
         stream.write(json.dumps(manifest, indent=2) + "\n")
     for info in images.values():
@@ -83,9 +114,11 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--repository", required=True)
     parser.add_argument("--revision", required=True)
+    parser.add_argument("--tag", default="", help="version Git tag; omit for SHA-only publication")
+    parser.add_argument("--project", type=Path, default=Path(__file__).resolve().parents[1])
     args = parser.parse_args()
     try:
-        publish(args.verified_dir, args.output, args.repository, args.revision)
+        publish(args.verified_dir, args.output, args.repository, args.revision, args.tag, args.project)
     except (OSError, ValueError, subprocess.CalledProcessError) as error:
         parser.exit(1, f"Registry release failed: {error}\n")
 

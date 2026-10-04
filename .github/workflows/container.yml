@@ -10,7 +10,16 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: container-${{ github.repository }}-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
+  release-checks:
+    # A tag/manual publication must pass the same complete checks as main.
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    uses: ./.github/workflows/ci.yml
+
   compose:
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -22,12 +31,18 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Validate the release tag and application versions
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: python3 -B scripts/github_release.py validate --tag "$RELEASE_TAG"
+
       - name: Verify schema artifacts
         run: |
           python3 -B scripts/schema_contract.py
 
       - name: Verify registry delivery tooling
-        run: PYTHONPATH=scripts python3 -B -m unittest scripts/test_registry_release.py scripts/test_container_images.py scripts/test_compose_init.py scripts/test_browser_recovery.py
+        run: PYTHONPATH=scripts python3 -B -m unittest scripts/test_registry_release.py scripts/test_github_release.py scripts/test_container_images.py scripts/test_compose_init.py scripts/test_browser_recovery.py
 
       - name: Build deployable image
         run: >-
@@ -84,7 +99,7 @@ jobs:
 
   publish:
     # PRs and ordinary branch pushes never receive package write permission.
-    needs: compose
+    needs: [compose, release-checks]
     if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -120,9 +135,36 @@ jobs:
         run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
 
       - name: Publish the verified image
+        env:
+          RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
         run: >-
           python3 -B scripts/registry_release.py --verified-dir verified --output published-image.json
-          --repository "$GITHUB_REPOSITORY" --revision "$GITHUB_SHA"
+          --repository "$GITHUB_REPOSITORY" --revision "$GITHUB_SHA" --tag "$RELEASE_TAG"
+
+      - name: Prepare the versioned Compose files and release notes
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: >-
+          python3 -B scripts/github_release.py prepare --manifest published-image.json --output release
+          --repository "$GITHUB_REPOSITORY" --revision "$GITHUB_SHA" --tag "$RELEASE_TAG"
+
+      - name: Save the release attachments
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v4
+        with:
+          name: blog-release-${{ github.sha }}
+          path: release/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Save the publication report
+        uses: actions/upload-artifact@v4
+        with:
+          name: published-image-${{ github.sha }}
+          path: published-image.json
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Show the image reference for Compose
         run: |
@@ -138,8 +180,37 @@ jobs:
               summary.write(f"Published the verified Linux amd64 blog image.\n\n```yaml\nimage: {image}\n```\n\n")
               summary.write(f"Copy [compose.yaml]({source}/compose.yaml) for an existing database, or [compose.postgres.yaml]({source}/compose.postgres.yaml) to include PostgreSQL. Replace its image line with the reference above.\n\n")
               summary.write(f"Start the service and finish database setup at `/install`. See the [1Panel guide]({source}/docs/1panel.md). No deployment package is required.\n")
+              if result.get("release_tag"):
+                  tag = result["release_tag"]
+                  version_tag = result["images"]["blog"]["version_tag"]
+                  summary.write(f"\nVersion image: `{version_tag}`. The final job publishes [GitHub Release {tag}](https://github.com/{repository}/releases/tag/{tag}) with ready-to-use Compose files.\n")
           PYTHON
 
       - name: Sign out of the registry
         if: always()
         run: docker logout ghcr.io
+
+  release:
+    needs: publish
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: blog-release-${{ github.sha }}
+          path: release
+
+      - name: Publish the Release after verifying all attachments
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: >-
+          python3 -B scripts/github_release.py publish --directory release
+          --repository "$GITHUB_REPOSITORY" --revision "$GITHUB_SHA" --tag "$RELEASE_TAG"

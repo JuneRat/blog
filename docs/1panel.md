@@ -11,6 +11,8 @@
 
 两个文件是独立的完整示例，选择其中一个即可。数据库连接始终在安装向导填写；Compose 不向博客传入数据库密码。带数据库的示例在新数据库卷中创建非超级用户 `blog_owner`，安装时使用它。
 
+部署某个正式版本时，从 [GitHub Releases](https://github.com/JuneRat/blog/releases) 下载该版本的 `compose.yaml` 或 `compose.postgres.yaml`，再按下面的步骤填写并启动。Release 附件已固定该版本通过验收的镜像，形如 `ghcr.io/junerat/blog:0.1.0@sha256:…`，无需自行查找或替换镜像摘要。仓库根目录示例保留已记录的验收镜像；选择版本时以对应 Release 的附件为准。
+
 ## 填写并启动
 
 在 1Panel“容器 → 编排”中创建编排，粘贴所选文件，修改这些值：[1Panel 编排说明](https://1panel.pro/docs/v2/user_manual/containers/composes/)

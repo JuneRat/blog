@@ -22,12 +22,20 @@ class RegistryReleaseTests(unittest.TestCase):
         self.root = Path(temporary.name)
         self.bundle = self.root / "verified"
         self.bundle.mkdir()
+        self.project = self.root / "source"
+        (self.project / "crates/server").mkdir(parents=True)
+        (self.project / "apps/admin").mkdir(parents=True)
+        (self.project / "crates/server/Cargo.toml").write_text('[package]\nversion = "0.1.0"\n')
+        (self.project / "apps/admin/package.json").write_text('{"version":"0.1.0"}')
+        (self.project / "CHANGELOG.md").write_text('## 0.1.0\n\n- Release.\n')
         self.output = self.root / "deployment"
         self.images = {}
         self.calls = []
         self.bad_digest = False
         self.bad_pull = False
         self.fail_push = False
+        self.version_manifests = {}
+        self.manifest_error = None
         for index, (role, filename, _) in enumerate(release.IMAGE_ROLES, 1):
             image_id = "sha256:" + str(index) * 64
             (self.bundle / filename).write_text(f"{role}:{REVISION}\n")
@@ -43,6 +51,12 @@ class RegistryReleaseTests(unittest.TestCase):
 
     def docker(self, *arguments):
         self.calls.append(arguments)
+        if arguments[:3] == ("manifest", "inspect", "--verbose"):
+            if self.manifest_error:
+                raise subprocess.CalledProcessError(1, ["docker", *arguments], stderr=self.manifest_error)
+            if arguments[3] not in self.version_manifests:
+                raise subprocess.CalledProcessError(1, ["docker", *arguments], stderr="no such manifest")
+            return json.dumps({"Descriptor": {"digest": self.version_manifests[arguments[3]]}})
         if arguments[:2] == ("image", "inspect"):
             reference = arguments[2]
             role = "blog-ops" if "blog-ops" in reference else "blog"
@@ -58,12 +72,14 @@ class RegistryReleaseTests(unittest.TestCase):
             return json.dumps([info])
         if arguments[0] == "push" and self.fail_push:
             raise subprocess.CalledProcessError(1, ["docker", *arguments])
+        if arguments[0] == "push":
+            self.version_manifests[arguments[1]] = "sha256:" + "d" * 64
         self.assertIn(arguments[0], ("tag", "push", "pull"))
         return ""
 
     def publish(self, **overrides):
         arguments = dict(verified_dir=self.bundle, output=self.output,
-                         repository=REPOSITORY, revision=REVISION)
+                         repository=REPOSITORY, revision=REVISION, project=self.project)
         arguments.update(overrides)
         with patch.object(release, "docker", side_effect=self.docker), contextlib.redirect_stdout(io.StringIO()):
             release.publish(**arguments)
@@ -142,7 +158,48 @@ class RegistryReleaseTests(unittest.TestCase):
         self.assertEqual(manifest["images"]["blog"]["reference"], reference)
         self.assertIn(("pull", reference), self.calls)
         self.assertNotIn("PRIVATE_VALUE", self.output.read_text())
-        self.assertEqual({p.name for p in self.root.iterdir()}, {self.bundle.name, self.output.name})
+        self.assertEqual({p.name for p in self.root.iterdir()},
+                         {self.bundle.name, self.output.name, self.project.name})
+
+    def test_version_and_sha_tags_publish_the_same_verified_image(self):
+        self.publish(tag="v0.1.0")
+        pushes = [call[1] for call in self.calls if call[0] == "push"]
+        self.assertEqual(pushes, [f"ghcr.io/example/blog:sha-{REVISION}", "ghcr.io/example/blog:0.1.0"])
+        tags = [call for call in self.calls if call[0] == "tag"]
+        self.assertEqual({call[1] for call in tags}, {self.images["blog"]["Id"]})
+        report = json.loads(self.output.read_text())
+        self.assertEqual(report["release_tag"], "v0.1.0")
+        self.assertEqual(report["version"], "0.1.0")
+        self.assertEqual(report["images"]["blog"]["version_tag"], "ghcr.io/example/blog:0.1.0")
+
+    def test_invalid_or_mismatched_version_never_writes_to_registry(self):
+        for tag in ("latest", "v99.0.0", "v0.1.0/other"):
+            with self.subTest(tag=tag), self.assertRaises(ValueError):
+                self.publish(tag=tag)
+        self.assert_no_registry_writes()
+
+    def test_existing_version_is_only_reused_when_digest_matches(self):
+        version_tag = "ghcr.io/example/blog:0.1.0"
+        self.version_manifests[version_tag] = "sha256:" + "d" * 64
+        self.publish(tag="v0.1.0")
+        self.assertNotIn(("push", version_tag), self.calls)
+
+    def test_existing_version_pointing_to_another_image_is_never_overwritten(self):
+        version_tag = "ghcr.io/example/blog:0.1.0"
+        self.version_manifests[version_tag] = "sha256:" + "e" * 64
+        with self.assertRaisesRegex(ValueError, "use a new version"):
+            self.publish(tag="v0.1.0")
+        self.assertNotIn(("push", version_tag), self.calls)
+        self.assertFalse(self.output.exists())
+
+    def test_registry_auth_or_network_error_does_not_allow_version_overwrite(self):
+        for message in ("unauthorized: authentication required", "connection timed out"):
+            with self.subTest(message=message):
+                self.manifest_error = message
+                with self.assertRaises(subprocess.CalledProcessError):
+                    self.publish(tag="v0.1.0")
+                self.assertNotIn(("push", "ghcr.io/example/blog:0.1.0"), self.calls)
+                self.assertFalse(self.output.exists())
 
 
 if __name__ == "__main__":

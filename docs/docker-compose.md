@@ -17,15 +17,29 @@ docker compose up -d
 
 ## 从 GHCR 拉取镜像并部署到 1Panel
 
-直接部署本项目时，使用上述 Compose 内的固定镜像地址即可。需要发布新版本或维护自己的仓库时，将代码推送到 GitHub，运行 **Actions → container → Run workflow**，或推送 `v*` 标签。普通分支推送与 PR 只构建验收。发布镜像使用：
+直接部署本项目时，使用上述 Compose 内的固定镜像地址，或从 [GitHub Releases](https://github.com/JuneRat/blog/releases) 下载指定版本的 Compose 附件。发布标签采用 `vMAJOR.MINOR.PATCH`（例如 `v0.1.0`），镜像同时提供版本标签与提交标签：
 
 ```text
+ghcr.io/<github-owner>/<repository>:0.1.0
 ghcr.io/<github-owner>/<repository>:sha-<完整提交 SHA>
 ```
 
-验收后，发布任务加载同一个已测试的镜像，检查 ID、提交、来源和 Linux amd64 架构，然后推送 GHCR；再通过 digest 拉取核对。结果页直接给出 `image: ghcr.io/…@sha256:…`，复制到所选 Compose 的 `blog.image` 即可。固定 digest 保证拉取对应构建。当前没有用户配置包或离线部署包，部署无需下载 Actions artifact。
+版本标签与 SHA 标签指向同一镜像，不发布浮动 `latest` 标签。正式发布前，同步 `crates/server/Cargo.toml` 与 `apps/admin/package.json` 的应用版本，更新 Cargo 锁文件中的应用版本，并在 [CHANGELOG.md](../CHANGELOG.md) 增加 `## 版本号` 及变更说明。依赖升级不是发布的前提，依赖和工具链可继续沿用已验证版本。提交推送后，以 `0.1.0` 为例：
 
-发布只使用该仓库的 `GITHUB_TOKEN`，仅 publish job 有 `packages: write`。本项目镜像已公开并验证匿名拉取。自行发布的私有镜像需在 1Panel 配置仓库凭据，或由包所有者在 **Package settings → Change visibility → Public** 设置公开；发布流程不自动改变镜像可见性，源码公开也不代表镜像公开。本项目的管理入口为[镜像包设置](https://github.com/users/JuneRat/packages/container/blog/settings)。[GitHub 包发布权限](https://docs.github.com/en/packages/managing-github-packages-using-github-actions-workflows/publishing-and-installing-a-package-with-github-actions)、[GHCR 访问说明](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry)
+```bash
+git tag -a v0.1.0 -m "Release v0.1.0"
+git push origin v0.1.0
+```
+
+`container` 工作流先校验标签、前后端版本和更新记录，再运行完整 CI（后端、前端、安全审计、全链路验收）及容器验收。全部通过后，发布任务加载同一个已测试镜像，检查 ID、提交、来源和 Linux amd64 架构，然后推送 GHCR，并通过 digest 拉取核对。已存在的版本标签只有在摘要相同时才允许复用，不会覆盖为其他镜像。
+
+最后一个 job 自动创建 GitHub Release：正文包含当前版本的更新记录、安装说明和 GitHub 生成的变更列表；附件包含 `compose.yaml`、`compose.postgres.yaml`、`published-image.json` 与 `SHA256SUMS`。两份 Compose 的 `blog.image` 已填入该版本标签和本次验收镜像的固定 digest，无需手工替换。它们是无凭据的独立模板，不读取或打包用户配置，也不要求下载 Actions artifact。
+
+Release 先保持草稿，附件全部上传并下载核对后才公开。上传中断后可在 Actions 重跑失败的 job；重试会复用一致的附件，已发布的 Release 不被覆盖。镜像已经发布时应优先重跑失败的 job：重新构建可能因构建源变化产生不同摘要，同一版本号会拒绝覆盖。`v0.1.0-rc.1` 等预发布标签也受相同版本校验约束，并标记为 GitHub prerelease。
+
+普通分支推送与 PR 只构建验收。手工 **Actions → container → Run workflow** 选择分支时，完整检查通过后仅发布 SHA 镜像，结果页给出固定镜像地址，不创建 Release；选择版本标签时执行对应的完整发布流程。GitHub Release 由工作流创建，无需预先手工发布。
+
+发布只使用该仓库的 `GITHUB_TOKEN`：仅 `publish` job 有 `packages: write`，仅最后的 `release` job 有 `contents: write`；PR 和普通分支构建保持只读。本项目镜像已公开并验证匿名拉取。自行发布的私有镜像需在 1Panel 配置仓库凭据，或由包所有者在 **Package settings → Change visibility → Public** 设置公开；发布流程不自动改变镜像可见性，源码公开也不代表镜像公开。可从[账号的 Packages 页面](https://github.com/JuneRat?tab=packages)进入博客镜像设置。[GitHub 包发布权限](https://docs.github.com/en/packages/managing-github-packages-using-github-actions-workflows/publishing-and-installing-a-package-with-github-actions)、[GHCR 访问说明](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry)
 
 流水线当前发布 Linux amd64。ARM 主机可以从源码原生构建；尚未提供经过 CI 验收的 ARM 发布镜像。使用自己仓库发布的镜像时，将两个示例中的 `blog.image` 替换为对应发布结果。
 

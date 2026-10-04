@@ -10,6 +10,8 @@ Rust 模块化单体博客，公开站点使用服务端渲染，管理后台使
 
 使用 1Panel 时，复制 [compose.yaml](compose.yaml)，填写域名与安装码并启动，再通过安装向导验证已有 PostgreSQL 连接、创建管理员并保存配置。如果希望数据库也由同一编排运行，选择完整的 [compose.postgres.yaml](compose.postgres.yaml)，同时填写数据库密码。两个示例均已固定经过验收的 `ghcr.io/junerat/blog` 镜像，适用于 x86_64 / amd64 服务器；镜像包含网站、后台和备份恢复工具，Docker 在启动时自动拉取本地缺少的版本。部署无需配置包，具体见 [网页部署指南](docs/1panel.md)。
 
+部署指定发布版本时，从 [GitHub Releases](https://github.com/JuneRat/blog/releases) 下载该版本的 Compose 附件，镜像地址已填好版本号与固定 digest。维护者的标签发布步骤见[镜像与 Release 发布](docs/docker-compose.md#从-ghcr-拉取镜像并部署到-1panel)，功能变更见[更新记录](CHANGELOG.md)。
+
 日常操作位于后台“系统 → 备份与恢复”：下载恢复密钥、立即或定时备份、配置 S3 远程存储、上传副本和原地恢复。数据库故障时仍可访问应急页面；操作步骤见[后台备份与恢复](docs/browser-backup.md)。
 
 从源码构建使用 `docker build -t blog:local .`，再将所选 Compose 中的镜像改为 `blog:local`。旧脚本编排保留为 `compose.legacy.yaml`；高级连接、分离数据库账号和旧恢复入口见 [Docker Compose 部署](docs/docker-compose.md)与 [Compose 备份恢复](docs/compose-backup.md)。
