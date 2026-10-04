@@ -224,7 +224,11 @@ PYTHONPATH=scripts python3 -B -m unittest scripts/test_recovery.py
 
 ### 依赖更新与安全审计
 
-[Dependabot 配置](../.github/dependabot.yml)每周检查 Cargo、后台 npm/pnpm、GitHub Actions 与 Docker。GitHub [官方支持列表](https://docs.github.com/en/code-security/reference/supply-chain-security/supported-ecosystems-and-repositories)目前只列出 pnpm 7–10，本项目采用 pnpm 12.5.1；npm 更新规则已接入，但不能把它视为 pnpm 12 锁文件自动更新的兼容保证。前端更新须通过原版本 `pnpm install --frozen-lockfile`、测试、构建及原生审计；若机器人更新失败，手动使用 `packageManager` 指定的 pnpm 更新并评审锁文件差异。
+[Dependabot 配置](../.github/dependabot.yml)每周一北京时间 09:00 检查 Cargo、后台 npm/pnpm、GitHub Actions 与 Docker。常规版本更新中的 `minor`、`patch` 按这四类分别分组，`major` 更新继续单独提交 PR；每类最多保留 5 个未关闭的版本更新 PR。分组仅适用于 `version-updates`，安全修复 PR 不并入每周常规更新。所有升级均须通过 CI 并人工评审，不启用自动合并；Rust 的 `0.x` 次版本升级也可能破坏兼容性，不能仅凭版本类型跳过评审。分组及调度规则见 [GitHub 配置参考](https://docs.github.com/en/code-security/reference/supply-chain-security/dependabot-options-reference)。
+
+仓库还应开启 Dependabot alerts 与 Dependabot security updates，发现受支持依赖的已知漏洞时自动尝试提交修复 PR。这两项是 GitHub 仓库设置，单独添加 `dependabot.yml` 不会开启它们；新建或迁移仓库时须在 Settings → Advanced Security 中检查。安全修复由漏洞告警触发，参见 [Dependabot 安全更新](https://docs.github.com/en/code-security/concepts/supply-chain-security/dependabot-security-updates)。
+
+GitHub [官方支持列表](https://docs.github.com/en/code-security/reference/supply-chain-security/supported-ecosystems-and-repositories)目前只列出 pnpm 7–10，本项目采用 pnpm 12.5.1；npm 更新规则已接入，但不能把它视为 pnpm 12 锁文件自动更新的兼容保证。前端更新须通过原版本 `pnpm install --frozen-lockfile`、测试、构建及原生审计；若机器人更新失败，手动使用 `packageManager` 指定的 pnpm 更新并评审锁文件差异。
 
 本地独立执行安全检查，无需启动数据库；扫描器安装与公告数据库放在临时目录，不改全局工具版本：
 
