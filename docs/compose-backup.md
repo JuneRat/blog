@@ -10,7 +10,7 @@
 docker compose build blog ops
 ```
 
-交付包部署通过 `docker load` 加载镜像，并将包内 `IMAGE`、`OPS_IMAGE` 的值填入 `.env` 的 `BLOG_IMAGE`、`BLOG_OPS_IMAGE`。升级时二者一起更换。恢复校验二进制 SHA-256 和迁移校验和；旧备份先用匹配版本恢复，再执行升级，不能通过忽略校验跨版本导入。
+离线交付包通过 `docker load` 加载镜像，并将包内 `IMAGE`、`OPS_IMAGE` 的值填入 `.env` 的 `BLOG_IMAGE`、`BLOG_OPS_IMAGE`。[GHCR 配置包](docker-compose.md#从-ghcr-拉取镜像并部署到-1panel)在首次初始化时自动填好两者的 registry digest，运行 `docker compose --profile ops pull` 即可下载。升级时二者一起更换。恢复校验二进制 SHA-256 和迁移校验和；旧备份先用匹配版本恢复，再执行升级，不能通过忽略校验跨版本导入。
 
 ## 备份和状态
 

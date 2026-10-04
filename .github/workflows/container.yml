@@ -2,7 +2,7 @@ name: container
 
 on:
   push:
-    branches: [master]
+    branches: [master, main]
     tags: ['v*']
   pull_request:
   workflow_dispatch:
@@ -19,16 +19,27 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Verify schema artifacts
         run: |
           python3 -B scripts/schema_contract.py
 
+      - name: Verify registry delivery tooling
+        run: PYTHONPATH=scripts python3 -B -m unittest scripts/test_registry_release.py scripts/test_container_images.py scripts/test_compose_init.py
+
       - name: Build deployable image
-        run: docker build --build-arg VCS_REF="$GITHUB_SHA" --tag blog:ci --tag "blog:$GITHUB_SHA" .
+        run: >-
+          docker build --build-arg VCS_REF="$GITHUB_SHA"
+          --label "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
+          --tag blog:ci --tag "blog:$GITHUB_SHA" .
 
       - name: Build matching recovery image
-        run: docker build --target ops --build-arg VCS_REF="$GITHUB_SHA" --tag blog-ops:ci --tag "blog-ops:$GITHUB_SHA" .
+        run: >-
+          docker build --target ops --build-arg VCS_REF="$GITHUB_SHA"
+          --label "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
+          --tag blog-ops:ci --tag "blog-ops:$GITHUB_SHA" .
 
       - name: Pull the database image
         run: |
@@ -74,6 +85,8 @@ jobs:
           cp scripts/database-roles.sql scripts/compose-init.sh scripts/compose-backup.sh release/scripts/
           printf '%s\n' "blog:$GITHUB_SHA" > release/IMAGE
           printf '%s\n' "blog-ops:$GITHUB_SHA" > release/OPS_IMAGE
+          docker image inspect "blog:$GITHUB_SHA" --format '{{.Id}}' > release/IMAGE_ID
+          docker image inspect "blog-ops:$GITHUB_SHA" --format '{{.Id}}' > release/OPS_IMAGE_ID
           cd release
           find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
 
@@ -86,3 +99,67 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 90
+
+  publish:
+    # PRs and ordinary branch pushes never receive package write permission.
+    needs: compose
+    if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    concurrency:
+      group: registry-${{ github.repository }}-${{ github.sha }}
+      cancel-in-progress: false
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Download the images that passed Compose verification
+        uses: actions/download-artifact@v4
+        with:
+          name: blog-compose-linux-amd64-${{ github.sha }}
+          path: release
+
+      - name: Verify and load the tested images without rebuilding
+        working-directory: release
+        run: |
+          sha256sum -c SHA256SUMS
+          docker load -i blog-linux-amd64.tar.gz
+
+      - name: Sign in to GitHub Container Registry
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+
+      - name: Publish the matching images and prepare the pull-based deployment
+        run: >-
+          python3 -B scripts/registry_release.py --bundle release --output registry-release
+          --repository "$GITHUB_REPOSITORY" --revision "$GITHUB_SHA"
+
+      - name: Save the registry deployment files
+        uses: actions/upload-artifact@v4
+        with:
+          name: blog-compose-registry-linux-amd64-${{ github.sha }}
+          path: registry-release/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Show deployment references
+        run: |
+          {
+            printf 'Published the verified Linux amd64 images. Download **blog-compose-registry-linux-amd64-%s** for server deployment.\n\n' "$GITHUB_SHA"
+            printf 'Application: `%s`\n\n' "$(cat registry-release/IMAGE)"
+            printf 'Operations: `%s`\n\n' "$(cat registry-release/OPS_IMAGE)"
+            printf 'The deployment files pin both registry digests. See `docs/docker-compose.md` in the artifact for installation and private-registry login.\n'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Sign out of the registry
+        if: always()
+        run: docker logout ghcr.io
