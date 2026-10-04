@@ -2,6 +2,8 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { vditorAssets } from "./build/vditorAssets.ts";
 
+const backendTarget = "http://127.0.0.1:8080";
+
 /**
  * 开发期同源策略（docs/identity-and-admin.md「可信身份与入口」）：
  * Vite 代理 /api 与 /auth 到后端，使浏览器看到的后端与 SPA 同源。
@@ -36,10 +38,10 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      "/api": { target: "http://127.0.0.1:3000" },
-      "/auth": { target: "http://127.0.0.1:3000" },
-      "/assets/plugins": { target: "http://127.0.0.1:3000" },
-      "/media": { target: "http://127.0.0.1:3000" },
+      "/api": { target: backendTarget },
+      "/auth": { target: backendTarget },
+      "/assets/plugins": { target: backendTarget },
+      "/media": { target: backendTarget },
     },
   },
 });

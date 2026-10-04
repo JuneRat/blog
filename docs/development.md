@@ -184,7 +184,7 @@ blog media cleanup-staging
 
 ```bash
 # 终端一，仓库根目录
-BLOG_PUBLIC_BASE_URL=http://localhost:5173 cargo run -p server -- serve
+BLOG_PUBLIC_BASE_URL=http://localhost:5173 cargo run -p server -- serve --addr 127.0.0.1:8080
 ```
 
 ```bash
@@ -194,7 +194,7 @@ pnpm install --frozen-lockfile
 pnpm dev
 ```
 
-访问 `http://localhost:5173/admin/`。[Vite 配置](../apps/admin/vite.config.ts)把 `/api` 和 `/auth` 代理到 `127.0.0.1:8080`，保留 Host，使浏览器认证请求与代理入口一致；当前没有 `/media` 代理规则。涉及图片预览或完整公开站点时，使用构建后的后台并直接访问服务端地址验证。
+访问 `http://localhost:5173/admin/`。[Vite 配置](../apps/admin/vite.config.ts)把 `/api`、`/auth`、`/assets/plugins` 和 `/media` 统一代理到 `127.0.0.1:8080`，保留 Host，使浏览器认证请求与代理入口一致。开发期图片预览和插件资源可通过 Vite 访问；完整公开站点使用构建后的后台并直接访问服务端地址验证。
 
 登录过程保持使用同一个主机名，`localhost` 与 `127.0.0.1` 的 cookie 不互通。OAuth 联调需在提供商配置对应的 `http://localhost:5173/auth/callback/{provider}` 回调，宜使用独立的开发配置。
 
