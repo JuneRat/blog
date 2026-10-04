@@ -10,13 +10,15 @@
 - Node.js 22；pnpm 版本以 [apps/admin/package.json](../apps/admin/package.json) 的 `packageManager` 为准。
 - PostgreSQL 18，可通过 Docker 启动；开发数据库和检查脚本需要 Python 3。
 
-以下命令除明确说明外均在仓库根目录运行。初次建库、创建 Admin 和启动站点的完整流程见[快速开始](../README.md#快速开始)。
+以下命令除明确说明外均在仓库根目录运行。先启动 Docker，再执行：
 
 ```bash
 ./scripts/dev-db.sh
 (cd apps/admin && pnpm install --frozen-lockfile && pnpm build)
 cargo run
 ```
+
+首次运行时，打开 <http://127.0.0.1:8080/install>，输入启动终端显示的安装码和数据库脚本输出的连接地址，验证空库连接后创建管理员。配置保存在 `config.toml`，下次启动自动读取；安装完成后可访问[公开站点](http://127.0.0.1:8080/)和[管理后台](http://127.0.0.1:8080/admin/)。已有数据时另建空库，完整安装规则见[首次安装](installation.md)。
 
 `cargo run`（或 `cargo r`）不带子命令时默认启动 `serve`，地址读取 `BLOG_BIND`、TOML 的 `server.bind`，缺省为 `127.0.0.1:8080`。临时使用其他端口可运行 `BLOG_BIND=127.0.0.1:3000 cargo run`；`cargo run -- serve --addr 127.0.0.1:3000` 仍有效。迁移、用户和其他维护操作继续显式指定子命令。
 
