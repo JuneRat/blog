@@ -112,7 +112,7 @@ jobs:
             "$tls_dir" >> "$GITHUB_ENV"
 
       - name: Tests
-        run: cargo test --workspace
+        run: cargo test --workspace --no-fail-fast
 
       - name: Verify PostgreSQL TLS, certificate rejection and cancellation recovery
         run: |

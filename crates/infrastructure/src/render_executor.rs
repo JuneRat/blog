@@ -929,7 +929,13 @@ mod tests {
     async fn source_and_html_budgets_cover_boundaries_and_expansion() {
         use application::rendering_budget::MAX_CONTENT_HTML_BYTES;
         use domain::content::budget::MAX_SOURCE_BYTES;
-        let runtime = RenderingRuntime::default();
+        // This test checks byte limits, not shared-runner speed. Deadline and
+        // worker-permit behavior are covered separately with controlled workers.
+        let runtime = RenderingRuntime::with_limits(RenderingLimits {
+            execution_timeout: Duration::from_secs(30),
+            ..RenderingLimits::default()
+        })
+        .unwrap();
         let content = "x".repeat(MAX_CONTENT_HTML_BYTES - 8);
         let rendered = runtime.render_content(&content).await.unwrap();
         assert_eq!(rendered.content_html.len(), MAX_CONTENT_HTML_BYTES);

@@ -195,6 +195,20 @@ def exercise(image, root, ops_image, report, smtp_security="starttls"):
         diagnostic = next((line for line in result.stderr.splitlines()
                            if line.startswith(f"Compose {args[0]}:")
                            or line.startswith(f"Compose {args[0]} failed (")), "")
+        if (result.returncode == 0) != success and not diagnostic:
+            # Docker/host failures occur before the sanitized Python wrapper.
+            # Read this disposable deployment's resolved environment and redact
+            # every value before exposing bounded CLI diagnostics in CI logs.
+            config = subprocess.run(["docker", "compose", "--project-directory", str(directory),
+                                     "config", "--format", "json"], cwd=directory, env=env,
+                                    capture_output=True, text=True, timeout=30)
+            if config.returncode == 0:
+                diagnostic = result.stderr
+                values = {str(value) for service in json.loads(config.stdout)["services"].values()
+                          for value in service.get("environment", {}).values() if value is not None and str(value)}
+                for value in sorted(values, key=len, reverse=True):
+                    diagnostic = diagnostic.replace(value, "[redacted]")
+                diagnostic = re.sub(r"postgres(?:ql)?://[^\s]+", "[database URL]", diagnostic)[-2000:]
         require((result.returncode == 0) == success,
                 f"Compose recovery {args[0]} unexpected exit {result.returncode}"
                 + (f"; {diagnostic}" if diagnostic else ""))
