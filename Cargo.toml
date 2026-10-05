@@ -32,7 +32,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 # Exactly one backend is required by jsonwebtoken 10; AWS-LC also avoids the
 # RustCrypto RSA dependency, which currently has an unpatched timing advisory.
-jsonwebtoken = { version = "10", features = ["aws_lc_rs"] }
+jsonwebtoken = { version = "11", features = ["aws_lc_rs"] }
 sha2 = "0.10"
 getrandom = "0.3"
 base64 = "0.22"
