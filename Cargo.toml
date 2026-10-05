@@ -34,7 +34,7 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 # RustCrypto RSA dependency, which currently has an unpatched timing advisory.
 jsonwebtoken = { version = "10", features = ["aws_lc_rs"] }
 sha2 = "0.10"
-getrandom = "0.3"
+getrandom = "0.4"
 base64 = "0.22"
 # 本地密码凭据：Argon2id（PHC 字符串自描述参数，便于按策略升级重哈希）。
 argon2 = { version = "0.5", features = ["std"] }
