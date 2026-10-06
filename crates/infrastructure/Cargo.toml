@@ -2,6 +2,7 @@
 name = "infrastructure"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
 
 [features]
 # Only integration fixtures may inject/inspect a raw pool. Not enabled at runtime.

@@ -38,3 +38,7 @@
 - [配置参考](docs/configuration.md) · [管理 API](docs/admin-api.md) · [架构说明](docs/architecture.md)
 
 问题反馈与功能建议请提交 [GitHub Issue](https://github.com/JuneRat/blog/issues)。
+
+## 许可证
+
+本项目以 [MIT 许可证](LICENSE)发布。随插件分发的第三方组件许可见 [THIRD_PARTY_LICENSES.txt](crates/infrastructure/assets/markdown-enhance/THIRD_PARTY_LICENSES.txt)。
