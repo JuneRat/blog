@@ -8,7 +8,7 @@ RUN npm install --global "$(node -p 'require("./package.json").packageManager')"
 COPY apps/admin/ ./
 RUN pnpm build
 
-FROM rust:1.98.1-trixie@sha256:a8a5f0a1e5fe7dfe1d352591e4a1c7dd2c08fd70475cae872cf3458ba0df0546 AS server
+FROM rust:1.99.0-trixie@sha256:6ff07edce8775d0f64be7aba9197229407301bddf2054d62c27b541a6238a181 AS server
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY crates/ ./crates/
